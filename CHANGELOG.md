@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.0
+
+- Switch from UPM to the Tools Loader `Assets/` distribution format.
+- Add `tools-loader.manifest.json`.
+- Let Unity generate meta files after installation.
+
 ## 1.1.1
 
 - Keep the UI folder meta file with the Assets-installable Bookmarks source.

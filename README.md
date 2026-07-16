@@ -4,27 +4,13 @@ Unity Editor extension for Inspector asset bookmarks and selection history.
 
 ## Install
 
-In Unity Package Manager, select **Add package from git URL** and enter:
-
-```
-https://github.com/HaruFamily/Bookmarks.git#v1.1.1
-```
+Add this repository to the Tools Loader Google Sheet. Tools Loader reads
+`tools-loader.manifest.json` and installs the repository's `Assets/` content into the current project.
 
 ## Data storage
 
 Each user's bookmarks and history are stored locally in `UserSettings/PinInspectorData.json`.
 The file is not included in the package or source control.
-
-## Install To Assets
-
-Use Tools Loader with this source mapping:
-
-| Field | Value |
-| --- | --- |
-| Git URL | `https://github.com/HaruFamily/Bookmarks.git` |
-| Ref | `v1.1.1` |
-| Source Path | `PinTools/Editor/Bookmarks` |
-| Install Path | `Assets/PinTools/Editor/Bookmarks` |
 
 ## Commands
 
