@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0
+
+- Move Bookmarks-only UI helpers into the Bookmarks source directory for Assets installation.
+
 ## 1.0.2
 
 - Add the required Unity meta file for package.json.
