@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1
+
+- Keep the UI folder meta file with the Assets-installable Bookmarks source.
+
 ## 1.1.0
 
 - Move Bookmarks-only UI helpers into the Bookmarks source directory for Assets installation.
