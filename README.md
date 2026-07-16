@@ -7,7 +7,7 @@ Unity Editor extension for Inspector asset bookmarks and selection history.
 In Unity Package Manager, select **Add package from git URL** and enter:
 
 ```
-https://github.com/HaruFamily/Bookmarks.git#v1.0.1
+https://github.com/HaruFamily/Bookmarks.git#v1.0.2
 ```
 
 ## Data storage

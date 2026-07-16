@@ -1,6 +1,6 @@
 {
   "name": "com.harufamily.pintools.bookmarks",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "displayName": "Pin Tools Bookmarks",
   "description": "Inspector asset bookmarks and selection history for the Unity Editor.",
   "unity": "2021.3",
