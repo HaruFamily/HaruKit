@@ -1,7 +1,7 @@
 {
-  "name": "com.harufamily.pintools.bookmarks",
+  "name": "com.harufamily.ux.bookmarks",
   "version": "1.0.0",
-  "displayName": "PinTools Bookmarks",
+  "displayName": "HaruKit UX Bookmarks",
   "description": "Editor bookmarks / pinned object inspector tool for Unity.",
   "unity": "2021.3",
   "author": {
@@ -10,7 +10,8 @@
   "keywords": [
     "editor",
     "bookmarks",
-    "pintools",
+    "ux",
+    "harukit",
     "tool"
   ]
 }

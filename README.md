@@ -1,6 +1,6 @@
-# PinTools
+# HaruKit
 
-Unity Editor 工具集，以 UPM (Unity Package Manager) 分發。每個工具為獨立子套件，透過 Git URL 的 `?path=` 安裝。
+Unity Editor / runtime 工具集，以 UPM (Unity Package Manager) 分發。依類別分組（UX / Framework / Tools…），每個工具為獨立子套件，透過 Git URL 的 `?path=` 安裝。
 
 > 新增工具 / AI 上架規範見 [`CONVENTIONS.md`](./CONVENTIONS.md)。
 
@@ -13,18 +13,19 @@ Unity → `Window > Package Manager` → `+` → `Add package from git URL...`�
 ```json
 {
   "dependencies": {
-    "com.harufamily.pintools.bookmarks": "https://github.com/HaruFamily/PinTools.git?path=/Bookmarks"
+    "com.harufamily.ux.bookmarks": "https://github.com/HaruFamily/HaruKit.git?path=/UX/Bookmarks"
   }
 }
 ```
 
-指定版本（tag）：monorepo 用 per-package tag 慣例，在 URL 尾端加 `#bookmarks/v1.0.0`（tag 綁整 repo commit，各套件各打各的 tag 獨立釘選）。不加則吃 default branch 最新。
+指定版本（tag）：在 URL 尾端加 `#bookmarks/v1.0.0`（tag 綁整 repo commit，各工具各打各的 tag 獨立釘選）。不加則吃 default branch 最新。
 
-> Private repo：安裝端須先在系統 git 設好認證（PAT）。UPM 走系統 git，URL 本身不帶 token。
-> Windows 可用 Git Credential Manager，或 `git config --global credential.helper store` 後先手動 clone 一次快取 PAT。
+> **一次裝整組**（例：整個 UX）：UPM git URL 無法用單一 path 拉整組子套件（package 不能巢狀）。要裝一組就在 `manifest.json` 一次列該類別底下每個 `?path=` 條目。
+
+> Private repo：安裝端須先在系統 git 設好認證（PAT）。public repo 讀取免認證。UPM 走系統 git，URL 本身不帶 token。
 
 ## 套件清單
 
-| 套件 | path | 說明 |
-|------|------|------|
-| PinTools Bookmarks | `?path=/Bookmarks` | Editor 書籤 / pinned object inspector |
+| 類別 | 套件 | package name | 安裝 path |
+|------|------|--------------|-----------|
+| UX | Bookmarks | `com.harufamily.ux.bookmarks` | `?path=/UX/Bookmarks` |
