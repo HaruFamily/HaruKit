@@ -1,0 +1,16 @@
+{
+  "name": "com.harufamily.pintools.bookmarks",
+  "version": "1.0.0",
+  "displayName": "PinTools Bookmarks",
+  "description": "Editor bookmarks / pinned object inspector tool for Unity.",
+  "unity": "2021.3",
+  "author": {
+    "name": "HaruFamily"
+  },
+  "keywords": [
+    "editor",
+    "bookmarks",
+    "pintools",
+    "tool"
+  ]
+}
