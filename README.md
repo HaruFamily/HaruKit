@@ -2,6 +2,8 @@
 
 Unity Editor 工具集，以 UPM (Unity Package Manager) 分發。每個工具為獨立子套件，透過 Git URL 的 `?path=` 安裝。
 
+> 新增工具 / AI 上架規範見 [`CONVENTIONS.md`](./CONVENTIONS.md)。
+
 ## 安裝
 
 Unity → `Window > Package Manager` → `+` → `Add package from git URL...`，貼上對應 URL。
