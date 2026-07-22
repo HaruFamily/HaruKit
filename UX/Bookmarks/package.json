@@ -1,6 +1,6 @@
 {
   "name": "com.harufamily.ux.bookmarks",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "displayName": "HaruKit UX Bookmarks",
   "description": "Editor bookmarks / pinned object inspector tool for Unity.",
   "unity": "2021.3",
@@ -15,6 +15,7 @@
     "tool"
   ],
   "files": [
+    "package.json.meta",
     "BookmarksGUI.cs",
     "BookmarksGUI.cs.meta",
     "BookmarksWindow.cs",
