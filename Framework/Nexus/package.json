@@ -1,0 +1,21 @@
+{
+  "name": "com.harufamily.framework.nexus",
+  "version": "1.0.0",
+  "displayName": "HaruKit Framework Nexus",
+  "description": "Scoped async service locator with lifecycle ownership, pooling, and Addressables support.",
+  "unity": "2021.3",
+  "author": {
+    "name": "HaruFamily"
+  },
+  "dependencies": {
+    "com.unity.addressables": "1.21.21"
+  },
+  "keywords": [
+    "framework",
+    "nexus",
+    "service-locator",
+    "addressables",
+    "harukit",
+    "tool"
+  ]
+}

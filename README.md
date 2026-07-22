@@ -29,3 +29,4 @@ Unity → `Window > Package Manager` → `+` → `Add package from git URL...`�
 | 類別 | 套件 | package name | 安裝 path |
 |------|------|--------------|-----------|
 | UX | Bookmarks | `com.harufamily.ux.bookmarks` | `?path=/UX/Bookmarks` |
+| Framework | Nexus | `com.harufamily.framework.nexus` | `?path=/Framework/Nexus` |
