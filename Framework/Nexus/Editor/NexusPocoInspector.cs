@@ -28,7 +28,7 @@ namespace PinPlugin.Nexus.Editor
 
     /// <summary>POCO Inspector：反射顯示 public instance members，不依賴第三方 Inspector。</summary>
     [CustomEditor(typeof(NexusPocoProxy))]
-    public sealed class NexusPocoProxyEditor : Editor
+    public sealed class NexusPocoProxyEditor : UnityEditor.Editor
     {
         public override bool RequiresConstantRepaint() => true;
 
