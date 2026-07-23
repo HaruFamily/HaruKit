@@ -1,7 +1,7 @@
 {
   "name": "com.harufamily.framework.actionsystem",
-  "version": "1.0.0",
-  "displayName": "HaruKit Framework ActionSystem",
+  "version": "1.0.1",
+  "displayName": "ActionSystem",
   "description": "Generic action, formula, token, validation, and description-compilation framework.",
   "unity": "2021.3",
   "author": {

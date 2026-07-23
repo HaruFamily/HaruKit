@@ -1,4 +1,4 @@
-# HaruKit Framework ActionSystem
+# ActionSystem
 
 Generic ActionSystem for Unity: timing-driven actions, typed formulas, named
 tokens, editor validation, shared ScriptableObject formulas/actions, and
@@ -38,7 +38,7 @@ Or add it to `Packages/manifest.json`:
 }
 ```
 
-For a reproducible release, append `#actionsystem/v1.0.0` after the path.
+For a reproducible release, append `#actionsystem/v1.0.1` after the path.
 
 ## Package Boundary
 
