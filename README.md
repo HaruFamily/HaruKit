@@ -30,3 +30,4 @@ Unity → `Window > Package Manager` → `+` → `Add package from git URL...`�
 |------|------|--------------|-----------|
 | UX | Bookmarks | `com.harufamily.ux.bookmarks` | `?path=/UX/Bookmarks` |
 | Framework | Nexus | `com.harufamily.framework.nexus` | `?path=/Framework/Nexus` |
+| Framework | ActionSystem | `com.harufamily.framework.actionsystem` | `?path=/Framework/ActionSystem` |
