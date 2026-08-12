@@ -1,7 +1,6 @@
 namespace PinPlugin.ActionSystem
 {
 using Cysharp.Threading.Tasks;
-using Sirenix.OdinInspector;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -13,9 +12,6 @@ using UnityEditor;
 public abstract class ActionAssetBase<TPack> : ScriptableObject
 {
     [SerializeReference]
-#if UNITY_EDITOR
-    [OnValueChanged("NotifySubscribers", IncludeChildren = true)]
-#endif
     private ActionBase<TPack> _action;
     public async UniTask Execute(TPack pack, TokenCache<TPack> tokens) => await _action.Execute(pack, tokens);
 
@@ -50,34 +46,6 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject
         EditorUtility.SetDirty(this);
     }
 
-    private void NotifySubscribers()
-    {
-        if (_subscribers == null) return;
-        _subscribers.RemoveAll(s => s == null);
-        foreach (var so in _subscribers)
-        {
-            if (so is IActionSystemOwner owner)
-            {
-                owner.MarkActionSystemDirty();
-                EditorUtility.SetDirty(so);
-            }
-        }
-    }
-
-    private bool _isSoleSelected => Selection.activeObject == this;
-
-    [ShowInInspector, ShowIf("_isSoleSelected")]
-    [LabelText("已註冊的 Owner")]
-    [ListDrawerSettings(IsReadOnly = true, ShowFoldout = false, DraggableItems = false)]
-    private List<OwnerRow> OwnerRows
-    {
-        get => OwnerRow.Build(_subscribers);
-        set { /* no-op：保留 setter 讓 Odin 不把整段視為 read-only，子元素 [Button] 才能 enable */ }
-    }
-
-    [ShowIf("_isSoleSelected")]
-    [Button("全部驗證", ButtonSizes.Medium)]
-    private void VerifyAllOwners() => OwnerRow.VerifyAll(_subscribers);
 #endif
 }
 

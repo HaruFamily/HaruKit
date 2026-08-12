@@ -1,7 +1,6 @@
 namespace PinPlugin.ActionSystem
 {
 using Cysharp.Threading.Tasks;
-using Sirenix.OdinInspector;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -31,37 +30,21 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
     where TFormula : FormulaBase<TResult, TPack>
 {
     [SerializeField]
-    [HorizontalGroup("MainRow", Width = 0.2f)]
-    [HideLabel]
-    [EnumToggleButtons]
     protected UseType _useType = UseType.Default;
 
     [SerializeField]
-    [HorizontalGroup("MainRow")]
-    [LabelText("預設"), LabelWidth(40)]
     protected TResult _default = default;
 
-    [ShowInInspector, SerializeReference]
-    [HorizontalGroup("SubRow")]
-    [ShowIf("_isFormula")]
-    [HideLabel]
-    [TypeSelectorSettings(ShowCategories = true)]
+    [SerializeReference]
     [FormerlySerializedAs("_target")]
     private TFormula _formula;
 
-    [SerializeField, InlineEditor]
-    [HorizontalGroup("SubRow")]
-    [ShowIf("_isAsset")]
-    [HideLabel]
+    [SerializeField]
 #if UNITY_EDITOR
-    [OnValueChanged("OnAssetChanged")]
 #endif
     private TAsset _asset;
 
     [SerializeField]
-    [HorizontalGroup("SubRow")]
-    [ShowIf("_isToken")]
-    [HideLabel]
     private string _tokenKey;
 
     [NonSerialized] internal string _dictKey;
@@ -85,10 +68,10 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
 
     public enum UseType
     {
-        [LabelText("常數")] Default,
-        [LabelText("公式")] Formula,
-        [LabelText("資產")] Asset,
-        [LabelText("變數")] Token,
+        Default,
+        Formula,
+        Asset,
+        Token,
     }
 
     public FormulaSlot(bool active)
@@ -155,9 +138,6 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
             || (_useType == UseType.Asset);
     }
 
-    [Button("轉成 Token", ButtonSizes.Small, ButtonStyle.Box)]
-    [HorizontalGroup("MainRow")]
-    [EnableIf("@FindOwnerSO() != null")]
     private void ConvertToToken()
     {
         if (!CanShowTokenKey()) return;
@@ -248,10 +228,6 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
         return null;
     }
 
-    [Button("轉成 Formula", ButtonSizes.Small, ButtonStyle.Box)]
-    [ShowIf("@_isAsset")]
-    [EnableIf("@_asset != null")]
-    [HorizontalGroup("MainRow")]
     private void ConvertToFormula()
     {
         if (_asset == null) return;
@@ -262,7 +238,7 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
             return;
         }
 
-        var clone = Sirenix.Serialization.SerializationUtility.CreateCopy(src) as TFormula;
+        var clone = ActionSystemDeepCopy.Copy(src) as TFormula;
         if (clone == null)
         {
             Debug.LogError($"[ConvertToFormula] Clone 失敗（type={src.GetType().Name}）。");
@@ -280,10 +256,6 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
         if (owner != null) EditorUtility.SetDirty(owner);
     }
 
-    [Button("轉成 Asset", ButtonSizes.Small, ButtonStyle.Box)]
-    [ShowIf("@_isFormula")]
-    [EnableIf("@_formula != null")]
-    [HorizontalGroup("MainRow")]
     private void ConvertToAsset()
     {
         if (_formula == null) return;

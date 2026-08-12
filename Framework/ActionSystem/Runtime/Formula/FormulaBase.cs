@@ -7,7 +7,7 @@ public interface IFormulaSlot<T, TPack>
     UniTask<T> Evaluate(TPack pack, TokenCache<TPack> tokens);
 }
 
-public abstract class FormulaBase<T, TPack>
+public abstract class FormulaBase<T, TPack> : ActionSystemNode
 {
     public virtual async UniTask<T> Evaluate(TPack pack, TokenCache<TPack> tokens)
     {

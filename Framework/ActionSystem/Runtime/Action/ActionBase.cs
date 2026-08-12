@@ -2,7 +2,7 @@ namespace PinPlugin.ActionSystem
 {
 using Cysharp.Threading.Tasks;
 
-public abstract class ActionBase<TPack>
+public abstract class ActionBase<TPack> : ActionSystemNode
 {
     public async UniTask Execute(TPack pack, TokenCache<TPack> tokens)
     {
