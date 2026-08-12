@@ -1,7 +1,6 @@
 namespace PinPlugin.ActionSystem
 {
 #if UNITY_EDITOR
-using Sirenix.OdinInspector;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -18,10 +17,31 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
     private void Err(string msg) => _errors.Add(msg);
     private void Warn(string msg) => _warnings.Add(msg);
 
-    [Button("$ValidationButtonLabel", ButtonSizes.Large, ButtonStyle.Box, Expanded = true)]
-    [GUIColor("$ValidationButtonColor")]
+    /// <summary>開啟視覺化編輯器並聚焦到目前選取的 Owner。</summary>
+    // Owner 沿用專案既有慣例從 Selection 取（同 ActionSlot.FindOwnerSO）：這個按鈕本來就只在 Inspector 上按得到。
+    private void OpenVisualEditor()
+    {
+        if (ActionSystemEditorHooks.OpenGraphWindow == null)
+        {
+            Debug.LogError("[ActionSystem] 視覺化編輯器尚未載入（Editor assembly 未編譯完成？）。");
+            return;
+        }
+
+        var owner = Selection.activeObject as ScriptableObject;
+        if (owner == null)
+        {
+            Debug.LogError("[ActionSystem] 請從 Owner 資產的 Inspector 按此按鈕。");
+            return;
+        }
+
+        ActionSystemEditorHooks.OpenGraphWindow(owner);
+    }
+
     public void Verify()
     {
+        // DeepCopy 與 Unity 反序列化不會保留 NonSerialized 驗證緩衝。
+        _errors ??= new List<string>();
+        _warnings ??= new List<string>();
         TokenEntry.AssignTokenKeys();
 
         _errors.Clear();
@@ -34,6 +54,7 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
         // 5. Null slot：UseType / _formula / _asset / _tokenKey 一致性
         ValidateTokenNullSlots();
         ValidateActionNullSlots();
+        ReportOrphanNodes();
 
         bool ok = _errors.Count == 0;
         _validated = ok;
@@ -100,6 +121,14 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
         }
         foreach (var k in dup)
             Err($"{typeName}Tokens 重複 Key：'{k}'");
+    }
+
+    // 未連接節點只是「留在編輯區沒接線」，不阻擋存檔；但要講清楚它不會被執行。
+    private void ReportOrphanNodes()
+    {
+        int count = _editorOrphans?.Count ?? 0;
+        if (count > 0)
+            Warn($"編輯區有 {count} 個未連接節點（不會被執行，可在視覺化編輯器接線或刪除）");
     }
 
     private void ReportDuplicateTimings()
@@ -326,7 +355,7 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
 
         if (node is ActionSlot<TPack> a)
         {
-            int ut = a.EditorUseTypeRaw; // UnActive=0, Formula=1, Asset=2
+            int ut = a.EditorUseTypeRaw; // Empty=0, Formula=1, Asset=2
             if (ut != 1 && a.EditorHasFormula)
                 Warn($"ActionSlot UseType={UseTypeName_Action(ut)} 但仍殘留 _formula 設定（不會被使用，建議清除或切回 公式）");
             if (ut != 2 && a.EditorHasAsset)
@@ -389,7 +418,7 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
 
     private static string UseTypeName_Action(int ut) => ut switch
     {
-        0 => "無效",
+        0 => "空",
         1 => "公式",
         2 => "資產",
         _ => ut.ToString(),

@@ -1,7 +1,6 @@
 namespace PinPlugin.ActionSystem
 {
 using Cysharp.Threading.Tasks;
-using Sirenix.OdinInspector;
 using System;
 using System.Linq;
 using UnityEngine;
@@ -12,30 +11,28 @@ using UnityEngine.Serialization;
 using UnityEditor;
 #endif
 
-[Serializable, HideReferenceObjectPicker]
+[Serializable]
 [MovedFrom(true, sourceNamespace: "", sourceAssembly: "Assembly-CSharp", sourceClassName: "ActionSlot")]
 public class ActionSlot<TPack>
 {
+    // 停用用「反向旗標」：既有資產沒有這個欄位，反序列化後 false = 啟用，不會整批被關掉。
     [SerializeField]
-    [HorizontalGroup("MainRow", Width = 0.25f)]
-    [HideLabel]
-    [EnumToggleButtons]
-    private UseType _useType = UseType.UnActive;
+    private bool _disabled;
 
-    [ShowInInspector, SerializeReference]
-    [HorizontalGroup("SubRow")]
-    [ShowIf("_isFormula")]
-    [HideLabel]
-    [TypeSelectorSettings(ShowCategories = true)]
+    [SerializeField]
+    private string _label;
+
+    [SerializeField]
+    [HideInInspector]
+    // 0 是舊資產與剛建立空 Slot 的相容值；不再作為 Inspector／Graph 的可選模式。
+    private UseType _useType = UseType.Empty;
+
+    [SerializeReference]
     [FormerlySerializedAs("_target")]
     private ActionBase<TPack> _formula;
 
-    [SerializeField, InlineEditor]
-    [HorizontalGroup("SubRow")]
-    [ShowIf("_isAsset")]
-    [HideLabel]
+    [SerializeField]
 #if UNITY_EDITOR
-    [OnValueChanged("OnAssetChanged")]
 #endif
     private ActionAssetBase<TPack> _asset;
 
@@ -78,13 +75,17 @@ public class ActionSlot<TPack>
 
     public enum UseType
     {
-        [LabelText("無效")] UnActive,
-        [LabelText("公式")] Formula,
-        [LabelText("資產")] Asset,
+        Empty = 0,
+        Formula = 1,
+        Asset = 2,
     }
+
+    /// <summary>停用中的動作不執行，但設定完整保留（企劃暫時關掉某段效果用）。</summary>
+    public bool IsDisabled => _disabled;
 
     public async UniTask Execute(TPack pack, TokenCache<TPack> tokens)
     {
+        if (_disabled) return;
         switch (_useType)
         {
             case UseType.Formula: if (_formula != null) await _formula.Execute(pack, tokens); break;
@@ -94,10 +95,6 @@ public class ActionSlot<TPack>
     }
 
 #if UNITY_EDITOR
-    [Button("轉成 Formula", ButtonSizes.Small, ButtonStyle.Box)]
-    [ShowIf("@_isAsset")]
-    [EnableIf("@_asset != null")]
-    [HorizontalGroup("MainRow")]
     private void ConvertToFormula()
     {
         if (_asset == null) return;
@@ -108,7 +105,7 @@ public class ActionSlot<TPack>
             return;
         }
 
-        var clone = Sirenix.Serialization.SerializationUtility.CreateCopy(src) as ActionBase<TPack>;
+        var clone = ActionSystemDeepCopy.Copy(src);
         if (clone == null)
         {
             Debug.LogError($"[ConvertToFormula] Clone 失敗（type={src.GetType().Name}）。");
@@ -126,10 +123,6 @@ public class ActionSlot<TPack>
         if (owner != null) EditorUtility.SetDirty(owner);
     }
 
-    [Button("轉成 Asset", ButtonSizes.Small, ButtonStyle.Box)]
-    [ShowIf("@_isFormula")]
-    [EnableIf("@_formula != null")]
-    [HorizontalGroup("MainRow")]
     private void ConvertToAsset()
     {
         if (_formula == null) return;

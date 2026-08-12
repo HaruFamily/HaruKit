@@ -2,9 +2,7 @@
   "name": "HaruFamily.Framework.ActionSystem",
   "rootNamespace": "PinPlugin.ActionSystem",
   "references": [
-    "UniTask",
-    "Sirenix.OdinInspector.Attributes",
-    "Sirenix.Serialization"
+    "UniTask"
   ],
   "includePlatforms": [],
   "excludePlatforms": [],

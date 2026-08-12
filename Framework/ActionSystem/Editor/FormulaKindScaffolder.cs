@@ -91,7 +91,6 @@ public class FormulaKindScaffolder : EditorWindow
 $@"using System;
 using System.Collections.Generic;
 using PinPlugin.ActionSystem;
-using Sirenix.OdinInspector;
 using UnityEngine;
 
 {NamespaceOpen()}
@@ -118,10 +117,10 @@ public class {kind}Slot : TokenFormulaSlot<{resultType}, {kind}Asset, {kind}Form
 [Serializable]
 public class {kind}Entry : ITokenEntry
 {{
-    [SerializeField, HorizontalGroup(""row""), LabelText(""Key""), LabelWidth(40)]
+    [SerializeField]
     private string _key;
 
-    [SerializeField, HorizontalGroup(""row""), HideLabel]
+    [SerializeField]
     private {kind}Slot _slot = new {kind}Slot(false);
 
     public string Key {{ get => _key; set => _key = value; }}
