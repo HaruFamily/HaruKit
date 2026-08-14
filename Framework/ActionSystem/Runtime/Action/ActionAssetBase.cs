@@ -13,7 +13,26 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject
 {
     [SerializeReference]
     private ActionBase<TPack> _action;
-    public async UniTask Execute(TPack pack, TokenCache<TPack> tokens) => await _action.Execute(pack, tokens);
+
+    // 候選節點池：本資產編輯區專用，不執行、不參與驗證。資產是獨立交易，候選不可寫進 Owner。
+    [SerializeReference, HideInInspector]
+    private List<GraphNode> _orphans = new();
+
+    public async UniTask Execute(TPack pack, TokenCache<TPack> tokens)
+    {
+        if (_action == null)
+        {
+            Debug.LogWarning($"[ActionSystem] 動作資產 '{name}' 沒有內容，已跳過。");
+            return;
+        }
+        await _action.Execute(pack, tokens);
+    }
+
+    /// <summary>本資產的候選節點清單。僅視覺化編輯器使用。</summary>
+    public List<GraphNode> Orphans
+    {
+        get { _orphans ??= new List<GraphNode>(); return _orphans; }
+    }
 
 #if UNITY_EDITOR
     public void SetTarget(ActionBase<TPack> action) => _action = action;

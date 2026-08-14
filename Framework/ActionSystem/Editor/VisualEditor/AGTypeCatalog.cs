@@ -6,7 +6,7 @@ using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 
-/// <summary>可建立的節點型別清單，依 ActionSystem [ActionNode] 的分類分組。</summary>
+/// <summary>可建立的節點型別清單，依 ActionSystem [ASNode] 的分組整理。</summary>
 public static class AGTypeCatalog
 {
     private static readonly Dictionary<Type, List<Type>> cache = new();
@@ -66,9 +66,75 @@ public static class AGTypeCatalog
         var dropdown = new AGTypeDropdown(new AdvancedDropdownState(), types, title, onPick);
         dropdown.Show(rect);
     }
+
+    public static void ShowSourcePicker(Rect rect, List<AGSourceOption> options)
+    {
+        if (options == null || options.Count == 0)
+        {
+            Debug.LogWarning("[ActionGraph] 找不到可用的 Node 來源。");
+            return;
+        }
+        new AGSourceDropdown(new AdvancedDropdownState(), options).Show(rect);
+    }
 }
 
-/// <summary>型別選擇下拉：分類為資料夾，選項名稱用 [ActionNode.Name]。</summary>
+public class AGSourceOption
+{
+    public string Group;
+    public string Name;
+    public bool IsCurrent;
+    public Action Apply;
+}
+
+/// <summary>統一選擇 inline Node、Token 與 Asset 的搜尋下拉。</summary>
+public class AGSourceDropdown : AdvancedDropdown
+{
+    private class SourceItem : AdvancedDropdownItem
+    {
+        public readonly AGSourceOption Option;
+        public SourceItem(AGSourceOption option) : base(option.IsCurrent ? "✓ " + option.Name : option.Name)
+            => Option = option;
+    }
+
+    private readonly List<AGSourceOption> options;
+
+    public AGSourceDropdown(AdvancedDropdownState state, List<AGSourceOption> options) : base(state)
+    {
+        this.options = options;
+        minimumSize = new Vector2(280f, 360f);
+    }
+
+    protected override AdvancedDropdownItem BuildRoot()
+    {
+        var root = new AdvancedDropdownItem("變更來源");
+        var folders = new Dictionary<string, AdvancedDropdownItem>();
+        foreach (var option in options)
+        {
+            var parent = root;
+            string path = "";
+            foreach (string part in (option.Group ?? "其他").Split('/'))
+            {
+                path = string.IsNullOrEmpty(path) ? part : path + "/" + part;
+                if (!folders.TryGetValue(path, out var folder))
+                {
+                    folder = new AdvancedDropdownItem(part);
+                    folders[path] = folder;
+                    parent.AddChild(folder);
+                }
+                parent = folder;
+            }
+            parent.AddChild(new SourceItem(option));
+        }
+        return root;
+    }
+
+    protected override void ItemSelected(AdvancedDropdownItem item)
+    {
+        if (item is SourceItem source) source.Option.Apply?.Invoke();
+    }
+}
+
+/// <summary>型別選擇下拉：分組為資料夾，選項名稱用 [ASNode.Name]。</summary>
 public class AGTypeDropdown : AdvancedDropdown
 {
     private class TypeItem : AdvancedDropdownItem

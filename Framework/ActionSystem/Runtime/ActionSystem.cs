@@ -30,25 +30,7 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
     [SerializeField, HideInInspector]
     private bool _validated;
 
-    // 視覺化編輯器的版面資料：跟著 Owner 一起存檔，不參與任何執行流程。
-    [SerializeField, HideInInspector]
-    private List<ActionNodeLayout> _editorLayout = new();
-
-    // 未連接節點：留在編輯區但沒接到任何 Slot，不會被執行；驗證時列為警告。
-    [SerializeReference, HideInInspector]
-    private List<ActionSystemNode> _editorOrphans = new();
-
-    /// <summary>節點座標記錄。僅視覺化編輯器使用。</summary>
-    public List<ActionNodeLayout> EditorLayout
-    {
-        get { _editorLayout ??= new List<ActionNodeLayout>(); return _editorLayout; }
-    }
-
-    /// <summary>未連接節點清單。僅視覺化編輯器使用。</summary>
-    public List<ActionSystemNode> EditorOrphans
-    {
-        get { _editorOrphans ??= new List<ActionSystemNode>(); return _editorOrphans; }
-    }
+    // 座標與候選節點都住在各自的頭端（ActionSlot / TokenEntryBase）與 GraphNode 上，這裡不再有旁路版面表。
 
     [NonSerialized] private bool _hasLoggedValidationFailure;
 

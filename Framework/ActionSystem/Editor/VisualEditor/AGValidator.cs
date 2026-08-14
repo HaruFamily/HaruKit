@@ -63,13 +63,18 @@ public class AGReport
 /// </summary>
 public static class AGValidator
 {
-    public static AGReport Run(AGModel model)
+    /// <summary>
+    /// 圖的內容規則只有一套，編輯時與存檔時跑的是同一份（含 Token 循環與 Asset 參照循環）。
+    /// includeMissingTypes 另外處理：它檢查的是 Owner 資產本身，編輯工作副本不會改變它，只在綁定與存檔時才有意義。
+    /// </summary>
+    public static AGReport Run(AGModel model, bool includeMissingTypes = false)
     {
         var report = new AGReport();
         if (model?.Data == null) return report;
 
         var tokens = model.ReadTokens();
         var usedTokens = new HashSet<string>();
+        var checkedAssets = new HashSet<UnityEngine.Object>();
 
         // 1. Token 本身：空 Key、重複 Key、循環
         var seen = new HashSet<string>();
@@ -105,7 +110,11 @@ public static class AGValidator
                     ActionIndex = i,
                     ActionSlot = slot,
                 };
+                if (AGReflect.UseType(slot) == 0)
+                    Err(report, focus, $"{g.Timing} 第 {i + 1} 個動作", "尚未指定 Action 類型",
+                        "在空 Action Node 的下拉選單選擇一個 Action。", slot, null);
                 WalkTree(report, model, focus, slot, tokens, usedTokens, $"{g.Timing} 第 {i + 1} 個動作");
+                ValidateAssetCycles(report, focus, slot, null, $"{g.Timing} 第 {i + 1} 個動作", checkedAssets);
             }
         }
 
@@ -114,6 +123,7 @@ public static class AGValidator
             if (t.Slot == null) continue;
             var focus = new AGFocus { Kind = AGFocusKind.Token, Token = t };
             WalkTree(report, model, focus, t.Slot, tokens, usedTokens, $"變數 {t.Key}");
+            ValidateAssetCycles(report, focus, t.Slot, null, $"變數 {t.Key}", checkedAssets);
         }
 
         // 3. 未使用的 Token
@@ -127,27 +137,15 @@ public static class AGValidator
 
         // 4. SerializeReference 型別遺失（類別被改名或刪掉）
         //    反射看不到殘骸，只有 Unity 的 managed reference API 知道。存檔會把殘骸永久抹掉，所以必須擋。
-        if (model.Owner != null && UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(model.Owner))
+        //    對象是 Owner 本體：編輯工作副本不會改變它，所以只在綁定與存檔時檢查。
+        if (includeMissingTypes && model.Owner != null
+            && UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(model.Owner))
         {
             foreach (var missing in UnityEditor.SerializationUtility.GetManagedReferencesWithMissingTypes(model.Owner))
             {
                 Err(report, null, "資產本體",
                     $"有節點的程式類別已不存在：{missing.namespaceName}.{missing.className}（{missing.assemblyName}）",
                     "把類別改回原名，或確認要放棄這段內容後手動清除；直接存檔會永久刪掉它。", null, null);
-            }
-        }
-
-        // 5. 未連接節點
-        var orphans = model.Orphans;
-        if (orphans != null)
-        {
-            foreach (var o in orphans)
-            {
-                if (o is not ActionSystemNode node) continue;
-                string focusId = model.GetFocusId(node.EditorNodeId);
-                Warn(report, FocusById(model, focusId), "編輯區",
-                    $"未連接節點「{AGReflect.TypeName(o.GetType())}」不會被執行",
-                    "把它接到某個參數欄位，或刪除它。", null, o);
             }
         }
 
@@ -163,6 +161,7 @@ public static class AGValidator
         var tokens = model.ReadTokens();
         var used = new HashSet<string>();
         WalkTree(report, model, focus, rootSlot, tokens, used, where);
+        ValidateAssetCycles(report, focus, rootSlot, focus?.AssetObject, where, new HashSet<UnityEngine.Object>());
         return report;
     }
 
@@ -209,7 +208,7 @@ public static class AGValidator
                 bool found = false;
                 foreach (var t in tokens)
                     if (t.Key == key && t.ResultType == rt) { found = true; break; }
-                if (found) usedTokens.Add(AGReflect.ResultTypeName(rt) + "|" + key);
+                if (found) usedTokens.Add(TokenId(rt, key));
                 else Err(report, focus, where, $"引用了不存在的變數 '{key}'", "新增同名同型別的變數，或改指向現有變數。", slot, null);
             }
         }
@@ -293,34 +292,114 @@ public static class AGValidator
         foreach (var s in AGModel.WalkSlots(slot, visited)) yield return s;
     }
 
-    private static string TokenId(AGToken t) => AGReflect.ResultTypeName(t.ResultType) + "|" + t.Key;
+    // ===== Asset 參照循環 =====
 
-    private static AGFocus FocusById(AGModel model, string focusId)
+    private static void ValidateAssetCycles(AGReport report, AGFocus focus, object root,
+        UnityEngine.Object rootAsset, string where, HashSet<UnityEngine.Object> completed)
     {
-        if (string.IsNullOrEmpty(focusId)) return null;
-        foreach (var g in model.ReadGroups())
+        var stack = new HashSet<UnityEngine.Object>();
+        var path = new List<UnityEngine.Object>();
+        if (rootAsset != null)
         {
-            if (g.Actions == null) continue;
-            for (int i = 0; i < g.Actions.Count; i++)
-            {
-                var focus = new AGFocus
-                {
-                    Kind = AGFocusKind.Action,
-                    Timing = g.Timing,
-                    ActionList = g.Actions,
-                    ActionIndex = i,
-                    ActionSlot = g.Actions[i],
-                };
-                if (focus.Id == focusId) return focus;
-            }
+            stack.Add(rootAsset);
+            path.Add(rootAsset);
         }
-        foreach (var t in model.ReadTokens())
+
+        string cycle = null;
+        foreach (var asset in DirectAssetReferences(root))
         {
-            var focus = new AGFocus { Kind = AGFocusKind.Token, Token = t };
-            if (focus.Id == focusId) return focus;
+            cycle = FindAssetCycle(asset, stack, path, completed);
+            if (cycle != null) break;
         }
-        return null;
+        if (rootAsset != null) completed.Add(rootAsset);
+        if (cycle == null) return;
+
+        Err(report, focus, where, $"Asset 循環引用：{cycle}",
+            "替換其中一個 Asset，切斷遞迴引用。", root, null);
     }
+
+    private static string FindAssetCycle(UnityEngine.Object asset, HashSet<UnityEngine.Object> stack,
+        List<UnityEngine.Object> path, HashSet<UnityEngine.Object> completed)
+    {
+        if (asset == null || completed.Contains(asset)) return null;
+        if (stack.Contains(asset))
+        {
+            int start = 0;
+            while (start < path.Count && path[start] != asset) start++;
+            var names = new List<string>();
+            for (int i = start; i < path.Count; i++) names.Add(path[i] != null ? path[i].name : "?");
+            names.Add(asset.name);
+            return string.Join(" → ", names);
+        }
+
+        stack.Add(asset);
+        path.Add(asset);
+        string cycle = null;
+        foreach (var child in DirectAssetReferences(AssetContent(asset)))
+        {
+            cycle = FindAssetCycle(child, stack, path, completed);
+            if (cycle != null) break;
+        }
+        path.RemoveAt(path.Count - 1);
+        stack.Remove(asset);
+        completed.Add(asset);
+        return cycle;
+    }
+
+    private static IEnumerable<UnityEngine.Object> DirectAssetReferences(object root)
+    {
+        var result = new List<UnityEngine.Object>();
+        CollectDirectAssetReferences(root, new HashSet<object>(AGRefComparer.Instance), result);
+        return result;
+    }
+
+    private static void CollectDirectAssetReferences(object node, HashSet<object> visited,
+        List<UnityEngine.Object> result)
+    {
+        if (node == null || !visited.Add(node)) return;
+        Type type = node.GetType();
+        if (AGReflect.IsSlotType(type))
+        {
+            int useType = AGReflect.UseType(node);
+            if (useType == 1)
+                CollectDirectAssetReferences(AGReflect.GetFormula(node), visited, result);
+            else if (useType == 2 && AGReflect.GetAsset(node) is UnityEngine.Object asset)
+                result.Add(asset);
+            return;
+        }
+        if (node is UnityEngine.Object) return;
+
+        if (type.IsPrimitive || type.IsEnum || node is string) return;
+        string ns = type.Namespace;
+        if (ns != null && (ns == "UnityEngine" || ns.StartsWith("UnityEngine."))) return;
+
+        if (node is IList rootList)
+        {
+            foreach (var item in rootList) CollectDirectAssetReferences(item, visited, result);
+            return;
+        }
+
+        foreach (var field in AGReflect.Fields(type))
+        {
+            if (field.IsStatic || field.IsNotSerialized) continue;
+            var value = field.GetValue(node);
+            if (value == null) continue;
+            if (value is IList list)
+            {
+                foreach (var item in list) CollectDirectAssetReferences(item, visited, result);
+                continue;
+            }
+            CollectDirectAssetReferences(value, visited, result);
+        }
+    }
+
+    private static object AssetContent(UnityEngine.Object asset)
+        => AGReflect.Get(asset, "_action") ?? AGReflect.Get(asset, "_target");
+
+    private static string TokenId(AGToken t) => TokenId(t.ResultType, t.Key);
+
+    private static string TokenId(Type resultType, string key)
+        => (resultType?.AssemblyQualifiedName ?? "?") + "|" + key;
 
     private static void Err(AGReport r, AGFocus focus, string where, string message, string fix, object slot, object node)
         => r.Issues.Add(new AGIssue { IsError = true, Focus = focus, Where = where, Message = message, Fix = fix, Slot = slot, Node = node });

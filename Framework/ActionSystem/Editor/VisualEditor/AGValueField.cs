@@ -1,8 +1,8 @@
 namespace PinPlugin.ActionSystem.Editor
 {
-using System;
-using UnityEditor;
-using UnityEngine;
+    using System;
+    using UnityEditor;
+    using UnityEngine;
 
 /// <summary>
 /// 把任意型別的值畫成一個輸入框。畫不了的型別顯示唯讀說明，不會把內部欄位攤開誤導使用者。
@@ -10,7 +10,7 @@ using UnityEngine;
 public static class AGValueField
 {
     /// <summary>回傳新值；沒有變更就回原值。</summary>
-    public static object Draw(Rect rect, Type type, object value)
+    public static object Draw(Rect rect, Type type, object value, bool enumButtons = false)
     {
         if (type == null) return value;
 
@@ -40,13 +40,52 @@ public static class AGValueField
         if (type.IsEnum)
         {
             var current = value as Enum;
+            Array values = Enum.GetValues(type);
             if (current == null)
             {
-                var values = Enum.GetValues(type);
                 if (values.Length == 0) return value;
                 current = (Enum)values.GetValue(0);
             }
-            return EditorGUI.EnumPopup(rect, current);
+            if (!enumButtons) return EditorGUI.EnumPopup(rect, current);
+
+            var names = Enum.GetNames(type);
+            var labels = new string[names.Length];
+            for (int i = 0; i < names.Length; i++)
+            {
+                var member = type.GetField(names[i]);
+                var attr = member?.GetCustomAttributes(typeof(ASLabelAttribute), false);
+                labels[i] = attr != null && attr.Length > 0
+                    ? ((ASLabelAttribute)attr[0]).Name
+                    : names[i];
+            }
+
+            if (type.IsDefined(typeof(FlagsAttribute), false))
+            {
+                long selectedFlags = Convert.ToInt64(current);
+                int buttonCount = 0;
+                for (int i = 0; i < values.Length; i++)
+                {
+                    long flag = Convert.ToInt64(values.GetValue(i));
+                    if (flag > 0 && (flag & (flag - 1)) == 0) buttonCount++;
+                }
+                if (buttonCount <= 0) return current;
+                float width = rect.width / buttonCount;
+                int buttonIndex = 0;
+                for (int i = 0; i < names.Length; i++)
+                {
+                    long flag = Convert.ToInt64(values.GetValue(i));
+                    if (flag <= 0 || (flag & (flag - 1)) != 0) continue;
+                    var buttonRect = new Rect(rect.x + width * buttonIndex++, rect.y, width, rect.height);
+                    bool enabled = (selectedFlags & flag) == flag;
+                    if (GUI.Toggle(buttonRect, enabled, labels[i], EditorStyles.miniButton) == enabled) continue;
+                    selectedFlags = enabled ? selectedFlags & ~flag : selectedFlags | flag;
+                }
+                return Enum.ToObject(type, selectedFlags);
+            }
+
+            int selected = Array.IndexOf(values, current);
+            int next = GUI.Toolbar(rect, selected, labels, EditorStyles.miniButton);
+            return next >= 0 && next < values.Length ? values.GetValue(next) : current;
         }
 
         // ===== Unity 內建型別 =====
@@ -92,11 +131,11 @@ public static class AGValueField
     }
 
     /// <summary>畫成不可編輯的樣子（值仍可改，只是視覺上表示它不是主要來源）。</summary>
-    public static object DrawMuted(Rect rect, Type type, object value, string tooltip)
+    public static object DrawMuted(Rect rect, Type type, object value, string tooltip, bool enumButtons = false)
     {
         var old = GUI.color;
         GUI.color = new Color(1f, 1f, 1f, 0.55f);
-        var result = Draw(rect, type, value);
+        var result = Draw(rect, type, value, enumButtons);
         GUI.color = old;
         if (!string.IsNullOrEmpty(tooltip)) GUI.Label(rect, new GUIContent("", tooltip));
         return result;

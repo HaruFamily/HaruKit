@@ -21,6 +21,12 @@ public class ActionGraphWindow : EditorWindow
     private const float ResizeHandleWidth = 6f;
     private const float HeaderHeight = 46f;
     private const float MinConsole = 22f;
+    private const float NodeCornerRadius = 6f;
+    private const float LinkSnapDistance = 24f;
+    private const float LinkThickness = 4f;
+    private const float TokenCellHeight = 30f;
+    private const float ActionCellHeight = TokenCellHeight;
+    private const float AssetCellHeight = 34f;
     private const string PrefConsoleHeight = "ActionGraph.ConsoleHeight";
     private const string PrefConsoleCollapsed = "ActionGraph.ConsoleCollapsed";
     private const string PrefLeftWidth = "ActionGraph.LeftWidth";
@@ -33,14 +39,19 @@ public class ActionGraphWindow : EditorWindow
     private bool graphDirty = true;
     private AGReport report = new();
     private bool verifiedOnce;
+    private bool reportStale;
+    private bool assetVerifiedOnce;
+    private bool assetReportStale;
 
     // 畫布
     private Vector2 pan = new(20f, 20f);
     private float zoom = 1f;
     private Rect canvasRect;
+    private Matrix4x4 canvasGuiMatrix;
+    private Rect rootGuiGroupRect;
 
     // 面板狀態
-    private Vector2 tokenScroll, actionScroll, consoleScroll;
+    private Vector2 tokenScroll, assetLibraryScroll, actionScroll, consoleScroll;
     private float consoleHeight = 150f;
     private bool consoleCollapsed;
     private bool resizingConsole;
@@ -49,10 +60,12 @@ public class ActionGraphWindow : EditorWindow
     private bool resizingLeftPanel;
     private bool resizingRightPanel;
     private int consoleTab;                  // 0 全部 / 1 錯誤 / 2 警告
+    private int libraryTab;                  // 0 變數 / 1 資產
     private string tokenSearch = "";
-    private Type newTokenType;
-    private string newTokenKey = "";
+    private string assetSearch = "";
     private Enum currentTiming;
+    private object editingNameTarget;
+    private string editingNameDraft = "";
 
     // 互動
     private AGNode dragNode;
@@ -60,9 +73,17 @@ public class ActionGraphWindow : EditorWindow
     private readonly Dictionary<string, Vector2> dragStartPositions = new();
     private bool linking;
     private AGRow linkRow;
+    private AGNode linkNode;
+
+    // 拉線期間的相容性：起手時對全圖判定一次，之後高亮與吸附都讀這份，不必每幀重算。
+    private readonly HashSet<string> linkCompatibleNodeIds = new();
+    private readonly HashSet<AGRow> linkCompatibleRows = new();
     private AGToken dragToken;
     private bool dragTokenActive;
     private AGToken pendingTokenFocus;
+    private ScriptableObject dragAsset;
+    private bool dragAssetActive;
+    private ScriptableObject pendingAssetFocus;
     private AGFocus pendingActionFocus;
     // 選取用 id 記，節點物件每次重建圖都會換一份。
     private readonly HashSet<string> selectedIds = new();
@@ -76,13 +97,18 @@ public class ActionGraphWindow : EditorWindow
     private static readonly List<object> clipboard = new();
 
     // 有未儲存變更時不硬切對象，先記在這裡等使用者按確認
-    private UnityEngine.Object pendingOwner;
+    private UnityEngine.Object pendingTarget;
 
     // 資產焦點（獨立存檔交易）
     private AGFocus returnFocus;
     private bool assetDirty;
     private AGReport assetReport = new();
     private Vector2 referenceScroll;
+
+    private bool HasUnsavedWork => model?.Dirty == true || assetDirty;
+    private bool IsCurrentReportFresh => focus.Kind == AGFocusKind.Asset
+        ? assetVerifiedOnce && !assetReportStale
+        : verifiedOnce && !reportStale;
 
     // ===== 開啟 =====
 
@@ -132,6 +158,14 @@ public class ActionGraphWindow : EditorWindow
     /// <summary>資產本身沒有變數清單與欄位型別，必須借一個引用它的 Owner 當上下文。</summary>
     private void OpenSharedAsset(ScriptableObject asset)
     {
+        if (focus.Kind == AGFocusKind.Asset)
+        {
+            if (focus.AssetObject == asset) return;
+            if (!ConfirmLeaveAsset()) return;
+            ExitAsset();
+        }
+        if (TryEnterSharedAsset(asset)) return;
+
         ScriptableObject owner = null;
         if (AGReflect.Get(asset, "_subscribers") is IList subs)
         {
@@ -145,42 +179,140 @@ public class ActionGraphWindow : EditorWindow
             return;
         }
 
-        Bind(owner);
-        if (model == null) return;
-
-        foreach (var slot in model.AllSlots())
-        {
-            if (AGReflect.GetAsset(slot) != asset) continue;
-            EnterAsset(asset, slot.GetType());
-            return;
-        }
+        if (!Bind(owner)) return;
+        if (TryEnterSharedAsset(asset)) return;
         EditorUtility.DisplayDialog("找不到引用點",
             $"'{owner.name}' 的引用清單登記了這個資產，但實際內容裡找不到指向它的欄位。\n請在資產編輯畫面重建引用清單。", "好");
     }
 
-    public void Bind(UnityEngine.Object owner)
+    private bool TryEnterSharedAsset(ScriptableObject asset)
     {
-        if (model != null && model.Dirty && !EditorUtility.DisplayDialog(
-                "尚未儲存", $"'{(model.Owner != null ? model.Owner.name : "?")}' 有未儲存的修改，切換後會遺失。要繼續嗎？", "捨棄並切換", "取消"))
-            return;
+        if (model == null) return false;
+        foreach (var slot in model.AllSlots())
+        {
+            if (AGReflect.GetAsset(slot) != asset) continue;
+            EnterAsset(asset, slot.GetType());
+            return true;
+        }
+
+        Type compatibleSlot = SlotTypeForAsset(asset, AssetSlotTypes());
+        if (compatibleSlot == null) return false;
+
+        // 磁碟上的 Owner 已不再引用時，這筆 subscriber 是舊快取；資產仍可借其型別上下文獨立編輯。
+        if (model.Owner is ScriptableObject owner && !OwnerReferencesAsset(owner, asset))
+            RemoveStaleSubscriber(asset, owner);
+
+        EnterAsset(asset, compatibleSlot);
+        return true;
+    }
+
+    private static void RemoveStaleSubscriber(ScriptableObject asset, ScriptableObject owner)
+    {
+        if (asset == null || owner == null) return;
+        if (AGReflect.Get(asset, "_subscribers") is not IList subscribers || !subscribers.Contains(owner)) return;
+
+        asset.GetType().GetMethod("UnregisterSubscriber")?.Invoke(asset, new object[] { owner });
+        AssetDatabase.SaveAssets();
+    }
+
+    private static bool OwnerReferencesAsset(ScriptableObject owner, ScriptableObject asset)
+    {
+        var field = AGModel.FindSystemField(owner);
+        var system = field?.GetValue(owner);
+        if (system == null) return false;
+
+        foreach (var slot in AGModel.SlotsOfSystem(system))
+            if (AGReflect.GetAsset(slot) == asset) return true;
+        return false;
+    }
+
+    /// <summary>Owner 存檔時才依最終工作副本同步訂閱，取消與 Undo 不會污染衍生快取。</summary>
+    private void SyncOwnerAssetSubscriptions()
+    {
+        if (model?.Owner is not ScriptableObject owner) return;
+
+        var referenced = CollectAssets(model.AllSlots());
+        var candidates = new HashSet<ScriptableObject>(referenced);
+
+        var field = AGModel.FindSystemField(owner);
+        var storedSystem = field?.GetValue(owner);
+        if (storedSystem != null)
+            foreach (var asset in CollectAssets(AGModel.SlotsOfSystem(storedSystem))) candidates.Add(asset);
+
+        // 涵蓋「剛轉存後又刪除」：它不在舊資料與新資料內，但可能殘留舊版立即登記的 subscriber。
+        foreach (var entry in AGAssetIndex.Entries)
+            if (entry.Asset != null) candidates.Add(entry.Asset);
+
+        foreach (var asset in candidates)
+        {
+            string method = referenced.Contains(asset) ? "RegisterSubscriber" : "UnregisterSubscriber";
+            asset.GetType().GetMethod(method)?.Invoke(asset, new object[] { owner });
+        }
+    }
+
+    private static HashSet<ScriptableObject> CollectAssets(IEnumerable<object> slots)
+    {
+        var result = new HashSet<ScriptableObject>();
+        foreach (var slot in slots)
+            if (AGReflect.GetAsset(slot) is ScriptableObject asset) result.Add(asset);
+        return result;
+    }
+
+    public bool Bind(UnityEngine.Object owner)
+    {
+        if (HasUnsavedWork && !EditorUtility.DisplayDialog(
+                "尚未儲存", $"'{(model?.Owner != null ? model.Owner.name : "?")}' 有未儲存的修改，切換後會遺失。要繼續嗎？", "捨棄並切換", "取消"))
+            return false;
 
         SaveCurrentTiming();
+        returnFocus = null;
+        assetDirty = false;
+        assetReport = new AGReport();
+        assetVerifiedOnce = false;
+        assetReportStale = false;
         model = new AGModel();
-        if (!model.Bind(owner)) { model = null; return; }
-        pendingOwner = null;
+        if (!model.Bind(owner))
+        {
+            model = null;
+            UpdateUnsavedState();
+            return false;
+        }
+        pendingTarget = null;
 
         focus = new AGFocus();
         RestoreCurrentTiming();
         graphDirty = true;
         verifiedOnce = false;
-        report = AGValidator.Run(model);
+        report = AGValidator.Run(model, includeMissingTypes: true);
         verifiedOnce = true;
+        reportStale = false;
+        UpdateUnsavedState();
         Repaint();
+        return true;
     }
 
     /// <summary>從 Project／Hierarchy 選到支援的對象就自動聚焦。有未儲存變更時不硬切，改成在工具列問。</summary>
     private void OnSelectionChange()
     {
+        if (Selection.activeObject is ScriptableObject asset && IsSharedAsset(asset))
+        {
+            if (focus.Kind == AGFocusKind.Asset && focus.AssetObject == asset) return;
+
+            // 同一 Owner 的工作副本已引用此資產時可安全下鑽，不會丟掉 Owner 修改。
+            if (focus.Kind != AGFocusKind.Asset && TryEnterSharedAsset(asset))
+            {
+                pendingTarget = null;
+                Repaint();
+                return;
+            }
+
+            bool assetSwitchBusy = model != null && (model.Dirty || (focus.Kind == AGFocusKind.Asset && assetDirty));
+            if (assetSwitchBusy) pendingTarget = asset;
+            else { pendingTarget = null; OpenSharedAsset(asset); }
+            Repaint();
+            return;
+        }
+
         var picked = ResolveOwner(Selection.activeObject);
         if (picked == null)
         {
@@ -190,8 +322,8 @@ public class ActionGraphWindow : EditorWindow
         if (model != null && ReferenceEquals(picked, model.Owner)) return;
 
         bool busy = model != null && (model.Dirty || focus.Kind == AGFocusKind.Asset);
-        if (busy) pendingOwner = picked;
-        else { pendingOwner = null; Bind(picked); }
+        if (busy) pendingTarget = picked;
+        else { pendingTarget = null; Bind(picked); }
         Repaint();
     }
 
@@ -214,6 +346,8 @@ public class ActionGraphWindow : EditorWindow
             }
             else ExitAsset();
         }
+
+        if (focus.Kind == AGFocusKind.Asset) ExitAsset();
 
         if (!model.Dirty) return true;
 
@@ -258,12 +392,17 @@ public class ActionGraphWindow : EditorWindow
         report = new AGReport();
         assetReport = new AGReport();
         verifiedOnce = false;
+        reportStale = false;
+        assetVerifiedOnce = false;
+        assetReportStale = false;
         currentTiming = null;
         tokenSearch = "";
-        pendingOwner = null;
+        assetSearch = "";
+        pendingTarget = null;
         returnFocus = null;
         assetDirty = false;
         selectedIds.Clear();
+        UpdateUnsavedState();
         Repaint();
     }
 
@@ -283,10 +422,12 @@ public class ActionGraphWindow : EditorWindow
 
     private void OnEnable()
     {
+        saveChangesMessage = "ActionSystemGraph 有未儲存的修改。是否在關閉前存檔？";
         consoleHeight = EditorPrefs.GetFloat(PrefConsoleHeight, 150f);
         consoleCollapsed = EditorPrefs.GetBool(PrefConsoleCollapsed, false);
         leftWidth = EditorPrefs.GetFloat(PrefLeftWidth, DefaultLeftWidth);
         rightWidth = EditorPrefs.GetFloat(PrefRightWidth, DefaultRightWidth);
+        UpdateUnsavedState();
     }
 
     private void OnDisable()
@@ -296,6 +437,52 @@ public class ActionGraphWindow : EditorWindow
         EditorPrefs.SetBool(PrefConsoleCollapsed, consoleCollapsed);
         EditorPrefs.SetFloat(PrefLeftWidth, leftWidth);
         EditorPrefs.SetFloat(PrefRightWidth, rightWidth);
+    }
+
+    public override void SaveChanges()
+    {
+        if (!HasUnsavedWork)
+        {
+            base.SaveChanges();
+            return;
+        }
+
+        if (focus.Kind == AGFocusKind.Asset)
+        {
+            if (assetDirty && !SaveAsset(false))
+                throw new InvalidOperationException("共用資產驗證失敗，ActionSystemGraph 保留未儲存內容並取消關閉。");
+            if (focus.Kind == AGFocusKind.Asset) ExitAsset();
+        }
+
+        if (model?.Dirty == true && !DoSave(false))
+            throw new InvalidOperationException("編輯對象驗證失敗，ActionSystemGraph 保留未儲存內容並取消關閉。");
+
+        UpdateUnsavedState();
+        base.SaveChanges();
+    }
+
+    public override void DiscardChanges()
+    {
+        if (focus.Kind == AGFocusKind.Asset) ExitAsset();
+        if (model?.Dirty == true)
+        {
+            model.Reload();
+            focus = new AGFocus();
+            graphDirty = true;
+        }
+        UpdateUnsavedState();
+        base.DiscardChanges();
+    }
+
+    private void UpdateUnsavedState()
+    {
+        hasUnsavedChanges = HasUnsavedWork;
+        if (!hasUnsavedChanges) return;
+
+        string ownerName = model?.Owner != null ? model.Owner.name : "ActionSystemGraph";
+        saveChangesMessage = focus.Kind == AGFocusKind.Asset && assetDirty
+            ? $"共用資產與 '{ownerName}' 有未儲存的修改。是否在關閉前存檔？"
+            : $"'{ownerName}' 有未儲存的修改。是否在關閉前存檔？";
     }
 
     private string TimingPrefKey()
@@ -337,31 +524,41 @@ public class ActionGraphWindow : EditorWindow
         {
             DrawIdle(toolbar, left, right, center);
             DrawPanelResizeHandles(leftHandle, rightHandle);
+            UpdateUnsavedState();
             return;
         }
 
         HandleGlobalKeys();
         EnsureGraph();
+        if (Event.current.type == EventType.MouseDrag && dragToken != null) dragTokenActive = true;
+        if (Event.current.type == EventType.MouseDrag && dragAsset != null) dragAssetActive = true;
 
-        DrawToolbar(toolbar);
-        DrawTokenPanel(left);
+        // 縮放畫布先畫；固定面板最後畫，吸收 IMGUI 縮放在邊界可能漏出的次像素。
+        DrawCenter(center);
+        DrawLibraryPanel(left);
         if (focus.Kind == AGFocusKind.Asset) DrawReferencePanel(right);
         else DrawTimingPanel(right);
-        DrawCenter(center);
+        DrawToolbar(toolbar);
         DrawPanelResizeHandles(leftHandle, rightHandle);
 
         if (dragTokenActive) DrawDragTokenGhost();
-        if (Event.current.type == EventType.MouseUp)
+        if (dragAssetActive) DrawDragAssetGhost();
+        if (Event.current.rawType == EventType.MouseUp)
         {
+            if (Event.current.button == 0) EndLink();
             dragTokenActive = false;
             dragToken = null;
             pendingTokenFocus = null;
+            dragAssetActive = false;
+            dragAsset = null;
+            pendingAssetFocus = null;
             pendingActionFocus = null;
             dragActionIndex = -1;
             dragListRow = null;
             dragListIndex = -1;
         }
         if (Event.current.type == EventType.MouseDrag || linking || dragTokenActive) Repaint();
+        UpdateUnsavedState();
     }
 
     private void GetLayout(out Rect toolbar, out Rect left, out Rect right, out Rect center, out Rect leftHandle, out Rect rightHandle)
@@ -461,7 +658,7 @@ public class ActionGraphWindow : EditorWindow
         x -= 92f; GUI.Button(new Rect(x, toolbar.y + 1f, 90f, 19f), "換編輯對象");
         GUI.enabled = true;
 
-        DrawIdlePanel(left, "變數庫");
+        DrawIdlePanel(left, "資料庫");
         DrawIdlePanel(right, "時機");
 
         AGStyles.Fill(center, AGStyles.Canvas);
@@ -498,28 +695,19 @@ public class ActionGraphWindow : EditorWindow
         if (!graphDirty && graph != null) return;
         graphDirty = false;
 
+        // 候選池掛在焦點的頭端上，不必再依 FocusId 過濾。
+        model.OrphanHead = focus.Head;
+
         var rootSlot = focus.RootSlot;
         graph = rootSlot != null
-            ? AGGraph.Build(model, rootSlot, focus.Title, OrphansOfCurrentFocus())
+            ? AGGraph.Build(model, rootSlot, OrphansOfCurrentFocus(), focus.Id)
             : new AGGraphView();
 
         if (pendingCenterTarget != null) { CenterOn(pendingCenterTarget); pendingCenterTarget = null; }
     }
 
-    /// <summary>只顯示屬於目前焦點的未連接節點。</summary>
-    private IList OrphansOfCurrentFocus()
-    {
-        var result = new List<object>();
-        var all = model.Orphans;
-        if (all == null) return result;
-        string focusId = focus.Id;
-        foreach (var o in all)
-        {
-            if (o is not ActionSystemNode n) continue;
-            if (model.GetFocusId(n.EditorNodeId) == focusId) result.Add(o);
-        }
-        return result;
-    }
+    /// <summary>目前焦點頭端自己的候選節點。</summary>
+    private IList OrphansOfCurrentFocus() => AGReflect.Orphans(focus.Head);
 
     /// <summary>目前畫面該用哪一份驗證結果：資產焦點只看資產自己的。</summary>
     private AGReport Rep => focus.Kind == AGFocusKind.Asset ? assetReport : report;
@@ -528,8 +716,39 @@ public class ActionGraphWindow : EditorWindow
     {
         graphDirty = true;
         // 資產是獨立存檔交易，改它不算改 Owner，也不進 Owner 的 Undo 堆疊。
-        if (focus.Kind == AGFocusKind.Asset) assetDirty = true;
-        else model.MarkDirty();
+        if (focus.Kind == AGFocusKind.Asset)
+        {
+            assetDirty = true;
+            assetReportStale = true;
+        }
+        else
+        {
+            model.MarkDirty();
+            reportStale = true;
+        }
+        LiveVerify();
+        UpdateUnsavedState();
+    }
+
+    /// <summary>
+    /// 每次修改後重跑驗證：接上來源、換型別、刪節點都會立刻反映在徽章與 Console。
+    /// 規則與存檔時完全相同（含 Token 循環、Asset 參照循環）；差別只有 SerializeReference
+    /// 型別遺失那一項——它看的是 Owner 本體，編輯工作副本不會改變它。
+    /// </summary>
+    private void LiveVerify()
+    {
+        if (model?.Data == null) return;
+
+        if (focus.Kind == AGFocusKind.Asset)
+        {
+            if (focus.AssetHostSlot == null) return;
+            assetReport = AGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
+            assetVerifiedOnce = true;
+            return;
+        }
+
+        report = AGValidator.Run(model);
+        verifiedOnce = true;
     }
 
     // ===== 全域快捷鍵 =====
@@ -600,6 +819,7 @@ public class ActionGraphWindow : EditorWindow
         selectedIds.Clear();
         graphDirty = true;
         DoVerify(true);
+        UpdateUnsavedState();
         Repaint();
     }
 
@@ -616,24 +836,33 @@ public class ActionGraphWindow : EditorWindow
             AGOwnerIndex.ShowPicker(ownerPickerRect, owner => { Bind(owner); Repaint(); });
         GUI.enabled = true;
 
-        string crumb = $"{model.Owner.name}{(model.Dirty ? "●" : "")}　›　";
-        crumb += focus.Kind == AGFocusKind.Asset
-            ? $"{(returnFocus != null ? returnFocus.Title : "—")}　›　{focus.Title}{(assetDirty ? "　●未儲存" : "")}"
-            : $"{focus.Title}{(model.Dirty ? "　●未儲存" : "")}";
+        string ownerPath = AssetDatabase.GetAssetPath(model.Owner);
+        if (string.IsNullOrEmpty(ownerPath)) ownerPath = "Scene";
+        bool inAsset = focus.Kind == AGFocusKind.Asset;
+        string crumb = $"{model.Owner.name} ({model.Owner.GetType().Name})({ownerPath})";
         GUI.Label(new Rect(ownerPickerRect.xMax + 4f, r.y + 2f, r.width - 440f, 18f), crumb, EditorStyles.boldLabel);
 
-        bool inAsset = focus.Kind == AGFocusKind.Asset;
-        bool blocked = inAsset ? !assetReport.CanSave : verifiedOnce && !report.CanSave;
+        // 即時檢查一有錯就把存檔鈕關掉；沒有錯時仍可按，存檔當下再跑一次嚴格驗證。
+        bool blocked = !Rep.CanSave;
+        bool hasChanges = inAsset ? assetDirty : model.Dirty;
+        bool canSave = hasChanges && !blocked;
 
         float x = r.xMax - 6f;
         x -= 96f;
-        GUI.enabled = !blocked;
-        if (GUI.Button(new Rect(x, r.y + 1f, 94f, 19f),
-                new GUIContent(blocked ? "存檔（有錯誤）" : inAsset ? "存檔並返回" : "存檔",
-                    blocked ? "驗證有錯誤，先在 Console 修正才能存檔" : "驗證通過後寫回資產")))
+        var saveRect = new Rect(x, r.y + 1f, 94f, 19f);
+        GUI.enabled = canSave;
+        var saveColor = GUI.backgroundColor;
+        if (canSave) GUI.backgroundColor = new Color(0.85f, 0.28f, 0.28f);
+        string saveLabel = blocked ? "存檔（有錯誤）" : inAsset ? "存檔並返回" : "存檔";
+        string saveTooltip = blocked ? "驗證有錯誤，先在 Console 修正才能存檔"
+            : !hasChanges ? "目前沒有未儲存的修改"
+            : !IsCurrentReportFresh ? "按下後先做完整驗證（含循環與型別遺失），通過才會存檔"
+            : "驗證通過後寫回資產";
+        if (GUI.Button(saveRect, new GUIContent(saveLabel, saveTooltip)))
         {
             if (inAsset) SaveAsset(); else DoSave();
         }
+        GUI.backgroundColor = saveColor;
         GUI.enabled = true;
 
         x -= 62f;
@@ -656,21 +885,22 @@ public class ActionGraphWindow : EditorWindow
 
         x -= 132f;
         var switchRect = new Rect(x, r.y + 1f, 130f, 19f);
-        if (pendingOwner != null)
+        if (pendingTarget != null)
         {
-            var label = new GUIContent($"切換→{pendingOwner.name}", "剛才選取了別的對象，按此切換（目前的修改會依提示處理）");
+            var label = new GUIContent($"切換→{pendingTarget.name}", "剛才選取了別的對象，按此切換（目前的修改會依提示處理）");
             var old = GUI.backgroundColor;
             GUI.backgroundColor = new Color(1f, 0.85f, 0.5f);
             if (GUI.Button(switchRect, label))
             {
-                var target = pendingOwner;
-                pendingOwner = null;
+                var target = pendingTarget;
+                pendingTarget = null;
                 if (inAsset)
                 {
                     if (!ConfirmLeaveAsset()) { GUI.backgroundColor = old; return; }
                     ExitAsset();
                 }
-                Bind(target);
+                if (target is ScriptableObject asset && IsSharedAsset(asset)) OpenSharedAsset(asset);
+                else Bind(target);
             }
             GUI.backgroundColor = old;
         }
@@ -684,30 +914,43 @@ public class ActionGraphWindow : EditorWindow
         if (focus.Kind == AGFocusKind.Asset)
         {
             assetReport = AGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
+            assetVerifiedOnce = true;
+            assetReportStale = false;
             if (assetReport.ErrorCount > 0) { consoleCollapsed = false; consoleTab = 1; }
             if (!silent && assetReport.Issues.Count == 0) ShowNotification(new GUIContent("驗證通過"));
             return;
         }
 
-        report = AGValidator.Run(model);
+        report = AGValidator.Run(model, includeMissingTypes: true);
         verifiedOnce = true;
+        reportStale = false;
         if (report.ErrorCount > 0) { consoleCollapsed = false; consoleTab = 1; }
         if (!silent && report.ErrorCount == 0 && report.WarningCount == 0)
             ShowNotification(new GUIContent("驗證通過"));
     }
 
-    private void DoSave()
+    private bool DoSave(bool showDialog = true)
     {
         DoVerify(true);
         if (!report.CanSave)
         {
             consoleCollapsed = false;
             consoleTab = 1;
-            EditorUtility.DisplayDialog("無法存檔", $"還有 {report.ErrorCount} 個錯誤，請先在 Console 修正。", "好");
-            return;
+            if (showDialog)
+                EditorUtility.DisplayDialog("無法存檔", $"還有 {report.ErrorCount} 個錯誤，請先在 Console 修正。", "好");
+            return false;
         }
-        model.Save();
+        if (!model.Save())
+        {
+            if (showDialog)
+                EditorUtility.DisplayDialog("無法存檔", "Core 驗證未通過，Owner 未寫入。請查看 Unity Console。", "好");
+            return false;
+        }
+        SyncOwnerAssetSubscriptions();
+        AssetDatabase.SaveAssets();
+        UpdateUnsavedState();
         ShowNotification(new GUIContent("已存檔"));
+        return true;
     }
 
     private void DoCancel()
@@ -720,6 +963,7 @@ public class ActionGraphWindow : EditorWindow
         selectedIds.Clear();
         graphDirty = true;
         DoVerify(true);
+        UpdateUnsavedState();
     }
 
     // ===== 資產焦點（獨立存檔交易）=====
@@ -735,6 +979,8 @@ public class ActionGraphWindow : EditorWindow
     private void EnterAsset(UnityEngine.Object asset, Type slotType)
     {
         if (asset == null) return;
+        if (focus.Kind == AGFocusKind.Asset && focus.AssetObject == asset) return;
+        AGFocus back = focus.Kind == AGFocusKind.Asset ? returnFocus : focus;
         if (focus.Kind == AGFocusKind.Asset && !ConfirmLeaveAsset()) return;
 
         object host = slotType != null ? AGReflect.CreateInstance(slotType) : null;
@@ -745,44 +991,40 @@ public class ActionGraphWindow : EditorWindow
         }
 
         var target = AGReflect.Get(asset, "_target") ?? AGReflect.Get(asset, "_action");
-        if (target is ActionSystemNode source)
-        {
-            var clone = source.EditorClone();
-            AGReflect.SetUseType(host, 1);
-            AGReflect.SetFormula(host, clone);
-        }
-        else
-        {
-            AGReflect.SetUseType(host, 0);
-        }
+        if (target is ActionSystemNode source) AGReflect.SetFormula(host, source.EditorClone());
+        else AGReflect.ClearNode(host);
 
-        var back = focus;
         SetFocus(new AGFocus { Kind = AGFocusKind.Asset, AssetObject = asset, AssetHostSlot = host });
-        returnFocus = back;
+        returnFocus = back ?? new AGFocus();
         assetDirty = false;
+        assetVerifiedOnce = false;
+        assetReportStale = false;
         DoVerify(true);
+        UpdateUnsavedState();
     }
 
-    private void SaveAsset()
+    private bool SaveAsset(bool showDialog = true)
     {
         var asset = focus.AssetObject;
         var host = focus.AssetHostSlot;
-        if (asset == null || host == null) { ExitAsset(); return; }
+        if (asset == null || host == null) return false;
 
         DoVerify(true);
         if (!assetReport.CanSave)
         {
             consoleCollapsed = false;
             consoleTab = 1;
-            EditorUtility.DisplayDialog("無法存檔", $"這個資產還有 {assetReport.ErrorCount} 個錯誤。", "好");
-            return;
+            if (showDialog)
+                EditorUtility.DisplayDialog("無法存檔", $"這個資產還有 {assetReport.ErrorCount} 個錯誤。", "好");
+            return false;
         }
 
         int useType = AGReflect.UseType(host);
         if (useType == 2 || useType == 3)
         {
-            EditorUtility.DisplayDialog("無法存檔", "資產的內容只能是公式或動作，不能再指向另一個資產或變數。", "好");
-            return;
+            if (showDialog)
+                EditorUtility.DisplayDialog("無法存檔", "資產的內容只能是公式或動作，不能再指向另一個資產或變數。", "好");
+            return false;
         }
 
         var content = useType == 1 ? AGReflect.GetFormula(host) : null;
@@ -790,16 +1032,21 @@ public class ActionGraphWindow : EditorWindow
         if (setTarget == null)
         {
             Debug.LogError($"[ActionGraph] {asset.GetType().Name} 沒有 SetTarget，無法寫回。");
-            return;
+            return false;
         }
         setTarget.Invoke(asset, new object[] { content });
         EditorUtility.SetDirty(asset);
         AssetDatabase.SaveAssets();
         NotifyAssetSubscribers(asset);
+        AssetDatabase.SaveAssets();
 
         assetDirty = false;
+        assetVerifiedOnce = true;
+        assetReportStale = false;
         ShowNotification(new GUIContent("資產已存檔"));
         ExitAsset();
+        UpdateUnsavedState();
+        return true;
     }
 
     private void CancelAsset()
@@ -820,9 +1067,12 @@ public class ActionGraphWindow : EditorWindow
         var back = returnFocus;
         returnFocus = null;
         assetDirty = false;
+        assetVerifiedOnce = false;
+        assetReportStale = false;
         assetReport = new AGReport();
         SetFocus(back ?? new AGFocus());
         DoVerify(true);
+        UpdateUnsavedState();
         Repaint();
     }
 
@@ -838,52 +1088,51 @@ public class ActionGraphWindow : EditorWindow
         }
     }
 
-    // ===== 左欄：Token 庫 =====
+    // ===== 左欄：Token／Asset 庫 =====
 
-    private void DrawTokenPanel(Rect r)
+    private void DrawLibraryPanel(Rect r)
     {
         AGStyles.Fill(r, new Color(0.19f, 0.20f, 0.22f));
         AGStyles.Frame(r, AGStyles.NodeBorder);
 
         bool inAsset = focus.Kind == AGFocusKind.Asset;
-        GUI.Label(new Rect(r.x + 4f, r.y + 2f, 160f, 18f),
-            new GUIContent(inAsset ? "變數庫（呼叫端）" : "變數庫",
-                inAsset ? "資產目前以名稱對應呼叫端的變數，沒有自己的參數宣告" : ""),
-            AGStyles.PanelHeader);
+        GUI.Label(new Rect(r.x + 4f, r.y + 2f, 160f, 18f), "資料庫", AGStyles.PanelHeader);
 
-        var createRect = new Rect(r.x + 2f, r.y + 20f, r.width - 4f, 50f);
+        float tabWidth = (r.width - 8f) * 0.5f;
+        if (DrawTab(new Rect(r.x + 4f, r.y + 22f, tabWidth, 22f), "變數", libraryTab == 0)) libraryTab = 0;
+        if (DrawTab(new Rect(r.x + 4f + tabWidth, r.y + 22f, tabWidth, 22f), "資產", libraryTab == 1)) libraryTab = 1;
+
+        if (libraryTab == 0) DrawTokenLibrary(r, r.y + 48f, inAsset);
+        else DrawAssetLibrary(r, r.y + 48f);
+    }
+
+    private void DrawTokenLibrary(Rect r, float top, bool inAsset)
+    {
+        GUI.Label(new Rect(r.x + 6f, top, r.width - 12f, 16f),
+            new GUIContent(inAsset ? "呼叫端變數" : "共用變數",
+                inAsset ? "資產目前以名稱對應呼叫端的變數，沒有自己的參數宣告" : ""), AGStyles.Tiny);
+
+        var createRect = new Rect(r.x + 2f, top + 18f, r.width - 4f, 28f);
         AGStyles.Fill(createRect, new Color(0.22f, 0.23f, 0.26f));
         AGStyles.Frame(createRect, AGStyles.NodeBorder);
 
         var kinds = model.TokenKinds();
-        if (newTokenType == null && kinds.Count > 0) newTokenType = kinds[0].resultType;
-
-        var typeLabels = new string[kinds.Count];
-        int selectedType = 0;
-        for (int i = 0; i < kinds.Count; i++)
-        {
-            typeLabels[i] = AGReflect.ResultTypeName(kinds[i].resultType);
-            if (kinds[i].resultType == newTokenType) selectedType = i;
-        }
-
         GUI.enabled = !inAsset && kinds.Count > 0;
-        int pickedType = EditorGUI.Popup(new Rect(r.x + 4f, r.y + 22f, 72f, 20f), selectedType, typeLabels);
-        if (kinds.Count > 0) newTokenType = kinds[pickedType].resultType;
-        newTokenKey = EditorGUI.TextField(new Rect(r.x + 80f, r.y + 22f, r.width - 84f, 20f), newTokenKey);
-
-        bool uniqueKey = !string.IsNullOrWhiteSpace(newTokenKey);
-        if (uniqueKey)
-            foreach (var token in model.ReadTokens())
-                if (token.Key == newTokenKey.Trim()) { uniqueKey = false; break; }
-        GUI.enabled = !inAsset && newTokenType != null && uniqueKey;
-        if (GUI.Button(new Rect(r.x + 4f, r.y + 46f, r.width - 8f, 22f), "新增變數")) AddTokenFromFields();
+        if (GUI.Button(new Rect(r.x + 4f, top + 21f, r.width - 8f, 22f), "新增變數")) ShowAddTokenMenu();
         GUI.enabled = true;
 
-        var listRect = new Rect(r.x + 2f, r.y + 72f, r.width - 4f, r.height - 98f);
-        var searchRect = new Rect(r.x + 4f, r.yMax - 22f, r.width - 8f, 20f);
+        var removeRect = new Rect(r.x + 4f, top + 50f, r.width - 8f, 20f);
+        bool canRemoveToken = !inAsset && focus.Kind == AGFocusKind.Token && focus.Token != null;
+        GUI.enabled = canRemoveToken;
+        if (GUI.Button(removeRect, "移除變數")) RemoveToken(focus.Token);
+        GUI.enabled = true;
+
+        var searchRect = new Rect(r.x + 4f, top + 74f, r.width - 8f, 20f);
         GUI.Label(new Rect(searchRect.x + 4f, searchRect.y + 2f, 16f, 16f),
             EditorGUIUtility.IconContent("Search Icon", "搜尋變數"));
         tokenSearch = EditorGUI.TextField(new Rect(searchRect.x + 20f, searchRect.y, searchRect.width - 20f, searchRect.height), tokenSearch);
+
+        var listRect = new Rect(r.x + 2f, top + 98f, r.width - 4f, r.yMax - top - 100f);
         var tokens = model.ReadTokens();
         var shown = new List<AGToken>();
         foreach (var t in tokens)
@@ -892,24 +1141,27 @@ public class ActionGraphWindow : EditorWindow
                 || t.TypeName.IndexOf(tokenSearch, StringComparison.OrdinalIgnoreCase) >= 0)
                 shown.Add(t);
 
-        var content = new Rect(0f, 0f, listRect.width - 16f, shown.Count * 22f + 4f);
+        var content = new Rect(0f, 0f, listRect.width - 16f, shown.Count * TokenCellHeight + 4f);
         tokenScroll = GUI.BeginScrollView(listRect, tokenScroll, content);
         for (int i = 0; i < shown.Count; i++)
         {
             var token = shown[i];
-            var row = new Rect(0f, i * 22f, content.width, 21f);
+            var row = new Rect(2f, i * TokenCellHeight + 2f, content.width - 4f, TokenCellHeight - 3f);
             bool isFocus = focus.Kind == AGFocusKind.Token && focus.Token != null
                 && focus.Token.Key == token.Key && focus.Token.ResultType == token.ResultType;
-            if (isFocus) AGStyles.Fill(row, new Color(0.30f, 0.42f, 0.52f, 0.6f));
-            else if (i % 2 == 1) AGStyles.Fill(row, AGStyles.RowAlt);
+            AGStyles.Fill(row, isFocus ? AGStyles.LibraryCellFocused
+                : i % 2 == 0 ? AGStyles.LibraryCell : AGStyles.LibraryCellAlt);
+            AGStyles.Frame(row, isFocus ? AGStyles.Link : AGStyles.LibraryCellBorder);
 
-            GUI.Label(new Rect(row.x + 4f, row.y + 1f, row.width - 70f, 18f),
+            GUI.Label(new Rect(row.x + 8f, row.y + 2f, row.width - 70f, 18f),
                 string.IsNullOrEmpty(token.Key) ? "（未命名）" : token.Key, AGStyles.RowLabel);
-            GUI.Label(new Rect(row.xMax - 62f, row.y + 1f, 40f, 18f), token.TypeName, AGStyles.Tiny);
+            var typeRect = new Rect(row.xMax - 58f, row.y + 6f, 42f, 15f);
+            AGStyles.Fill(typeRect, new Color(0.27f, 0.24f, 0.38f));
+            GUI.Label(typeRect, token.TypeName, AGStyles.Tiny);
 
             if (HasTokenIssue(token, out string reason, out bool isError))
             {
-                var dot = new Rect(row.xMax - 16f, row.y + 6f, 8f, 8f);
+                var dot = new Rect(row.xMax - 10f, row.y + 10f, 7f, 7f);
                 AGStyles.Fill(dot, isError ? AGStyles.Error : AGStyles.Warning);
                 GUI.Label(dot, new GUIContent("", reason));
             }
@@ -930,12 +1182,105 @@ public class ActionGraphWindow : EditorWindow
                 && pendingTokenFocus.Key == token.Key && pendingTokenFocus.ResultType == token.ResultType
                 && !dragTokenActive && row.Contains(e.mousePosition))
             {
+                dragToken = null;
+                pendingTokenFocus = null;
                 if (isFocus) SetFocus(new AGFocus());
                 else SetFocus(new AGFocus { Kind = AGFocusKind.Token, Token = token });
                 e.Use();
             }
         }
         GUI.EndScrollView();
+    }
+
+    private void DrawAssetLibrary(Rect r, float top)
+    {
+        if (GUI.Button(new Rect(r.x + 4f, top, r.width - 8f, 22f), "重新掃描資產")) AGAssetIndex.Refresh();
+
+        var searchRect = new Rect(r.x + 4f, top + 26f, r.width - 8f, 20f);
+        GUI.Label(new Rect(searchRect.x + 4f, searchRect.y + 2f, 16f, 16f),
+            EditorGUIUtility.IconContent("Search Icon", "搜尋資產"));
+        assetSearch = EditorGUI.TextField(new Rect(searchRect.x + 20f, searchRect.y,
+            searchRect.width - 20f, searchRect.height), assetSearch);
+
+        var shown = new List<(AGAssetEntry entry, Type slotType)>();
+        var slotTypes = AssetSlotTypes();
+        foreach (var entry in AGAssetIndex.Entries)
+        {
+            Type slotType = SlotTypeForAsset(entry.Asset, slotTypes);
+            if (slotType == null) continue;
+            if (!string.IsNullOrWhiteSpace(assetSearch)
+                && entry.Name.IndexOf(assetSearch, StringComparison.OrdinalIgnoreCase) < 0
+                && entry.TypeName.IndexOf(assetSearch, StringComparison.OrdinalIgnoreCase) < 0
+                && (entry.ResultType == null
+                    || AGReflect.ResultTypeName(entry.ResultType).IndexOf(assetSearch, StringComparison.OrdinalIgnoreCase) < 0)) continue;
+            shown.Add((entry, slotType));
+        }
+
+        var listRect = new Rect(r.x + 2f, top + 50f, r.width - 4f, r.yMax - top - 52f);
+        var content = new Rect(0f, 0f, listRect.width - 16f, shown.Count * AssetCellHeight + 4f);
+        assetLibraryScroll = GUI.BeginScrollView(listRect, assetLibraryScroll, content);
+        for (int i = 0; i < shown.Count; i++)
+        {
+            var entry = shown[i].entry;
+            var asset = entry.Asset;
+            var row = new Rect(2f, i * AssetCellHeight + 2f, content.width - 4f, AssetCellHeight - 3f);
+            bool isFocus = focus.Kind == AGFocusKind.Asset && focus.AssetObject == asset;
+            AGStyles.Fill(row, isFocus ? AGStyles.LibraryCellFocused
+                : i % 2 == 0 ? AGStyles.LibraryCell : AGStyles.LibraryCellAlt);
+            AGStyles.Frame(row, isFocus ? AGStyles.Link : AGStyles.LibraryCellBorder);
+
+            GUI.Label(new Rect(row.x + 8f, row.y + 2f, row.width - 64f, 17f), asset.name, AGStyles.RowLabel);
+            string kind = entry.IsAction ? "ACT" : AGReflect.ResultTypeName(entry.ResultType);
+            var typeRect = new Rect(row.xMax - 54f, row.y + 5f, 46f, 15f);
+            AGStyles.Fill(typeRect, entry.IsAction ? new Color(0.42f, 0.27f, 0.20f) : new Color(0.24f, 0.36f, 0.34f));
+            GUI.Label(typeRect, kind, AGStyles.Tiny);
+            GUI.Label(new Rect(row.x + 8f, row.y + 18f, row.width - 70f, 13f), entry.TypeName, AGStyles.Tiny);
+
+            var e = Event.current;
+            if (e.type == EventType.MouseDown && e.button == 0 && row.Contains(e.mousePosition))
+            {
+                dragAsset = asset;
+                pendingAssetFocus = asset;
+                e.Use();
+            }
+            if (e.type == EventType.MouseDrag && dragAsset == asset) dragAssetActive = true;
+            if (e.type == EventType.MouseUp && pendingAssetFocus == asset
+                && !dragAssetActive && row.Contains(e.mousePosition))
+            {
+                pendingAssetFocus = null;
+                dragAsset = null;
+                EnterAsset(asset, shown[i].slotType);
+                e.Use();
+            }
+        }
+        GUI.EndScrollView();
+    }
+
+    /// <summary>找目前 ActionSystem 中能承載此資產內容的 Slot；找不到代表本 Owner 不相容。</summary>
+    private List<(Type acceptedAssetType, Type slotType)> AssetSlotTypes()
+    {
+        var result = new List<(Type acceptedAssetType, Type slotType)>();
+        foreach (var (_, list) in model.TokenKinds())
+        {
+            Type entryType = list.GetType().GetGenericArguments()[0];
+            if (AGReflect.CreateInstance(entryType) is not ITokenEntry entry || entry.Slot == null) continue;
+            Type slotType = entry.Slot.GetType();
+            Type accepted = AGReflect.AssetType(slotType);
+            if (accepted != null) result.Add((accepted, slotType));
+        }
+
+        Type actionSlotType = model.ActionSlotType;
+        Type actionAssetType = actionSlotType != null ? AGReflect.ActionAssetType(actionSlotType) : null;
+        if (actionAssetType != null) result.Add((actionAssetType, actionSlotType));
+        return result;
+    }
+
+    private static Type SlotTypeForAsset(ScriptableObject asset, List<(Type acceptedAssetType, Type slotType)> slotTypes)
+    {
+        if (asset == null) return null;
+        foreach (var candidate in slotTypes)
+            if (candidate.acceptedAssetType.IsInstanceOfType(asset)) return candidate.slotType;
+        return null;
     }
 
     private bool HasTokenIssue(AGToken token, out string reason, out bool isError)
@@ -952,6 +1297,19 @@ public class ActionGraphWindow : EditorWindow
         return reason != null;
     }
 
+    private bool HasActionIssue(AGFocus action, out string reason, out bool isError)
+    {
+        reason = null; isError = false;
+        foreach (var issue in report.Issues)
+        {
+            if (issue.Focus == null || !issue.Focus.SameAs(action)) continue;
+            reason = issue.Line;
+            isError = issue.IsError;
+            if (isError) return true;
+        }
+        return reason != null;
+    }
+
     private bool DrawTab(Rect r, string label, bool active)
     {
         AGStyles.Fill(r, active ? new Color(0.30f, 0.34f, 0.40f) : new Color(0.23f, 0.24f, 0.27f));
@@ -959,22 +1317,59 @@ public class ActionGraphWindow : EditorWindow
         return GUI.Button(r, GUIContent.none, GUIStyle.none);
     }
 
-    private void AddTokenFromFields()
+    private void ShowAddTokenMenu()
     {
-        string key = newTokenKey.Trim();
-        if (!model.AddToken(newTokenType, key, out string error))
+        var menu = new GenericMenu();
+        foreach (var (resultType, _) in model.TokenKinds())
+        {
+            var capturedType = resultType;
+            menu.AddItem(new GUIContent(AGReflect.ResultTypeName(capturedType)), false, () => AddToken(capturedType));
+        }
+        menu.ShowAsContext();
+    }
+
+    private void AddToken(Type resultType)
+    {
+        string typeName = AGReflect.ResultTypeName(resultType).ToLowerInvariant();
+        int index = 0;
+        string key;
+        do { key = $"t_{typeName}_{index++}"; }
+        while (TokenKeyExists(key));
+
+        if (!model.AddToken(resultType, key, out string error))
         {
             ShowNotification(new GUIContent(error));
             return;
         }
         foreach (var token in model.ReadTokens())
         {
-            if (token.Key != key || token.ResultType != newTokenType) continue;
+            if (token.Key != key || token.ResultType != resultType) continue;
             SetFocus(new AGFocus { Kind = AGFocusKind.Token, Token = token });
             break;
         }
-        newTokenKey = "";
         Invalidate();
+        Repaint();
+    }
+
+    private bool TokenKeyExists(string key)
+    {
+        foreach (var token in model.ReadTokens())
+            if (token.Key == key) return true;
+        return false;
+    }
+
+    private void RemoveToken(AGToken token)
+    {
+        if (token == null) return;
+        int refs = model.CountReferences(token);
+        string msg = refs > 0
+            ? $"'{token.Key}' 還有 {refs} 個欄位在引用，刪除後那些欄位會指向不存在的變數。"
+            : $"確定刪除 '{token.Key}'？";
+        if (!EditorUtility.DisplayDialog("刪除變數", msg, "刪除", "取消")) return;
+        model.RemoveToken(token);
+        SetFocus(new AGFocus());
+        Invalidate();
+        DoVerify(true);
         Repaint();
     }
 
@@ -990,16 +1385,7 @@ public class ActionGraphWindow : EditorWindow
             }));
         menu.AddItem(new GUIContent("刪除"), false, () =>
         {
-            int refs = model.CountReferences(token);
-            string msg = refs > 0
-                ? $"'{token.Key}' 還有 {refs} 個欄位在引用，刪除後那些欄位會指向不存在的變數。"
-                : $"確定刪除 '{token.Key}'？";
-            if (!EditorUtility.DisplayDialog("刪除變數", msg, "刪除", "取消")) return;
-            model.RemoveToken(token);
-            SetFocus(new AGFocus());
-            Invalidate();
-            DoVerify(true);
-            Repaint();
+            RemoveToken(token);
         });
         menu.ShowAsContext();
     }
@@ -1013,6 +1399,15 @@ public class ActionGraphWindow : EditorWindow
         GUI.Label(r, $"@{dragToken.Key}", AGStyles.Chip);
     }
 
+    private void DrawDragAssetGhost()
+    {
+        if (dragAsset == null) return;
+        Vector2 p = Event.current.mousePosition;
+        var r = new Rect(p.x + 8f, p.y + 8f, 160f, 18f);
+        AGStyles.Fill(r, new Color(0.24f, 0.36f, 0.34f, 0.95f));
+        GUI.Label(r, dragAsset.name, AGStyles.Chip);
+    }
+
     // ===== 右欄：時機與動作清單 =====
 
     private void DrawTimingPanel(Rect r)
@@ -1021,10 +1416,13 @@ public class ActionGraphWindow : EditorWindow
         AGStyles.Frame(r, AGStyles.NodeBorder);
 
         var groups = model.ReadGroups();
-        GUI.Label(new Rect(r.x + 4f, r.y + 2f, 120f, 18f), "時機", AGStyles.PanelHeader);
+        var timingSection = new Rect(r.x + 2f, r.y + 2f, r.width - 4f, 50f);
+        AGStyles.Fill(timingSection, new Color(0.22f, 0.23f, 0.26f));
+        AGStyles.Frame(timingSection, AGStyles.NodeBorder);
+        GUI.Label(new Rect(r.x + 4f, r.y + 4f, 120f, 18f), "時機", AGStyles.PanelHeader);
 
         string timingLabel = currentTiming != null ? currentTiming.ToString() : "（選擇時機）";
-        var dropRect = new Rect(r.x + 4f, r.y + 22f, r.width - 8f, 20f);
+        var dropRect = new Rect(r.x + 4f, r.y + 26f, r.width - 8f, 24f);
         if (EditorGUI.DropdownButton(dropRect, new GUIContent(timingLabel), FocusType.Keyboard))
             ShowTimingMenu(groups);
 
@@ -1033,11 +1431,18 @@ public class ActionGraphWindow : EditorWindow
             if (currentTiming != null && Equals(g.Timing, currentTiming)) current = g;
 
         GUI.enabled = currentTiming != null;
-        if (GUI.Button(new Rect(r.x + 4f, r.y + 46f, r.width - 8f, 22f), "新增動作"))
-            ShowAddActionMenu(currentTiming);
+        if (GUI.Button(new Rect(r.x + 4f, r.y + 56f, r.width - 8f, 20f), "新增動作"))
+            AddEmptyAction(currentTiming);
         GUI.enabled = true;
 
-        var listRect = new Rect(r.x + 2f, r.y + 72f, r.width - 4f, r.height - 74f);
+        var removeRect = new Rect(r.x + 4f, r.y + 78f, r.width - 8f, 20f);
+        bool canRemoveAction = focus.Kind == AGFocusKind.Action && focus.ActionSlot != null
+            && Equals(focus.Timing, currentTiming);
+        GUI.enabled = canRemoveAction;
+        if (GUI.Button(removeRect, "移除動作")) RemoveAction(focus);
+        GUI.enabled = true;
+
+        var listRect = new Rect(r.x + 2f, r.y + 102f, r.width - 4f, r.height - 104f);
         AGStyles.Fill(listRect, new Color(0.16f, 0.17f, 0.19f));
 
         if (current?.Actions != null) DrawActionList(listRect, current);
@@ -1047,23 +1452,24 @@ public class ActionGraphWindow : EditorWindow
     private void DrawActionList(Rect listRect, AGTimingGroup group)
     {
         var actions = group.Actions;
-        var content = new Rect(0f, 0f, listRect.width - 16f, actions.Count * 24f + 4f);
+        var content = new Rect(0f, 0f, listRect.width - 16f, actions.Count * ActionCellHeight + 4f);
         actionScroll = GUI.BeginScrollView(listRect, actionScroll, content);
 
         for (int i = 0; i < actions.Count; i++)
         {
             var slot = actions[i];
             if (slot == null) continue;
-            var row = new Rect(0f, i * 24f, content.width, 23f);
+            var row = new Rect(2f, i * ActionCellHeight + 2f, content.width - 4f, ActionCellHeight - 3f);
             bool isFocus = focus.Kind == AGFocusKind.Action && ReferenceEquals(focus.ActionSlot, slot);
-            if (isFocus) AGStyles.Fill(row, new Color(0.30f, 0.42f, 0.52f, 0.6f));
-            else if (i % 2 == 1) AGStyles.Fill(row, AGStyles.RowAlt);
+            AGStyles.Fill(row, isFocus ? AGStyles.LibraryCellFocused
+                : i % 2 == 0 ? AGStyles.LibraryCell : AGStyles.LibraryCellAlt);
+            AGStyles.Frame(row, isFocus ? AGStyles.Link : AGStyles.LibraryCellBorder);
 
-            GUI.Label(new Rect(row.x + 2f, row.y + 3f, 12f, 18f), "≡", AGStyles.Tiny);
+            GUI.Label(new Rect(row.x + 5f, row.y + 5f, 12f, 18f), "≡", AGStyles.Tiny);
 
             bool disabled = AGReflect.GetDisabled(slot);
             bool enabled = !disabled;
-            bool newEnabled = GUI.Toggle(new Rect(row.x + 16f, row.y + 4f, 16f, 16f), enabled, GUIContent.none);
+            bool newEnabled = GUI.Toggle(new Rect(row.x + 20f, row.y + 6f, 16f, 16f), enabled, GUIContent.none);
             if (newEnabled != enabled) { AGReflect.SetDisabled(slot, !newEnabled); Invalidate(); }
 
             var focusOfRow = new AGFocus
@@ -1074,19 +1480,18 @@ public class ActionGraphWindow : EditorWindow
                 ActionIndex = i,
                 ActionSlot = slot,
             };
-            report.CountFor(focusOfRow, out int errors, out int warnings);
 
-            string name = focusOfRow.Title;
-            var nameStyle = errors > 0 ? AGStyles.RowLabelError : AGStyles.RowLabel;
-            GUI.Label(new Rect(row.x + 34f, row.y + 1f, row.width - 44f, 15f),
-                errors > 0 ? $"{name}（{errors} 個錯誤）" : name, nameStyle);
-
+            string typeName = AGFocus.ActionName(slot);
             string label = AGReflect.GetLabel(slot);
-            string tail = disabled
-                ? (string.IsNullOrEmpty(label) ? "已停用" : $"{label}・已停用")
-                : label;
-            GUI.Label(new Rect(row.x + 34f, row.y + 12f, row.width - 44f, 12f),
-                string.IsNullOrEmpty(tail) ? (warnings > 0 ? $"{warnings} 個警告" : "") : tail, AGStyles.Tiny);
+            string name = string.IsNullOrEmpty(label) ? typeName : label;
+            GUI.Label(new Rect(row.x + 42f, row.y + 2f, row.width - 60f, 18f), name, AGStyles.RowLabel);
+
+            if (HasActionIssue(focusOfRow, out string reason, out bool isError))
+            {
+                var dot = new Rect(row.xMax - 10f, row.y + 10f, 7f, 7f);
+                AGStyles.Fill(dot, isError ? AGStyles.Error : AGStyles.Warning);
+                GUI.Label(dot, new GUIContent("", reason));
+            }
 
             var e = Event.current;
             if (e.type == EventType.MouseDown && row.Contains(e.mousePosition))
@@ -1103,21 +1508,24 @@ public class ActionGraphWindow : EditorWindow
                 dragActionIndex = i;
             if (e.type == EventType.MouseDrag && dragActionIndex >= 0 && dragActionIndex < actions.Count)
             {
-                int target = Mathf.Clamp(Mathf.FloorToInt(e.mousePosition.y / 24f), 0, actions.Count - 1);
+                int target = Mathf.Clamp(Mathf.FloorToInt(e.mousePosition.y / ActionCellHeight), 0, actions.Count - 1);
                 if (target != dragActionIndex)
                 {
                     var moved = actions[dragActionIndex];
                     actions.RemoveAt(dragActionIndex);
                     actions.Insert(target, moved);
                     dragActionIndex = target;
+                    RefreshActionIndices(actions);
                     Invalidate();
                 }
             }
             if (e.type == EventType.MouseUp && pendingActionFocus != null
                 && ReferenceEquals(pendingActionFocus.ActionSlot, slot) && dragActionIndex < 0 && row.Contains(e.mousePosition))
             {
+                var nextFocus = pendingActionFocus;
+                pendingActionFocus = null;
                 if (isFocus) SetFocus(new AGFocus());
-                else SetFocus(pendingActionFocus);
+                else SetFocus(nextFocus);
                 e.Use();
             }
         }
@@ -1163,36 +1571,25 @@ public class ActionGraphWindow : EditorWindow
         menu.ShowAsContext();
     }
 
-    private void ShowAddActionMenu(Enum timing)
+    private void AddEmptyAction(Enum timing)
     {
         var slotType = model.ActionSlotType;
-        if (slotType == null) return;
-        var baseType = AGReflect.ActionBaseType(slotType);
-        var rect = new Rect(Event.current.mousePosition, Vector2.one);
+        if (slotType == null || timing == null) return;
+        var slot = AGReflect.CreateInstance(slotType);
+        if (slot == null) return;
 
-        AGTypeCatalog.ShowPicker(rect, baseType, "選擇動作", type =>
+        model.BreakUndoMerge();
+        var group = model.AddGroup(timing);
+        if (group?.Actions == null) return;
+        group.Actions.Add(slot);
+
+        SetFocus(new AGFocus
         {
-            var instance = AGReflect.CreateInstance(type);
-            if (instance == null) return;
-            var slot = AGReflect.CreateInstance(slotType);
-            if (slot == null) return;
-
-            var group = model.AddGroup(timing);
-            if (group?.Actions == null) return;
-            if (instance is ActionSystemNode n) n.EnsureEditorNodeId();
-
-            AGReflect.SetUseType(slot, 1);
-            AGReflect.SetFormula(slot, instance);
-            group.Actions.Add(slot);
-
-            SetFocus(new AGFocus
-            {
-                Kind = AGFocusKind.Action, Timing = group.Timing,
-                ActionList = group.Actions, ActionIndex = group.Actions.Count - 1, ActionSlot = slot,
-            });
-            Invalidate();
-            Repaint();
+            Kind = AGFocusKind.Action, Timing = group.Timing,
+            ActionList = group.Actions, ActionIndex = group.Actions.Count - 1, ActionSlot = slot,
         });
+        Invalidate();
+        Repaint();
     }
 
     private void ShowActionMenu(AGTimingGroup group, int index)
@@ -1217,15 +1614,48 @@ public class ActionGraphWindow : EditorWindow
 
         menu.AddItem(new GUIContent("刪除"), false, () =>
         {
-            if (!EditorUtility.DisplayDialog("刪除動作", "確定刪除這個動作？", "刪除", "取消")) return;
-            group.Actions.RemoveAt(index);
-            if (group.Actions.Count == 0) model.RemoveGroup(group);
-            SetFocus(new AGFocus());
-            Invalidate();
-            DoVerify(true);
-            Repaint();
+            RemoveAction(new AGFocus
+            {
+                Kind = AGFocusKind.Action, Timing = group.Timing,
+                ActionList = group.Actions, ActionIndex = index, ActionSlot = slot,
+            });
         });
         menu.ShowAsContext();
+    }
+
+    private void RemoveAction(AGFocus action)
+    {
+        if (action?.ActionList == null || action.ActionSlot == null) return;
+        int index = IndexOfReference(action.ActionList, action.ActionSlot);
+        if (index < 0) return;
+        if (!EditorUtility.DisplayDialog("刪除動作", "確定刪除這個動作？", "刪除", "取消")) return;
+        action.ActionList.RemoveAt(index);
+        foreach (var group in model.ReadGroups())
+        {
+            if (!ReferenceEquals(group.Actions, action.ActionList)) continue;
+            if (group.Actions.Count == 0) model.RemoveGroup(group);
+            break;
+        }
+        SetFocus(new AGFocus());
+        Invalidate();
+        DoVerify(true);
+        Repaint();
+    }
+
+    private void RefreshActionIndices(IList actions)
+    {
+        if (focus.Kind == AGFocusKind.Action && ReferenceEquals(focus.ActionList, actions))
+            focus.ActionIndex = IndexOfReference(actions, focus.ActionSlot);
+        if (pendingActionFocus != null && ReferenceEquals(pendingActionFocus.ActionList, actions))
+            pendingActionFocus.ActionIndex = IndexOfReference(actions, pendingActionFocus.ActionSlot);
+    }
+
+    private static int IndexOfReference(IList list, object item)
+    {
+        if (list == null || item == null) return -1;
+        for (int i = 0; i < list.Count; i++)
+            if (ReferenceEquals(list[i], item)) return i;
+        return -1;
     }
 
     // ===== 右欄（資產焦點）：引用清單 =====
@@ -1347,7 +1777,6 @@ public class ActionGraphWindow : EditorWindow
         AGStyles.Fill(r, AGStyles.Canvas);
 
         var header = new Rect(r.x, r.y, r.width, HeaderHeight);
-        DrawFocusHeader(header);
 
         float consoleH = consoleCollapsed ? MinConsole : Mathf.Clamp(consoleHeight, MinConsole, r.height - HeaderHeight - 80f);
         canvasRect = new Rect(r.x, r.y + HeaderHeight, r.width, r.height - HeaderHeight - consoleH);
@@ -1357,6 +1786,7 @@ public class ActionGraphWindow : EditorWindow
         HandleConsoleResize(consoleHandle);
 
         DrawCanvas(canvasRect);
+        DrawFocusHeader(header);
         DrawConsole(consoleRect);
         DrawResizeGrip(consoleHandle, false, resizingConsole);
     }
@@ -1378,28 +1808,37 @@ public class ActionGraphWindow : EditorWindow
 
         if (focus.Kind == AGFocusKind.Token && focus.Token != null)
         {
-            GUI.Label(new Rect(r.x + 6f, r.y + 3f, 60f, 18f), "變數名稱", AGStyles.Tiny);
-            var nameRect = new Rect(r.x + 66f, r.y + 3f, 180f, 18f);
-            string newName = EditorGUI.DelayedTextField(nameRect, focus.Token.Key);
-            if (newName != focus.Token.Key)
+            DrawFocusName(r, focus.Token, focus.Token.Key, name =>
             {
-                if (!model.RenameToken(focus.Token, newName, out string error)) EditorUtility.DisplayDialog("無法改名", error, "好");
+                if (!model.RenameToken(focus.Token, name, out string error))
+                {
+                    EditorUtility.DisplayDialog("無法改名", error, "好");
+                    return false;
+                }
                 Invalidate();
-            }
-            GUI.Label(new Rect(r.x + 254f, r.y + 3f, r.width - 260f, 18f),
-                $"型別 {focus.Token.TypeName}　被引用 {model.CountReferences(focus.Token)} 次", AGStyles.Tiny);
+                return true;
+            });
             GUI.Label(new Rect(r.x + 6f, r.y + 24f, r.width - 12f, 16f),
-                "這個變數的值由下方公式決定；任何欄位都可以拖它進去共用同一個值。", AGStyles.Tiny);
+                $"型別 {focus.Token.TypeName}　被引用 {model.CountReferences(focus.Token)} 次", AGStyles.Tiny);
             return;
         }
 
-        GUI.Label(new Rect(r.x + 6f, r.y + 3f, r.width - 12f, 18f), focus.Title, EditorStyles.boldLabel);
+        if (focus.Kind == AGFocusKind.Action && focus.ActionSlot != null)
+        {
+            DrawFocusName(r, focus.ActionSlot, focus.Title, name =>
+            {
+                AGReflect.SetLabel(focus.ActionSlot, name);
+                Invalidate();
+                return true;
+            });
+        }
+        else GUI.Label(new Rect(r.x + 6f, r.y + 3f, r.width - 12f, 18f), focus.Title, EditorStyles.boldLabel);
 
         string desc = "";
         if (focus.Kind == AGFocusKind.Action && focus.ActionSlot != null)
         {
             var f = AGReflect.GetFormula(focus.ActionSlot);
-            desc = f != null ? AGReflect.TypeDescription(f.GetType()) : "這個動作還沒有內容，在根節點按右鍵選擇。";
+            desc = f != null ? AGReflect.TypeDescription(f.GetType()) : "這個動作還沒有內容，請從根節點下拉選擇。";
             if (AGReflect.GetDisabled(focus.ActionSlot)) desc += "　（已停用，不會執行）";
         }
         else if (focus.Kind == AGFocusKind.None)
@@ -1407,6 +1846,37 @@ public class ActionGraphWindow : EditorWindow
             desc = "從右欄選一個動作，或從左欄選一個變數開始編輯。";
         }
         GUI.Label(new Rect(r.x + 6f, r.y + 24f, r.width - 12f, 16f), desc, AGStyles.Tiny);
+    }
+
+    /// <summary>焦點名稱平常只讀；按左側按鈕才進入編輯，再按一次才提交。</summary>
+    private void DrawFocusName(Rect header, object target, string displayName, Func<string, bool> submit)
+    {
+        bool editing = ReferenceEquals(editingNameTarget, target);
+        var editRect = new Rect(header.x + 4f, header.y + 3f, 20f, 20f);
+        var nameRect = new Rect(editRect.xMax + 4f, header.y + 2f, header.width - 32f, 22f);
+        if (GUI.Button(editRect, new GUIContent(editing ? "✓" : "✎", editing ? "提交名稱" : "編輯名稱"), EditorStyles.miniButton))
+        {
+            if (!editing)
+            {
+                editingNameTarget = target;
+                editingNameDraft = displayName ?? "";
+                GUI.FocusControl(null);
+            }
+            else if (submit(editingNameDraft.Trim()))
+            {
+                editingNameTarget = null;
+                editingNameDraft = "";
+            }
+            Repaint();
+        }
+
+        if (editing)
+        {
+            GUI.SetNextControlName("actionGraphFocusName");
+            editingNameDraft = EditorGUI.TextField(nameRect, editingNameDraft);
+            EditorGUI.FocusTextInControl("actionGraphFocusName");
+        }
+        else GUI.Label(nameRect, displayName, AGStyles.FocusTitle);
     }
 
     // ===== 畫布 =====
@@ -1418,37 +1888,86 @@ public class ActionGraphWindow : EditorWindow
 
         var e = Event.current;
         Vector2 clipMouse = e.mousePosition - r.position;
+        HandleLinkNavigation(e, clipMouse);
         Vector2 graphMouse = clipMouse / zoom - pan;
         bool mouseInCanvas = r.Contains(e.mousePosition);
 
-        GUI.BeginClip(r);
-        var oldMatrix = GUI.matrix;
-        GUIUtility.ScaleAroundPivot(Vector2.one * zoom, Vector2.zero);
-
         if (graph != null)
         {
-            // 連線要先於節點畫（線在節點下方），但接點座標由節點位置決定 → 先算一次。
             foreach (var node in graph.Nodes) UpdateRowGeometry(node, node.Rows);
-            DrawLinks();
-            foreach (var node in graph.Nodes) DrawNode(node);
-            if (linking && linkRow != null)
-            {
-                var from = linkRow.PortPos + pan;
-                DrawBezier(from, graphMouse + pan, AGStyles.Link);
-            }
-            if (boxSelecting)
-            {
-                var box = BoxRect();
-                var visual = new Rect(box.position + pan, box.size);
-                AGStyles.Fill(visual, new Color(0.42f, 0.78f, 1f, 0.10f));
-                AGStyles.Frame(visual, AGStyles.Link);
-            }
+            DrawLinks(graphMouse);
         }
 
-        GUI.matrix = oldMatrix;
-        GUI.EndClip();
+        BeginZoomedCanvas(r);
+        try
+        {
+            if (graph != null)
+            {
+                AGNode linkTarget = LinkTargetNode(graphMouse);
+                foreach (var node in graph.Nodes) DrawNode(node, ReferenceEquals(node, linkTarget));
+                if (boxSelecting)
+                {
+                    var box = BoxRect();
+                    var visual = new Rect(box.position + pan, box.size);
+                    AGStyles.Fill(visual, new Color(0.42f, 0.78f, 1f, 0.10f));
+                    AGStyles.Frame(visual, AGStyles.Link);
+                }
+            }
+        }
+        finally
+        {
+            EndZoomedCanvas();
+        }
 
-        if (mouseInCanvas) HandleCanvasInput(e, graphMouse);
+        if (mouseInCanvas && !HandleAssetDrag(e, graphMouse)) HandleCanvasInput(e, graphMouse);
+    }
+
+    /// <summary>連線期間先更新視圖，讓同一事件的預覽端點仍精準對齊滑鼠。</summary>
+    private void HandleLinkNavigation(Event e, Vector2 clipMouse)
+    {
+        if (!linking) return;
+        if (e.type == EventType.ScrollWheel)
+        {
+            ZoomAt(clipMouse, e.delta.y);
+            e.Use();
+            Repaint();
+            return;
+        }
+        if (e.type == EventType.MouseDrag && e.button == 2)
+        {
+            pan += e.delta / zoom;
+            e.Use();
+            Repaint();
+        }
+    }
+
+    /// <summary>離開 EditorWindow 的隱式群組，建立不受外層 clip matrix 干擾的縮放畫布。</summary>
+    private void BeginZoomedCanvas(Rect r)
+    {
+        Vector2 rootOffset = GUIUtility.GUIToScreenPoint(Vector2.zero) - position.position;
+        rootGuiGroupRect = new Rect(rootOffset, position.size);
+
+        GUI.EndGroup();
+
+        var clippedArea = new Rect(
+            r.x + rootOffset.x,
+            r.y + rootOffset.y,
+            r.width / zoom,
+            r.height / zoom);
+        GUI.BeginGroup(clippedArea);
+
+        canvasGuiMatrix = GUI.matrix;
+        var translation = Matrix4x4.TRS(clippedArea.position, Quaternion.identity, Vector3.one);
+        var scale = Matrix4x4.Scale(new Vector3(zoom, zoom, 1f));
+        GUI.matrix = translation * scale * translation.inverse * GUI.matrix;
+    }
+
+    /// <summary>結束縮放畫布並恢復 EditorWindow 原本的局部座標與裁切。</summary>
+    private void EndZoomedCanvas()
+    {
+        GUI.matrix = canvasGuiMatrix;
+        GUI.EndGroup();
+        GUI.BeginGroup(rootGuiGroupRect);
     }
 
     private void DrawGrid(Rect r)
@@ -1467,87 +1986,191 @@ public class ActionGraphWindow : EditorWindow
         Handles.EndGUI();
     }
 
-    private void DrawLinks()
+    /// <summary>連線在未縮放的視窗座標繪製，避免 GUI.matrix 旋轉造成起終點偏移。</summary>
+    private void DrawLinks(Vector2 graphMouse)
     {
-        foreach (var node in graph.Nodes)
+        Handles.BeginGUI();
+        foreach (var link in graph.Links)
         {
-            if (node.ParentRow == null || node.IsRoot) continue;
-            Vector2 from = node.ParentRow.PortPos + pan;
-            Vector2 to = node.OutputPort + pan;
-            bool err = Rep.HasIssue(node.ParentRow.Slot, out bool isError) && isError;
-            Color color = err ? AGStyles.Error
-                : node.TokenKey != null ? AGStyles.PortToken
-                : AGStyles.Link;
-            DrawBezier(from, to, color);
+            if (link.ParentRow == null || link.Target == null) continue;
+            DrawGraphLine(link.ParentRow.PortPos, link.Target.OutputPort);
         }
+        if (linking && (linkRow != null || linkNode != null))
+        {
+            Vector2 from = linkRow != null ? linkRow.PortPos : linkNode.OutputPort;
+            DrawGraphLine(from, LinkPreviewEnd(graphMouse));
+        }
+        Handles.EndGUI();
     }
 
-    private static void DrawBezier(Vector2 from, Vector2 to, Color color)
+    private void DrawGraphLine(Vector2 graphFrom, Vector2 graphTo)
     {
-        Handles.DrawBezier(from, to,
-            from + Vector2.right * 40f, to + Vector2.left * 40f,
-            color, null, 2.4f);
+        Vector2 from = canvasRect.position + (graphFrom + pan) * zoom;
+        Vector2 to = canvasRect.position + (graphTo + pan) * zoom;
+        if (!ClipLine(canvasRect, ref from, ref to)) return;
+
+        Color oldColor = Handles.color;
+        Handles.color = Color.white;
+        Handles.DrawAAPolyLine(LinkThickness, new Vector3(from.x, from.y), new Vector3(to.x, to.y));
+        Handles.color = oldColor;
     }
 
-    private void DrawNode(AGNode node)
+    private static bool ClipLine(Rect rect, ref Vector2 from, ref Vector2 to)
+    {
+        Vector2 start = from;
+        Vector2 delta = to - from;
+        float min = 0f;
+        float max = 1f;
+        if (!ClipLineEdge(-delta.x, start.x - rect.xMin, ref min, ref max)
+            || !ClipLineEdge(delta.x, rect.xMax - start.x, ref min, ref max)
+            || !ClipLineEdge(-delta.y, start.y - rect.yMin, ref min, ref max)
+            || !ClipLineEdge(delta.y, rect.yMax - start.y, ref min, ref max)) return false;
+        from = start + delta * min;
+        to = start + delta * max;
+        return true;
+    }
+
+    private static bool ClipLineEdge(float direction, float distance, ref float min, ref float max)
+    {
+        if (Mathf.Approximately(direction, 0f)) return distance >= 0f;
+        float ratio = distance / direction;
+        if (direction < 0f)
+        {
+            if (ratio > max) return false;
+            if (ratio > min) min = ratio;
+        }
+        else
+        {
+            if (ratio < min) return false;
+            if (ratio < max) max = ratio;
+        }
+        return true;
+    }
+
+    private void DrawNode(AGNode node, bool isLinkTarget)
     {
         var rect = new Rect(node.Pos + pan, new Vector2(node.Width, node.Height));
 
-        AGStyles.Fill(rect, AGStyles.NodeBody);
+        AGStyles.RoundedFill(rect, AGStyles.NodeBody, NodeCornerRadius);
         var header = new Rect(rect.x, rect.y, rect.width, 20f);
-        Color headerColor = node.IsRoot ? AGStyles.NodeHeaderRoot
-            : node.IsOrphan ? AGStyles.NodeHeaderOrphan
+        Color headerColor = node.IsOrphan ? AGStyles.NodeHeaderOrphan
             : node.TokenKey != null ? AGStyles.NodeHeaderToken
             : node.IsAssetNode ? AGStyles.NodeHeaderAsset
-            : AGStyles.NodeHeader;
-        AGStyles.Fill(header, headerColor);
-        GUI.Label(header, node.Title, AGStyles.NodeTitle);
-        GUI.Label(new Rect(rect.x, rect.y + 19f, rect.width, 16f),
-            node.IsOrphan ? node.Desc + "　・未連接" : node.Desc, AGStyles.NodeDesc);
+            : node.IsActionNode
+                ? node.IsRoot ? AGStyles.NodeHeaderRootAction : AGStyles.NodeHeaderAction
+                : node.IsRoot ? AGStyles.NodeHeaderRootFormula : AGStyles.NodeHeaderFormula;
+        AGStyles.RoundedTopFill(header, headerColor, NodeCornerRadius);
+        float buttonX = rect.xMax - 4f;
+        bool canEditTips = node.Obj != null;
+        float titleInset = node.IsRoot ? 0f : AGGraph.PortDiameter + 2f;
+        float titleWidth = Mathf.Max(24f, buttonX - rect.x - titleInset - 4f);
+        GUI.Label(new Rect(rect.x + titleInset, rect.y, titleWidth, 20f), node.Title, AGStyles.NodeTitle);
 
-        if (node.IsAssetNode)
+        float y = rect.y + AGGraph.HeaderHeight;
+        if (node.HasNodeTypeSelector)
         {
-            var assetType = node.ParentSlot != null
-                ? AGReflect.AssetType(node.ParentSlot.GetType()) ?? typeof(UnityEngine.Object)
-                : typeof(UnityEngine.Object);
-            var assetRect = new Rect(rect.x + 6f, rect.y + 40f, rect.width - 12f, 18f);
-            EditorGUI.BeginChangeCheck();
-            var picked = EditorGUI.ObjectField(assetRect, node.Asset, assetType, false);
-            if (EditorGUI.EndChangeCheck() && node.ParentSlot != null)
-            {
-                AGReflect.SetAsset(node.ParentSlot, picked);
-                Invalidate();
-            }
+            var selector = new Rect(rect.x + 6f, y + 1f, rect.width - 12f, 18f);
+            string label = node.IsPlaceholder
+                ? node.IsActionNode
+                    ? "選擇 Action 類型"
+                    : $"選擇 {AGReflect.ResultTypeName(node.ResultType)} Formula"
+                : node.ConcreteTypeName;
+            if (EditorGUI.DropdownButton(selector, new GUIContent(label), FocusType.Keyboard))
+                ShowNodeSourceSelector(node, selector);
+            y += AGGraph.TypeSelectorHeight;
         }
-        else if (node.TokenKey != null)
+        if (node.DescriptionHeight > 0f)
         {
-            var pickRect = new Rect(rect.x + 6f, rect.y + 38f, rect.width - 12f, 15f);
-            if (GUI.Button(pickRect, string.IsNullOrEmpty(node.TokenKey) ? "選擇變數…" : "換一個變數…", EditorStyles.miniButton))
-                ShowTokenPicker(node);
+            AGStyles.Fill(new Rect(rect.x, y, rect.width, node.DescriptionHeight), new Color(0f, 0f, 0f, 0.12f));
+            GUI.Label(new Rect(rect.x, y, rect.width, node.DescriptionHeight), node.IsOrphan ? node.Desc + "　・候選" : node.Desc, AGStyles.NodeDesc);
+            y += node.DescriptionHeight;
         }
-        else
+
+        if (node.TokenKey != null)
+        {
+            var selector = new Rect(rect.x + 6f, rect.y + node.BodyStart + 1f, rect.width - 12f, 18f);
+            string label = string.IsNullOrEmpty(node.TokenKey) ? "（選擇 Token）" : "@" + node.TokenKey;
+            if (EditorGUI.DropdownButton(selector, new GUIContent(label), FocusType.Keyboard))
+                ShowNodeSourceSelector(node, selector);
+        }
+        else if (node.IsAssetNode)
+        {
+            var selector = new Rect(rect.x + 6f, rect.y + node.BodyStart + 1f, rect.width - 12f, 18f);
+            string label = node.Asset != null ? node.Asset.name : "（選擇 Asset）";
+            if (EditorGUI.DropdownButton(selector, new GUIContent(label), FocusType.Keyboard))
+                ShowNodeSourceSelector(node, selector);
+        }
+        else if (!node.IsPlaceholder)
         {
             DrawRows(node, node.Rows, rect);
         }
 
+        if (canEditTips && node.TipsHeight > 0f)
+        {
+            var tipsLabel = new Rect(rect.x + 6f, rect.y + node.ContentHeight - node.TipsHeight - 4f, 36f, 16f);
+            var tipsField = new Rect(tipsLabel.xMax, tipsLabel.y, rect.width - 48f, node.TipsHeight);
+            var noteRect = new Rect(rect.x + 4f, tipsLabel.y - 3f, rect.width - 8f, node.TipsHeight + 6f);
+            AGStyles.Fill(noteRect, AGStyles.NodeNote);
+            AGStyles.Frame(noteRect, AGStyles.NodeNoteBorder);
+            GUI.Label(tipsLabel, "NOTE", AGStyles.Tiny);
+            EditorGUI.BeginChangeCheck();
+            string tips = EditorGUI.TextArea(tipsField, node.Tips ?? "");
+            if (EditorGUI.EndChangeCheck())
+            {
+                model.SetNodeTips(node.Id, tips);
+                Invalidate();
+            }
+        }
+
         // 節點層級的問題用徽章；參數列層級的問題直接把該列標紅。
-        // 資產／變數節點自己沒有物件，問題掛在父欄位上，改查父欄位才看得到。
-        object issueTarget = node.Obj ?? (node.IsAssetNode || node.TokenKey != null ? node.ParentSlot : null);
-        if (Rep.HasIssue(issueTarget, out bool nodeError) || node.IsOrphan)
+        // 資產／變數／空節點自己沒有物件，問題掛在父欄位上，改查父欄位才看得到。
+        object issueTarget = node.Obj ?? (node.IsAssetNode || node.TokenKey != null || node.IsPlaceholder
+            ? node.ParentSlot : null);
+        if (Rep.HasIssue(issueTarget, out bool nodeError))
         {
             var badge = new Rect(rect.xMax - 16f, rect.y + 4f, 12f, 12f);
             AGStyles.Fill(badge, nodeError ? AGStyles.Error : AGStyles.Warning);
-            GUI.Label(badge, new GUIContent("", node.IsOrphan ? "未連接節點：不會被執行" : "此節點有問題，詳見 Console"));
-        }
-
-        if (!node.IsRoot)
-        {
-            var outPort = new Rect(rect.x - 5f, rect.y + 5f, 10f, 10f);
-            AGStyles.Port(outPort, AGStyles.PortLive);
+            GUI.Label(badge, new GUIContent("", "此節點有問題，詳見 Console"));
         }
 
         bool selected = selectedIds.Contains(node.Id);
-        AGStyles.Frame(rect, selected ? AGStyles.NodeBorderSelected : AGStyles.NodeBorder, selected ? 2f : 1f);
+        // 拉線期間：可以接的 Node 整個亮外框，滑鼠實際吸到的那個再加粗。
+        bool linkCandidate = linking && linkRow != null && linkCompatibleNodeIds.Contains(node.Id);
+        Color borderColor = isLinkTarget ? AGStyles.Link
+            : linkCandidate ? new Color(AGStyles.Link.r, AGStyles.Link.g, AGStyles.Link.b, 0.55f)
+            : selected ? AGStyles.NodeBorderSelected : AGStyles.NodeBorder;
+        AGStyles.RoundedFrame(rect, borderColor, NodeCornerRadius, isLinkTarget || selected ? 2f : linkCandidate ? 1.5f : 1f);
+        DrawNodePorts(node, rect);
+    }
+
+    /// <summary>外框完成後最後畫接點；圓點完整位於 Node 內側。</summary>
+    private void DrawNodePorts(AGNode node, Rect nodeRect)
+    {
+        foreach (var row in AGGraph.AllRows(node.Rows))
+        {
+            if (row.Kind != AGRowKind.Slot) continue;
+            var portRect = new Rect(nodeRect.xMax - AGGraph.PortDiameter,
+                nodeRect.y + row.LocalY + row.Height * 0.5f - AGGraph.PortRadius,
+                AGGraph.PortDiameter, AGGraph.PortDiameter);
+            AGStyles.Port(portRect, SlotPortColor(row));
+        }
+
+        if (node.IsRoot) return;
+        AGStyles.Port(new Rect(nodeRect.x, nodeRect.y + AGGraph.HeaderHeight * 0.5f - AGGraph.PortRadius,
+            AGGraph.PortDiameter, AGGraph.PortDiameter), AGStyles.PortLive);
+    }
+
+    private Color SlotPortColor(AGRow row)
+    {
+        // 從 Node 發點拉線時，收得下它的欄位接點先亮起來，使用者不用逐一試。
+        if (linking && linkNode != null && linkCompatibleRows.Contains(row)) return AGStyles.Link;
+
+        bool hasIssue = Rep.HasIssue(row.Slot, out bool isError);
+        int useType = AGReflect.UseType(row.Slot);
+        return hasIssue && isError ? AGStyles.PortError
+            : useType == 3 ? AGStyles.PortToken
+            : useType == 1 || useType == 2 ? AGStyles.PortLive
+            : AGStyles.PortEmpty;
     }
 
     /// <summary>把每一列的圖面座標（命中測試與接點）更新成目前的節點位置。</summary>
@@ -1556,7 +2179,8 @@ public class ActionGraphWindow : EditorWindow
         foreach (var row in rows)
         {
             row.ScreenRect = new Rect(node.Pos.x, node.Pos.y + row.LocalY, node.Width, row.Height);
-            row.PortPos = new Vector2(node.Pos.x + node.Width, node.Pos.y + row.LocalY + row.Height * 0.5f);
+            row.PortPos = new Vector2(node.Pos.x + node.Width - AGGraph.PortRadius,
+                node.Pos.y + row.LocalY + row.Height * 0.5f);
             UpdateRowGeometry(node, row.Children);
         }
     }
@@ -1566,6 +2190,7 @@ public class ActionGraphWindow : EditorWindow
         foreach (var row in rows)
         {
             var rowRect = new Rect(nodeRect.x, nodeRect.y + row.LocalY, nodeRect.width, row.Height);
+            if (rowRect.yMax > nodeRect.yMax) continue;
             if (row.IsListElement) DrawListElementControls(row, rowRect, nodeRect);
 
             switch (row.Kind)
@@ -1577,13 +2202,15 @@ public class ActionGraphWindow : EditorWindow
                     DrawValueRow(row, rowRect);
                     break;
                 case AGRowKind.Group:
-                    GUI.Label(Indent(rowRect, row.Depth, row.IsListElement), row.Label, AGStyles.RowLabel);
+                    if (!row.HideLabel)
+                        GUI.Label(Indent(rowRect, row.Depth, row.IsListElement), new GUIContent(row.Label, AGReflect.FieldDescription(row.Field)), AGStyles.RowLabel);
                     DrawRows(node, row.Children, nodeRect);
                     break;
                 case AGRowKind.List:
                     DrawListHeader(row, rowRect);
                     DrawRows(node, row.Children, nodeRect);
                     var addRect = new Rect(nodeRect.x, nodeRect.y + row.AddRowY, nodeRect.width, AGGraph.RowHeight);
+                    if (addRect.yMax > nodeRect.yMax) break;
                     var addBtn = new Rect(addRect.x + 8f + row.Depth * AGGraph.IndentWidth, addRect.y + 2f, 60f, 15f);
                     bool fixedSize = row.List != null && row.List.IsFixedSize;
                     GUI.enabled = !fixedSize;
@@ -1728,10 +2355,14 @@ public class ActionGraphWindow : EditorWindow
         bool hasIssue = Rep.HasIssue(slot, out bool isError);
 
         var labelRect = Indent(new Rect(rowRect.x, rowRect.y, rowRect.width * 0.42f, rowRect.height), row.Depth, row.IsListElement);
-        GUI.Label(labelRect, row.Label, hasIssue && isError ? AGStyles.RowLabelError : AGStyles.RowLabel);
+        if (!row.HideLabel)
+            GUI.Label(labelRect, new GUIContent(row.Label, AGReflect.FieldDescription(row.Field)), hasIssue && isError ? AGStyles.RowLabelError : AGStyles.RowLabel);
 
-        var fieldRect = new Rect(rowRect.x + rowRect.width * 0.42f, rowRect.y + 1f,
-            rowRect.width * 0.58f - 20f, rowRect.height - 3f);
+        float portInset = AGGraph.PortDiameter + 10f;
+        var fieldRect = row.HideLabel
+            ? new Rect(rowRect.x + 4f, rowRect.y + 1f, rowRect.width - portInset - 4f, rowRect.height - 3f)
+            : new Rect(rowRect.x + rowRect.width * 0.42f, rowRect.y + 1f,
+                rowRect.width * 0.58f - portInset, rowRect.height - 3f);
 
         if (row.IsActionSlot)
         {
@@ -1755,37 +2386,36 @@ public class ActionGraphWindow : EditorWindow
             };
             EditorGUI.BeginChangeCheck();
             var value = useType == 0
-                ? AGValueField.Draw(fieldRect, row.ResultType, AGReflect.GetDefault(slot))
-                : AGValueField.DrawMuted(fieldRect, row.ResultType, AGReflect.GetDefault(slot), tooltip);
+                ? AGValueField.Draw(fieldRect, row.ResultType, AGReflect.GetDefault(slot), row.IsEnum)
+                : AGValueField.DrawMuted(fieldRect, row.ResultType, AGReflect.GetDefault(slot), tooltip, row.IsEnum);
             if (EditorGUI.EndChangeCheck()) { AGReflect.SetDefault(slot, value); Invalidate(); }
         }
 
-        var portRect = new Rect(rowRect.xMax - 14f, rowRect.y + rowRect.height * 0.5f - 5f, 10f, 10f);
-        Color portColor = hasIssue && isError ? AGStyles.PortError
-            : useType == 3 ? AGStyles.PortToken
-            : useType == 1 || useType == 2 ? AGStyles.PortLive
-            : AGStyles.PortEmpty;
-        AGStyles.Port(portRect, portColor);
-
+        var portRect = new Rect(rowRect.xMax - AGGraph.PortDiameter,
+            rowRect.y + rowRect.height * 0.5f - AGGraph.PortRadius,
+            AGGraph.PortDiameter, AGGraph.PortDiameter);
         var e = Event.current;
-        if (e.type == EventType.MouseDown && rowRect.Contains(e.mousePosition))
+        if (e.type == EventType.MouseDown)
         {
-            if (e.button == 1) { ShowSlotMenu(row); e.Use(); }
-            else if (portRect.Contains(e.mousePosition)) { linking = true; linkRow = row; e.Use(); }
+            if (e.button == 0 && portRect.Contains(e.mousePosition)) { BeginLinkFromRow(row); e.Use(); }
+            else if (e.button == 1 && rowRect.Contains(e.mousePosition)) { ShowSlotMenu(row); e.Use(); }
         }
     }
 
     private void DrawValueRow(AGRow row, Rect rowRect)
     {
         var labelRect = Indent(new Rect(rowRect.x, rowRect.y, rowRect.width * 0.42f, rowRect.height), row.Depth, row.IsListElement);
-        GUI.Label(labelRect, row.Label, AGStyles.RowLabel);
+        if (!row.HideLabel)
+            GUI.Label(labelRect, new GUIContent(row.Label, AGReflect.FieldDescription(row.Field)), AGStyles.RowLabel);
 
-        var fieldRect = new Rect(rowRect.x + rowRect.width * 0.42f, rowRect.y + 1f, rowRect.width * 0.58f - 20f, rowRect.height - 3f);
+        var fieldRect = row.HideLabel
+            ? new Rect(rowRect.x + 4f, rowRect.y + 1f, rowRect.width - 8f, rowRect.height - 3f)
+            : new Rect(rowRect.x + rowRect.width * 0.42f, rowRect.y + 1f, rowRect.width * 0.58f - 20f, rowRect.height - 3f);
 
         if (row.Field != null && row.Target != null)
         {
             EditorGUI.BeginChangeCheck();
-            var value = AGValueField.Draw(fieldRect, row.Field.FieldType, row.Field.GetValue(row.Target));
+            var value = AGValueField.Draw(fieldRect, row.Field.FieldType, row.Field.GetValue(row.Target), row.IsEnum);
             if (EditorGUI.EndChangeCheck()) { row.Field.SetValue(row.Target, value); Invalidate(); }
             return;
         }
@@ -1829,11 +2459,17 @@ public class ActionGraphWindow : EditorWindow
         switch (e.type)
         {
             case EventType.ScrollWheel:
-                zoom = Mathf.Clamp(zoom - e.delta.y * 0.03f, 0.45f, 1.8f);
+                ZoomAt(e.mousePosition - canvasRect.position, e.delta.y);
                 e.Use();
                 break;
 
             case EventType.MouseDown:
+                if (e.button == 0 && !e.alt && OutputNodeAt(graphMouse) is AGNode outputNode)
+                {
+                    BeginLinkFromNode(outputNode);
+                    e.Use();
+                    break;
+                }
                 var hit = NodeAt(graphMouse);
                 if (e.button == 1)
                 {
@@ -1885,7 +2521,7 @@ public class ActionGraphWindow : EditorWindow
                 if (dragNode != null)
                 {
                     // 多選時整組一起搬：以主拖曳節點的位移量套用到其他被選節點。
-                    Vector2 target = graphMouse - dragOffset;
+                    Vector2 target = SnapToGrid(graphMouse - dragOffset);
                     Vector2 delta = target - (dragStartPositions.TryGetValue(dragNode.Id, out var start) ? start : dragNode.Pos);
                     foreach (var n in graph.Nodes)
                     {
@@ -1926,11 +2562,11 @@ public class ActionGraphWindow : EditorWindow
                     boxSelecting = false;
                     e.Use();
                 }
-                if (linking)
+                if (linking && e.button == 0)
                 {
-                    ResolveLink(graphMouse);
-                    linking = false;
-                    linkRow = null;
+                    if (linkRow != null) ResolveLink(graphMouse);
+                    else ResolveLinkFromOutput(graphMouse);
+                    EndLink();
                     e.Use();
                 }
                 if (dragTokenActive && dragToken != null)
@@ -1938,6 +2574,14 @@ public class ActionGraphWindow : EditorWindow
                     DropTokenOn(graphMouse);
                     dragTokenActive = false;
                     dragToken = null;
+                    e.Use();
+                }
+                if (dragAssetActive && dragAsset != null)
+                {
+                    DropAssetOn(graphMouse);
+                    dragAssetActive = false;
+                    dragAsset = null;
+                    pendingAssetFocus = null;
                     e.Use();
                 }
                 break;
@@ -2011,12 +2655,13 @@ public class ActionGraphWindow : EditorWindow
             var clone = source.EditorClone();
             if (clone == null) continue;
             AGModel.ResetNodeIds(clone);
-            clone.EnsureEditorNodeId();
 
-            model.AddOrphan(clone);
-            model.SetFocusId(clone.EditorNodeId, focus.Id);
-            model.SetPosition(clone.EditorNodeId, graphMouse + new Vector2(offset, offset));
-            selectedIds.Add(clone.EditorNodeId);
+            // 貼上＝新載體包新內容，落在目前焦點的候選池。
+            var carrier = new GraphNode(clone);
+            carrier.EnsureId();
+            carrier.Pos = graphMouse + new Vector2(offset, offset);
+            model.AddOrphan(carrier);
+            selectedIds.Add(carrier.Id);
             offset += 24f;
         }
         Invalidate();
@@ -2028,6 +2673,169 @@ public class ActionGraphWindow : EditorWindow
         if (graph == null) return null;
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
             if (graph.Nodes[i].Rect.Contains(graphPoint)) return graph.Nodes[i];
+        return null;
+    }
+
+    private AGNode OutputNodeAt(Vector2 graphPoint)
+    {
+        if (graph == null) return null;
+        for (int i = graph.Nodes.Count - 1; i >= 0; i--)
+        {
+            var node = graph.Nodes[i];
+            if (node.IsRoot) continue;
+            var port = new Rect(node.OutputPort - Vector2.one * AGGraph.PortRadius,
+                Vector2.one * AGGraph.PortDiameter);
+            if (port.Contains(graphPoint)) return node;
+        }
+        return null;
+    }
+
+    private void BeginLinkFromRow(AGRow row)
+    {
+        linking = true;
+        linkRow = row;
+        linkNode = null;
+        RebuildLinkCompatibility();
+    }
+
+    private void BeginLinkFromNode(AGNode node)
+    {
+        linking = true;
+        linkRow = null;
+        linkNode = node;
+        RebuildLinkCompatibility();
+    }
+
+    private void EndLink()
+    {
+        linking = false;
+        linkRow = null;
+        linkNode = null;
+        linkCompatibleNodeIds.Clear();
+        linkCompatibleRows.Clear();
+    }
+
+    /// <summary>
+    /// 拉線起手時把整張圖判定一次：從欄位拉出去就標出所有能當來源的 Node，從 Node 拉出去就標出所有收得下它的欄位。
+    /// 判定結果整段拖曳期間不變（拖曳不改資料），所以算一次就夠，比原本每幀重算便宜。
+    /// </summary>
+    private void RebuildLinkCompatibility()
+    {
+        linkCompatibleNodeIds.Clear();
+        linkCompatibleRows.Clear();
+        if (graph == null) return;
+
+        if (linkRow != null)
+        {
+            foreach (var node in graph.Nodes)
+                if (!node.IsRoot && CanConnectLink(linkRow, node)) linkCompatibleNodeIds.Add(node.Id);
+            return;
+        }
+
+        if (linkNode == null) return;
+        foreach (var node in graph.Nodes)
+            foreach (var row in AGGraph.AllRows(node.Rows))
+                if (row.Kind == AGRowKind.Slot && CanConnectLink(row, linkNode)) linkCompatibleRows.Add(row);
+    }
+
+    /// <summary>本次拉線中直接查快取；不在拉線中（例如放開瞬間的重算）才實算。</summary>
+    private bool CanLinkTo(AGRow row, AGNode node)
+        => linking && ReferenceEquals(row, linkRow)
+            ? linkCompatibleNodeIds.Contains(node.Id)
+            : CanConnectLink(row, node);
+
+    private bool CanLinkFrom(AGRow row, AGNode node)
+        => linking && ReferenceEquals(node, linkNode)
+            ? linkCompatibleRows.Contains(row)
+            : CanConnectLink(row, node);
+
+    private AGNode LinkTargetNode(Vector2 graphMouse)
+    {
+        if (!linking) return null;
+        if (linkRow != null) return SnappedOutputNode(graphMouse, linkRow);
+        return linkNode != null ? OwnerOfRow(SnappedInputRow(graphMouse, linkNode)) : null;
+    }
+
+    private Vector2 LinkPreviewEnd(Vector2 graphMouse)
+    {
+        if (linkRow != null)
+        {
+            var target = SnappedOutputNode(graphMouse, linkRow);
+            return target != null ? target.OutputPort : graphMouse;
+        }
+
+        var row = SnappedInputRow(graphMouse, linkNode);
+        return row != null ? row.PortPos : graphMouse;
+    }
+
+    private AGNode SnappedOutputNode(Vector2 graphMouse, AGRow row)
+    {
+        if (graph == null || row == null) return null;
+        for (int i = graph.Nodes.Count - 1; i >= 0; i--)
+        {
+            var node = graph.Nodes[i];
+            if (node.IsRoot || !node.Rect.Contains(graphMouse) || !CanLinkTo(row, node)) continue;
+            return node;
+        }
+
+        float maxDistanceSqr = LinkSnapDistance * LinkSnapDistance / (zoom * zoom);
+        float nearestDistanceSqr = maxDistanceSqr;
+        AGNode nearest = null;
+        foreach (var node in graph.Nodes)
+        {
+            if (node.IsRoot || !CanLinkTo(row, node)) continue;
+            float distanceSqr = (node.OutputPort - graphMouse).sqrMagnitude;
+            if (distanceSqr > nearestDistanceSqr) continue;
+            nearestDistanceSqr = distanceSqr;
+            nearest = node;
+        }
+        return nearest;
+    }
+
+    private AGRow SnappedInputRow(Vector2 graphMouse, AGNode node)
+    {
+        if (graph == null || node == null) return null;
+        for (int i = graph.Nodes.Count - 1; i >= 0; i--)
+        {
+            var owner = graph.Nodes[i];
+            if (!owner.Rect.Contains(graphMouse)) continue;
+
+            AGRow nearestInNode = null;
+            float nearestY = float.MaxValue;
+            foreach (var row in AGGraph.AllRows(owner.Rows))
+            {
+                if (row.Kind != AGRowKind.Slot || !CanLinkFrom(row, node)) continue;
+                float distanceY = Mathf.Abs(row.ScreenRect.center.y - graphMouse.y);
+                if (distanceY >= nearestY) continue;
+                nearestY = distanceY;
+                nearestInNode = row;
+            }
+            if (nearestInNode != null) return nearestInNode;
+        }
+
+        float maxDistanceSqr = LinkSnapDistance * LinkSnapDistance / (zoom * zoom);
+        float nearestDistanceSqr = maxDistanceSqr;
+        AGRow nearest = null;
+        foreach (var owner in graph.Nodes)
+        {
+            foreach (var row in AGGraph.AllRows(owner.Rows))
+            {
+                if (row.Kind != AGRowKind.Slot || !CanLinkFrom(row, node)) continue;
+                float distanceSqr = (row.PortPos - graphMouse).sqrMagnitude;
+                if (distanceSqr > nearestDistanceSqr) continue;
+                nearestDistanceSqr = distanceSqr;
+                nearest = row;
+            }
+        }
+        return nearest;
+    }
+
+    private AGNode OwnerOfRow(AGRow target)
+    {
+        if (graph == null || target == null) return null;
+        foreach (var node in graph.Nodes)
+            foreach (var row in AGGraph.AllRows(node.Rows))
+                if (ReferenceEquals(row, target)) return node;
         return null;
     }
 
@@ -2044,134 +2852,169 @@ public class ActionGraphWindow : EditorWindow
         return null;
     }
 
-    /// <summary>找滑鼠附近的連線（取樣貝茲曲線比對距離）。</summary>
-    private AGNode LinkAt(Vector2 graphPoint)
+    /// <summary>找滑鼠附近的直線連線。</summary>
+    private AGLink LinkAt(Vector2 graphPoint)
     {
         if (graph == null) return null;
-        foreach (var node in graph.Nodes)
+        foreach (var link in graph.Links)
         {
-            if (node.ParentRow == null || node.IsRoot) continue;
-            Vector2 a = node.ParentRow.PortPos;
-            Vector2 b = node.OutputPort;
-            for (int i = 0; i <= 16; i++)
-            {
-                float t = i / 16f;
-                Vector2 p = Bezier(a, a + Vector2.right * 40f, b + Vector2.left * 40f, b, t);
-                if ((p - graphPoint).sqrMagnitude < 36f) return node;
-            }
+            if (link.ParentRow == null || link.Target == null) continue;
+            Vector2 a = link.ParentRow.PortPos;
+            Vector2 b = link.Target.OutputPort;
+            if (PointToSegmentSqrDistance(graphPoint, a, b) < 36f) return link;
         }
         return null;
     }
 
-    private static Vector2 Bezier(Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3, float t)
+    private static float PointToSegmentSqrDistance(Vector2 point, Vector2 from, Vector2 to)
     {
-        float u = 1f - t;
-        return u * u * u * p0 + 3f * u * u * t * p1 + 3f * u * t * t * p2 + t * t * t * p3;
+        Vector2 segment = to - from;
+        float lengthSqr = segment.sqrMagnitude;
+        if (lengthSqr <= 0.01f) return (point - from).sqrMagnitude;
+        float t = Mathf.Clamp01(Vector2.Dot(point - from, segment) / lengthSqr);
+        return (point - (from + segment * t)).sqrMagnitude;
     }
 
-    /// <summary>切線：父欄位改回常數，被切下來的節點留成未連接節點。</summary>
+    /// <summary>切線：父欄位改回常數／空槽，被切下來的來源留成候選。</summary>
     private void CutLink(AGNode node)
     {
-        if (node.ParentSlot == null) return;
-        var detached = AGReflect.GetFormula(node.ParentSlot);
-        AGReflect.SetUseType(node.ParentSlot, 0);
-        AGReflect.ClearUnusedSources(node.ParentSlot, 0);
-        if (detached is ActionSystemNode n)
-        {
-            model.AddOrphan(n);
-            model.SetFocusId(n.EnsureEditorNodeId(), focus.Id);
-        }
+        CutLink(node?.ParentSlot);
+    }
+
+    private void CutLink(AGLink link)
+    {
+        CutLink(link?.ParentRow?.Slot);
+    }
+
+    private void CutLink(object slot)
+    {
+        if (slot == null) return;
+        PreserveVisibleNodePositions();
+        AttachSource(slot, null);
         Invalidate();
+    }
+
+    /// <summary>
+    /// 換掉欄位接的來源載體。舊載體若沒有其他欄位在用，原地留成候選——完整子樹與座標都跟著載體走。
+    /// </summary>
+    private void AttachSource(object slot, GraphNode next)
+    {
+        if (slot == null) return;
+        var old = AGReflect.GetNode(slot);
+        if (ReferenceEquals(old, next)) return;
+
+        AGReflect.SetNode(slot, next);
+        if (old != null && !IsCarrierUsed(old)) model.AddOrphan(old);
+        if (next != null)
+        {
+            next.EnsureId();
+            model.RemoveOrphan(next);
+        }
+    }
+
+    /// <summary>還有沒有別的欄位指著這個載體（共用來源）。</summary>
+    private bool IsCarrierUsed(GraphNode carrier)
+    {
+        if (carrier == null) return false;
+        foreach (var slot in model.AllSlots())
+            if (ReferenceEquals(AGReflect.GetNode(slot), carrier)) return true;
+        if (focus.Kind == AGFocusKind.Asset && focus.AssetHostSlot != null)
+            return ReferenceEquals(AGReflect.GetNode(focus.AssetHostSlot), carrier);
+        return false;
+    }
+
+    /// <summary>建立新的空載體並接上欄位；使用者接著在節點上選具體來源。</summary>
+    private GraphNode NewSource(object slot)
+    {
+        var carrier = new GraphNode();
+        carrier.EnsureId();
+        AttachSource(slot, carrier);
+        return carrier;
     }
 
     private void ResolveLink(Vector2 graphMouse)
     {
         if (linkRow?.Slot == null) return;
-        var slot = linkRow.Slot;
-        var target = NodeAt(graphMouse);
+        var target = SnappedOutputNode(graphMouse, linkRow);
+        if (TryConnectLink(linkRow, target)) return;
 
-        // 拉到既有的變數節點：直接改接同一個變數。
-        if (target != null && target.TokenKey != null)
-        {
-            if (linkRow.IsActionSlot || target.ResultType != linkRow.ResultType)
-            {
-                ShowNotification(new GUIContent("型別不符，無法連接"));
-                return;
-            }
-            AssignToken(slot, target.TokenKey);
-            return;
-        }
-
-        // 拉到既有的資產節點：共用同一個資產。
-        if (target != null && target.IsAssetNode)
-        {
-            if (target.ResultType != linkRow.ResultType)
-            {
-                ShowNotification(new GUIContent("型別不符，無法連接"));
-                return;
-            }
-            AssignAsset(slot, target.Asset);
-            return;
-        }
-
-        if (target != null && target.Obj != null)
-        {
-            var accepted = linkRow.IsActionSlot
-                ? AGReflect.ActionBaseType(slot.GetType())
-                : AGReflect.FormulaBaseType(slot.GetType());
-            if (accepted == null || !accepted.IsInstanceOfType(target.Obj))
-            {
-                ShowNotification(new GUIContent("型別不符，無法連接"));
-                return;
-            }
-            if (target.ParentSlot != null && !ReferenceEquals(target.ParentSlot, slot))
-            {
-                ShowNotification(new GUIContent("這個節點已經接在別的欄位上"));
-                return;
-            }
-            Connect(slot, target.Obj);
-            return;
-        }
-
-        // 空白處放開：直接開型別選單建新節點。
-        var baseType = linkRow.IsActionSlot
-            ? AGReflect.ActionBaseType(slot.GetType())
-            : AGReflect.FormulaBaseType(slot.GetType());
-        var rect = new Rect(Event.current.mousePosition, Vector2.one);
-        AGTypeCatalog.ShowPicker(rect, baseType, linkRow.IsActionSlot ? "選擇動作" : "選擇公式", type =>
-        {
-            var instance = AGReflect.CreateInstance(type);
-            if (instance == null) return;
-            Connect(slot, instance);
-            if (instance is ActionSystemNode n) model.SetPosition(n.EnsureEditorNodeId(), graphMouse);
-            Repaint();
-        });
+        // 空白處放開：先建立空 Node，讓使用者在 Node 上決定具體型別。
+        model.BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        NewSource(linkRow.Slot).Pos = graphMouse;
+        Invalidate();
+        Repaint();
     }
 
-    private void Connect(object slot, object node)
+    private void ResolveLinkFromOutput(Vector2 graphMouse)
     {
-        var previous = AGReflect.GetFormula(slot);
-        if (previous != null && !ReferenceEquals(previous, node) && previous is ActionSystemNode old)
+        var row = SnappedInputRow(graphMouse, linkNode);
+        if (row == null || !TryConnectLink(row, linkNode))
+            ShowNotification(new GUIContent("請拖到相容的參數接點"));
+    }
+
+    /// <summary>接線＝欄位指到那個節點的載體。Token／資產節點因此天然可以被多個欄位共用。</summary>
+    private bool TryConnectLink(AGRow row, AGNode target)
+    {
+        if (row?.Slot == null || target?.Carrier == null) return false;
+
+        if (!CanConnectLink(row, target))
         {
-            model.AddOrphan(old);
-            model.SetFocusId(old.EnsureEditorNodeId(), focus.Id);
+            ShowNotification(new GUIContent("型別或連線關係不符"));
+            return true;
         }
 
-        AGReflect.SetUseType(slot, 1);
-        AGReflect.SetFormula(slot, node);
-        AGReflect.ClearUnusedSources(slot, 1);
-        if (node is ActionSystemNode n)
-        {
-            n.EnsureEditorNodeId();
-            model.RemoveOrphan(n);
-        }
+        model.BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        AttachSource(row.Slot, target.Carrier);
+        Invalidate();
+        return true;
+    }
+
+    private static bool CanConnectLink(AGRow row, AGNode target)
+    {
+        if (row?.Slot == null || target?.Carrier == null) return false;
+        if (target.TokenKey != null)
+            return !row.IsActionSlot && target.ResultType == row.ResultType;
+        if (target.IsAssetNode)
+            return CanAssignAsset(row, target.Asset);
+        if (target.Obj == null) return false;
+
+        object slot = row.Slot;
+        Type accepted = row.IsActionSlot
+            ? AGReflect.ActionBaseType(slot.GetType())
+            : AGReflect.FormulaBaseType(slot.GetType());
+        if (accepted == null || !accepted.IsInstanceOfType(target.Obj)) return false;
+        // 內嵌節點不能從別的欄位手上搶走；共用只開放給 Token 與資產這種引用型來源。
+        if (target.ParentSlot != null && !ReferenceEquals(target.ParentSlot, slot)) return false;
+        return !WouldCreateCycle(slot, target.Obj);
+    }
+
+    private static bool WouldCreateCycle(object slot, object node)
+    {
+        foreach (var childSlot in AGModel.WalkSlots(node, new HashSet<object>(AGRefComparer.Instance)))
+            if (ReferenceEquals(childSlot, slot)) return true;
+        return false;
+    }
+
+    /// <summary>把一個新建立的具體 Action／Formula 接到欄位（右鍵「指定公式」等入口）。</summary>
+    private void Connect(object slot, object node)
+    {
+        if (node is not ActionSystemNode body) return;
+        PreserveVisibleNodePositions();
+        NewSource(slot).SetBody(body);
         Invalidate();
     }
 
     private void DropTokenOn(Vector2 graphMouse)
     {
         var row = RowAt(graphMouse, out _);
-        if (row == null || row.IsActionSlot)
+        if (row == null)
+        {
+            AddTokenReferenceNode(dragToken, graphMouse);
+            return;
+        }
+        if (row.IsActionSlot)
         {
             ShowNotification(new GUIContent("只能拖到參數欄位上"));
             return;
@@ -2184,45 +3027,341 @@ public class ActionGraphWindow : EditorWindow
         AssignToken(row.Slot, dragToken.Key);
     }
 
-    /// <summary>把欄位接到共用變數；原本接著的公式節點留成未連接節點。</summary>
+    private void DropAssetOn(Vector2 graphMouse)
+    {
+        var row = RowAt(graphMouse, out _);
+        if (row == null)
+        {
+            AddAssetReferenceNode(dragAsset, graphMouse);
+            return;
+        }
+        if (!CanAssignAsset(row, dragAsset))
+        {
+            ShowNotification(new GUIContent("資產型別不符，無法接到這個欄位"));
+            return;
+        }
+        AssignAsset(row.Slot, dragAsset);
+    }
+
+    /// <summary>把左欄 Token 拖到空白畫布：建立一個沒有連線的變數載體，放進候選池等人來接。</summary>
+    private void AddTokenReferenceNode(AGToken token, Vector2 graphMouse)
+    {
+        if (token == null) return;
+        if (!CanCreateReferenceNode())
+        {
+            ShowNotification(new GUIContent("先指定根公式或動作，才能放入參照節點"));
+            return;
+        }
+        var carrier = new GraphNode();
+        carrier.EnsureId();
+        carrier.SetToken(token.Key);
+        carrier.Pos = SnapToGrid(graphMouse);
+        model.AddOrphan(carrier);
+        Invalidate();
+    }
+
+    /// <summary>把 Project 的共用資產拖到空白畫布：同樣建立一個候選載體。</summary>
+    private void AddAssetReferenceNode(UnityEngine.Object asset, Vector2 graphMouse)
+    {
+        if (!CanCreateReferenceNode())
+        {
+            ShowNotification(new GUIContent("先指定根公式或動作，才能放入參照節點"));
+            return;
+        }
+        if (asset is not ScriptableObject so)
+        {
+            ShowNotification(new GUIContent("資產尚未存入 Project，無法建立節點"));
+            return;
+        }
+        var carrier = new GraphNode();
+        carrier.EnsureId();
+        carrier.SetAsset(so);
+        carrier.Pos = SnapToGrid(graphMouse);
+        model.AddOrphan(carrier);
+        Invalidate();
+    }
+
+    /// <summary>處理從 Project 拖進來的公式／動作資產；落在參數列就直接接上，空白處就建立來源節點。</summary>
+    private bool HandleAssetDrag(Event e, Vector2 graphMouse)
+    {
+        if (e.type != EventType.DragUpdated && e.type != EventType.DragPerform) return false;
+
+        UnityEngine.Object asset = null;
+        foreach (var candidate in DragAndDrop.objectReferences)
+        {
+            if (candidate is not ScriptableObject so || !IsSharedAsset(so)) continue;
+            asset = so;
+            break;
+        }
+        if (asset == null) return false;
+
+        var row = RowAt(graphMouse, out _);
+        bool canAssign = row != null && CanAssignAsset(row, asset);
+        bool canCreate = row == null && CanCreateReferenceNode();
+        DragAndDrop.visualMode = canAssign || canCreate ? DragAndDropVisualMode.Copy : DragAndDropVisualMode.Rejected;
+        if (e.type == EventType.DragUpdated)
+        {
+            e.Use();
+            return true;
+        }
+
+        if (canAssign) AssignAsset(row.Slot, asset);
+        else if (canCreate) AddAssetReferenceNode(asset, graphMouse);
+        else if (row == null) ShowNotification(new GUIContent("先指定根公式或動作，才能放入參照節點"));
+        else ShowNotification(new GUIContent("資產型別不符，無法接到這個欄位"));
+        DragAndDrop.AcceptDrag();
+        e.Use();
+        return true;
+    }
+
+    // 有頭端才有候選池可放；資產焦點的頭端是資產本身，同樣有一份。
+    private bool CanCreateReferenceNode() => focus.Head != null && focus.RootSlot != null;
+
+    private static bool CanAssignAsset(AGRow row, UnityEngine.Object asset)
+    {
+        if (row?.Slot == null || asset == null) return false;
+        Type accepted = row.IsActionSlot
+            ? AGReflect.ActionAssetType(row.Slot.GetType())
+            : AGReflect.AssetType(row.Slot.GetType());
+        return accepted != null && accepted.IsInstanceOfType(asset);
+    }
+
+    private void ShowNodeSourceSelector(AGNode node, Rect selector)
+    {
+        if (node == null) return;
+        var options = new List<AGSourceOption>();
+        object slot = SourceSlot(node);
+        bool isAction = slot != null
+            ? AGReflect.IsActionSlotType(slot.GetType())
+            : node.IsActionNode || (node.IsAssetNode && node.ResultType == null);
+
+        Type baseType = node.ParentSlot != null
+            ? (isAction
+                ? AGReflect.ActionBaseType(node.ParentSlot.GetType())
+                : AGReflect.FormulaBaseType(node.ParentSlot.GetType()))
+            : AGReflect.NodeBaseType(node.Obj?.GetType());
+        if (baseType != null)
+        {
+            string kind = isAction ? "Action" : "Formula";
+            foreach (var type in AGTypeCatalog.Concrete(baseType))
+            {
+                Type captured = type;
+                options.Add(new AGSourceOption
+                {
+                    Group = kind + "/" + AGReflect.TypeCategory(type),
+                    Name = AGReflect.TypeName(type),
+                    IsCurrent = node.Obj?.GetType() == type,
+                    Apply = () => ReplaceNodeType(node, captured),
+                });
+            }
+        }
+
+        Type resultType = !isAction
+            ? (slot != null ? AGReflect.ResultType(slot.GetType()) : node.ResultType)
+            : null;
+        bool canUseReferenceSources = node.ParentSlot != null || node.Obj == null;
+        if (canUseReferenceSources && !isAction && resultType != null)
+        {
+            foreach (var token in model.ReadTokens())
+            {
+                if (token.ResultType != resultType || string.IsNullOrWhiteSpace(token.Key)) continue;
+                string key = token.Key;
+                options.Add(new AGSourceOption
+                {
+                    Group = "Token",
+                    Name = key,
+                    IsCurrent = node.TokenKey == key,
+                    Apply = () => ChangeNodeToToken(node, key),
+                });
+            }
+        }
+
+        if (canUseReferenceSources)
+        {
+            foreach (var entry in AGAssetIndex.Entries)
+            {
+                if (entry.Asset == null || !CanReplaceAssetNode(node, entry.Asset)) continue;
+                var asset = entry.Asset;
+                options.Add(new AGSourceOption
+                {
+                    Group = "Asset",
+                    Name = entry.Name,
+                    IsCurrent = node.Asset == asset,
+                    Apply = () => ChangeNodeToAsset(node, asset),
+                });
+            }
+        }
+
+        AGTypeCatalog.ShowSourcePicker(selector, options);
+    }
+
+    private object SourceSlot(AGNode node)
+    {
+        if (node?.ParentSlot != null) return node.ParentSlot;
+        if (graph?.Links == null) return null;
+        foreach (var link in graph.Links)
+            if (ReferenceEquals(link.Target, node) && link.ParentRow?.Slot != null)
+                return link.ParentRow.Slot;
+        return null;
+    }
+
+    /// <summary>換節點型別＝換載體裡的內容。載體 Id、座標、備註與所有連入邊都不動，這才是真的「替換」。</summary>
+    private void ReplaceNodeType(AGNode node, Type type)
+    {
+        if (node?.Carrier == null || type == null || node.Obj?.GetType() == type) return;
+        if (AGReflect.CreateInstance(type) is not ActionSystemNode instance) return;
+
+        model.BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        DetachChildSourcesForReplacement(node);
+        node.Carrier.SetBody(instance);
+        Invalidate();
+        Repaint();
+    }
+
+    private bool CanReplaceAssetNode(AGNode node, ScriptableObject asset)
+    {
+        if (node?.ParentSlot != null)
+        {
+            Type slotType = node.ParentSlot.GetType();
+            Type accepted = AGReflect.IsActionSlotType(slotType)
+                ? AGReflect.ActionAssetType(slotType)
+                : AGReflect.AssetType(slotType);
+            return accepted != null && accepted.IsInstanceOfType(asset);
+        }
+
+        bool hasLink = false;
+        if (graph?.Links != null)
+        {
+            foreach (var link in graph.Links)
+            {
+                if (!ReferenceEquals(link.Target, node)) continue;
+                hasLink = true;
+                if (!CanAssignAsset(link.ParentRow, asset)) return false;
+            }
+        }
+        if (hasLink) return true;
+
+        Type acceptedType = AcceptedAssetType(node);
+        return acceptedType != null && acceptedType.IsInstanceOfType(asset);
+    }
+
+    private Type AcceptedAssetType(AGNode node)
+    {
+        Type slotType = node.ParentSlot?.GetType();
+        if (slotType == null && graph?.Links != null)
+        {
+            foreach (var link in graph.Links)
+            {
+                if (!ReferenceEquals(link.Target, node) || link.ParentRow?.Slot == null) continue;
+                slotType = link.ParentRow.Slot.GetType();
+                break;
+            }
+        }
+        if (slotType == null && node.Asset is ScriptableObject asset)
+            slotType = SlotTypeForAsset(asset, AssetSlotTypes());
+        if (slotType == null && node.ResultType != null)
+        {
+            foreach (var (resultType, list) in model.TokenKinds())
+            {
+                if (resultType != node.ResultType) continue;
+                Type entryType = list.GetType().GetGenericArguments()[0];
+                slotType = (AGReflect.CreateInstance(entryType) as ITokenEntry)?.Slot?.GetType();
+                break;
+            }
+        }
+        if (slotType == null) return null;
+        return AGReflect.IsActionSlotType(slotType)
+            ? AGReflect.ActionAssetType(slotType)
+            : AGReflect.AssetType(slotType);
+    }
+
+    /// <summary>節點改接變數。節點是共用來源時，所有指著它的欄位一起改——這正是共用的語意。</summary>
+    private void ChangeNodeToToken(AGNode node, string key)
+    {
+        if (node?.Carrier == null || string.IsNullOrWhiteSpace(key) || node.TokenKey == key) return;
+
+        model.BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        DetachChildSourcesForReplacement(node);
+        node.Carrier.SetToken(key);
+        Invalidate();
+        Repaint();
+    }
+
+    private void ChangeNodeToAsset(AGNode node, ScriptableObject asset)
+    {
+        if (node?.Carrier == null || asset == null || node.Asset == asset) return;
+
+        model.BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        DetachChildSourcesForReplacement(node);
+        node.Carrier.SetAsset(asset);
+        Invalidate();
+        Repaint();
+    }
+
+    /// <summary>換掉節點內容前，先把它的直接來源拆散：子載體原位變成候選，完整子樹與座標都留著。</summary>
+    private void DetachChildSourcesForReplacement(AGNode node)
+    {
+        if (node?.Obj == null) return;
+        foreach (var row in AGGraph.AllRows(node.Rows))
+        {
+            if (row.Kind != AGRowKind.Slot || row.Slot == null) continue;
+            var child = AGReflect.GetNode(row.Slot);
+            if (child == null) continue;
+            AGReflect.SetNode(row.Slot, null);
+            model.AddOrphan(child);
+        }
+    }
+
+    /// <summary>
+    /// 取一個可以直接改內容的載體：欄位獨佔且不是內嵌內容時就地沿用；
+    /// 共用中或還掛著內嵌子樹時另建一個，舊載體整棵留成候選。
+    /// </summary>
+    private GraphNode SoloSource(object slot)
+    {
+        var carrier = AGReflect.GetNode(slot);
+        bool reusable = carrier != null && carrier.Kind != NodeKind.Inline && CountCarrierUsers(carrier) <= 1;
+        return reusable ? carrier : NewSource(slot);
+    }
+
+    private int CountCarrierUsers(GraphNode carrier)
+    {
+        if (carrier == null) return 0;
+        int n = 0;
+        foreach (var slot in model.AllSlots())
+            if (ReferenceEquals(AGReflect.GetNode(slot), carrier)) n++;
+        if (focus.Kind == AGFocusKind.Asset && focus.AssetHostSlot != null
+            && ReferenceEquals(AGReflect.GetNode(focus.AssetHostSlot), carrier)) n++;
+        return n;
+    }
+
+    /// <summary>把欄位接到共用變數；原本接著的公式節點留成候選。</summary>
     private void AssignToken(object slot, string key)
     {
-        DetachFormula(slot);
-        AGReflect.SetUseType(slot, 3);
-        AGReflect.SetTokenKey(slot, key);
-        AGReflect.ClearUnusedSources(slot, 3);
+        PreserveVisibleNodePositions();
+        SoloSource(slot).SetToken(key);
         Invalidate();
     }
 
     private void AssignAsset(object slot, UnityEngine.Object asset)
     {
-        DetachFormula(slot);
-        AGReflect.SetUseType(slot, 2);
-        AGReflect.SetAsset(slot, asset);
-        AGReflect.ClearUnusedSources(slot, 2);
+        if (asset is not ScriptableObject so) return;
+        PreserveVisibleNodePositions();
+        SoloSource(slot).SetAsset(so);
         Invalidate();
     }
 
-    /// <summary>在變數節點上換一個同型別的變數。</summary>
-    private void ShowTokenPicker(AGNode node)
+    /// <summary>拓樸變動前固定目前畫面座標，避免 AutoLayout 因根節點順序改變而重排既有 Node。</summary>
+    private void PreserveVisibleNodePositions()
     {
-        if (node.ParentSlot == null) return;
-        var menu = new GenericMenu();
-        bool any = false;
-        foreach (var t in model.ReadTokens())
+        if (graph?.Nodes == null) return;
+        foreach (var node in graph.Nodes)
         {
-            if (t.ResultType != node.ResultType) continue;
-            if (string.IsNullOrWhiteSpace(t.Key)) continue;
-            any = true;
-            var captured = t.Key;
-            menu.AddItem(new GUIContent(t.Key), captured == node.TokenKey, () =>
-            {
-                AssignToken(node.ParentSlot, captured);
-                Repaint();
-            });
+            if (node == null || string.IsNullOrEmpty(node.Id)) continue;
+            model.SetPosition(node.Id, node.Pos);
         }
-        if (!any) menu.AddDisabledItem(new GUIContent($"沒有 {AGReflect.ResultTypeName(node.ResultType)} 變數，先在左欄新增"));
-        menu.ShowAsContext();
     }
 
     /// <summary>切到這個變數節點指向的 Token 焦點。</summary>
@@ -2240,19 +3379,24 @@ public class ActionGraphWindow : EditorWindow
 
     private void DeleteNode(AGNode node, bool pushUndo = true)
     {
-        if (node.Obj == null && !node.IsAssetNode && node.TokenKey == null) return;
+        if (node == null) return;
         if (node.IsRoot)
         {
             ShowNotification(new GUIContent("根節點不可刪除；要換內容請按右鍵"));
             return;
         }
+        if (node.Carrier == null) return;
         if (pushUndo) model.BreakUndoMerge();
-        if (node.ParentSlot != null)
-        {
-            AGReflect.SetUseType(node.ParentSlot, 0);
-            AGReflect.ClearUnusedSources(node.ParentSlot, 0);
-        }
-        if (node.Obj is ActionSystemNode n) model.RemoveOrphan(n);
+        PreserveVisibleNodePositions();
+
+        // 刪節點＝斷開所有指著這個載體的欄位，並把它移出候選池。
+        foreach (var slot in model.AllSlots())
+            if (ReferenceEquals(AGReflect.GetNode(slot), node.Carrier)) AGReflect.SetNode(slot, null);
+        if (focus.Kind == AGFocusKind.Asset && focus.AssetHostSlot != null
+            && ReferenceEquals(AGReflect.GetNode(focus.AssetHostSlot), node.Carrier))
+            AGReflect.SetNode(focus.AssetHostSlot, null);
+        model.RemoveOrphan(node.Carrier);
+
         selectedIds.Remove(node.Id);
         Invalidate();
     }
@@ -2269,13 +3413,7 @@ public class ActionGraphWindow : EditorWindow
 
         if (!row.IsActionSlot)
         {
-            menu.AddItem(new GUIContent("設為常數"), useType == 0, () =>
-            {
-                DetachFormula(slot);
-                AGReflect.SetUseType(slot, 0);
-                AGReflect.ClearUnusedSources(slot, 0);
-                Invalidate();
-            });
+            menu.AddItem(new GUIContent("設為常數"), useType == 0, () => CutLink(slot));
         }
 
         menu.AddItem(new GUIContent(row.IsActionSlot ? "指定動作…" : "指定公式…"), false, () =>
@@ -2318,25 +3456,9 @@ public class ActionGraphWindow : EditorWindow
         if (useType != 0)
         {
             menu.AddSeparator("");
-            menu.AddItem(new GUIContent("清除這個欄位"), false, () =>
-            {
-                DetachFormula(slot);
-                AGReflect.SetUseType(slot, 0);
-                AGReflect.ClearUnusedSources(slot, 0);
-                Invalidate();
-            });
+            menu.AddItem(new GUIContent("清除這個欄位"), false, () => CutLink(slot));
         }
         menu.ShowAsContext();
-    }
-
-    private void DetachFormula(object slot)
-    {
-        var previous = AGReflect.GetFormula(slot);
-        if (previous is ActionSystemNode old)
-        {
-            model.AddOrphan(old);
-            model.SetFocusId(old.EnsureEditorNodeId(), focus.Id);
-        }
     }
 
     /// <summary>把某個欄位的公式抽成共用變數，欄位本身改為變數狀態。</summary>
@@ -2355,15 +3477,15 @@ public class ActionGraphWindow : EditorWindow
         foreach (var t in model.ReadTokens())
         {
             if (t.Key != key || t.ResultType != resultType) continue;
-            AGReflect.SetUseType(t.Slot, 1);
             AGReflect.SetFormula(t.Slot, formula);
             break;
         }
 
-        AGReflect.SetUseType(slot, 3);
-        AGReflect.SetFormula(slot, null);
-        AGReflect.SetTokenKey(slot, key);
-        AGReflect.ClearUnusedSources(slot, 3);
+        // 內容已經搬進變數，這裡直接換一個乾淨的變數載體，不把舊載體留成候選（否則同一份公式會有兩個位置）。
+        var carrier = new GraphNode();
+        carrier.EnsureId();
+        carrier.SetToken(key);
+        AGReflect.SetNode(slot, carrier);
         Invalidate();
         Repaint();
     }
@@ -2375,20 +3497,13 @@ public class ActionGraphWindow : EditorWindow
 
         if (node.IsPlaceholder && node.ParentSlot != null)
         {
-            bool isAction = AGReflect.IsActionSlotType(node.ParentSlot.GetType());
-            menu.AddItem(new GUIContent(isAction ? "指定動作…" : "指定公式…"), false, () =>
+            menu.AddItem(new GUIContent("變更來源…"), false,
+                () => ShowNodeSourceSelector(node, new Rect(menuPos, Vector2.one)));
+            if (!node.IsRoot)
             {
-                var baseType = isAction
-                    ? AGReflect.ActionBaseType(node.ParentSlot.GetType())
-                    : AGReflect.FormulaBaseType(node.ParentSlot.GetType());
-                AGTypeCatalog.ShowPicker(new Rect(menuPos, Vector2.one), baseType,
-                    isAction ? "選擇動作" : "選擇公式", type =>
-                    {
-                        var instance = AGReflect.CreateInstance(type);
-                        if (instance != null) Connect(node.ParentSlot, instance);
-                        Repaint();
-                    });
-            });
+                menu.AddSeparator("");
+                menu.AddItem(new GUIContent("清除空 Node"), false, () => DeleteNode(node));
+            }
             menu.ShowAsContext();
             return;
         }
@@ -2396,13 +3511,11 @@ public class ActionGraphWindow : EditorWindow
         if (node.TokenKey != null)
         {
             menu.AddItem(new GUIContent("編輯這個變數"), false, () => FocusToken(node));
-            menu.AddItem(new GUIContent("換一個變數…"), false, () => ShowTokenPicker(node));
         }
 
         if (!node.IsRoot && node.ParentSlot != null)
         {
-            // 變數／資產節點只是引用，中斷後不會留下未連接節點（沒有可保留的內容）。
-            string cut = node.Obj != null ? "中斷連線（留成未連接節點）" : "中斷連線（欄位改回常數）";
+            string cut = "中斷連線（來源留成候選）";
             menu.AddItem(new GUIContent(cut), false, () => CutLink(node));
         }
 
@@ -2412,13 +3525,33 @@ public class ActionGraphWindow : EditorWindow
                 ? AGReflect.IsActionSlotType(node.ParentSlot.GetType())
                 : ActionBaseTypeOfCurrentSystem()?.IsInstanceOfType(node.Obj) ?? false;
             menu.AddSeparator("");
-            menu.AddItem(new GUIContent(isAction ? "轉存為動作資產…" : "轉存為公式資產…"), false, () => ExtractAsset(node));
+            menu.AddItem(new GUIContent(isAction ? "轉存為動作資產" : "轉存為公式資產"), false, () => ExtractAsset(node));
 
             if (!isAction && node.ParentSlot != null && !AGReflect.IsActionSlotType(node.ParentSlot.GetType()))
             {
                 var slot = node.ParentSlot;
                 menu.AddItem(new GUIContent("轉存為變數（Token）…"), false, () =>
                     AGPrompt.Show("轉存為變數", "輸入變數名稱", "", key => ExtractToken(slot, key)));
+            }
+
+            menu.AddSeparator("");
+            if (string.IsNullOrWhiteSpace(node.Tips))
+            {
+                menu.AddItem(new GUIContent("新增備註"), false, () =>
+                {
+                    model.SetNodeTips(node.Id, "備註");
+                    Invalidate();
+                    Repaint();
+                });
+            }
+            else
+            {
+                menu.AddItem(new GUIContent("刪除備註"), false, () =>
+                {
+                    model.SetNodeTips(node.Id, "");
+                    Invalidate();
+                    Repaint();
+                });
             }
         }
 
@@ -2486,32 +3619,34 @@ public class ActionGraphWindow : EditorWindow
         menu.ShowAsContext();
     }
 
-    // ===== 轉存為資產 =====
+    private static Vector2 SnapToGrid(Vector2 value)
+    {
+        return new Vector2(
+            Mathf.Round(value.x / AGGraph.GridSize) * AGGraph.GridSize,
+            Mathf.Round(value.y / AGGraph.GridSize) * AGGraph.GridSize);
+    }
 
-    private const string PrefAssetDir = "ActionSystem.LastAssetSaveDir";
+
+    // ===== 轉存為資產 =====
 
     /// <summary>把節點抽成獨立資產，原欄位改指向它。未連接節點則只建立資產。</summary>
     private void ExtractAsset(AGNode node)
     {
         if (node.Obj is not ActionSystemNode source) return;
 
-        var assetType = AssetTypeFor(node, out bool isAction);
+        var assetType = AssetTypeFor(node, out _);
         if (assetType == null)
         {
             EditorUtility.DisplayDialog("無法轉存", "找不到對應的資產型別。", "好");
             return;
         }
 
-        string dir = EditorPrefs.GetString(PrefAssetDir, "");
-        if (string.IsNullOrEmpty(dir) || !AssetDatabase.IsValidFolder(dir)) dir = "Assets";
+        CreateExtractedAsset(node, source, assetType, AGReflect.TypeName(source.GetType()));
+    }
 
-        string path = EditorUtility.SaveFilePanelInProject(
-            isAction ? "儲存動作資產" : "儲存公式資產",
-            AGReflect.TypeName(source.GetType()),
-            "asset",
-            "請選擇儲存位置",
-            dir);
-        if (string.IsNullOrEmpty(path)) return;
+    private void CreateExtractedAsset(AGNode node, ActionSystemNode source, Type assetType, string assetName)
+    {
+        if (!AGAssetStore.TryGetUniquePath(assetName, out string path)) return;
 
         var asset = ScriptableObject.CreateInstance(assetType);
         if (asset == null)
@@ -2528,28 +3663,16 @@ public class ActionGraphWindow : EditorWindow
         }
         setTarget.Invoke(asset, new object[] { source });
 
+        asset.name = System.IO.Path.GetFileNameWithoutExtension(path);
         AssetDatabase.CreateAsset(asset, path);
-        AssetDatabase.SaveAssets();
-        EditorPrefs.SetString(PrefAssetDir, System.IO.Path.GetDirectoryName(path)?.Replace('\\', '/') ?? "Assets");
 
-        // 讓資產記得誰在用它：資產內容變動時才通知得到 Owner 重新驗證。
-        if (model.Owner is ScriptableObject ownerSo)
-            assetType.GetMethod("RegisterSubscriber")?.Invoke(asset, new object[] { ownerSo });
-        else
-            Debug.LogWarning("[ActionGraph] Owner 不是 ScriptableObject，資產不會登記引用者。");
+        AssetDatabase.SaveAssets();
+        AGAssetIndex.Refresh();
 
         model.BreakUndoMerge();
-        if (node.ParentSlot != null)
-        {
-            // 這裡不能走 AssignAsset：原節點是被「搬進資產」，不該再留成未連接節點。
-            AGReflect.SetUseType(node.ParentSlot, 2);
-            AGReflect.SetAsset(node.ParentSlot, asset);
-            AGReflect.ClearUnusedSources(node.ParentSlot, 2);
-        }
-        else
-        {
-            model.RemoveOrphan(source);
-        }
+        // 內容被「搬進資產」，所以是就地把載體換成資產引用，不留成候選。
+        if (node.Carrier != null) node.Carrier.SetAsset(asset);
+        if (node.ParentSlot == null) model.RemoveOrphan(node.Carrier);
 
         Invalidate();
         EditorGUIUtility.PingObject(asset);
@@ -2621,14 +3744,16 @@ public class ActionGraphWindow : EditorWindow
         return null;
     }
 
+    // 候選池掛在焦點頭端上（資產有自己的一份），所以資產焦點也能建候選，不會污染 Owner。
     private void CreateOrphan(Type type, Vector2 graphMouse)
     {
         var instance = AGReflect.CreateInstance(type);
         if (instance is not ActionSystemNode node) return;
-        node.EnsureEditorNodeId();
-        model.AddOrphan(node);
-        model.SetFocusId(node.EditorNodeId, focus.Id);
-        model.SetPosition(node.EditorNodeId, graphMouse);
+
+        var carrier = new GraphNode(node);
+        carrier.EnsureId();
+        carrier.Pos = graphMouse;
+        model.AddOrphan(carrier);
         Invalidate();
         Repaint();
     }
@@ -2679,7 +3804,17 @@ public class ActionGraphWindow : EditorWindow
     private void SetFocus(AGFocus next)
     {
         if (next == null) return;
+        // 頭端第一次被聚焦時補一個穩定識別碼；焦點與座標都靠它。
+        object head = next.Head;
+        if ((next.Kind == AGFocusKind.Action || next.Kind == AGFocusKind.Token) && head != null
+            && string.IsNullOrEmpty(AGReflect.SlotEditorId(head)))
+        {
+            AGReflect.EnsureSlotEditorId(head);
+            model.MarkDirty();
+        }
         focus = next;
+        editingNameTarget = null;
+        editingNameDraft = "";
         if (next.Kind == AGFocusKind.Action)
         {
             currentTiming = next.Timing;
@@ -2710,8 +3845,12 @@ public class ActionGraphWindow : EditorWindow
         tx += 70f;
         if (DrawTab(new Rect(tx, head.y + 2f, 68f, 17f), $"警告 {warnings}", consoleTab == 2)) consoleTab = 2;
 
-        GUI.Label(new Rect(head.xMax - 200f, head.y + 3f, 196f, 16f),
-            verifiedOnce ? $"上次驗證 {Rep.Time:HH:mm:ss}" : "尚未驗證", AGStyles.Tiny);
+        string verifyStatus = IsCurrentReportFresh
+            ? $"完整驗證 {Rep.Time:HH:mm:ss}"
+            : (focus.Kind == AGFocusKind.Asset ? assetVerifiedOnce : verifiedOnce)
+                ? $"即時驗證 {Rep.Time:HH:mm:ss}"
+                : "尚未驗證";
+        GUI.Label(new Rect(head.xMax - 274f, head.y + 3f, 270f, 16f), verifyStatus, AGStyles.Tiny);
 
         if (consoleCollapsed) return;
 
@@ -2767,6 +3906,17 @@ public class ActionGraphWindow : EditorWindow
             resizingConsole = false;
             e.Use();
         }
+    }
+
+    private void ZoomAt(Vector2 clipMouse, float wheelDelta)
+    {
+        float nextZoom = Mathf.Clamp(zoom - wheelDelta * 0.03f, 0.45f, 1.8f);
+        if (Mathf.Approximately(nextZoom, zoom)) return;
+
+        // 固定滑鼠下的 Graph 點，縮放期間連線起點與預覽終點都不漂移。
+        Vector2 anchor = clipMouse / zoom - pan;
+        zoom = nextZoom;
+        pan = clipMouse / zoom - anchor;
     }
 
     private void JumpTo(AGIssue issue)

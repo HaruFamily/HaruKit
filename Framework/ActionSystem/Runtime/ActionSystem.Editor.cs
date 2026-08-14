@@ -18,7 +18,7 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
     private void Warn(string msg) => _warnings.Add(msg);
 
     /// <summary>開啟視覺化編輯器並聚焦到目前選取的 Owner。</summary>
-    // Owner 沿用專案既有慣例從 Selection 取（同 ActionSlot.FindOwnerSO）：這個按鈕本來就只在 Inspector 上按得到。
+    // Owner 從 Selection 取：這個按鈕本來就只在 Inspector 上按得到。
     private void OpenVisualEditor()
     {
         if (ActionSystemEditorHooks.OpenGraphWindow == null)
@@ -50,11 +50,12 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
         // 0. 空 Key / 1. 重複 Key / 2~4. 循環 + missing-key — 6 kind 由 concrete pack dispatch（型別配對它才知道）
         TokenEntry.ForEachKind(new VerifyKindVisitor(this));
         ReportDuplicateTimings();
+        ReportEmptyRootActions();
 
-        // 5. Null slot：UseType / _formula / _asset / _tokenKey 一致性
-        ValidateTokenNullSlots();
-        ValidateActionNullSlots();
-        ReportOrphanNodes();
+        // 5. 節點內容：空節點、內容為 null、型別與欄位不相容
+        ValidateTokenSlotSources();
+        ValidateActionSlotSources();
+        ReportAssetCycles();
 
         bool ok = _errors.Count == 0;
         _validated = ok;
@@ -123,14 +124,6 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
             Err($"{typeName}Tokens 重複 Key：'{k}'");
     }
 
-    // 未連接節點只是「留在編輯區沒接線」，不阻擋存檔；但要講清楚它不會被執行。
-    private void ReportOrphanNodes()
-    {
-        int count = _editorOrphans?.Count ?? 0;
-        if (count > 0)
-            Warn($"編輯區有 {count} 個未連接節點（不會被執行，可在視覺化編輯器接線或刪除）");
-    }
-
     private void ReportDuplicateTimings()
     {
         if (ActionGroups == null) return;
@@ -143,6 +136,134 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
         }
         foreach (var t in dup)
             Err($"ActionGroups 重複 Timing：'{t}'");
+    }
+
+    private void ReportEmptyRootActions()
+    {
+        if (ActionGroups == null) return;
+        foreach (var group in ActionGroups)
+        {
+            if (group?.Actions == null) continue;
+            for (int i = 0; i < group.Actions.Count; i++)
+            {
+                var slot = group.Actions[i];
+                if (slot == null) continue;
+                if (slot.Node == null || slot.Node.Kind == NodeKind.Empty)
+                    Err($"{group.Timing} 第 {i + 1} 個動作尚未指定 Action 類型");
+            }
+        }
+    }
+
+    private void ReportAssetCycles()
+    {
+        var completed = new HashSet<UnityEngine.Object>();
+        if (ActionGroups != null)
+        {
+            foreach (var group in ActionGroups)
+            {
+                if (group?.Actions == null) continue;
+                for (int i = 0; i < group.Actions.Count; i++)
+                    ValidateAssetCycles(group.Actions[i], $"{group.Timing} 第 {i + 1} 個動作", completed);
+            }
+        }
+        TokenEntry.ForEachKind(new AssetCycleKindVisitor(this, completed));
+    }
+
+    private void ValidateAssetCycles(object root, string where, HashSet<UnityEngine.Object> completed)
+    {
+        if (root == null) return;
+        var stack = new HashSet<UnityEngine.Object>();
+        var path = new List<UnityEngine.Object>();
+        foreach (var asset in DirectAssetReferences(root))
+        {
+            string cycle = FindAssetCycle(asset, stack, path, completed);
+            if (cycle == null) continue;
+            Err($"{where} Asset 循環引用：{cycle}");
+            return;
+        }
+    }
+
+    private string FindAssetCycle(UnityEngine.Object asset, HashSet<UnityEngine.Object> stack,
+        List<UnityEngine.Object> path, HashSet<UnityEngine.Object> completed)
+    {
+        if (asset == null || completed.Contains(asset)) return null;
+        if (stack.Contains(asset))
+        {
+            int start = 0;
+            while (start < path.Count && path[start] != asset) start++;
+            var names = new List<string>();
+            for (int i = start; i < path.Count; i++) names.Add(path[i] != null ? path[i].name : "?");
+            names.Add(asset.name);
+            return string.Join(" → ", names);
+        }
+
+        stack.Add(asset);
+        path.Add(asset);
+        string cycle = null;
+        foreach (var child in DirectAssetReferences(AssetContent(asset)))
+        {
+            cycle = FindAssetCycle(child, stack, path, completed);
+            if (cycle != null) break;
+        }
+        path.RemoveAt(path.Count - 1);
+        stack.Remove(asset);
+        completed.Add(asset);
+        return cycle;
+    }
+
+    private List<UnityEngine.Object> DirectAssetReferences(object root)
+    {
+        var result = new List<UnityEngine.Object>();
+        CollectDirectAssetReferences(root, new HashSet<object>(), result);
+        return result;
+    }
+
+    private void CollectDirectAssetReferences(object node, HashSet<object> visited, List<UnityEngine.Object> result)
+    {
+        if (node == null || !visited.Add(node)) return;
+
+        // 欄位只往目前接的節點下沉；候選池（_orphans）不執行，不算引用。
+        if (node is ActionSlot<TPack> actionSlot)
+        {
+            CollectDirectAssetReferences(actionSlot.Node, visited, result);
+            return;
+        }
+        if (node is FormulaSlotBase formulaSlot)
+        {
+            CollectDirectAssetReferences(formulaSlot.Node, visited, result);
+            return;
+        }
+        if (node is GraphNode graphNode)
+        {
+            if (graphNode.Kind == NodeKind.Asset && graphNode.AssetObject != null) result.Add(graphNode.AssetObject);
+            else if (graphNode.Kind == NodeKind.Inline) CollectDirectAssetReferences(graphNode.BodyObject, visited, result);
+            return;
+        }
+        if (node is UnityEngine.Object) return;
+
+        var type = node.GetType();
+        if (type.IsPrimitive || type.IsEnum || node is string) return;
+        string ns = type.Namespace;
+        if (ns != null && (ns == "UnityEngine" || ns.StartsWith("UnityEngine."))) return;
+
+        if (node is System.Collections.IList list)
+        {
+            foreach (var item in list) CollectDirectAssetReferences(item, visited, result);
+            return;
+        }
+
+        foreach (var field in GetAllInstanceFields(type))
+        {
+            if (field.IsStatic || field.IsNotSerialized) continue;
+            CollectDirectAssetReferences(field.GetValue(node), visited, result);
+        }
+    }
+
+    private static object AssetContent(UnityEngine.Object asset)
+    {
+        if (asset is ActionAssetBase<TPack> actionAsset) return actionAsset.EditorGetAction();
+        if (asset is FormulaAssetBase formulaAsset) return formulaAsset.EditorGetTargetObject();
+        return null;
     }
 
     // ===== Generic token-kind walker（取代原 6 型 × 4 方法 ≈ 700 行重複） =====
@@ -187,7 +308,7 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
             if (string.IsNullOrEmpty(key) || slot == null) continue;
             if (slot.IsSelfReferencing)
             {
-                Err($"{typeName} token '{key}' 直接自我參照（Slot.UseType=Token 且 _tokenKey={key}）");
+                Err($"{typeName} token '{key}' 直接自我參照（接的變數節點就是自己）");
                 continue;
             }
             var path = new List<string> { key };
@@ -220,6 +341,12 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
                 path.RemoveAt(path.Count - 1);
             }
         }
+
+        // 欄位只往目前接的節點下沉；候選池不參與驗證。
+        if (node is ActionSlot<TPack> actionSlot)
+            return FindCycle<TResult>(actionSlot.Node, rootKey, stack, path, visited, lookup);
+        if (node is FormulaSlotBase slotBase)
+            return FindCycle<TResult>(slotBase.Node, rootKey, stack, path, visited, lookup);
 
         foreach (var f in GetAllInstanceFields(node.GetType()))
         {
@@ -291,6 +418,18 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
                 Err($"{typeName} token 引用不存在的 Key：'{key}'");
         }
 
+        // 欄位只往目前接的節點下沉；候選池不參與驗證。
+        if (node is ActionSlot<TPack> actionSlotNode)
+        {
+            ValidateMissing<TResult>(typeName, actionSlotNode.Node, visited, lookup);
+            return;
+        }
+        if (node is FormulaSlotBase slotNode)
+        {
+            ValidateMissing<TResult>(typeName, slotNode.Node, visited, lookup);
+            return;
+        }
+
         foreach (var f in GetAllInstanceFields(node.GetType()))
         {
             var val = f.GetValue(node);
@@ -318,26 +457,26 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
         }
     }
 
-    // ===== Null-slot 一致性（UseType vs _formula / _asset / _tokenKey）=====
+    // ===== 節點內容檢查（空節點 / 內容為 null / 型別與欄位不相容）=====
 
-    private void ValidateTokenNullSlots()
+    private void ValidateTokenSlotSources()
     {
         var visited = new HashSet<object>();
-        TokenEntry.ForEachKind(new NullSlotKindVisitor(this, visited));
+        TokenEntry.ForEachKind(new SlotSourceKindVisitor(this, visited));
     }
 
-    private void WalkTokenNullSlots<TEntry>(List<TEntry> entries, Func<TEntry, object> getSlot, HashSet<object> visited)
+    private void WalkTokenSlotSources<TEntry>(List<TEntry> entries, Func<TEntry, object> getSlot, HashSet<object> visited)
         where TEntry : class
     {
         if (entries == null) return;
         foreach (var e in entries)
         {
             var slot = getSlot(e);
-            if (slot != null) ValidateNullSlots(slot, visited);
+            if (slot != null) ValidateSlotSources(slot, visited);
         }
     }
 
-    private void ValidateActionNullSlots()
+    private void ValidateActionSlotSources()
     {
         if (ActionGroups == null) return;
         var visited = new HashSet<object>();
@@ -345,39 +484,32 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
         {
             if (g?.Actions == null) continue;
             foreach (var slot in g.Actions)
-                if (slot != null) ValidateNullSlots(slot, visited);
+                if (slot != null) ValidateSlotSources(slot, visited);
         }
     }
 
-    private void ValidateNullSlots(object node, HashSet<object> visited)
+    private void ValidateSlotSources(object node, HashSet<object> visited)
     {
         if (node == null || !visited.Add(node)) return;
 
+        // 欄位只往目前接的節點下沉；候選池不執行、不驗證。
         if (node is ActionSlot<TPack> a)
         {
-            int ut = a.EditorUseTypeRaw; // Empty=0, Formula=1, Asset=2
-            if (ut != 1 && a.EditorHasFormula)
-                Warn($"ActionSlot UseType={UseTypeName_Action(ut)} 但仍殘留 _formula 設定（不會被使用，建議清除或切回 公式）");
-            if (ut != 2 && a.EditorHasAsset)
-                Warn($"ActionSlot UseType={UseTypeName_Action(ut)} 但仍殘留 _asset 設定（不會被使用，建議清除或切回 資產）");
-            if (ut == 1 && !a.EditorHasFormula)
-                Err("ActionSlot UseType=公式 但 _formula 為 null");
-            if (ut == 2 && !a.EditorHasAsset)
-                Err("ActionSlot UseType=資產 但 _asset 為 null");
+            CheckNode(a.Node, "動作欄位", a.AcceptsBody, a.AcceptsAsset, allowToken: false);
+            ValidateSlotSources(a.Node, visited);
+            return;
         }
-        else if (node is FormulaSlotBase fsb)
+        if (node is FormulaSlotBase fsb)
         {
-            int ut = fsb.EditorUseTypeRaw; // Default=0, Formula=1, Asset=2, Token=3
-            var name = node.GetType().Name;
-            if (ut != 1 && fsb.EditorHasFormula)
-                Warn($"{name} UseType={UseTypeName_Formula(ut)} 但仍殘留 _formula 設定（不會被使用，建議清除或切回 公式）");
-            if (ut != 2 && fsb.EditorHasAsset)
-                Warn($"{name} UseType={UseTypeName_Formula(ut)} 但仍殘留 _asset 設定（不會被使用，建議清除或切回 資產）");
-            if (ut != 3 && fsb.EditorHasTokenKey)
-                Warn($"{name} UseType={UseTypeName_Formula(ut)} 但仍殘留 _tokenKey 設定（不會被使用，建議清除或切回 變數）");
-            if (ut == 1 && !fsb.EditorHasFormula) Err($"{name} UseType=公式 但 _formula 為 null");
-            if (ut == 2 && !fsb.EditorHasAsset)   Err($"{name} UseType=資產 但 _asset 為 null");
-            if (ut == 3 && !fsb.EditorHasTokenKey) Err($"{name} UseType=變數 但 _tokenKey 為空");
+            CheckNode(fsb.Node, fsb.GetType().Name, fsb.AcceptsBody, fsb.AcceptsAsset, allowToken: true);
+            ValidateSlotSources(fsb.Node, visited);
+            return;
+        }
+        if (node is GraphNode graphNode)
+        {
+            if (graphNode.Kind == NodeKind.Inline) ValidateSlotSources(graphNode.BodyObject, visited);
+            else if (graphNode.Kind == NodeKind.Asset) ValidateSlotSources(graphNode.AssetObject, visited);
+            return;
         }
 
         // 下沉樹：穿透 ActionAsset / FormulaAssetBase；其他 UnityEngine.Object 視 leaf。
@@ -392,7 +524,7 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
             {
                 if (!visited.Add(aa)) continue;
                 var inner = aa.EditorGetAction();
-                if (inner != null) ValidateNullSlots(inner, visited);
+                if (inner != null) ValidateSlotSources(inner, visited);
                 continue;
             }
 
@@ -400,7 +532,7 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
             {
                 if (!visited.Add(fa)) continue;
                 var inner = fa.EditorGetTargetObject();
-                if (inner != null) ValidateNullSlots(inner, visited);
+                if (inner != null) ValidateSlotSources(inner, visited);
                 continue;
             }
 
@@ -408,30 +540,44 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
 
             if (val is System.Collections.IList list)
             {
-                foreach (var item in list) ValidateNullSlots(item, visited);
+                foreach (var item in list) ValidateSlotSources(item, visited);
                 continue;
             }
 
-            ValidateNullSlots(val, visited);
+            ValidateSlotSources(val, visited);
         }
     }
 
-    private static string UseTypeName_Action(int ut) => ut switch
+    // 節點是唯一來源，所以只需檢查「這個節點的內容有沒有、對不對型別」一件事。
+    private void CheckNode(GraphNode node, string where,
+        Func<ActionSystemNode, bool> acceptsBody, Func<ScriptableObject, bool> acceptsAsset, bool allowToken)
     {
-        0 => "空",
-        1 => "公式",
-        2 => "資產",
-        _ => ut.ToString(),
-    };
+        if (node == null) return;   // 動作＝空槽、公式＝常數，都是合法狀態
 
-    private static string UseTypeName_Formula(int ut) => ut switch
-    {
-        0 => "常數",
-        1 => "公式",
-        2 => "資產",
-        3 => "變數",
-        _ => ut.ToString(),
-    };
+        switch (node.Kind)
+        {
+            case NodeKind.Empty:
+                Err($"{where} 有一個尚未指定內容的節點");
+                return;
+
+            case NodeKind.Inline:
+                if (node.BodyObject == null) { Err($"{where} 的節點設為內嵌內容，但內容是空的"); return; }
+                if (!acceptsBody(node.BodyObject))
+                    Err($"{where} 接的內容型別不相容：{node.BodyObject.GetType().Name}");
+                return;
+
+            case NodeKind.Asset:
+                if (node.AssetObject == null) { Err($"{where} 的節點設為資產，但沒有指定資產"); return; }
+                if (!acceptsAsset(node.AssetObject))
+                    Err($"{where} 接的資產型別不相容：{node.AssetObject.GetType().Name}");
+                return;
+
+            case NodeKind.Token:
+                if (!allowToken) { Err($"{where} 不能接變數"); return; }
+                if (string.IsNullOrEmpty(node.TokenKey)) Err($"{where} 的節點設為變數，但沒有指定變數");
+                return;
+        }
+    }
 
     // 衍生型別 GetFields 不會回 base class 的 private 欄位 — 手動沿繼承鏈往上抓 DeclaredOnly。
     private static IEnumerable<System.Reflection.FieldInfo> GetAllInstanceFields(Type type)
@@ -464,11 +610,11 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
         }
     }
 
-    private sealed class NullSlotKindVisitor : ITokenKindVisitor<TPack>
+    private sealed class SlotSourceKindVisitor : ITokenKindVisitor<TPack>
     {
         private readonly ActionSystem<TTiming, TPack, TTokenEntryPack> _s;
         private readonly HashSet<object> _visited;
-        public NullSlotKindVisitor(ActionSystem<TTiming, TPack, TTokenEntryPack> s, HashSet<object> visited)
+        public SlotSourceKindVisitor(ActionSystem<TTiming, TPack, TTokenEntryPack> s, HashSet<object> visited)
         {
             _s = s;
             _visited = visited;
@@ -477,7 +623,29 @@ where TTokenEntryPack : TokenEntryPack<TPack>, new()
         public void Visit<TResult, TEntry>(string typeName, List<TEntry> entries)
             where TEntry : class, ITokenEntry
         {
-            _s.WalkTokenNullSlots(entries, e => e?.Slot, _visited);
+            _s.WalkTokenSlotSources(entries, e => e?.Slot, _visited);
+        }
+    }
+
+    private sealed class AssetCycleKindVisitor : ITokenKindVisitor<TPack>
+    {
+        private readonly ActionSystem<TTiming, TPack, TTokenEntryPack> system;
+        private readonly HashSet<UnityEngine.Object> completed;
+
+        public AssetCycleKindVisitor(ActionSystem<TTiming, TPack, TTokenEntryPack> system,
+            HashSet<UnityEngine.Object> completed)
+        {
+            this.system = system;
+            this.completed = completed;
+        }
+
+        public void Visit<TResult, TEntry>(string typeName, List<TEntry> entries)
+            where TEntry : class, ITokenEntry
+        {
+            if (entries == null) return;
+            foreach (var entry in entries)
+                if (entry?.Slot != null)
+                    system.ValidateAssetCycles(entry.Slot, $"{typeName} token '{entry.Key}'", completed);
         }
     }
 }

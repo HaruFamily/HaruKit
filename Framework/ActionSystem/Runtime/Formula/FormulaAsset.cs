@@ -8,9 +8,12 @@ using UnityEngine;
 using UnityEditor;
 #endif
 
-// 非泛型 base：給 Editor walker 不必反射就能取 _target。
+// 非泛型 base：給 Editor walker 不必反射就能取 _target 與候選池。
 public abstract class FormulaAssetBase : ScriptableObject
 {
+    /// <summary>本資產的候選節點清單。僅視覺化編輯器使用。</summary>
+    public abstract List<GraphNode> Orphans { get; }
+
 #if UNITY_EDITOR
     internal abstract object EditorGetTargetObject();
 #endif
@@ -20,7 +23,17 @@ public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
 {
     [SerializeReference]
     private FormulaBase<T, TPack> _target;
+
+    // 候選節點池：本資產編輯區專用，不參與求值與驗證。資產是獨立交易，候選不可寫進 Owner。
+    [SerializeReference, HideInInspector]
+    private List<GraphNode> _orphans = new();
+
     public async UniTask<T> Evaluate(TPack pack, TokenCache<TPack> tokens) => _target != null ? await _target.Evaluate(pack, tokens) : default;
+
+    public override List<GraphNode> Orphans
+    {
+        get { _orphans ??= new List<GraphNode>(); return _orphans; }
+    }
 
 #if UNITY_EDITOR
     public void SetTarget(FormulaBase<T, TPack> target) => _target = target;
