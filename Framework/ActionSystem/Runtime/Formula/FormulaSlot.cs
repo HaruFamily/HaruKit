@@ -2,26 +2,32 @@ namespace PinPlugin.ActionSystem
 {
 using Cysharp.Threading.Tasks;
 using System;
-using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Serialization;
 
-#if UNITY_EDITOR
-using UnityEditor;
-#endif
-
-// 非泛型 base：給 Editor walker 不必泛型參數就能取 DebugTokenKey/IsSelfReferencing/Use-Type 等。
+// 非泛型 base：Verify 與編輯器不必帶泛型參數就能取節點、結果型別與型別相容判定。
 public abstract class FormulaSlotBase
 {
     internal abstract string DebugTokenKey { get; }
     public abstract bool IsSelfReferencing { get; }
     internal abstract void SetDictKey(string key);
-#if UNITY_EDITOR
-    internal abstract int EditorUseTypeRaw { get; }
-    internal abstract bool EditorHasFormula { get; }
-    internal abstract bool EditorHasAsset { get; }
-    internal abstract bool EditorHasTokenKey { get; }
-#endif
+
+    /// <summary>目前接的節點。null＝常數模式，直接用預設值。</summary>
+    public abstract GraphNode Node { get; }
+
+    /// <summary>接上或斷開節點。斷開傳 null 即回常數模式。</summary>
+    public abstract void SetNode(GraphNode node);
+
+    /// <summary>求值結果型別（TResult）。</summary>
+    public abstract Type ResultType { get; }
+
+    /// <summary>不分型別存取預設值，供編輯器輸入框讀寫。</summary>
+    public abstract object DefaultObject { get; set; }
+
+    /// <summary>這個欄位能不能接這個內嵌內容。</summary>
+    public abstract bool AcceptsBody(ActionSystemNode body);
+
+    /// <summary>這個欄位能不能接這個資產。</summary>
+    public abstract bool AcceptsAsset(ScriptableObject asset);
 }
 
 [Serializable]
@@ -30,334 +36,96 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
     where TFormula : FormulaBase<TResult, TPack>
 {
     [SerializeField]
-    protected UseType _useType = UseType.Default;
-
-    [SerializeField]
     protected TResult _default = default;
 
+    // 唯一來源：節點決定這個欄位取值方式，不再有 UseType 與三個來源欄位互相打架的可能。
     [SerializeReference]
-    [FormerlySerializedAs("_target")]
-    private TFormula _formula;
-
-    [SerializeField]
-#if UNITY_EDITOR
-#endif
-    private TAsset _asset;
-
-    [SerializeField]
-    private string _tokenKey;
+    private GraphNode _node;
 
     [NonSerialized] internal string _dictKey;
 
-    private bool _isFormula => _useType == UseType.Formula;
-    private bool _isAsset => _useType == UseType.Asset;
-    private bool _isToken => _useType == UseType.Token;
+    // 型別不符每個 Slot 只吼一次，避免逐次求值洗版。
+    [NonSerialized] private bool _loggedMismatch;
 
-    internal override string DebugTokenKey => _useType == UseType.Token ? _tokenKey : null;
+    protected FormulaSlot() { }
 
-    public override bool IsSelfReferencing => _useType == UseType.Token && _dictKey != null && _tokenKey == _dictKey;
-
-    internal override void SetDictKey(string key) => _dictKey = key;
-
-#if UNITY_EDITOR
-    internal override int EditorUseTypeRaw => (int)_useType;
-    internal override bool EditorHasFormula => _formula != null;
-    internal override bool EditorHasAsset => _asset != null;
-    internal override bool EditorHasTokenKey => !string.IsNullOrEmpty(_tokenKey);
-#endif
-
-    public enum UseType
-    {
-        Default,
-        Formula,
-        Asset,
-        Token,
-    }
-
-    public FormulaSlot(bool active)
-    {
-        if (active)
-            _useType = UseType.Formula;
-        else
-            _useType = UseType.Default;
-    }
-
-    // 帶初始常數值：active 決定模式（true=公式、false=常數），defaultValue 寫入 _default（常數模式即此值、公式模式為 fallback）。
-    public FormulaSlot(bool active, TResult defaultValue) : this(active)
+    /// <summary>帶初始常數值：常數模式即此值，接了來源時是解析失敗的保底值。</summary>
+    protected FormulaSlot(TResult defaultValue)
     {
         _default = defaultValue;
     }
 
+    public override GraphNode Node => _node;
+
+    public override void SetNode(GraphNode node) => _node = node;
+
+    public override Type ResultType => typeof(TResult);
+
+    public override object DefaultObject
+    {
+        get => _default;
+        set
+        {
+            if (value is TResult typed) { _default = typed; return; }
+            if (value == null && !typeof(TResult).IsValueType) { _default = default; return; }
+            Debug.LogWarning($"[ActionSystem] 預設值型別不符（欄位 {typeof(TResult).Name}，傳入 {value?.GetType().Name ?? "null"}），忽略。");
+        }
+    }
+
+    public override bool AcceptsBody(ActionSystemNode body) => body is TFormula;
+
+    public override bool AcceptsAsset(ScriptableObject asset) => asset is TAsset;
+
+    /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
+    public TResult Default { get => _default; set => _default = value; }
+
+    internal override string DebugTokenKey => _node?.TokenKey;
+
+    public override bool IsSelfReferencing => _dictKey != null && _node?.TokenKey == _dictKey;
+
+    internal override void SetDictKey(string key) => _dictKey = key;
+
     public async UniTask<TResult> Evaluate(TPack pack, TokenCache<TPack> tokens)
     {
-        switch (_useType)
+        if (_node == null) return _default;
+
+        switch (_node.Kind)
         {
-            case UseType.Formula:
-                return _formula != null ? await _formula.Evaluate(pack, tokens) : _default;
-            case UseType.Asset:
-                return _asset != null ? await _asset.Evaluate(pack, tokens) : _default;
-            case UseType.Token:
-                {
-                    if (IsSelfReferencing) return _default;
-                    if (tokens == null || !tokens.Has<TResult>(_tokenKey)) return _default;
-                    if (tokens.IsResolving<TResult>(_tokenKey)) return _default;
-                    return await tokens.Resolve<TResult>(_tokenKey, pack);
-                }
-            default:
-                return _default;
-        }
-    }
-
-#if UNITY_EDITOR
-    [SerializeField, HideInInspector] private TAsset _previousAsset;
-
-    private void OnAssetChanged()
-    {
-        var owner = FindOwnerSO();
-        if (owner == null) { _previousAsset = _asset; return; }
-
-        if (_previousAsset != null) _previousAsset.UnregisterSubscriber(owner);
-        if (_asset != null) _asset.RegisterSubscriber(owner);
-        _previousAsset = _asset;
-    }
-
-    internal TAsset EditorGetAsset() => _asset;
-    internal void EditorSetAsset(TAsset a) => _asset = a;
-    internal TFormula EditorGetFormula() => _formula;
-    internal void EditorSetFormula(TFormula f) => _formula = f;
-    internal UseType EditorGetUseType() => _useType;
-    internal void EditorSetUseType(UseType t) => _useType = t;
-    internal TResult EditorGetDefault() => _default;
-    internal void EditorSetDefault(TResult v) => _default = v;
-
-    // Default / Formula(非空) / Asset(非空) 三模式都允許轉 Token；Token → Token 跳過
-    private bool CanShowTokenKey()
-    {
-        return _useType == UseType.Default
-            || (_useType == UseType.Formula)
-            || (_useType == UseType.Asset);
-    }
-
-    private void ConvertToToken()
-    {
-        if (!CanShowTokenKey()) return;
-        switch (_useType)
-        {
-            case UseType.Formula:
-                if (_formula == null) return;
-                break;
-            case UseType.Asset:
-                if (_asset == null) return;
-                break;
-        }
-        // Key 改由 modal popup 輸入，與「預設值」資料欄分離（避免被當成資料設定）。確認後才執行轉換。
-        TokenKeyPopup.Open(DoConvertToToken);
-    }
-
-    private void DoConvertToToken(string key)
-    {
-        if (string.IsNullOrEmpty(key)) return;
-
-        var owner = FindOwnerSO();
-        if (owner == null)
-        {
-            Debug.LogError("[ConvertToToken] 找不到 owning ActionSystem。請從 Card / Effect SO inspector 開啟編輯（不要直接雙擊 FormulaAsset .asset）。");
-            return;
-        }
-
-        if (!(owner is IActionSystemOwner aso))
-        {
-            Debug.LogError($"[ConvertToToken] owner '{owner.name}' 未實作 IActionSystemOwner。");
-            return;
-        }
-
-        bool added = TryAddTokenEntry(aso, key, _useType, _formula, _asset, _default);
-        if (!added)
-        {
-            Debug.LogError($"[ConvertToToken] 無法在 owner '{owner.name}' 加入 {typeof(TResult).Name} token entry。");
-            return;
-        }
-
-        _useType = UseType.Token;
-        _tokenKey = key;
-        _formula = null;
-        _asset = null;
-        _previousAsset = null;
-
-        aso.MarkActionSystemDirty();
-        EditorUtility.SetDirty(owner);
-    }
-
-    // 6 型子類覆寫：依 mode 把對應 source 塞進新 token entry 的 Slot
-    protected abstract bool TryAddTokenEntry(IActionSystemOwner owner, string key, UseType mode, TFormula formula, TAsset asset, TResult constant);
-
-    // 共用 populate：子類傳入新 entry + entry.Slot + source 三模式資料
-    protected static bool EditorPopulateAndAdd<TEntry>(
-        List<TEntry> list, TEntry entry,
-        FormulaSlot<TResult, TAsset, TFormula, TPack> slot,
-        UseType mode, TFormula formula, TAsset asset, TResult constant)
-    {
-        if (list == null || entry == null || slot == null) return false;
-        switch (mode)
-        {
-            case UseType.Default:
-                slot.EditorSetUseType(UseType.Default);
-                slot.EditorSetDefault(constant);
-                break;
-            case UseType.Formula:
-                if (formula == null) return false;
-                slot.EditorSetUseType(UseType.Formula);
-                slot.EditorSetFormula(formula);
-                break;
-            case UseType.Asset:
-                if (asset == null) return false;
-                slot.EditorSetUseType(UseType.Asset);
-                slot.EditorSetAsset(asset);
-                break;
-            default:
-                return false;
-        }
-        list.Add(entry);
-        return true;
-    }
-
-    private ScriptableObject FindOwnerSO()
-    {
-        var sel = Selection.activeObject as ScriptableObject;
-        if (sel is IActionSystemOwner) return sel;
-        return null;
-    }
-
-    private void ConvertToFormula()
-    {
-        if (_asset == null) return;
-        var src = _asset.EditorGetTarget();
-        if (src == null)
-        {
-            Debug.LogError("[ConvertToFormula] 來源 FormulaAsset._target 為 null。");
-            return;
-        }
-
-        var clone = ActionSystemDeepCopy.Copy(src) as TFormula;
-        if (clone == null)
-        {
-            Debug.LogError($"[ConvertToFormula] Clone 失敗（type={src.GetType().Name}）。");
-            return;
-        }
-
-        var owner = FindOwnerSO();
-        if (owner != null) _asset.UnregisterSubscriber(owner);
-
-        _formula = clone;
-        _asset = null;
-        _previousAsset = null;
-        _useType = UseType.Formula;
-
-        if (owner != null) EditorUtility.SetDirty(owner);
-    }
-
-    private void ConvertToAsset()
-    {
-        if (_formula == null) return;
-
-        string defaultName = $"{_formula.GetType().Name}";
-        string dir = ActionSystemSavePathPrefs.GetInitialDir();
-        string path = EditorUtility.SaveFilePanelInProject(
-            "儲存 Formula Asset",
-            defaultName,
-            "asset",
-            "請選擇要儲存 FormulaAsset 的位置",
-            dir);
-
-        if (string.IsNullOrEmpty(path)) return;
-
-        var newAsset = ScriptableObject.CreateInstance<TAsset>();
-        newAsset.SetTarget(_formula);
-
-        AssetDatabase.CreateAsset(newAsset, path);
-        AssetDatabase.SaveAssets();
-        AssetDatabase.Refresh();
-
-        var loadedAsset = AssetDatabase.LoadAssetAtPath<TAsset>(path);
-        if (loadedAsset != null)
-        {
-            var monoScript = MonoScript.FromScriptableObject(loadedAsset);
-            if (monoScript != null)
+            case NodeKind.Inline:
             {
-                EditorUtility.SetDirty(loadedAsset);
-                AssetDatabase.SaveAssets();
+                var formula = _node.GetBody<TFormula>();
+                if (formula == null) return Mismatch("公式");
+                return await formula.Evaluate(pack, tokens);
             }
-
-            // 自動訂閱
-            var owner = FindOwnerSO();
-            if (owner != null) loadedAsset.RegisterSubscriber(owner);
-
-            _asset = loadedAsset;
-            _previousAsset = loadedAsset;
-            _useType = UseType.Asset;
-            _formula = null;
-            ActionSystemSavePathPrefs.RememberDir(path);
-            EditorGUIUtility.PingObject(loadedAsset);
-        }
-        else
-        {
-            Debug.LogError("建立 FormulaAsset 失敗！");
-        }
-    }
-#endif
-}
-
-#if UNITY_EDITOR
-/// <summary>
-/// 「轉成 Token」用的 Key 輸入 modal 小窗（非泛型，全 Slot 共用）。與「預設值」資料欄分離 → 明確是工具操作非資料設定。
-/// 確認回呼帶回 trim 後的 Key；取消/Esc 不回呼。留 runtime asm（被 FormulaSlot #if 引用，不可進 Editor/）。
-/// </summary>
-internal class TokenKeyPopup : EditorWindow
-{
-    private string key = "";
-    private System.Action<string> onConfirm;
-    private bool focused;
-
-    public static void Open(System.Action<string> onConfirm)
-    {
-        var w = CreateInstance<TokenKeyPopup>();
-        w.titleContent = new GUIContent("轉成 Token");
-        var size = new Vector2(320f, 96f);
-        var res = Screen.currentResolution;
-        w.position = new Rect((res.width - size.x) * 0.5f, (res.height - size.y) * 0.5f, size.x, size.y);
-        w.minSize = w.maxSize = size;
-        w.onConfirm = onConfirm;
-        w.ShowModalUtility();
-    }
-
-    private void OnGUI()
-    {
-        EditorGUILayout.Space(4);
-        EditorGUILayout.LabelField("輸入 Token Key", EditorStyles.boldLabel);
-
-        GUI.SetNextControlName("keyField");
-        key = EditorGUILayout.TextField(key);
-        if (!focused) { EditorGUI.FocusTextInControl("keyField"); focused = true; }
-
-        var e = Event.current;
-        bool enter = e.type == EventType.KeyDown && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter);
-        bool esc = e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape;
-
-        EditorGUILayout.Space(4);
-        using (new EditorGUILayout.HorizontalScope())
-        {
-            bool valid = !string.IsNullOrWhiteSpace(key);
-            GUI.enabled = valid;
-            if (GUILayout.Button("確認") || (enter && valid))
+            case NodeKind.Asset:
             {
-                onConfirm?.Invoke(key.Trim());
-                Close();
+                var asset = _node.GetAsset<TAsset>();
+                if (asset == null) return Mismatch("資產");
+                return await asset.Evaluate(pack, tokens);
             }
-            GUI.enabled = true;
-            if (GUILayout.Button("取消") || esc) Close();
+            case NodeKind.Token:
+            {
+                string key = _node.TokenKey;
+                if (string.IsNullOrEmpty(key)) return _default;
+                if (IsSelfReferencing) return _default;
+                if (tokens == null || !tokens.Has<TResult>(key)) return _default;
+                if (tokens.IsResolving<TResult>(key)) return _default;
+                return await tokens.Resolve<TResult>(key, pack);
+            }
+            default:
+                return _default;   // Empty：編輯中的空節點，存檔驗證會擋，runtime 走保底值續跑。
         }
+    }
+
+    private TResult Mismatch(string what)
+    {
+        if (!_loggedMismatch)
+        {
+            _loggedMismatch = true;
+            Debug.LogWarning($"[ActionSystem] {typeof(TResult).Name} 欄位接的{what}為空或型別不符，改用預設值。");
+        }
+        return _default;
     }
 }
-#endif
 
 }

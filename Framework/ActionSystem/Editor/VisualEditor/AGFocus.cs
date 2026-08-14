@@ -49,7 +49,7 @@ public class AGFocus
                 case AGFocusKind.Action:
                     string label = AGReflect.GetLabel(ActionSlot);
                     string name = ActionName(ActionSlot);
-                    return string.IsNullOrEmpty(label) ? name : $"{name}（{label}）";
+                    return string.IsNullOrEmpty(label) ? name : label;
                 case AGFocusKind.Token:
                     return Token != null ? $"變數 {Token.Key}" : "變數";
                 case AGFocusKind.Asset:
@@ -60,7 +60,7 @@ public class AGFocus
         }
     }
 
-    /// <summary>穩定字串：未連接節點靠它認得自己屬於哪個焦點。</summary>
+    /// <summary>穩定字串：HEAD、候選與獨立參照靠它認得所屬焦點。</summary>
     public string Id
     {
         get
@@ -68,11 +68,9 @@ public class AGFocus
             switch (Kind)
             {
                 case AGFocusKind.Action:
-                    var formula = ActionSlot != null ? AGReflect.GetFormula(ActionSlot) : null;
-                    if (formula is ActionSystemNode node) return "act:" + node.EnsureEditorNodeId();
-                    return $"act:{Timing}:{ActionIndex}";
+                    return "act:" + AGReflect.EnsureSlotEditorId(ActionSlot);
                 case AGFocusKind.Token:
-                    return Token != null ? $"tok:{AGReflect.ResultTypeName(Token.ResultType)}:{Token.Key}" : "tok:?";
+                    return Token != null ? TokenFocusId(Token.ResultType, Token.Key) : "tok:?";
                 case AGFocusKind.Asset:
                     return AssetObject != null
                         ? "ast:" + UnityEditor.AssetDatabase.AssetPathToGUID(UnityEditor.AssetDatabase.GetAssetPath(AssetObject))
@@ -82,6 +80,18 @@ public class AGFocus
             }
         }
     }
+
+    public static string TokenFocusId(Type resultType, string key)
+        => $"tok:{resultType?.AssemblyQualifiedName ?? "?"}:{key ?? ""}";
+
+    /// <summary>候選池掛在頭端上，切焦點時視窗用它指定 AGModel.OrphanHead。</summary>
+    public object Head => Kind switch
+    {
+        AGFocusKind.Action => ActionSlot,
+        AGFocusKind.Token => Token?.Entry,
+        AGFocusKind.Asset => AssetObject,
+        _ => null,
+    };
 
     public bool SameAs(AGFocus other)
     {
@@ -96,7 +106,7 @@ public class AGFocus
         }
     }
 
-    private static string ActionName(object actionSlot)
+    public static string ActionName(object actionSlot)
     {
         if (actionSlot == null) return "（空動作）";
         int useType = AGReflect.UseType(actionSlot);

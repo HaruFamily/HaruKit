@@ -4,6 +4,8 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Text;
+using UnityEditor;
 using UnityEngine;
 
 public enum AGRowKind
@@ -31,6 +33,8 @@ public class AGRow
 
     public object Target;            // Kind == Value：欄位所屬物件
     public FieldInfo Field;
+    public bool IsEnum;
+    public bool HideLabel;
 
     public IList List;               // Kind == List
     public Type ElementType;
@@ -54,6 +58,7 @@ public class AGRow
 /// <summary>編輯區上的一個節點。</summary>
 public class AGNode
 {
+    public GraphNode Carrier;             // 這個節點的載體；HEAD 節點為 null（載體是頭端本身）
     public object Obj;                    // ActionSystemNode（公式 / 動作）；資產、變數、空節點為 null
     public UnityEngine.Object Asset;      // 資產節點目前指到的資產（可為 null＝尚未指定）
     public bool IsAssetNode;              // 資產節點（不論有沒有指定資產）
@@ -61,10 +66,13 @@ public class AGNode
     public Type ResultType;               // 資產／變數節點的結果型別
     public string Id;
     public string Title;
+    public string ConcreteTypeName;
     public string Desc;
     public bool IsRoot;
     public bool IsOrphan;
-    public bool IsPlaceholder;            // 根節點還沒指定內容
+    public bool IsPlaceholder;            // Slot 尚未指定具體 Action／Formula
+    public bool IsActionNode;
+    public string Tips;
 
     public object ParentSlot;             // 這個節點接在哪個 Slot 上（root / orphan 為 null）
     public AGRow ParentRow;
@@ -73,16 +81,26 @@ public class AGNode
     public Vector2 Pos;
     public float Width = 280f;
     public float Height = 60f;
+    public float ContentHeight;
+    public float DescriptionHeight;
+    public float TipsHeight;
+    public bool HasNodeTypeSelector => IsPlaceholder || Obj != null;
+    public float DescriptionStart => AGGraph.HeaderHeight + (HasNodeTypeSelector ? AGGraph.TypeSelectorHeight : 0f);
+    public float BodyStart => DescriptionStart + DescriptionHeight;
 
     public Rect Rect => new Rect(Pos.x, Pos.y, Width, Height);
-    public Vector2 OutputPort => new Vector2(Pos.x, Pos.y + 14f);
+    public Vector2 OutputPort => new Vector2(Pos.x + AGGraph.PortRadius, Pos.y + AGGraph.HeaderHeight * 0.5f);
 }
 
 /// <summary>一次焦點的完整節點圖。每次資料變動就整份重建，不做增量。</summary>
 public class AGGraphView
 {
     public List<AGNode> Nodes = new();
+    public List<AGLink> Links = new();
     public Dictionary<object, AGNode> BySlot = new(AGRefComparer.Instance);
+
+    // 同一個載體被多個欄位指到＝共用來源：只畫一個節點，連線各自一條。GraphNode 沒有覆寫 Equals，預設就是參考比對。
+    public Dictionary<GraphNode, AGNode> ByCarrier = new();
 
     public AGNode FindByObject(object obj)
     {
@@ -92,159 +110,207 @@ public class AGGraphView
     }
 }
 
+public class AGLink
+{
+    public AGRow ParentRow;
+    public AGNode Target;
+}
+
 /// <summary>
 /// 由焦點根 Slot 遞迴展開節點圖：節點 → 參數列 → 子節點，並套用記憶座標或樹狀自動排版。
 /// </summary>
 public static class AGGraph
 {
     public const float RowHeight = 20f;
-    public const float HeaderHeight = 38f;
+    public const float HeaderHeight = 20f;
+    public const float TypeSelectorHeight = 20f;
+    public const float PortRadius = 7f;
+    public const float PortDiameter = PortRadius * 2f;
+    public const float GridSize = 20f;
     public const float IndentWidth = 12f;
     public const float ColumnGap = 90f;
     public const float NodeGap = 24f;
+    private const float MinNodeWidth = 220f;
+    private const float MaxNodeWidth = 760f;
+    private const float ValueWidth = 132f;
 
     private static readonly HashSet<string> SkipFields = new()
     {
-        "editorNodeId", "_previousAsset", "_dictKey",
+        "_dictKey",
     };
 
     /// <summary>
-    /// 建圖。rootSlot 是動作清單的 ActionSlot 或 Token 的 FormulaSlot；orphans 是本焦點要一併顯示的未連接節點。
+    /// 建圖。rootSlot 畫成固定 HEAD；orphans 是本焦點的候選節點（含拖進畫布的獨立 Token／資產節點）。
     /// </summary>
-    public static AGGraphView Build(AGModel model, object rootSlot, string rootTitle, IList orphans)
+    public static AGGraphView Build(AGModel model, object rootSlot, IList orphans, string focusId)
     {
         var view = new AGGraphView();
         if (rootSlot == null) return view;
 
-        var root = MakeNodeForSlot(model, rootSlot, null, true, "root");
-        root.Title = string.IsNullOrEmpty(root.Title) ? rootTitle : root.Title;
+        // 每次重建都重新登記 id → 載體，座標與備註的讀寫才找得到人。
+        model.ClearCarriers();
+
+        var root = MakeHeadNode(model, rootSlot, focusId);
         Collect(model, root, view, 0);
 
         if (orphans != null)
         {
             foreach (var o in orphans)
             {
-                if (o == null) continue;
-                var node = MakeNodeForObject(model, o, null, null);
+                if (o is not GraphNode carrier) continue;
+                if (view.ByCarrier.ContainsKey(carrier)) continue;
+                var node = MakeNodeForCarrier(model, carrier, null, null);
                 node.IsOrphan = true;
                 Collect(model, node, view, 0);
             }
         }
 
+        ApplyViewState(model, view);
         AutoLayout(model, view);
         return view;
     }
 
     // ===== 節點建立 =====
 
-    // idBase：資產／變數節點沒有自己的 editorNodeId，改用「父節點 id + 列序」組出跨開關穩定的 id，座標才記得住。
-    private static AGNode MakeNodeForSlot(AGModel model, object slot, AGRow parentRow, bool isRoot, string idBase)
+    private static AGNode MakeHeadNode(AGModel model, object rootSlot, string focusId)
     {
-        int useType = AGReflect.UseType(slot);
-        var resultType = AGReflect.ResultType(slot.GetType());
-
-        if (useType == 1)
+        bool isAction = AGReflect.IsActionSlotType(rootSlot.GetType());
+        Type resultType = isAction ? null : AGReflect.ResultType(rootSlot.GetType());
+        string kind = isAction ? "ACTION"
+            : focusId?.StartsWith("tok:", StringComparison.Ordinal) == true ? "TOKEN" : "ASSET";
+        var node = new AGNode
         {
-            var formula = AGReflect.GetFormula(slot);
-            if (formula != null)
+            Id = HeadId(focusId),
+            Title = resultType != null ? $"{kind} HEAD({AGReflect.ResultTypeName(resultType)})" : kind + " HEAD",
+            ParentSlot = rootSlot,
+            IsRoot = true,
+            IsActionNode = isAction,
+            ResultType = resultType,
+            Width = 230f,
+        };
+        node.Rows.Add(SlotRow(rootSlot, "來源", 0));
+        model.RegisterCarrier(node.Id, rootSlot);
+        return node;
+    }
+
+    public static string HeadId(string focusId) => "head:" + (focusId ?? "?");
+
+    /// <summary>一個載體＝一個節點。內容種類決定畫成公式／動作、資產葉、變數葉或編輯中的空節點。</summary>
+    private static AGNode MakeNodeForCarrier(AGModel model, GraphNode carrier, object parentSlot, AGRow parentRow)
+    {
+        string id = carrier.EnsureId();
+        Type slotResultType = parentSlot != null && !AGReflect.IsActionSlotType(parentSlot.GetType())
+            ? AGReflect.ResultType(parentSlot.GetType())
+            : null;
+
+        AGNode node;
+        switch (carrier.Kind)
+        {
+            case NodeKind.Inline when carrier.BodyObject != null:
+                node = MakeNodeForObject(carrier.BodyObject, parentSlot, parentRow, slotResultType);
+                break;
+
+            case NodeKind.Asset:
+                node = new AGNode
+                {
+                    Asset = carrier.AssetObject,
+                    IsAssetNode = true,
+                    ResultType = slotResultType ?? AGReflect.AssetResultType(carrier.AssetObject),
+                    Title = AssetTitle(slotResultType ?? AGReflect.AssetResultType(carrier.AssetObject)),
+                    Width = 230f,
+                };
+                break;
+
+            case NodeKind.Token:
+                node = new AGNode
+                {
+                    TokenKey = carrier.TokenKey ?? "",
+                    ResultType = slotResultType,
+                    Title = TokenTitle(slotResultType),
+                    Width = 210f,
+                };
+                break;
+
+            default:
             {
-                var n = MakeNodeForObject(model, formula, slot, parentRow);
-                n.IsRoot = isRoot;
-                return n;
+                bool isAction = parentSlot != null && AGReflect.IsActionSlotType(parentSlot.GetType());
+                node = new AGNode
+                {
+                    Title = isAction ? "ACTION" : FormulaTitle(slotResultType),
+                    ResultType = slotResultType,
+                    IsPlaceholder = true,
+                    IsActionNode = isAction,
+                    Width = 230f,
+                };
+                break;
             }
         }
 
-        if (useType == 2)
-        {
-            var asset = AGReflect.GetAsset(slot);
-            return new AGNode
-            {
-                Asset = asset,
-                IsAssetNode = true,
-                ResultType = resultType,
-                Id = idBase + ":asset",
-                Title = asset != null ? asset.name : "（未指定資產）",
-                Desc = resultType != null ? $"共用資產・{AGReflect.ResultTypeName(resultType)}" : "共用資產",
-                ParentSlot = slot,
-                ParentRow = parentRow,
-                IsRoot = isRoot,
-                Width = 230f,
-            };
-        }
-
-        if (useType == 3)
-        {
-            string key = AGReflect.GetTokenKey(slot);
-            return new AGNode
-            {
-                TokenKey = key ?? "",
-                ResultType = resultType,
-                Id = idBase + ":token",
-                Title = string.IsNullOrEmpty(key) ? "（未指定變數）" : "@" + key,
-                Desc = resultType != null
-                    ? $"共用變數・{AGReflect.ResultTypeName(resultType)}（雙擊編輯它的公式）"
-                    : "共用變數",
-                ParentSlot = slot,
-                ParentRow = parentRow,
-                IsRoot = isRoot,
-                Width = 210f,
-            };
-        }
-
-        return new AGNode
-        {
-            Id = idBase + ":empty",
-            Title = "（未指定內容）",
-            Desc = "在此節點按右鍵選擇內容",
-            ParentSlot = slot,
-            ParentRow = parentRow,
-            IsRoot = isRoot,
-            IsPlaceholder = true,
-            Width = 230f,
-        };
+        node.Carrier = carrier;
+        node.Id = id;
+        node.ParentSlot = parentSlot;
+        node.ParentRow = parentRow;
+        model.RegisterCarrier(id, carrier);
+        return node;
     }
 
-    private static AGNode MakeNodeForObject(AGModel model, object obj, object parentSlot, AGRow parentRow)
+    private static string TokenTitle(Type resultType)
+        => resultType != null ? $"TOKEN({AGReflect.ResultTypeName(resultType)})" : "TOKEN";
+
+    private static string AssetTitle(Type resultType)
+        => resultType != null ? $"ASSET({AGReflect.ResultTypeName(resultType)})" : "ASSET(Action)";
+
+    private static string FormulaTitle(Type resultType)
+        => resultType != null ? $"FORMULA({AGReflect.ResultTypeName(resultType)})" : "FORMULA";
+
+    private static AGNode MakeNodeForObject(object obj, object parentSlot, AGRow parentRow, Type slotResultType)
     {
+        bool isAction = AGReflect.IsActionNodeType(obj.GetType());
+        Type resultType = !isAction && slotResultType != null
+            ? slotResultType
+            : AGReflect.FormulaResultType(obj.GetType());
         var node = new AGNode
         {
             Obj = obj,
             ParentSlot = parentSlot,
             ParentRow = parentRow,
-            Title = AGReflect.TypeName(obj.GetType()),
+            Title = isAction ? "ACTION" : FormulaTitle(resultType),
+            ConcreteTypeName = AGReflect.TypeName(obj.GetType()),
             Desc = AGReflect.TypeDescription(obj.GetType()),
+            IsActionNode = isAction,
+            ResultType = resultType,
         };
-        node.Id = obj is ActionSystemNode n ? n.EnsureEditorNodeId() : obj.GetHashCode().ToString();
         BuildRows(obj, 0, node.Rows, new HashSet<object>(AGRefComparer.Instance));
         return node;
     }
 
-    /// <summary>把節點與其子樹加入視圖。</summary>
+    /// <summary>把節點與其子樹加入視圖。已經畫過的載體只補一條連線，不重複建節點。</summary>
     private static void Collect(AGModel model, AGNode node, AGGraphView view, int depth)
     {
         if (depth > 24) return;                       // 資料異常時不讓編輯器堆疊爆掉
         view.Nodes.Add(node);
+        if (node.Carrier != null) view.ByCarrier[node.Carrier] = node;
         if (node.ParentSlot != null) view.BySlot[node.ParentSlot] = node;
+        if (node.ParentRow != null) view.Links.Add(new AGLink { ParentRow = node.ParentRow, Target = node });
         MeasureNode(node);
 
-        int index = 0;
         foreach (var row in AllRows(node.Rows))
         {
-            index++;
             if (row.Kind != AGRowKind.Slot || row.Slot == null) continue;
 
-            // 公式、資產、變數三種來源一律長成節點，用連線表達引用關係；常數留在列上。
-            int useType = AGReflect.UseType(row.Slot);
-            bool hasChild = useType switch
-            {
-                1 => AGReflect.GetFormula(row.Slot) != null,
-                2 => true,
-                3 => !row.IsActionSlot,
-                _ => false,
-            };
-            if (!hasChild) continue;
+            var carrier = AGReflect.GetNode(row.Slot);
+            if (carrier == null) continue;            // 常數／空槽留在列上，不長節點
+            if (row.IsActionSlot && carrier.Kind == NodeKind.Token) continue;   // 動作欄位不接變數
 
-            var child = MakeNodeForSlot(model, row.Slot, row, false, $"{node.Id}#{index}");
+            // 共用來源：同一個載體被多個欄位指到時只有一個節點，這裡只補連線。
+            if (view.ByCarrier.TryGetValue(carrier, out var existing))
+            {
+                view.Links.Add(new AGLink { ParentRow = row, Target = existing });
+                view.BySlot[row.Slot] = existing;
+                continue;
+            }
+
+            var child = MakeNodeForCarrier(model, carrier, row.Slot, row);
             Collect(model, child, view, depth + 1);
         }
     }
@@ -267,6 +333,7 @@ public static class AGGraph
         foreach (var f in AGReflect.Fields(obj.GetType()))
         {
             if (SkipFields.Contains(f.Name)) continue;
+            if (AGReflect.IsHidden(f)) continue;
             if (f.IsNotSerialized) continue;
             if (f.IsStatic) continue;
 
@@ -282,7 +349,11 @@ public static class AGGraph
                     if (slot != null) f.SetValue(obj, slot);
                 }
                 if (slot == null) continue;
-                into.Add(SlotRow(slot, label, depth));
+                var row = SlotRow(slot, label, depth);
+                row.Field = f;
+                row.IsEnum = AGReflect.IsEnum(f);
+                row.HideLabel = AGReflect.IsLabelHidden(f);
+                into.Add(row);
                 continue;
             }
 
@@ -298,6 +369,8 @@ public static class AGGraph
                     ElementType = elem,
                     Target = obj,
                     Field = f,
+                    IsEnum = AGReflect.IsEnum(f),
+                    HideLabel = AGReflect.IsLabelHidden(f),
                 };
                 BuildListChildren(row, depth + 1, visited);
                 into.Add(row);
@@ -313,6 +386,8 @@ public static class AGGraph
                     Depth = depth,
                     Target = obj,
                     Field = f,
+                    IsEnum = AGReflect.IsEnum(f),
+                    HideLabel = AGReflect.IsLabelHidden(f),
                 });
                 continue;
             }
@@ -320,7 +395,7 @@ public static class AGGraph
             // 其餘視為巢狀資料：展開成一個群組，內容遞迴。
             var value = f.GetValue(obj);
             if (value == null) continue;
-            var group = new AGRow { Kind = AGRowKind.Group, Label = label, Depth = depth };
+            var group = new AGRow { Kind = AGRowKind.Group, Label = label, Depth = depth, Field = f, HideLabel = AGReflect.IsLabelHidden(f) };
             BuildRows(value, depth + 1, group.Children, visited);
             if (group.Children.Count > 0) into.Add(group);
         }
@@ -425,13 +500,76 @@ public static class AGGraph
 
     public static void MeasureNode(AGNode node)
     {
-        // 資產／變數節點是葉節點，沒有參數列，高度固定。
-        if (node.IsAssetNode) { node.Height = 64f; return; }
-        if (node.TokenKey != null) { node.Height = 56f; return; }
+        node.Width = SnapUp(MeasureWidth(node));
+        string description = node.IsOrphan ? node.Desc + "　・候選" : node.Desc;
+        node.DescriptionHeight = string.IsNullOrEmpty(description)
+            ? 0f
+            : Mathf.Max(16f, AGStyles.NodeDesc.CalcHeight(new GUIContent(description), node.Width));
+        bool hasTips = node.Obj != null && !string.IsNullOrWhiteSpace(node.Tips);
+        node.TipsHeight = !hasTips
+            ? 0f
+            : Mathf.Clamp(EditorStyles.textArea.CalcHeight(new GUIContent(node.Tips ?? ""), node.Width - 48f), 48f, 160f);
 
-        float y = HeaderHeight;
+        // 專用葉節點本體只放替換選單。
+        if (node.IsAssetNode || node.TokenKey != null || node.IsPlaceholder)
+        {
+            node.ContentHeight = node.IsPlaceholder ? node.DescriptionStart : node.BodyStart + 20f;
+            node.Height = SnapUp(node.ContentHeight);
+            return;
+        }
+        float y = node.BodyStart;
         y = MeasureRows(node.Rows, y);
-        node.Height = Mathf.Max(y + 6f, HeaderHeight + 8f);
+        if (node.TipsHeight > 0f) y += node.TipsHeight + 10f;
+        node.ContentHeight = Mathf.Max(y + 6f, node.BodyStart + 8f);
+        node.Height = SnapUp(node.ContentHeight);
+    }
+
+    /// <summary>以節點文字與參數列需求寬度自動估算，不讓長文把畫布撐到無法操作。</summary>
+    private static float MeasureWidth(AGNode node)
+    {
+        float width = MinNodeWidth;
+        width = Mathf.Max(width, TextWidth(node.Title) + 28f);        // 收合按鈕
+        width = Mathf.Max(width, TextWidth(node.ConcreteTypeName) + 24f);
+        string description = node.IsOrphan ? node.Desc + "　・候選" : node.Desc;
+        width = Mathf.Max(width, TextWidth(description) + 12f);
+
+        if (!string.IsNullOrWhiteSpace(node.Tips)) width = Mathf.Max(width, LongestLineWidth(node.Tips) + 54f);
+
+        foreach (var row in AllRows(node.Rows))
+        {
+            if (row.Kind == AGRowKind.Group || row.Kind == AGRowKind.List)
+                width = Mathf.Max(width, TextWidth(row.Label) + row.Depth * IndentWidth + 32f);
+            else
+                width = Mathf.Max(width, TextWidth(row.Label) + row.Depth * IndentWidth + ValueWidth + 28f);
+        }
+
+        return Mathf.Clamp(width, MinNodeWidth, MaxNodeWidth);
+    }
+
+    private static float TextWidth(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return 0f;
+        return EditorStyles.label.CalcSize(new GUIContent(text)).x;
+    }
+
+    private static float LongestLineWidth(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return 0f;
+        float width = 0f;
+        foreach (var line in text.Split('\n')) width = Mathf.Max(width, TextWidth(line));
+        return width;
+    }
+
+    private static float SnapUp(float value) => Mathf.Ceil(value / GridSize) * GridSize;
+
+    private static void ApplyViewState(AGModel model, AGGraphView view)
+    {
+        foreach (var node in view.Nodes)
+        {
+            if (!model.TryGetNodeView(node.Id, out var tips)) continue;
+            node.Tips = tips;
+        }
+        foreach (var node in view.Nodes) MeasureNode(node);
     }
 
     private static float MeasureRows(List<AGRow> rows, float y)

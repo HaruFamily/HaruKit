@@ -12,13 +12,6 @@ public interface ITokenEntry
     FormulaSlotBase Slot { get; }
 }
 
-// owner 契約：editor 端 ConvertToToken 透過它拿到 token pack，再 pack.FindList<TEntry>() 取對應清單。
-// 泛型回傳 Core base TokenEntryPack<TPack> → 不碰任何具體 entry 型別，故可留在 Core。
-public interface ITokenEntryOwner<TPack>
-{
-    TokenEntryPack<TPack> GetTokenPack();
-}
-
 public interface ITokenKindVisitor<TPack>
 {
     void Visit<TResult, TEntry>(string typeName, List<TEntry> entries)
@@ -44,14 +37,6 @@ public abstract class TokenEntryPack<TPack>
     public void AssignTokenKeys() => ForEachKind(AssignKeysVisitor.Instance);
 
     public void BuildDict(TokenCache<TPack> t) => ForEachKind(new BuildDictVisitor(t));
-
-    // 依 entry 型別取回對應清單（給 editor 端 ConvertToToken 新增 token 用）。同樣由 ForEachKind 衍生，不必逐型寫 Get 方法。
-    public List<TEntry> FindList<TEntry>() where TEntry : class, ITokenEntry
-    {
-        var v = new FindListVisitor<TEntry>();
-        ForEachKind(v);
-        return v.Found;
-    }
 
     // ===== 衍生 visitor：每個就是「對一種 kind 做什麼」的單點定義 =====
 
@@ -98,14 +83,6 @@ public abstract class TokenEntryPack<TPack>
         }
     }
 
-    private sealed class FindListVisitor<TWanted> : ITokenKindVisitor<TPack> where TWanted : class, ITokenEntry
-    {
-        public List<TWanted> Found;
-        public void Visit<TResult, TEntry>(string typeName, List<TEntry> entries) where TEntry : class, ITokenEntry
-        {
-            if (entries is List<TWanted> match) Found = match;
-        }
-    }
 }
 
 }

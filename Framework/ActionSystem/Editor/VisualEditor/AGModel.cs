@@ -5,6 +5,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 
 /// <summary>一筆 Token 的可編輯視圖：Key、結果型別、所屬清單與索引。</summary>
@@ -87,10 +88,7 @@ public class AGModel
     {
         var live = systemField.GetValue(Owner);
         if (live == null)
-        {
             live = Activator.CreateInstance(systemField.FieldType);
-            systemField.SetValue(Owner, live);
-        }
         Data = DeepCopy(live);
         Dirty = false;
         ClearHistory();
@@ -98,10 +96,15 @@ public class AGModel
 
     private static object DeepCopy(object system)
     {
+        if (system == null)
+        {
+            Debug.LogError("[ActionGraph] 無法建立 ActionSystem 工作副本，來源為 null。");
+            return null;
+        }
         var m = system.GetType().GetMethod("DeepCopy");
         var copy = m?.Invoke(system, null);
-        if (copy == null) Debug.LogError("[ActionGraph] ActionSystem.DeepCopy 失敗，改用原物件（編輯將直接影響資產）。");
-        return copy ?? system;
+        if (copy == null) Debug.LogError("[ActionGraph] ActionSystem.DeepCopy 失敗，已停止編輯以避免直接修改 Owner。");
+        return copy;
     }
 
     // ===== Undo / Redo（整份工作副本快照）=====
@@ -175,27 +178,37 @@ public class AGModel
         lastPushTime = 0d;
     }
 
-    /// <summary>把工作副本寫回 Owner 並跑 Core 的 Verify（_validated 由 Core 規則決定）。</summary>
-    public void Save()
+    /// <summary>先以 Core 規則驗證副本；通過後才寫回 Owner。</summary>
+    public bool Save()
     {
         var toStore = DeepCopy(Data);
-        systemField.SetValue(Owner, toStore);
+        if (toStore == null) return false;
 
         var markDirty = toStore.GetType().GetMethod("MarkDirty");
         markDirty?.Invoke(toStore, null);
         var verify = toStore.GetType().GetMethod("Verify");
         verify?.Invoke(toStore, null);
+        var isValidated = toStore.GetType().GetProperty("IsValidated");
+        if (isValidated?.GetValue(toStore) is not true)
+        {
+            Debug.LogError("[ActionGraph] Core Verify 未通過，Owner 未寫入。請查看 Console 的 Core 驗證訊息。");
+            return false;
+        }
 
+        systemField.SetValue(Owner, toStore);
         EditorUtility.SetDirty(Owner);
+        if (Owner is Component component && component.gameObject.scene.IsValid())
+            EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
         AssetDatabase.SaveAssets();
         Dirty = false;
+        return true;
     }
 
     // ===== 時機群組 =====
 
     public IList Groups => AGReflect.Get(Data, "ActionGroups") as IList;
 
-    /// <summary>從 ActionGroups 的泛型型別取得動作 Slot 型別，空群組時也能開啟新增動作選單。</summary>
+    /// <summary>從 ActionGroups 的泛型型別取得動作 Slot 型別，空群組時也能新增空動作。</summary>
     public Type ActionSlotType
     {
         get
@@ -250,7 +263,7 @@ public class AGModel
         Groups?.Remove(group.Group);
     }
 
-    /// <summary>建立空 ActionSlot，呼叫端必須立刻指定動作型別後加入清單。</summary>
+    /// <summary>建立空 ActionSlot；可先加入清單，稍後再由空 Node 選擇動作型別。</summary>
     public object NewActionSlot(IList actionList)
     {
         var slotType = actionList.GetType().GetGenericArguments()[0];
@@ -349,6 +362,7 @@ public class AGModel
         foreach (var t in ReadTokens())
             if (t.Key == newKey) { error = $"已存在名為 '{newKey}' 的 Token。"; return false; }
 
+        // 節點的座標與焦點歸屬跟著載體走，改名只要換掉引用它的節點內容。
         string oldKey = token.Key;
         foreach (var slot in AllFormulaSlots())
         {
@@ -357,6 +371,8 @@ public class AGModel
             if (AGReflect.ResultType(slot.GetType()) != token.ResultType) continue;
             AGReflect.SetTokenKey(slot, newKey);
         }
+        foreach (var node in AllOrphanNodes())
+            if (node.Kind == NodeKind.Token && node.TokenKey == oldKey) node.SetToken(newKey);
 
         if (token.Entry is ITokenEntry entry) entry.Key = newKey;
         token.Key = newKey;
@@ -366,6 +382,15 @@ public class AGModel
 
     public void RemoveToken(AGToken token)
     {
+        // 候選池裡引用這個變數的獨立節點一起移除；仍接在欄位上的引用留著，由驗證報「引用不存在的變數」。
+        foreach (var head in Heads())
+        {
+            var list = AGReflect.Orphans(head);
+            if (list == null) continue;
+            for (int i = list.Count - 1; i >= 0; i--)
+                if (list[i] != null && list[i].Kind == NodeKind.Token && list[i].TokenKey == token.Key)
+                    list.RemoveAt(i);
+        }
         token.List?.Remove(token.Entry);
         MarkDirty();
     }
@@ -384,103 +409,95 @@ public class AGModel
         return n;
     }
 
-    // ===== 未連接節點 =====
+    // ===== 候選節點 =====
+    // 候選池屬於「目前焦點的頭端」（動作頭端 / Token 頭端 / 資產），不再有全系統共用的一池 + FocusId 歸屬。
 
-    public IList Orphans
-    {
-        get
-        {
-            var p = Data.GetType().GetProperty("EditorOrphans");
-            return p?.GetValue(Data) as IList;
-        }
-    }
+    /// <summary>目前焦點的頭端物件，由視窗切焦點時指定。</summary>
+    public object OrphanHead { get; set; }
 
-    public void AddOrphan(object node)
+    public List<GraphNode> Orphans => AGReflect.Orphans(OrphanHead);
+
+    public void AddOrphan(GraphNode node)
     {
-        if (node is not ActionSystemNode n) return;
-        n.EnsureEditorNodeId();
+        if (node == null) return;
+        node.EnsureId();
         var list = Orphans;
-        if (list != null && !list.Contains(n)) list.Add(n);
+        if (list != null && !list.Contains(node)) list.Add(node);
         MarkDirty();
     }
 
-    public void RemoveOrphan(object node)
+    public void RemoveOrphan(GraphNode node)
     {
-        if (node is not ActionSystemNode n) return;
-        Orphans?.Remove(n);
+        if (node == null) return;
+        Orphans?.Remove(node);
         MarkDirty();
     }
 
     // ===== 座標記憶 =====
+    // 座標與備註住在載體（GraphNode）與頭端上。建圖時登記 id → 載體，讓視窗仍可用 nodeId 讀寫。
 
-    private List<ActionNodeLayout> Layout
+    private readonly Dictionary<string, object> carriers = new();
+
+    public void ClearCarriers() => carriers.Clear();
+
+    /// <summary>建圖時登記一個節點的載體：GraphNode，或頭端（ActionSlot / TokenEntryBase）。</summary>
+    public void RegisterCarrier(string nodeId, object carrier)
     {
-        get
-        {
-            var p = Data.GetType().GetProperty("EditorLayout");
-            return p?.GetValue(Data) as List<ActionNodeLayout>;
-        }
+        if (string.IsNullOrEmpty(nodeId) || carrier == null) return;
+        carriers[nodeId] = carrier;
     }
+
+    public object Carrier(string nodeId)
+        => !string.IsNullOrEmpty(nodeId) && carriers.TryGetValue(nodeId, out var c) ? c : null;
 
     public bool TryGetPosition(string nodeId, out Vector2 pos)
     {
         pos = Vector2.zero;
-        if (string.IsNullOrEmpty(nodeId)) return false;
-        var layout = Layout;
-        if (layout == null) return false;
-        foreach (var l in layout)
-            if (l != null && l.NodeId == nodeId && l.HasPosition) { pos = l.Position; return true; }
-        return false;
+        var carrier = Carrier(nodeId);
+        if (carrier == null) return false;
+        if (carrier is GraphNode node)
+        {
+            if (!node.HasPos) return false;
+            pos = node.Pos;
+            return true;
+        }
+        return AGReflect.GetHeadPos(carrier, out pos);
     }
 
     public void SetPosition(string nodeId, Vector2 pos)
     {
-        var entry = EnsureLayoutEntry(nodeId);
-        if (entry == null) return;
-        entry.Position = pos;
-        entry.HasPosition = true;
+        var carrier = Carrier(nodeId);
+        if (carrier == null) return;
+        if (TryGetPosition(nodeId, out var current) && current == pos) return;
+
+        if (carrier is GraphNode node) node.Pos = pos;
+        else AGReflect.SetHeadPos(carrier, pos);
+        MarkDirty();
+    }
+
+    public bool TryGetNodeView(string nodeId, out string tips)
+    {
+        tips = "";
+        if (Carrier(nodeId) is not GraphNode node) return false;
+        tips = node.Note ?? "";
+        return true;
+    }
+
+    public void SetNodeTips(string nodeId, string tips)
+    {
+        if (Carrier(nodeId) is not GraphNode node || node.Note == tips) return;
+        node.Note = tips;
         MarkDirty();
     }
 
     /// <summary>忘掉手動座標，讓自動排版重新接手（整理版面）。</summary>
     public void ClearPosition(string nodeId)
     {
-        if (string.IsNullOrEmpty(nodeId)) return;
-        var layout = Layout;
-        if (layout == null) return;
-        foreach (var l in layout)
-            if (l != null && l.NodeId == nodeId) { l.HasPosition = false; MarkDirty(); return; }
-    }
-
-    /// <summary>記錄節點屬於哪個焦點；未連接節點靠它決定顯示在哪個編輯區。</summary>
-    public void SetFocusId(string nodeId, string focusId)
-    {
-        var entry = EnsureLayoutEntry(nodeId);
-        if (entry == null) return;
-        entry.FocusId = focusId;
+        var carrier = Carrier(nodeId);
+        if (carrier == null) return;
+        if (carrier is GraphNode node) node.ClearPos();
+        else AGReflect.ClearHeadPos(carrier);
         MarkDirty();
-    }
-
-    public string GetFocusId(string nodeId)
-    {
-        if (string.IsNullOrEmpty(nodeId)) return null;
-        var layout = Layout;
-        if (layout == null) return null;
-        foreach (var l in layout)
-            if (l != null && l.NodeId == nodeId) return l.FocusId;
-        return null;
-    }
-
-    private ActionNodeLayout EnsureLayoutEntry(string nodeId)
-    {
-        if (string.IsNullOrEmpty(nodeId)) return null;
-        var layout = Layout;
-        if (layout == null) return null;
-        foreach (var l in layout)
-            if (l != null && l.NodeId == nodeId) return l;
-        var created = new ActionNodeLayout { NodeId = nodeId };
-        layout.Add(created);
-        return created;
     }
 
     // ===== 全圖走訪 =====
@@ -514,10 +531,33 @@ public class AGModel
         foreach (var t in ReadTokens())
             if (t.Slot != null) yield return t.Slot;
 
-        var orphans = Orphans;
-        if (orphans != null)
-            foreach (var o in orphans)
-                if (o != null) yield return o;
+        foreach (var node in AllOrphanNodes())
+            if (node.Kind == NodeKind.Inline && node.BodyObject != null) yield return node.BodyObject;
+    }
+
+    /// <summary>所有頭端：時機群組裡的動作欄位，以及每個 Token 宣告。候選池掛在它們身上。</summary>
+    public IEnumerable<object> Heads()
+    {
+        foreach (var g in ReadGroups())
+        {
+            if (g.Actions == null) continue;
+            foreach (var a in g.Actions)
+                if (a != null) yield return a;
+        }
+        foreach (var t in ReadTokens())
+            if (t.Entry != null) yield return t.Entry;
+    }
+
+    /// <summary>所有頭端的候選節點。</summary>
+    public IEnumerable<GraphNode> AllOrphanNodes()
+    {
+        foreach (var head in Heads())
+        {
+            var list = AGReflect.Orphans(head);
+            if (list == null) continue;
+            foreach (var node in list)
+                if (node != null) yield return node;
+        }
     }
 
     /// <summary>走訪任意一份 ActionSystem 的所有 Slot（重建資產引用清單用，對象不是工作副本）。</summary>
@@ -565,7 +605,8 @@ public class AGModel
     private static void ResetNodeIdsInternal(object node, HashSet<object> visited)
     {
         if (node == null || !visited.Add(node)) return;
-        if (node is ActionSystemNode n) n.ResetEditorNodeId();
+        if (node is GraphNode carrier) carrier.ResetId();
+        else if (AGReflect.IsActionSlotType(node.GetType())) AGReflect.ResetSlotEditorId(node);
 
         foreach (var f in AGReflect.Fields(node.GetType()))
         {

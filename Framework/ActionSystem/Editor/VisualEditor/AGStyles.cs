@@ -11,11 +11,15 @@ public static class AGStyles
     public static readonly Color GridBold = new(0.26f, 0.27f, 0.31f);
 
     public static readonly Color NodeBody = new(0.24f, 0.25f, 0.28f);
-    public static readonly Color NodeHeader = new(0.30f, 0.33f, 0.39f);
-    public static readonly Color NodeHeaderRoot = new(0.24f, 0.40f, 0.44f);
+    public static readonly Color NodeHeaderFormula = new(0.24f, 0.38f, 0.48f);
+    public static readonly Color NodeHeaderAction = new(0.48f, 0.30f, 0.22f);
+    public static readonly Color NodeHeaderRootFormula = new(0.20f, 0.46f, 0.58f);
+    public static readonly Color NodeHeaderRootAction = new(0.62f, 0.36f, 0.22f);
     public static readonly Color NodeHeaderOrphan = new(0.40f, 0.34f, 0.24f);
     public static readonly Color NodeHeaderToken = new(0.36f, 0.28f, 0.48f);
     public static readonly Color NodeHeaderAsset = new(0.26f, 0.36f, 0.34f);
+    public static readonly Color NodeNote = new(0.30f, 0.27f, 0.20f);
+    public static readonly Color NodeNoteBorder = new(0.62f, 0.50f, 0.28f);
     public static readonly Color NodeBorder = new(0.10f, 0.10f, 0.12f);
     public static readonly Color NodeBorderSelected = new(1f, 0.78f, 0.30f);
 
@@ -29,8 +33,12 @@ public static class AGStyles
     public static readonly Color Warning = new(1f, 0.78f, 0.34f);
     public static readonly Color Muted = new(0.65f, 0.66f, 0.70f);
     public static readonly Color RowAlt = new(1f, 1f, 1f, 0.03f);
+    public static readonly Color LibraryCell = new(0.20f, 0.22f, 0.26f);
+    public static readonly Color LibraryCellAlt = new(0.24f, 0.25f, 0.29f);
+    public static readonly Color LibraryCellBorder = new(0.11f, 0.12f, 0.15f);
+    public static readonly Color LibraryCellFocused = new(0.22f, 0.42f, 0.54f);
 
-    private static GUIStyle nodeTitle, nodeDesc, rowLabel, rowLabelError, chip, panelHeader, consoleRow, tiny;
+    private static GUIStyle nodeTitle, nodeDesc, focusTitle, rowLabel, rowLabelError, chip, panelHeader, consoleRow, tiny;
 
     public static GUIStyle NodeTitle => nodeTitle ??= new GUIStyle(EditorStyles.boldLabel)
     {
@@ -44,7 +52,14 @@ public static class AGStyles
     {
         padding = new RectOffset(6, 6, 0, 0),
         normal = { textColor = Muted },
-        wordWrap = false,
+        wordWrap = true,
+    };
+
+    public static GUIStyle FocusTitle => focusTitle ??= new GUIStyle(EditorStyles.boldLabel)
+    {
+        fontSize = 15,
+        alignment = TextAnchor.MiddleLeft,
+        padding = new RectOffset(4, 4, 0, 0),
     };
 
     public static GUIStyle RowLabel => rowLabel ??= new GUIStyle(EditorStyles.label)
@@ -84,6 +99,22 @@ public static class AGStyles
 
     public static void Fill(Rect r, Color c) => EditorGUI.DrawRect(r, c);
 
+    public static void RoundedFill(Rect r, Color c, float radius)
+    {
+        GUI.DrawTexture(r, EditorGUIUtility.whiteTexture, ScaleMode.StretchToFill, true, 0f, c, 0f, radius);
+    }
+
+    public static void RoundedTopFill(Rect r, Color c, float radius)
+    {
+        RoundedFill(r, c, radius);
+        EditorGUI.DrawRect(new Rect(r.x, r.yMax - radius, r.width, radius), c);
+    }
+
+    public static void RoundedFrame(Rect r, Color c, float radius, float thickness = 1f)
+    {
+        GUI.DrawTexture(r, EditorGUIUtility.whiteTexture, ScaleMode.StretchToFill, true, 0f, c, thickness, radius);
+    }
+
     /// <summary>畫外框（四條線，避免額外貼圖）。</summary>
     public static void Frame(Rect r, Color c, float thickness = 1f)
     {
@@ -93,11 +124,12 @@ public static class AGStyles
         EditorGUI.DrawRect(new Rect(r.xMax - thickness, r.y, thickness, r.height), c);
     }
 
-    /// <summary>接點：實心小方塊（IMGUI 沒有便宜的圓形，方塊在小尺寸下更清楚）。</summary>
+    /// <summary>接點：以圓形區分資料流端點，外框保持在深色畫布上的辨識度。</summary>
     public static void Port(Rect r, Color c)
     {
-        EditorGUI.DrawRect(r, c);
-        Frame(r, new Color(0f, 0f, 0f, 0.6f));
+        float radius = Mathf.Min(r.width, r.height) * 0.5f;
+        RoundedFill(r, c, radius);
+        RoundedFrame(r, new Color(0f, 0f, 0f, 0.6f), radius);
     }
 }
 

@@ -99,32 +99,28 @@ using UnityEngine;
 // 接線：在 {packType} 內加欄位 + ForEachKind 一行（見產生時 Console 提示）。
 // 具體算式：class XxxFormula : {kind}Formula {{ 覆寫 OnEvaluate }}。
 
-/// <summary>{kind} 算式分類 base：Inspector 型別選單只列此類下的 {resultType} 公式。</summary>
+/// <summary>{kind} 算式分類 base：節點選單只列此類下的 {resultType} 公式。</summary>
 public abstract class {kind}Formula : FormulaBase<{resultType}, {packType}> {{ }}
 
-/// <summary>{kind} 公式抽出成共用 SO（ConvertToAsset 用）。</summary>
+/// <summary>{kind} 公式經 Graph 抽出成共用 SO 時的資產型別。</summary>
 public class {kind}Asset : FormulaAsset<{resultType}, {packType}> {{ }}
 
-/// <summary>{kind} 求值槽：常數 / 公式 / 資產 / Token 變數四模式。</summary>
+/// <summary>{kind} 求值槽：沒接節點＝常數，接了節點＝公式 / 資產 / 變數。</summary>
 [Serializable]
-public class {kind}Slot : TokenFormulaSlot<{resultType}, {kind}Asset, {kind}Formula, {kind}Entry, {packType}>
+public class {kind}Slot : FormulaSlot<{resultType}, {kind}Asset, {kind}Formula, {packType}>
 {{
-    public {kind}Slot() : base(false) {{ }}
-    public {kind}Slot(bool active) : base(active) {{ }}
+    public {kind}Slot() {{ }}
+    public {kind}Slot({resultType} defaultValue) : base(defaultValue) {{ }}
 }}
 
 /// <summary>{kind} token 定義：Key + Slot，登記於 {packType}.{kind}Tokens。</summary>
 [Serializable]
-public class {kind}Entry : ITokenEntry
+public class {kind}Entry : TokenEntryBase
 {{
     [SerializeField]
-    private string _key;
+    private {kind}Slot _slot = new {kind}Slot();
 
-    [SerializeField]
-    private {kind}Slot _slot = new {kind}Slot(false);
-
-    public string Key {{ get => _key; set => _key = value; }}
-    public FormulaSlotBase Slot => _slot;
+    public override FormulaSlotBase Slot => _slot;
 }}
 {NamespaceClose()}
 ";
