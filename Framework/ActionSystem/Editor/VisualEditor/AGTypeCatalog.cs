@@ -67,14 +67,14 @@ public static class AGTypeCatalog
         dropdown.Show(rect);
     }
 
-    public static void ShowSourcePicker(Rect rect, List<AGSourceOption> options)
+    public static void ShowSourcePicker(Rect rect, List<AGSourceOption> options, string title = "變更來源")
     {
         if (options == null || options.Count == 0)
         {
             Debug.LogWarning("[ActionGraph] 找不到可用的 Node 來源。");
             return;
         }
-        new AGSourceDropdown(new AdvancedDropdownState(), options).Show(rect);
+        new AGSourceDropdown(new AdvancedDropdownState(), options, title).Show(rect);
     }
 }
 
@@ -97,23 +97,27 @@ public class AGSourceDropdown : AdvancedDropdown
     }
 
     private readonly List<AGSourceOption> options;
+    private readonly string title;
 
-    public AGSourceDropdown(AdvancedDropdownState state, List<AGSourceOption> options) : base(state)
+    public AGSourceDropdown(AdvancedDropdownState state, List<AGSourceOption> options, string title) : base(state)
     {
         this.options = options;
+        this.title = title;
         minimumSize = new Vector2(280f, 360f);
     }
 
     protected override AdvancedDropdownItem BuildRoot()
     {
-        var root = new AdvancedDropdownItem("變更來源");
+        var root = new AdvancedDropdownItem(title);
         var folders = new Dictionary<string, AdvancedDropdownItem>();
         foreach (var option in options)
         {
             var parent = root;
             string path = "";
-            foreach (string part in (option.Group ?? "其他").Split('/'))
+            // 沒有分組的選項直接掛在根，不要為它生一個空資料夾。
+            foreach (string part in (option.Group ?? "").Split('/'))
             {
+                if (string.IsNullOrEmpty(part)) continue;
                 path = string.IsNullOrEmpty(path) ? part : path + "/" + part;
                 if (!folders.TryGetValue(path, out var folder))
                 {
