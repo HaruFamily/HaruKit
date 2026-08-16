@@ -60,6 +60,26 @@ public class AGFocus
         }
     }
 
+    /// <summary>HEAD 節點的名稱：直接用編輯對象自己的名字，與右欄／左欄清單的顯示規則一致。</summary>
+    public string HeadTitle
+    {
+        get
+        {
+            switch (Kind)
+            {
+                case AGFocusKind.Action:
+                    string label = AGReflect.GetLabel(ActionSlot);
+                    return string.IsNullOrEmpty(label) ? ActionName(ActionSlot) : label;
+                case AGFocusKind.Token:
+                    return Token != null && !string.IsNullOrEmpty(Token.Key) ? "@" + Token.Key : "（未命名變數）";
+                case AGFocusKind.Asset:
+                    return AssetObject != null ? AssetObject.name : "（未指定資產）";
+                default:
+                    return "";
+            }
+        }
+    }
+
     /// <summary>穩定字串：HEAD、候選與獨立參照靠它認得所屬焦點。</summary>
     public string Id
     {
