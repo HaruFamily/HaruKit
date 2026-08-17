@@ -23,7 +23,7 @@ public partial class ActionGraphWindow
                 break;
 
             case EventType.MouseDown:
-                if (e.button == 0 && !e.alt && OutputNodeAt(graphMouse) is AGNode outputNode)
+                if (e.button == 0 && OutputNodeAt(graphMouse) is AGNode outputNode)
                 {
                     BeginLinkFromNode(outputNode);
                     e.Use();
@@ -36,9 +36,8 @@ public partial class ActionGraphWindow
                     else ShowCanvasMenu(graphMouse);
                     e.Use();
                 }
-                else if (e.button == 0 && !e.alt)
+                else if (e.button == 0)
                 {
-                    if (e.clickCount == 2 && hit != null && hit.TokenKey != null) { FocusToken(hit); e.Use(); break; }
                     if (e.clickCount == 2 && hit != null && hit.IsAssetNode && hit.Asset != null) { EnterAsset(hit); e.Use(); break; }
 
                     var link = LinkAt(graphMouse);
@@ -72,7 +71,7 @@ public partial class ActionGraphWindow
                         foreach (var n in graph.Nodes)
                             if (selectedIds.Contains(n.Id)) dragStartPositions[n.Id] = n.Pos;
 
-                        titleClickNode = hit.HasSourceSelector && hit.TitleRect.Contains(graphMouse) ? hit : null;
+                        titleClickNode = hit.HasSourceSelector && hit.SourceMenuRect.Contains(graphMouse) ? hit : null;
                         titleClickStart = graphMouse;
                     }
                     e.Use();
@@ -98,7 +97,10 @@ public partial class ActionGraphWindow
                     boxEnd = graphMouse;
                     e.Use();
                 }
-                else if (e.button == 2 || (e.button == 0 && e.alt))
+                // 平移只認中鍵。曾經跟著 Unity Scene View 的慣例做過 Alt+左鍵平移，已移除：
+                // Alt 在這張圖是 Slot 分支收合的 solo，兩者會在同一次拖曳裡打架，而中鍵已經夠用。
+                // hotControl 檢查留著：拖著輸入框時按中鍵，畫布也不該跟著跑。
+                else if (e.button == 2 && GUIUtility.hotControl == 0)
                 {
                     pan += e.delta / zoom;
                     e.Use();
@@ -114,7 +116,8 @@ public partial class ActionGraphWindow
                     {
                         dragNode = null;
                         dragStartPositions.Clear();
-                        // 選單在 clip 外開，錨點 rect 必須換回 window space。
+                        // 選單在 clip 外開，錨點 rect 必須換回 window space。用整條名稱區當錨點，
+                        // 選單才對齊 Header 而不是縮在那顆 18px 的 ▾ 底下。
                         ShowNodeSourceSelector(clicked, GraphToWindowRect(clicked.TitleRect));
                         e.Use();
                         break;
@@ -134,7 +137,7 @@ public partial class ActionGraphWindow
                 {
                     var box = BoxRect();
                     foreach (var n in graph.Nodes)
-                        if (box.Overlaps(n.Rect)) selectedIds.Add(n.Id);
+                        if (!n.Hidden && box.Overlaps(n.Rect)) selectedIds.Add(n.Id);
                     boxSelecting = false;
                     e.Use();
                 }
@@ -143,13 +146,6 @@ public partial class ActionGraphWindow
                     if (linkRow != null) ResolveLink(graphMouse);
                     else ResolveLinkFromOutput(graphMouse);
                     EndLink();
-                    e.Use();
-                }
-                if (dragTokenActive && dragToken != null)
-                {
-                    DropTokenOn(graphMouse);
-                    dragTokenActive = false;
-                    dragToken = null;
                     e.Use();
                 }
                 if (dragAssetActive && dragAsset != null)
@@ -170,7 +166,8 @@ public partial class ActionGraphWindow
                 else if (e.control && e.keyCode == KeyCode.A)
                 {
                     selectedIds.Clear();
-                    foreach (var n in graph.Nodes) selectedIds.Add(n.Id);
+                    foreach (var n in graph.Nodes)
+                        if (!n.Hidden) selectedIds.Add(n.Id);
                     e.Use();
                 }
                 break;
@@ -248,7 +245,7 @@ public partial class ActionGraphWindow
     {
         if (graph == null) return null;
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
-            if (graph.Nodes[i].Rect.Contains(graphPoint)) return graph.Nodes[i];
+            if (!graph.Nodes[i].Hidden && graph.Nodes[i].Rect.Contains(graphPoint)) return graph.Nodes[i];
         return null;
     }
 
@@ -258,7 +255,7 @@ public partial class ActionGraphWindow
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
         {
             var node = graph.Nodes[i];
-            if (node.IsRoot) continue;
+            if (node.IsRoot || node.Hidden) continue;
             var port = new Rect(node.OutputPort - Vector2.one * AGGraph.PortRadius,
                 Vector2.one * AGGraph.PortDiameter);
             if (port.Contains(graphPoint)) return node;
@@ -280,6 +277,7 @@ public partial class ActionGraphWindow
         var bounds = graph.Nodes[0].Rect;
         foreach (var n in graph.Nodes)
         {
+            if (n.Hidden) continue;      // 收起來的節點不該把視野拉到看不見的地方
             bounds.xMin = Mathf.Min(bounds.xMin, n.Rect.xMin);
             bounds.yMin = Mathf.Min(bounds.yMin, n.Rect.yMin);
             bounds.xMax = Mathf.Max(bounds.xMax, n.Rect.xMax);
@@ -312,26 +310,37 @@ public partial class ActionGraphWindow
     private void SetFocus(AGFocus next)
     {
         if (next == null) return;
-        // 頭端第一次被聚焦時補一個穩定識別碼；焦點與座標都靠它。
+        EnsureHeadIds(next);
+
+        focus = next;
+        if (model != null) model.TrackChanges = next.Kind != AGFocusKind.Asset;
+        editingNameTarget = null;
+        editingNameDraft = "";
+        selectedIds.Clear();
+        graphDirty = true;
+        Repaint();
+    }
+
+    /// <summary>頭端第一次被聚焦時補一個穩定識別碼；焦點與座標都靠它。</summary>
+    private void EnsureHeadIds(AGFocus next)
+    {
         object head = next.Head;
-        if ((next.Kind == AGFocusKind.Action || next.Kind == AGFocusKind.Token) && head != null
+        if (next.Kind == AGFocusKind.Action && head != null
             && string.IsNullOrEmpty(AGReflect.SlotEditorId(head)))
         {
             AGReflect.EnsureSlotEditorId(head);
             model.MarkDirty();
         }
-        focus = next;
-        editingNameTarget = null;
-        editingNameDraft = "";
-        if (next.Kind == AGFocusKind.Action)
-        {
-            currentTiming = next.Timing;
-            SaveCurrentTiming();
-        }
-        selectedIds.Clear();
-        graphDirty = true;
-        Repaint();
     }
+
+    /// <summary>
+    /// 時機畫布：所有時機群組畫在同一張圖上，一個時機一顆節點。一顆群組都還沒有也照樣成立——
+    /// 畫布會顯示「新增時機節點」的佔位，不在這裡偷偷建資料。
+    /// </summary>
+    private AGFocus AllTimingsFocus()
+        => model?.Data == null
+            ? new AGFocus()
+            : new AGFocus { Kind = AGFocusKind.Timing, Data = model.Data };
 }
 
 }

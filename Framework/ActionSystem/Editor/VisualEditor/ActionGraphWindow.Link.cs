@@ -49,7 +49,7 @@ public partial class ActionGraphWindow
         if (linkRow != null)
         {
             foreach (var node in graph.Nodes)
-                if (!node.IsRoot && CanConnectLink(linkRow, node)) linkCompatibleNodeIds.Add(node.Id);
+                if (!node.IsRoot && !node.Hidden && CanConnectLink(linkRow, node)) linkCompatibleNodeIds.Add(node.Id);
             return;
         }
 
@@ -95,7 +95,7 @@ public partial class ActionGraphWindow
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
         {
             var node = graph.Nodes[i];
-            if (node.IsRoot || !node.Rect.Contains(graphMouse) || !CanLinkTo(row, node)) continue;
+            if (node.IsRoot || node.Hidden || !node.Rect.Contains(graphMouse) || !CanLinkTo(row, node)) continue;
             return node;
         }
 
@@ -104,7 +104,7 @@ public partial class ActionGraphWindow
         AGNode nearest = null;
         foreach (var node in graph.Nodes)
         {
-            if (node.IsRoot || !CanLinkTo(row, node)) continue;
+            if (node.IsRoot || node.Hidden || !CanLinkTo(row, node)) continue;
             float distanceSqr = (node.OutputPort - graphMouse).sqrMagnitude;
             if (distanceSqr > nearestDistanceSqr) continue;
             nearestDistanceSqr = distanceSqr;
@@ -179,7 +179,7 @@ public partial class ActionGraphWindow
         if (graph == null) return null;
         foreach (var link in graph.Links)
         {
-            if (link.ParentRow == null || link.Target == null) continue;
+            if (link.ParentRow == null || link.Target == null || link.Target.Hidden) continue;
             Vector2 a = link.ParentRow.PortPos;
             Vector2 b = link.Target.OutputPort;
             if (PointToSegmentSqrDistance(graphPoint, a, b) < 36f) return link;
@@ -232,7 +232,7 @@ public partial class ActionGraphWindow
     private bool IsCarrierUsed(GraphNode carrier)
     {
         if (carrier == null) return false;
-        foreach (var slot in model.AllSlots())
+        foreach (var slot in SlotsInCurrentGraph())
             if (ReferenceEquals(AGReflect.GetNode(slot), carrier)) return true;
         if (focus.Kind == AGFocusKind.Asset && focus.AssetHostSlot != null)
             return ReferenceEquals(AGReflect.GetNode(focus.AssetHostSlot), carrier);
@@ -254,7 +254,14 @@ public partial class ActionGraphWindow
         var target = SnappedOutputNode(graphMouse, linkRow);
         if (TryConnectLink(linkRow, target)) return;
 
-        // 空白處放開：先建立空 Node，讓使用者在 Node 上決定具體型別。
+        // 落在既有 Node 但沒有相容來源時取消，不能把它誤判成空白而疊一顆空 Node 上去。
+        if (NodeAt(graphMouse) != null)
+        {
+            ShowNotification(new GUIContent("請拖到相容的節點或畫布空白處"));
+            return;
+        }
+
+        // 真正的空白處放開：先建立空 Node，讓使用者在 Node 上決定具體型別。
         model.BreakUndoMerge();
         PreserveVisibleNodePositions();
         NewSource(linkRow.Slot).Pos = graphMouse;
@@ -290,10 +297,8 @@ public partial class ActionGraphWindow
     private static bool CanConnectLink(AGRow row, AGNode target)
     {
         if (row?.Slot == null || target?.Carrier == null) return false;
-        if (target.TokenKey != null)
-            return !row.IsActionSlot && target.ResultType == row.ResultType;
         if (target.IsAssetNode)
-            return CanAssignAsset(row, target.Asset);
+            return CanAssignAsset(row, target.Asset) && !WouldCreateCycle(row.Slot, target.Carrier);
         if (target.Obj == null) return false;
 
         object slot = row.Slot;
@@ -301,9 +306,7 @@ public partial class ActionGraphWindow
             ? AGReflect.ActionBaseType(slot.GetType())
             : AGReflect.FormulaBaseType(slot.GetType());
         if (accepted == null || !accepted.IsInstanceOfType(target.Obj)) return false;
-        // 內嵌節點不能從別的欄位手上搶走；共用只開放給 Token 與資產這種引用型來源。
-        if (target.ParentSlot != null && !ReferenceEquals(target.ParentSlot, slot)) return false;
-        return !WouldCreateCycle(slot, target.Obj);
+        return !WouldCreateCycle(slot, target.Carrier);
     }
 
     private static bool WouldCreateCycle(object slot, object node)

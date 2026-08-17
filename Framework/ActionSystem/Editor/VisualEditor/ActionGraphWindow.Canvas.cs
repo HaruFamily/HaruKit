@@ -47,23 +47,6 @@ public partial class ActionGraphWindow
             return;
         }
 
-        if (focus.Kind == AGFocusKind.Token && focus.Token != null)
-        {
-            DrawFocusName(r, focus.Token, focus.Token.Key, name =>
-            {
-                if (!model.RenameToken(focus.Token, name, out string error))
-                {
-                    EditorUtility.DisplayDialog("無法改名", error, "好");
-                    return false;
-                }
-                Invalidate();
-                return true;
-            });
-            GUI.Label(new Rect(r.x + 6f, r.y + 24f, r.width - 12f, 16f),
-                $"型別 {focus.Token.TypeName}　被引用 {model.CountReferences(focus.Token)} 次", AGStyles.Tiny);
-            return;
-        }
-
         if (focus.Kind == AGFocusKind.Action && focus.ActionSlot != null)
         {
             DrawFocusName(r, focus.ActionSlot, focus.Title, name =>
@@ -82,9 +65,21 @@ public partial class ActionGraphWindow
             desc = f != null ? AGReflect.TypeDescription(f.GetType()) : "這個動作還沒有內容，請從根節點下拉選擇。";
             if (AGReflect.GetDisabled(focus.ActionSlot)) desc += "　（已停用，不會執行）";
         }
+        else if (focus.Kind == AGFocusKind.Timing)
+        {
+            int groups = 0, actions = 0;
+            foreach (var g in model.ReadGroups())
+            {
+                groups++;
+                actions += g.Actions?.Count ?? 0;
+            }
+            desc = groups > 0
+                ? $"{groups} 個時機、{actions} 個動作。時機節點可自由擺位；跨時機共用來源直接拉線即可。"
+                : "還沒有任何時機節點。在畫布空白處按右鍵新增一個。";
+        }
         else if (focus.Kind == AGFocusKind.None)
         {
-            desc = "從右欄選一個動作，或從左欄選一個變數開始編輯。";
+            desc = "從右上角的時機下拉跳到某個時機，或從左欄選一個變數開始編輯。";
         }
         GUI.Label(new Rect(r.x + 6f, r.y + 24f, r.width - 12f, 16f), desc, AGStyles.Tiny);
     }
@@ -145,7 +140,12 @@ public partial class ActionGraphWindow
             if (graph != null)
             {
                 AGNode linkTarget = LinkTargetNode(graphMouse);
-                foreach (var node in graph.Nodes) DrawNode(node, ReferenceEquals(node, linkTarget));
+                foreach (var node in graph.Nodes)
+                {
+                    if (node.Hidden) continue;
+                    DrawNode(node, ReferenceEquals(node, linkTarget));
+                }
+                DrawEmptyTimingHint();
                 if (boxSelecting)
                 {
                     var box = BoxRect();
@@ -161,6 +161,7 @@ public partial class ActionGraphWindow
         }
 
         DrawNodeInfoOverlay(r);
+        DrawTimingOverlay(r);
         if (mouseInCanvas && !HandleAssetDrag(e, graphMouse)) HandleCanvasInput(e, graphMouse);
     }
 
@@ -232,10 +233,19 @@ public partial class ActionGraphWindow
     private void DrawLinks(Vector2 graphMouse)
     {
         Handles.BeginGUI();
-        foreach (var link in graph.Links)
+
+        // 兩趟：先畫一般線，高亮線最後畫才不會被別的線壓在底下。
+        // 一張畫布容納全部時機之後，共用來源的連入線可能來自很遠的另一個時機，這是唯一追得回去的線索。
+        for (int pass = 0; pass < 2; pass++)
         {
-            if (link.ParentRow == null || link.Target == null) continue;
-            DrawGraphLine(link.ParentRow.PortPos, link.Target.OutputPort);
+            bool tracedPass = pass == 1;
+            foreach (var link in graph.Links)
+            {
+                if (link.ParentRow == null || link.Target == null || link.Target.Hidden) continue;
+                if (IsTracedLink(link) != tracedPass) continue;
+                // 停用子樹的線一起壓暗，才看得出整段路徑都不會被求值。
+                DrawGraphLine(link.ParentRow.PortPos, link.Target.OutputPort, link.Target.InDisabledSubtree, tracedPass);
+            }
         }
         if (linking && (linkRow != null || linkNode != null))
         {
@@ -244,6 +254,48 @@ public partial class ActionGraphWindow
         }
         Handles.EndGUI();
     }
+
+    /// <summary>
+    /// 這條線接在選取的節點上：兩端任一端被選取就算。純視覺，不改資料也不影響命中測試。
+    /// </summary>
+    private bool IsTracedLink(AGLink link)
+        => selectedIds.Count > 0
+            && (selectedIds.Contains(link.Target.Id) || selectedIds.Contains(link.ParentRow.OwnerNodeId));
+
+    /// <summary>
+    /// 一顆時機節點都還沒有時的入口。有節點之後就不再出現——刻意不在開窗時自動建第一個時機，
+    /// 那會在使用者還沒編輯前就把資產標成未存檔。
+    /// </summary>
+    private void DrawEmptyTimingHint()
+    {
+        if (focus.Kind != AGFocusKind.Timing || graph.Nodes.Count > 0) return;
+
+        var rect = new Rect(new Vector2(40f, 40f) + pan, new Vector2(AGGraph.NodeWidth, AGGraph.HeaderHeight + 4f));
+        AGStyles.RoundedFill(rect, AGStyles.NodeBody, NodeCornerRadius);
+        AGStyles.RoundedFrame(rect, AGStyles.NodeBorder, NodeCornerRadius, 1f);
+        if (GUI.Button(rect, "＋ 新增第一個時機節點", AGStyles.ListAdd))
+            ShowAddTimingMenu(new Vector2(40f, 40f));
+    }
+
+    private const float TimingOverlayWidth = 190f;
+
+    /// <summary>
+    /// 畫布右上角的時機下拉：所有時機都在同一張畫布上，所以它是「跳到哪一顆」而不是「切換畫布」。
+    /// 選到還沒建立的時機就在畫面中央建一顆。和說明面板一樣畫在 zoom clip 外，縮到 0.45 也讀得到。
+    /// </summary>
+    private void DrawTimingOverlay(Rect canvas)
+    {
+        if (model == null) return;
+
+        var r = new Rect(canvas.xMax - TimingOverlayWidth - 8f, canvas.y + 8f, TimingOverlayWidth, 22f);
+        if (EditorGUI.DropdownButton(r, new GUIContent("時機", "跳到某個時機節點，或新增一個"), FocusType.Keyboard))
+            ShowTimingMenu(CanvasCenterInGraph());
+    }
+
+    /// <summary>畫布中心的 graph 座標：從下拉新增的時機節點放這裡，使用者才看得到它。</summary>
+    private Vector2 CanvasCenterInGraph()
+        => new Vector2(canvasRect.width * 0.5f / zoom - pan.x - AGGraph.NodeWidth * 0.5f,
+                       canvasRect.height * 0.5f / zoom - pan.y);
 
     private const float InfoOverlayWidth = 300f;
 
@@ -288,15 +340,20 @@ public partial class ActionGraphWindow
     private Rect GraphToWindowRect(Rect graphRect)
         => new Rect(canvasRect.position + (graphRect.position + pan) * zoom, graphRect.size * zoom);
 
-    private void DrawGraphLine(Vector2 graphFrom, Vector2 graphTo)
+    private void DrawGraphLine(Vector2 graphFrom, Vector2 graphTo, bool dim = false, bool traced = false)
     {
         Vector2 from = canvasRect.position + (graphFrom + pan) * zoom;
         Vector2 to = canvasRect.position + (graphTo + pan) * zoom;
         if (!ClipLine(canvasRect, ref from, ref to)) return;
 
+        // 顏色只表達「這條線接的是選取中的節點」，透明度仍歸停用管——兩件事互不覆蓋。
+        Color color = traced ? AGStyles.NodeBorderSelected : Color.white;
+        if (dim) color.a *= AGStyles.LinkDisabled.a;
+
         Color oldColor = Handles.color;
-        Handles.color = Color.white;
-        Handles.DrawAAPolyLine(LinkThickness, new Vector3(from.x, from.y), new Vector3(to.x, to.y));
+        Handles.color = color;
+        Handles.DrawAAPolyLine(traced ? LinkThickness + 2f : LinkThickness,
+            new Vector3(from.x, from.y), new Vector3(to.x, to.y));
         Handles.color = oldColor;
     }
 
@@ -360,15 +417,46 @@ public partial class ActionGraphWindow
     }
 
     /// <summary>
-    /// Header 底色：Action 粉紅、Formula 淺綠、Asset 淺藍、Token 橘。
-    /// 容器型節點用漸層表達「容器 → 它承載的東西」：Action 型資產是淺藍→粉紅，變數是橘→淺綠。
+    /// Header 右上角的停用開關：停用中＝圓角方底 + 亮的暫停圖示，啟用中＝淡的暫停圖示。
+    /// 和註解開關同一套語彙，一樣刻意避開圓形——圓形在這張圖裡專屬於接點。
+    /// </summary>
+    private static readonly GUIContent DisableFallbackIcon = new("||");
+    private static GUIContent disableIcon;
+
+    private static bool DrawDisableToggle(Rect r, bool disabled, int users)
+    {
+        if (disabled) AGStyles.RoundedFill(r, AGStyles.HeaderOverlay, 2f);
+        disableIcon ??= EditorGUIUtility.IconContent("d_PauseButton On");
+        GUI.Label(r, disableIcon?.image != null ? disableIcon : DisableFallbackIcon,
+            disabled ? AGStyles.HeaderButton : AGStyles.HeaderButtonDim);
+
+        // 載體是共用單位，停用一顆被多個欄位指著的節點會同時影響全部引用處，講清楚才不會變成遠端的靜默行為。
+        string tip = disabled
+            ? (users > 1 ? $"已停用：{users} 個欄位改用保底值。點一下啟用" : "已停用：引用它的欄位改用保底值。點一下啟用")
+            : (users > 1 ? $"停用這顆節點（{users} 個欄位會一起改用保底值）" : "停用這顆節點，引用它的欄位改用保底值");
+        return GUI.Button(r, new GUIContent("", tip), GUIStyle.none);
+    }
+
+    /// <summary>
+    /// Header 底色：HEAD 深紫紅、Action 洋紅、Formula 琥珀、Asset 靛藍、標註 深綠。
+    /// 容器型節點用漸層表達「容器 → 它承載的東西」：Action 型資產是靛藍→洋紅。
+    /// **被標註的節點一律從深綠漸層出去**——標註是狀態不是內容，所以只換起點色，終點仍是它本來的身分色。
     /// </summary>
     private static void HeaderColors(AGNode node, out Color from, out Color to)
     {
-        if (node.TokenKey != null)
+        // HEAD 從流程入口深紫紅漸層到目前焦點可接的內容色。
+        if (node.IsRoot)
+        {
+            from = AGStyles.HeaderHead;
+            to = node.IsActionNode ? AGStyles.HeaderAction : AGStyles.HeaderFormula;
+            return;
+        }
+        if (node.TokenName != null)
         {
             from = AGStyles.HeaderToken;
-            to = AGStyles.HeaderFormula;      // 變數一定回傳公式結果
+            to = node.IsAssetNode
+                ? AGStyles.HeaderAsset
+                : node.IsActionNode ? AGStyles.HeaderAction : AGStyles.HeaderFormula;
             return;
         }
         if (node.IsAssetNode)
@@ -389,16 +477,29 @@ public partial class ActionGraphWindow
         HeaderColors(node, out Color headerFrom, out Color headerTo);
         AGStyles.HeaderFill(header, headerFrom, headerTo, NodeCornerRadius);
 
-        // Header 由右往左排：註解 ✎ → 結果型別 chip，剩下的寬度全給名稱區（＝換來源的按鈕）。
+        // Header 由右往左排：停用 → 註解 ✎ → 結果型別 chip，剩下的寬度全給名稱區（＝換來源的按鈕）。
         // 節點層級的問題畫在節點底部的色條（不佔 Header，也不和身分色搶）；參數列層級的問題直接把該列標紅。
-        // 資產／變數／空節點自己沒有物件，問題掛在父欄位上，改查父欄位才看得到。
-        object issueTarget = node.Obj ?? (node.IsAssetNode || node.TokenKey != null || node.IsPlaceholder
-            ? node.ParentSlot : null);
+        // 資產／空節點自己沒有物件，問題掛在父欄位上，改查父欄位才看得到。
+        object issueTarget = node.Obj ?? (node.IsAssetNode || node.IsPlaceholder ? node.ParentSlot : null);
         bool hasNodeIssue = Rep.HasIssue(issueTarget, out bool nodeError);
 
         float headerRight = rect.xMax - 4f;
 
-        // 註解開關固定在最右上角，變數與資產葉節點也有。
+        // 停用開關固定在右上角。HEAD 沒有：它的載體是頭端物件，沒有 GraphNode 可停用。
+        if (node.Carrier != null)
+        {
+            var disableToggle = new Rect(headerRight - 14f, rect.y + 3f, 14f, 14f);
+            if (DrawDisableToggle(disableToggle, node.Carrier.Disabled, CarrierUsers(node.Carrier)))
+            {
+                model.BreakUndoMerge();
+                model.SetNodeDisabled(node.Id, !node.Carrier.Disabled);
+                Invalidate();       // 停用改的是資料，不是視覺狀態
+                Repaint();
+            }
+            headerRight = disableToggle.x - 3f;
+        }
+
+        // 註解開關排在停用鈕左邊，變數與資產葉節點也有。
         // HEAD 沒有：它的載體是頭端物件（ActionSlot／TokenEntry／資產）而不是 GraphNode，沒有存註解的欄位。
         if (!node.IsRoot)
         {
@@ -434,28 +535,43 @@ public partial class ActionGraphWindow
             headerRight = chipRect.x - 2f;
         }
 
+        // 左端只讓開輸出接點；停用鈕已固定在右上角。
         float titleInset = node.IsRoot ? 0f : AGGraph.PortDiameter + 2f;
+
         float titleWidth = Mathf.Max(24f, headerRight - rect.x - titleInset);
         var titleRect = new Rect(rect.x + titleInset, rect.y, titleWidth, AGGraph.HeaderHeight);
         // 命中測試在 zoom clip 外做，所以存 graph space。
         node.TitleRect = new Rect(titleRect.position - pan, titleRect.size);
 
         float textWidth = titleWidth;
+        node.SourceMenuRect = new Rect();
         if (node.HasSourceSelector)
         {
-            // 名稱區整塊都是換來源的按鈕：底色墊高一階、右端補 ▾ 當提示。實際點擊在 HandleCanvasInput 判定（要分辨拖曳）。
+            // 只有右端這顆 ▾ 是換來源的按鈕，名稱區其餘部分留給拖曳。
+            // 整塊可按的舊做法會讓「想搬節點」變成「開了選單」——Header 本來就是唯一的拖曳抓取區。
+            // 例外是空節點：它沒有本體、沒有別的入口，整塊名稱區就是「選一個來源」，維持整塊可按。
             var lift = AGStyles.HeaderOverlay;
-            AGStyles.Fill(new Rect(titleRect.x, titleRect.y + 2f, titleRect.width, titleRect.height - 4f),
-                new Color(lift.r, lift.g, lift.b, lift.a * 0.65f));
-            GUI.Label(new Rect(titleRect.xMax - 14f, titleRect.y, 14f, titleRect.height), "▾", AGStyles.HeaderButton);
-            textWidth = titleWidth - 16f;
+            var arrow = new Rect(titleRect.xMax - SourceArrowWidth, titleRect.y + 2f,
+                SourceArrowWidth, titleRect.height - 4f);
+            var hot = node.IsPlaceholder
+                ? new Rect(titleRect.x, titleRect.y + 2f, titleRect.width, titleRect.height - 4f)
+                : arrow;
+            AGStyles.RoundedFill(hot, new Color(lift.r, lift.g, lift.b, lift.a * 0.65f), 3f);
+            GUI.Label(arrow, new GUIContent("▾", node.IsPlaceholder ? "選擇來源" : "換來源"), AGStyles.HeaderButton);
+            // 命中測試在 zoom clip 外做，所以存 graph space。
+            node.SourceMenuRect = new Rect(hot.position - pan, hot.size);
+            textWidth = titleWidth - SourceArrowWidth - 2f;
         }
-        GUI.Label(titleRect,
-            AGStyles.Elide(node.Title, AGStyles.NodeTitle, textWidth, node.HasSourceSelector ? "點一下換來源" : null),
-            AGStyles.NodeTitle);
+        // 標註的名字要看得到：外部是用這個字串查的，光有深綠漸層認不出是哪一個。
+        string title = node.TokenName != null ? $"@{node.TokenName}　{node.Title}" : node.Title;
+        GUI.Label(titleRect, AGStyles.Elide(title, AGStyles.NodeTitle, textWidth), AGStyles.NodeTitle);
 
-        // 變數／資產的本體是一列「選哪一個」的下拉；一般節點畫自己的參數列；空節點兩者都沒有。
-        if (node.TokenKey != null || node.IsAssetNode) DrawReferencePickerRow(node, rect);
+        // 資產的本體是一列「選哪一個」的下拉；一般節點畫自己的參數列；空節點兩者都沒有。
+        if (node.IsAssetNode)
+        {
+            DrawReferencePickerRow(node, rect);
+            DrawRows(node, node.Rows, rect);
+        }
         else if (!node.IsPlaceholder) DrawRows(node, node.Rows, rect);
 
         if (node.TipsHeight > 0f)
@@ -485,6 +601,11 @@ public partial class ActionGraphWindow
             graphDirty = true;
             Repaint();
         }
+
+        // 停用暗紗蓋在內容之上、問題色條之下：停用的節點要一眼看出來，但它的錯誤與警告仍然要讀得到。
+        // 只是貼圖，不註冊控制項，所以底下的參數列照樣可以編輯——停用不等於鎖定。
+        if (node.InDisabledSubtree)
+            AGStyles.RoundedFill(rect, AGStyles.DisabledVeil, NodeCornerRadius);
 
         // 問題色條：貼在節點底緣，紅＝錯誤、琥珀＝警告。
         // 不做成 Header 徽章——Header 已經被身分色佔用，狀態和身分混在同一塊會互相干擾。
@@ -517,53 +638,23 @@ public partial class ActionGraphWindow
     }
 
     /// <summary>
-    /// 變數／資產節點本體唯一的一列：像一般參數列那樣「標籤 + 下拉」，選的是「指到哪一個」。
-    /// 換身分（Formula／Asset／Token）是 Header 名稱區的事，這裡只換對象。
+    /// 資產節點本體唯一的一列：像一般參數列那樣「標籤 + 下拉」，選的是「指到哪一個資產」。
+    /// 換身分（Formula／Asset）是 Header 那顆 ▾ 的事，這裡只換對象。
     /// </summary>
     private void DrawReferencePickerRow(AGNode node, Rect nodeRect)
     {
-        bool isToken = node.TokenKey != null;
         var row = new Rect(nodeRect.x, nodeRect.y + AGGraph.HeaderHeight, nodeRect.width, AGGraph.RowHeight);
         float labelWidth = row.width * 0.34f;
 
-        GUI.Label(new Rect(row.x + 6f, row.y + 1f, labelWidth - 8f, row.height - 2f),
-            isToken ? "變數" : "資產", AGStyles.RowLabel);
+        GUI.Label(new Rect(row.x + 6f, row.y + 1f, labelWidth - 8f, row.height - 2f), "資產", AGStyles.RowLabel);
 
         var picker = new Rect(row.x + labelWidth, row.y + 1f, row.width - labelWidth - 8f, row.height - 3f);
-        string label = isToken
-            ? string.IsNullOrEmpty(node.TokenKey) ? "（未指定）" : "@" + node.TokenKey
-            : node.Asset != null ? node.Asset.name : "（未指定）";
+        string label = node.Asset != null ? node.Asset.name : "（未指定）";
 
         if (!EditorGUI.DropdownButton(picker,
                 AGStyles.Elide(label, EditorStyles.miniPullDown, picker.width - 20f), FocusType.Keyboard)) return;
 
-        if (isToken) ShowTokenPicker(node, picker);
-        else ShowAssetPicker(node, picker);
-    }
-
-    /// <summary>只列結果型別相容的變數。</summary>
-    private void ShowTokenPicker(AGNode node, Rect anchor)
-    {
-        var options = new List<AGSourceOption>();
-        foreach (var token in model.ReadTokens())
-        {
-            if (string.IsNullOrWhiteSpace(token.Key)) continue;
-            if (node.ResultType != null && token.ResultType != node.ResultType) continue;
-            string key = token.Key;
-            options.Add(new AGSourceOption
-            {
-                Name = key,
-                IsCurrent = node.TokenKey == key,
-                Apply = () => ChangeNodeToToken(node, key),
-            });
-        }
-
-        if (options.Count == 0)
-        {
-            ShowNotification(new GUIContent("沒有型別相容的變數，先在左欄新增"));
-            return;
-        }
-        AGTypeCatalog.ShowSourcePicker(anchor, options, "選擇變數");
+        ShowAssetPicker(node, picker);
     }
 
     /// <summary>只列這個欄位收得下的資產。</summary>
@@ -612,6 +703,10 @@ public partial class ActionGraphWindow
             AGGraph.PortDiameter, AGGraph.PortDiameter), AGStyles.PortLive);
     }
 
+    /// <summary>
+    /// 接點圓的位置。**永遠貼齊節點右緣**，不因為那一列是不是清單元素而縮排——
+    /// 所有接點排成一條垂直線是這張圖的基本語彙，讓開刪除鈕的是 ✕ 自己（它排到接點左邊）。
+    /// </summary>
     private static Rect PortRectOf(AGRow row, Rect nodeRect)
         => new Rect(nodeRect.xMax - AGGraph.PortDiameter,
             nodeRect.y + row.LocalY + row.Height * 0.5f - AGGraph.PortRadius,
@@ -633,7 +728,6 @@ public partial class ActionGraphWindow
         bool hasIssue = Rep.HasIssue(row.Slot, out bool isError);
         int useType = AGReflect.UseType(row.Slot);
         return hasIssue && isError ? AGStyles.PortError
-            : useType == 3 ? AGStyles.PortToken
             : useType == 1 || useType == 2 ? AGStyles.PortLive
             : AGStyles.PortEmpty;
     }

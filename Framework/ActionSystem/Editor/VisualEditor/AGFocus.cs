@@ -2,16 +2,25 @@ namespace PinPlugin.ActionSystem.Editor
 {
 using System;
 using System.Collections;
+using System.Collections.Generic;
 
 public enum AGFocusKind
 {
     None,
-    /// <summary>右欄選到的一個動作。</summary>
+    /// <summary>
+    /// 單獨一個動作。右欄動作清單移除後已經沒有路徑會設定它；
+    /// 保留是因為 AGValidator 仍用它當「這則問題屬於哪個動作」的標籤（見 AGReport.CountFor）。
+    /// </summary>
     Action,
-    /// <summary>左欄選到的一個 Token。</summary>
-    Token,
     /// <summary>下鑽進一個共用資產的內部。</summary>
     Asset,
+
+    /// <summary>
+    /// 全部時機共用的那張畫布：每個 ActionTimingGroup 是一顆節點，可自由擺位，
+    /// 跨時機的共用來源因此拉得到線。切時機不再是換畫布。
+    /// </summary>
+    // 排在最後而不是接在 Action 後面：其他 Kind 的數值不動，既有比較與紀錄不受影響。
+    Timing,
 }
 
 /// <summary>中欄目前在編輯什麼。切焦點就是換一份節點圖。</summary>
@@ -19,26 +28,52 @@ public class AGFocus
 {
     public AGFocusKind Kind = AGFocusKind.None;
 
-    // Action 焦點
+    // Action 焦點。畫布不再切到單一動作，但 AGValidator 仍用它當「這則問題屬於哪個動作」的標籤。
     public Enum Timing;
     public IList ActionList;
     public int ActionIndex = -1;
     public object ActionSlot;
 
-    // Token 焦點
-    public AGToken Token;
+    // Timing 焦點：ActionSystem 工作副本本身（＝AGModel.Data）。
+    // 群組清單每次都從它現讀，新增／刪除時機不必回頭修焦點。
+    public object Data;
 
     // 資產焦點：HostSlot 是合成出來的槽，內容＝資產內容的工作副本
     public UnityEngine.Object AssetObject;
     public object AssetHostSlot;
+    public List<GraphNode> AssetOrphans;
 
-    public object RootSlot => Kind switch
+    /// <summary>資產焦點的候選工作副本。存檔才覆寫資產，取消直接丟棄。</summary>
+    public List<GraphNode> Orphans => Kind == AGFocusKind.Asset ? AssetOrphans : null;
+
+    /// <summary>
+    /// 這個焦點畫成 HEAD 的東西。多數焦點只有一個 Slot 頭端；Timing 焦點則是**每個
+    /// ActionTimingGroup 各一顆**——它們不是 Slot，建圖時走「一般物件節點」那條路。
+    /// 群組清單現讀不快取：新增或刪除時機不需要重建焦點。
+    /// </summary>
+    public List<object> Roots
     {
-        AGFocusKind.Action => ActionSlot,
-        AGFocusKind.Token => Token?.Slot,
-        AGFocusKind.Asset => AssetHostSlot,
-        _ => null,
-    };
+        get
+        {
+            var roots = new List<object>();
+            if (Kind == AGFocusKind.Timing)
+            {
+                if (AGReflect.Get(Data, "ActionGroups") is IList groups)
+                    foreach (var g in groups)
+                        if (g != null) roots.Add(g);
+                return roots;
+            }
+
+            object single = Kind switch
+            {
+                AGFocusKind.Action => ActionSlot,
+                AGFocusKind.Asset => AssetHostSlot,
+                _ => null,
+            };
+            if (single != null) roots.Add(single);
+            return roots;
+        }
+    }
 
     public string Title
     {
@@ -47,11 +82,9 @@ public class AGFocus
             switch (Kind)
             {
                 case AGFocusKind.Action:
-                    string label = AGReflect.GetLabel(ActionSlot);
-                    string name = ActionName(ActionSlot);
-                    return string.IsNullOrEmpty(label) ? name : label;
-                case AGFocusKind.Token:
-                    return Token != null ? $"變數 {Token.Key}" : "變數";
+                    return ActionHeadTitle(ActionSlot);
+                case AGFocusKind.Timing:
+                    return "全部時機";
                 case AGFocusKind.Asset:
                     return AssetObject != null ? $"資產 {AssetObject.name}" : "資產";
                 default:
@@ -68,10 +101,10 @@ public class AGFocus
             switch (Kind)
             {
                 case AGFocusKind.Action:
-                    string label = AGReflect.GetLabel(ActionSlot);
-                    return string.IsNullOrEmpty(label) ? ActionName(ActionSlot) : label;
-                case AGFocusKind.Token:
-                    return Token != null && !string.IsNullOrEmpty(Token.Key) ? "@" + Token.Key : "（未命名變數）";
+                    return ActionHeadTitle(ActionSlot);
+                // 時機焦點有多顆 HEAD，名字由每個群組自己的 Timing 決定，不從焦點來。
+                case AGFocusKind.Timing:
+                    return "";
                 case AGFocusKind.Asset:
                     return AssetObject != null ? AssetObject.name : "（未指定資產）";
                 default:
@@ -89,8 +122,9 @@ public class AGFocus
             {
                 case AGFocusKind.Action:
                     return "act:" + AGReflect.EnsureSlotEditorId(ActionSlot);
-                case AGFocusKind.Token:
-                    return Token != null ? TokenFocusId(Token.ResultType, Token.Key) : "tok:?";
+                // 只有一張時機畫布，所以焦點 id 是常數；每顆群組 HEAD 的 id 走 AGGraph.GroupHeadId。
+                case AGFocusKind.Timing:
+                    return "tim:*";
                 case AGFocusKind.Asset:
                     return AssetObject != null
                         ? "ast:" + UnityEditor.AssetDatabase.AssetPathToGUID(UnityEditor.AssetDatabase.GetAssetPath(AssetObject))
@@ -101,15 +135,15 @@ public class AGFocus
         }
     }
 
-    public static string TokenFocusId(Type resultType, string key)
-        => $"tok:{resultType?.AssemblyQualifiedName ?? "?"}:{key ?? ""}";
-
-    /// <summary>候選池掛在頭端上，切焦點時視窗用它指定 AGModel.OrphanHead。</summary>
+    /// <summary>
+    /// 候選池掛在頭端上，切焦點時視窗用它指定 AGModel.OrphanHead。
+    /// 時機畫布沒有單一頭端，候選就掛在整套 ActionSystem 上——那張畫布的主人本來就是它。
+    /// </summary>
     public object Head => Kind switch
     {
         AGFocusKind.Action => ActionSlot,
-        AGFocusKind.Token => Token?.Entry,
-        AGFocusKind.Asset => AssetObject,
+        AGFocusKind.Timing => Data,
+        AGFocusKind.Asset => this,
         _ => null,
     };
 
@@ -119,11 +153,18 @@ public class AGFocus
         switch (Kind)
         {
             case AGFocusKind.Action: return ReferenceEquals(ActionSlot, other.ActionSlot);
-            case AGFocusKind.Token: return Token != null && other.Token != null
-                && Token.Key == other.Token.Key && Token.ResultType == other.Token.ResultType;
+            // 時機畫布只有一張，同 Kind 就是同一個焦點。
+            case AGFocusKind.Timing: return true;
             case AGFocusKind.Asset: return AssetObject == other.AssetObject;
             default: return true;
         }
+    }
+
+    /// <summary>一個動作頭端的名字：有標籤用標籤，否則用內容型別名。</summary>
+    public static string ActionHeadTitle(object actionSlot)
+    {
+        string label = AGReflect.GetLabel(actionSlot);
+        return string.IsNullOrEmpty(label) ? ActionName(actionSlot) : label;
     }
 
     public static string ActionName(object actionSlot)

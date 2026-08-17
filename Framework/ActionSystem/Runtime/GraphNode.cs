@@ -1,6 +1,7 @@
 namespace PinPlugin.ActionSystem
 {
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>節點的內容種類。一個節點同時只會是其中一種，切換即清掉其他來源。</summary>
@@ -15,13 +16,13 @@ public enum NodeKind
     /// <summary>共用資產（FormulaAssetBase / ActionAssetBase）。</summary>
     Asset = 2,
 
-    /// <summary>具名共用變數（Token）。</summary>
-    Token = 3,
+    // 3 = 舊的 Token 引用節點，2026-08-17 隨標註化移除。Token 不再是一種內容，
+    // 而是任何節點都能掛的一個名字（見 GraphNode.TokenName）。編號不重用。
 }
 
 /// <summary>
 /// 節點圖的唯一載體：一個畫面上的節點＝一個 GraphNode。
-/// 換來源＝換載體裡的內容（SetBody / SetAsset / SetToken），Id、座標、備註與所有連入邊全部保留。
+/// 換來源＝換載體裡的內容（SetBody / SetAsset），Id、座標、備註、標註與所有連入邊全部保留。
 /// </summary>
 // 非泛型才能讓候選池、複製貼上、座標與編輯器走訪全部走同一條路徑；
 // 型別安全收斂在 Slot 的 GetBody<T>() / GetAsset<T>() 一處，不合型別由 Verify() 於編輯期擋下。
@@ -41,6 +42,10 @@ public class GraphNode
     [SerializeField, HideInInspector]
     private string _note;
 
+    // 停用用「反向旗標」：既有資產沒有這個欄位，反序列化後 false = 啟用，不會整批被關掉。
+    [SerializeField]
+    private bool _disabled;
+
     [SerializeField]
     private NodeKind _kind = NodeKind.Empty;
 
@@ -50,8 +55,14 @@ public class GraphNode
     [SerializeField]
     private ScriptableObject _asset;
 
+    // 標註（Token）：這顆節點的值可以被外面指名讀取，也可以被外面指名覆蓋。
+    // 掛在載體而不是內容上——換型別時名字要留著，和 _id / _pos / _note 同一層。
     [SerializeField]
-    private string _tokenKey;
+    private string _tokenName;
+
+    // 資產呼叫點的參數綁定。它屬於這次引用，不屬於共用資產。
+    [SerializeField]
+    private List<NamedFormulaSlot> _bindings = new();
 
     public GraphNode() { }
 
@@ -81,8 +92,27 @@ public class GraphNode
     /// <summary>節點備註（右鍵新增）。空字串或 null 代表沒有備註。</summary>
     public string Note { get => _note; set => _note = value; }
 
-    /// <summary>Token 模式的變數名稱；其他模式為 null。</summary>
-    public string TokenKey => _kind == NodeKind.Token ? _tokenKey : null;
+    /// <summary>
+    /// 停用中的節點不求值，所有引用它的欄位一律取自己的保底值（Formula 取 _default、Action 直接跳過）。
+    /// 載體是共用單位，所以停用一顆被多個欄位指著的節點會同時影響全部引用處。
+    /// </summary>
+    public bool Disabled { get => _disabled; set => _disabled = value; }
+
+    /// <summary>
+    /// 標註名稱。空＝沒標註。有名字代表這顆節點是這張圖的對外端點：
+    /// Owner 的圖 → 可被 Inspector 用字串查；資產的圖 → 是這個資產的參數，呼叫端可以覆蓋。
+    /// </summary>
+    public string TokenName => string.IsNullOrEmpty(_tokenName) ? null : _tokenName;
+
+    public bool IsToken => !string.IsNullOrEmpty(_tokenName);
+
+    public List<NamedFormulaSlot> Bindings
+    {
+        get { _bindings ??= new List<NamedFormulaSlot>(); return _bindings; }
+    }
+
+    /// <summary>標註或取消標註（傳 null / 空字串即取消）。換內容不影響標註。</summary>
+    public void SetTokenName(string name) => _tokenName = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
 
     /// <summary>沒有識別碼時補一個，已存在則沿用；回傳最終識別碼。</summary>
     public string EnsureId()
@@ -106,12 +136,12 @@ public class GraphNode
     /// <summary>不分型別取資產，給編輯器與驗證走訪用。</summary>
     public ScriptableObject AssetObject => _asset;
 
-    /// <summary>換成內嵌 Action / Formula。Id、座標、備註與連入邊不變。</summary>
+    /// <summary>換成內嵌 Action / Formula。Id、座標、備註、標註與連入邊不變。</summary>
     public void SetBody(ActionSystemNode body)
     {
         _body = body;
         _asset = null;
-        _tokenKey = null;
+        Bindings.Clear();
         _kind = body != null ? NodeKind.Inline : NodeKind.Empty;
     }
 
@@ -120,25 +150,15 @@ public class GraphNode
     {
         _asset = asset;
         _body = null;
-        _tokenKey = null;
         _kind = NodeKind.Asset;
     }
 
-    /// <summary>換成 Token 引用。</summary>
-    public void SetToken(string key)
-    {
-        _tokenKey = key;
-        _body = null;
-        _asset = null;
-        _kind = NodeKind.Token;
-    }
-
-    /// <summary>清成空節點（編輯中狀態）。</summary>
+    /// <summary>清成空節點（編輯中狀態）。標註不清——名字是載體的身分，不是內容的。</summary>
     public void Clear()
     {
         _body = null;
         _asset = null;
-        _tokenKey = null;
+        Bindings.Clear();
         _kind = NodeKind.Empty;
     }
 }

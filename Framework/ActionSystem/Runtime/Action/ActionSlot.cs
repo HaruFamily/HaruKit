@@ -92,10 +92,12 @@ public class ActionSlot<TPack>
 
     public bool AcceptsAsset(ScriptableObject asset) => asset is ActionAssetBase<TPack>;
 
-    public async UniTask Execute(TPack pack, TokenCache<TPack> tokens)
+    public async UniTask Execute(TPack pack, TokenTable<TPack> tokens)
     {
         if (_disabled) return;
-        if (_node == null) return;
+
+        // 停用與空槽走同一條路：都不執行。企劃可以關掉一段動作而不必拆線。
+        if (_node == null || _node.Disabled) return;
 
         switch (_node.Kind)
         {
@@ -110,7 +112,7 @@ public class ActionSlot<TPack>
             {
                 var asset = _node.GetAsset<ActionAssetBase<TPack>>();
                 if (asset == null) { Mismatch("動作資產"); return; }
-                await asset.Execute(pack, tokens);
+                await asset.Execute(pack, tokens, _node.Bindings);
                 return;
             }
             default:

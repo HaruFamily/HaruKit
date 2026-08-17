@@ -7,7 +7,7 @@ using UnityEditor;
 using UnityEngine;
 
 /// <summary>
-/// ActionSystem 視覺化編輯器：左欄變數庫、中欄節點圖 + Console、右欄時機與動作清單。
+/// ActionSystem 視覺化編輯器：左欄變數庫、中欄節點圖 + Console；所有時機畫在同一張畫布，右欄只在資產焦點出現。
 /// 所有編輯都改工作副本，按「存檔」才寫回 Owner 資產。
 /// 狀態欄位與主繪製流程在本檔，其餘責任見 ActionGraphWindow.*.cs。
 /// </summary>
@@ -26,13 +26,11 @@ public partial class ActionGraphWindow : EditorWindow
     private const float LinkSnapDistance = 24f;
     private const float LinkThickness = 4f;
     private const float TokenCellHeight = 30f;
-    private const float ActionCellHeight = TokenCellHeight;
     private const float AssetCellHeight = 34f;
     private const string PrefConsoleHeight = "ActionGraph.ConsoleHeight";
     private const string PrefConsoleCollapsed = "ActionGraph.ConsoleCollapsed";
     private const string PrefLeftWidth = "ActionGraph.LeftWidth";
     private const string PrefRightWidth = "ActionGraph.RightWidth";
-    private const string PrefTimingPrefix = "ActionGraph.Timing.";
 
     private AGModel model;
     private AGFocus focus = new();
@@ -52,7 +50,7 @@ public partial class ActionGraphWindow : EditorWindow
     private Rect rootGuiGroupRect;
 
     // 面板狀態
-    private Vector2 tokenScroll, assetLibraryScroll, actionScroll, consoleScroll;
+    private Vector2 tokenScroll, assetLibraryScroll, consoleScroll;
     private float consoleHeight = 150f;
     private bool consoleCollapsed;
     private bool resizingConsole;
@@ -64,7 +62,6 @@ public partial class ActionGraphWindow : EditorWindow
     private int libraryTab;                  // 0 變數 / 1 資產
     private string tokenSearch = "";
     private string assetSearch = "";
-    private Enum currentTiming;
     private object editingNameTarget;
     private string editingNameDraft = "";
 
@@ -73,10 +70,12 @@ public partial class ActionGraphWindow : EditorWindow
     private Vector2 dragOffset;
     private readonly Dictionary<string, Vector2> dragStartPositions = new();
 
-    // Header 名稱區同時是「拖曳節點」與「換來源」：按下時先記著，放開時沒移動超過門檻才算點擊。
+    // Header 的 ▾ 落在拖曳抓取區裡，所以仍要分辨拖曳：按下時先記著，放開時沒移動超過門檻才算點擊。
     private AGNode titleClickNode;
     private Vector2 titleClickStart;
     private const float TitleClickSlop = 4f;
+    /// <summary>Header 右端 ▾ 的寬度。放大到 18px 是因為 0.45 倍縮放下它只剩 8px，再小就按不到。</summary>
+    private const float SourceArrowWidth = 18f;
 
     private bool linking;
     private AGRow linkRow;
@@ -85,29 +84,34 @@ public partial class ActionGraphWindow : EditorWindow
     // 拉線期間的相容性：起手時對全圖判定一次，之後高亮與吸附都讀這份，不必每幀重算。
     private readonly HashSet<string> linkCompatibleNodeIds = new();
     private readonly HashSet<AGRow> linkCompatibleRows = new();
-    private AGToken dragToken;
-    private bool dragTokenActive;
-    private AGToken pendingTokenFocus;
     private ScriptableObject dragAsset;
     private bool dragAssetActive;
     private ScriptableObject pendingAssetFocus;
-    private AGFocus pendingActionFocus;
     // 選取用 id 記，節點物件每次重建圖都會換一份。
     private readonly HashSet<string> selectedIds = new();
     // 空註解框是暫態：只跟著這一顆被選取的節點活著，不寫進資料。
     private string noteOpenId;
     // 手動收起的註解：只影響顯示，內容仍留在載體上。
     private readonly HashSet<string> noteCollapsed = new();
+    // 每個載體被幾個欄位指著。只在圖重建後才會變，但 Header 每幀都要拿它畫 tooltip，不快取就是每幀掃全部欄位。
+    private readonly Dictionary<GraphNode, int> carrierUsers = new();
     private bool boxSelecting;
     private Vector2 boxStart;
     private Vector2 boxEnd;
-    private int dragActionIndex = -1;
     private AGRow dragListRow;
     private int dragListIndex = -1;
     // 拖曳期間只算目標位置、畫插入線；MouseUp 才真的搬動。拖曳中改資料會讓整張圖重建、列在指標底下亂跳。
     private int dragListTarget = -1;
     // 清單折疊只是視覺狀態，不進資料：key 見 AGGraph.CollapseKey，沒有記錄的清單依項數自動決定。
     private readonly Dictionary<string, bool> listCollapse = new();
+    // Slot 的分支收合狀態，key 同樣是 AGGraph.CollapseKey。只認手動切換過的記錄，沒記錄就是展開。
+    // 純視覺，切換只能設 graphDirty，不可以走 Invalidate。
+    private readonly Dictionary<string, bool> slotHidden = new();
+    // 上一次算出來的實際結果：開關要畫成什麼樣子直接查這裡，不必再重算一次自動規則。
+    private readonly HashSet<string> effectiveHidden = new();
+    // Alt 按＝solo：只留這一個 Slot 的子樹。退出時還原成 soloRestore 記下的手動記錄，不是全展開。
+    private string soloSlotKey;
+    private readonly Dictionary<string, bool> soloRestore = new();
     private object pendingCenterTarget;
     private static readonly List<object> clipboard = new();
 
@@ -121,6 +125,12 @@ public partial class ActionGraphWindow : EditorWindow
     private Vector2 referenceScroll;
 
     private bool HasUnsavedWork => model?.Dirty == true || assetDirty;
+
+    /// <summary>
+    /// 右欄還有沒有內容。時機節點與動作清單都在畫布上，所以右欄只剩下資產焦點的引用清單
+    /// ——那份沒有別的地方可去（資產焦點沒有時機節點）。
+    /// </summary>
+    private bool HasRightPanel => focus.Kind == AGFocusKind.Asset;
     private bool IsCurrentReportFresh => focus.Kind == AGFocusKind.Asset
         ? assetVerifiedOnce && !assetReportStale
         : verifiedOnce && !reportStale;
@@ -143,30 +153,22 @@ public partial class ActionGraphWindow : EditorWindow
 
         HandleGlobalKeys();
         EnsureGraph();
-        if (Event.current.type == EventType.MouseDrag && dragToken != null) dragTokenActive = true;
         if (Event.current.type == EventType.MouseDrag && dragAsset != null) dragAssetActive = true;
 
         // 縮放畫布先畫；固定面板最後畫，吸收 IMGUI 縮放在邊界可能漏出的次像素。
         DrawCenter(center);
         DrawLibraryPanel(left);
-        if (focus.Kind == AGFocusKind.Asset) DrawReferencePanel(right);
-        else DrawTimingPanel(right);
+        if (HasRightPanel) DrawReferencePanel(right);
         DrawToolbar(toolbar);
         DrawPanelResizeHandles(leftHandle, rightHandle);
 
-        if (dragTokenActive) DrawDragTokenGhost();
         if (dragAssetActive) DrawDragAssetGhost();
         if (Event.current.rawType == EventType.MouseUp)
         {
             if (Event.current.button == 0) EndLink();
-            dragTokenActive = false;
-            dragToken = null;
-            pendingTokenFocus = null;
             dragAssetActive = false;
             dragAsset = null;
             pendingAssetFocus = null;
-            pendingActionFocus = null;
-            dragActionIndex = -1;
             // 放開才真的搬：拖曳中途放棄不會留下任何改動。
             if (dragListRow != null && dragListTarget >= 0 && dragListTarget != dragListIndex)
                 MoveListItem(dragListRow, dragListIndex, dragListTarget);
@@ -174,7 +176,7 @@ public partial class ActionGraphWindow : EditorWindow
             dragListIndex = -1;
             dragListTarget = -1;
         }
-        if (Event.current.type == EventType.MouseDrag || linking || dragTokenActive) Repaint();
+        if (Event.current.type == EventType.MouseDrag || linking || dragAssetActive) Repaint();
         UpdateUnsavedState();
     }
 
@@ -185,12 +187,19 @@ public partial class ActionGraphWindow : EditorWindow
         float maxRight = Mathf.Max(MinRightWidth, position.width - leftWidth - MinCenterWidth);
         rightWidth = Mathf.Clamp(rightWidth, MinRightWidth, maxRight);
 
+        // Timing 焦點的內容全在畫布上，右欄沒有東西可放，整條收掉把寬度讓給畫布。
+        // 記住的 rightWidth 不動，切回別的焦點時原封不動地回來。
+        float shownRight = HasRightPanel ? rightWidth : 0f;
+
         toolbar = new Rect(0f, 0f, position.width, ToolbarHeight);
         left = new Rect(0f, ToolbarHeight, leftWidth, position.height - ToolbarHeight);
-        right = new Rect(position.width - rightWidth, ToolbarHeight, rightWidth, position.height - ToolbarHeight);
+        right = new Rect(position.width - shownRight, ToolbarHeight, shownRight, position.height - ToolbarHeight);
         center = new Rect(left.xMax, ToolbarHeight, right.xMin - left.xMax, position.height - ToolbarHeight);
         leftHandle = new Rect(left.xMax - ResizeHandleWidth * 0.5f, ToolbarHeight, ResizeHandleWidth, left.height);
-        rightHandle = new Rect(right.xMin - ResizeHandleWidth * 0.5f, ToolbarHeight, ResizeHandleWidth, right.height);
+        // 右欄收起時把把手也收成零寬：留著會在畫布右緣壓出一條抓不到東西的縮放區。
+        rightHandle = HasRightPanel
+            ? new Rect(right.xMin - ResizeHandleWidth * 0.5f, ToolbarHeight, ResizeHandleWidth, right.height)
+            : new Rect(position.width, ToolbarHeight, 0f, right.height);
     }
 
     /// <summary>分隔把手先處理事件，畫布不能攔截欄位縮放拖曳。</summary>
@@ -269,7 +278,7 @@ public partial class ActionGraphWindow : EditorWindow
         // Bind 不依賴既有狀態，閒置沒理由只留 Project 選取一條路；位置與綁定後的 DrawToolbar 一致。
         var ownerPickerRect = new Rect(toolbar.x + 4f, toolbar.y + 2f, 18f, 18f);
         if (GUI.Button(ownerPickerRect, new GUIContent("", "選擇編輯對象"), EditorStyles.popup))
-            AGOwnerIndex.ShowPicker(ownerPickerRect, owner => { Bind(owner); Repaint(); });
+            AGOwnerIndex.ShowPicker(ownerPickerRect, PickOwner);
 
         GUI.Label(new Rect(toolbar.x + 26f, toolbar.y + 2f, toolbar.width - 200f, 18f),
             "尚未選擇編輯對象", EditorStyles.boldLabel);
@@ -281,7 +290,7 @@ public partial class ActionGraphWindow : EditorWindow
         GUI.enabled = true;
 
         DrawIdlePanel(left, "資料庫");
-        DrawIdlePanel(right, "時機");
+        DrawIdlePanel(right, "引用");
 
         AGStyles.Fill(center, AGStyles.Canvas);
         var header = new Rect(center.x, center.y, center.width, HeaderHeight);
@@ -316,20 +325,255 @@ public partial class ActionGraphWindow : EditorWindow
     {
         if (!graphDirty && graph != null) return;
         graphDirty = false;
+        carrierUsers.Clear();
+        model.ClearAssetParameterCache();
+
+        bool bindingsChanged = false;
+        foreach (var carrier in CurrentTokenScope())
+            if (model.EnsureAssetBindings(carrier)) bindingsChanged = true;
+        if (bindingsChanged)
+        {
+            if (focus.Kind == AGFocusKind.Asset)
+            {
+                assetDirty = true;
+                assetReportStale = true;
+            }
+            else
+            {
+                model.MarkDirty();
+                reportStale = true;
+            }
+            UpdateUnsavedState();
+        }
 
         // 候選池掛在焦點的頭端上，不必再依 FocusId 過濾。
         model.OrphanHead = focus.Head;
 
-        var rootSlot = focus.RootSlot;
-        graph = rootSlot != null
-            ? AGGraph.Build(model, rootSlot, OrphansOfCurrentFocus(), focus.Id, focus.HeadTitle, listCollapse, noteOpenId, noteCollapsed)
-            : new AGGraphView();
+        // 一顆 HEAD 都沒有也要建：時機畫布可能還沒有任何時機節點，但候選節點仍要畫出來。
+        graph = focus.Kind == AGFocusKind.None
+            ? new AGGraphView()
+            : AGGraph.Build(model, focus.Roots, OrphansOfCurrentFocus(), focus.Id, focus.HeadTitle,
+                listCollapse, noteOpenId, noteCollapsed);
 
+        ApplyVisibility();
         if (pendingCenterTarget != null) { CenterOn(pendingCenterTarget); pendingCenterTarget = null; }
     }
 
-    /// <summary>目前焦點頭端自己的候選節點。</summary>
-    private IList OrphansOfCurrentFocus() => AGReflect.Orphans(focus.Head);
+    /// <summary>
+    /// 套用 Slot 的分支收合。圖一律建到底再標記，因為「有沒有別的欄位在用」要走完整張圖才算得準；
+    /// 建圖時邊走邊剪會看不到後面才出現的引用。
+    /// </summary>
+    private void ApplyVisibility()
+    {
+        foreach (var n in graph.Nodes) n.Hidden = false;
+        effectiveHidden.Clear();
+        if (graph.Nodes.Count == 0) return;
+
+        if (soloSlotKey != null)
+        {
+            ApplySolo();
+            effectiveHidden.Add(soloSlotKey);
+            MarkHiddenSlots();
+            return;
+        }
+
+        // 先把所有「該收起來」的欄位挑出來，再一起收：邊挑邊收會讓後面的欄位落在已經收掉的節點上而查不到。
+        foreach (var n in graph.Nodes)
+        {
+            foreach (var row in AGGraph.AllRows(n.Rows))
+            {
+                if (row.Kind != AGRowKind.Slot || row.Slot == null) continue;
+                if (IsSlotHidden(n, row)) effectiveHidden.Add(AGGraph.CollapseKey(n.Id, row));
+            }
+        }
+
+        foreach (var n in graph.Nodes)
+        {
+            foreach (var row in AGGraph.AllRows(n.Rows))
+            {
+                if (row.Kind != AGRowKind.Slot || row.Slot == null) continue;
+                if (!effectiveHidden.Contains(AGGraph.CollapseKey(n.Id, row))) continue;
+                if (graph.BySlot.TryGetValue(row.Slot, out var target)) HideSubtree(target);
+            }
+        }
+
+        MarkHiddenSlots();
+    }
+
+    /// <summary>
+    /// 清掉所有「只跟目前這張圖有關」的視覺狀態。換編輯對象或回到閒置時一定要呼叫：
+    /// 這些集合的 key 是節點 Id + 欄位路徑，換了對象就再也對不到人，留著只會累積，
+    /// 還可能讓下一個對象一打開就是收合的樣子。
+    /// </summary>
+    private void ClearViewState()
+    {
+        slotHidden.Clear();
+        effectiveHidden.Clear();
+        soloRestore.Clear();
+        soloSlotKey = null;
+        listCollapse.Clear();
+        noteCollapsed.Clear();
+        noteOpenId = null;
+        carrierUsers.Clear();
+        selectedIds.Clear();
+    }
+
+    /// <summary>
+    /// 這個欄位收起來了沒。只認使用者手動切換過的記錄，沒有記錄就是展開。
+    /// 曾經加過自動收起未選取動作子樹，已移除：`slotHidden` 是 window 欄位，
+    /// 重開視窗會清空，於是自動規則整批重新套用，看起來就是「我沒收的也被收走了」。
+    /// 效能真的成為問題時再處理，不要用會讓畫面自己變動的規則換。
+    /// </summary>
+    private bool IsSlotHidden(AGNode owner, AGRow row)
+        => slotHidden.TryGetValue(AGGraph.CollapseKey(owner.Id, row), out bool stored) && stored;
+
+    /// <summary>
+    /// 把「目標已經被藏起來」的欄位補進 effectiveHidden，收合鈕才會畫成 +。
+    /// solo 模式尤其需要：那些欄位沒有手動記錄，是被 solo 連帶收掉的。
+    /// </summary>
+    private void MarkHiddenSlots()
+    {
+        foreach (var n in graph.Nodes)
+        {
+            if (n.Hidden) continue;
+            foreach (var row in AGGraph.AllRows(n.Rows))
+            {
+                if (row.Kind != AGRowKind.Slot || row.Slot == null) continue;
+                if (!graph.BySlot.TryGetValue(row.Slot, out var target) || !target.Hidden) continue;
+                effectiveHidden.Add(AGGraph.CollapseKey(n.Id, row));
+            }
+        }
+    }
+
+    /// <summary>solo：只留下這個 Slot 的子樹，以及持有它的節點與祖先。</summary>
+    private void ApplySolo()
+    {
+        var keep = new HashSet<AGNode>();
+        var row = FindSlotRow(soloSlotKey);
+        if (row?.Slot != null && graph.BySlot.TryGetValue(row.Slot, out var target)) MarkSubtree(target, keep);
+
+        // 持有這個欄位的節點、以及它一路往上的祖先都要留著。把來路藏掉的話，
+        // 畫面上會剩一段浮在空中、看不出從哪裡接出來的子樹，連要退出 solo 的那顆開關都不見了。
+        KeepAncestors(NodeById(row?.OwnerNodeId), keep);
+
+        foreach (var n in graph.Nodes)
+        {
+            if (n.IsRoot) continue;
+            n.Hidden = !keep.Contains(n);
+        }
+    }
+
+    /// <summary>從這顆節點沿 ParentRow 一路往上留到根。seen 獨立於 keep，避免資料成環時停不下來。</summary>
+    private void KeepAncestors(AGNode node, HashSet<AGNode> keep)
+    {
+        var seen = new HashSet<AGNode>();
+        while (node != null && seen.Add(node))
+        {
+            keep.Add(node);
+            node = node.ParentRow != null ? NodeById(node.ParentRow.OwnerNodeId) : null;
+        }
+    }
+
+    private AGNode NodeById(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return null;
+        foreach (var n in graph.Nodes)
+            if (n.Id == id) return n;
+        return null;
+    }
+
+    private void MarkSubtree(AGNode node, HashSet<AGNode> into)
+    {
+        if (node == null || !into.Add(node)) return;
+        foreach (var row in AGGraph.AllRows(node.Rows))
+        {
+            if (row.Slot == null) continue;
+            if (graph.BySlot.TryGetValue(row.Slot, out var child)) MarkSubtree(child, into);
+        }
+    }
+
+    private void HideSubtree(AGNode node)
+    {
+        if (node?.Carrier == null || node.IsRoot || node.Hidden) return;
+        // 被別的欄位共用的節點留著：它不只屬於這一段，收掉會讓另一條線斷在空白處。
+        if (graph.CarrierUsers.TryGetValue(node.Carrier, out int users) && users > 1) return;
+
+        node.Hidden = true;
+        foreach (var row in AGGraph.AllRows(node.Rows))
+        {
+            if (row.Slot == null) continue;
+            if (graph.BySlot.TryGetValue(row.Slot, out var child)) HideSubtree(child);
+        }
+    }
+
+    private AGRow FindSlotRow(string key)
+    {
+        foreach (var n in graph.Nodes)
+            foreach (var row in AGGraph.AllRows(n.Rows))
+                if (row.Kind == AGRowKind.Slot && AGGraph.CollapseKey(n.Id, row) == key) return row;
+        return null;
+    }
+
+    /// <summary>
+    /// 切換一個 Slot 的顯示。alt＝solo（只留這一段），再按一次還原成 solo 之前的隱藏集合，
+    /// 不是全部展開——不然會把使用者原本收好的東西一起吹掉。
+    /// </summary>
+    private void ToggleSlotVisibility(string key, bool solo)
+    {
+        if (solo && soloSlotKey != key)
+        {
+            // 進 solo 前把手動記錄整份存起來，退出時才還原得回去，而不是變成全展開。
+            if (soloSlotKey == null)
+            {
+                soloRestore.Clear();
+                foreach (var kv in slotHidden) soloRestore[kv.Key] = kv.Value;
+            }
+            soloSlotKey = key;
+        }
+        else
+        {
+            // 退出 solo（再按一次、或在 solo 中按了一般開關）：先把世界還原成 solo 之前的樣子。
+            bool wasSolo = soloSlotKey != null;
+            if (wasSolo)
+            {
+                soloSlotKey = null;
+                slotHidden.Clear();
+                foreach (var kv in soloRestore) slotHidden[kv.Key] = kv.Value;
+                soloRestore.Clear();
+            }
+            // 從 solo 退出的那一下只負責退出：使用者還沒看到還原後的樣子，不該同時再改動一項。
+            if (!solo && !wasSolo) slotHidden[key] = !effectiveHidden.Contains(key);
+        }
+
+        // 純視覺：只重建圖與重畫，不可以走 Invalidate，否則按個收合鈕就把資產標成未存檔。
+        graphDirty = true;
+        Repaint();
+    }
+
+    /// <summary>
+    /// 目前焦點的候選節點。時機畫布的候選掛在 ActionSystem 身上（＝model.OrphanHead），
+    /// 但合併畫布之前存下來的候選掛在個別動作頭端上，所以要一起讀回來，不然舊資產一開就少一批節點。
+    /// </summary>
+    private IList OrphansOfCurrentFocus()
+    {
+        if (focus.Kind != AGFocusKind.Timing) return AGReflect.Orphans(focus.Head);
+
+        var all = new List<object>();
+        Append(all, AGReflect.Orphans(model.Data));
+        foreach (var g in model.ReadGroups())
+        {
+            if (g.Actions == null) continue;
+            foreach (var slot in g.Actions) Append(all, AGReflect.Orphans(slot));
+        }
+        return all;
+    }
+
+    private static void Append(List<object> into, List<GraphNode> nodes)
+    {
+        if (nodes == null) return;
+        foreach (var n in nodes)
+            if (n != null) into.Add(n);
+    }
 
     /// <summary>目前畫面該用哪一份驗證結果：資產焦點只看資產自己的。</summary>
     private AGReport Rep => focus.Kind == AGFocusKind.Asset ? assetReport : report;
@@ -364,7 +608,7 @@ public partial class ActionGraphWindow : EditorWindow
         if (focus.Kind == AGFocusKind.Asset)
         {
             if (focus.AssetHostSlot == null) return;
-            assetReport = AGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
+            assetReport = AGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.AssetOrphans, focus.Title);
             assetVerifiedOnce = true;
             return;
         }
@@ -404,39 +648,13 @@ public partial class ActionGraphWindow : EditorWindow
         }
     }
 
-    /// <summary>Undo/Redo 換掉整份資料後，焦點抓的是舊圖的參考，要用「時機+索引 / 變數名稱」重新指回去。</summary>
+    /// <summary>
+    /// Undo/Redo 換掉整份資料後，焦點抓的是舊圖的參考。時機畫布只認工作副本本身、群組清單是現讀的，
+    /// 所以重指一次就好；標註節點也住在同一張畫布上，不需要另外解析。
+    /// </summary>
     private void AfterHistorySwap()
     {
-        var kind = focus.Kind;
-        var timing = focus.Timing;
-        int index = focus.ActionIndex;
-        string tokenKey = focus.Token?.Key;
-        var tokenType = focus.Token?.ResultType;
-
-        focus = new AGFocus();
-        if (kind == AGFocusKind.Action)
-        {
-            foreach (var g in model.ReadGroups())
-            {
-                if (!Equals(g.Timing, timing) || g.Actions == null) continue;
-                if (index < 0 || index >= g.Actions.Count) break;
-                focus = new AGFocus
-                {
-                    Kind = AGFocusKind.Action, Timing = g.Timing,
-                    ActionList = g.Actions, ActionIndex = index, ActionSlot = g.Actions[index],
-                };
-                break;
-            }
-        }
-        else if (kind == AGFocusKind.Token)
-        {
-            foreach (var t in model.ReadTokens())
-            {
-                if (t.Key != tokenKey || t.ResultType != tokenType) continue;
-                focus = new AGFocus { Kind = AGFocusKind.Token, Token = t };
-                break;
-            }
-        }
+        focus = focus.Kind == AGFocusKind.Timing ? AllTimingsFocus() : new AGFocus();
 
         selectedIds.Clear();
         graphDirty = true;
@@ -455,7 +673,7 @@ public partial class ActionGraphWindow : EditorWindow
         var ownerPickerRect = new Rect(r.x + 4f, r.y + 2f, 18f, 18f);
         GUI.enabled = focus.Kind != AGFocusKind.Asset;
         if (GUI.Button(ownerPickerRect, new GUIContent("", "換編輯對象"), EditorStyles.popup))
-            AGOwnerIndex.ShowPicker(ownerPickerRect, owner => { Bind(owner); Repaint(); });
+            AGOwnerIndex.ShowPicker(ownerPickerRect, PickOwner);
         GUI.enabled = true;
 
         string ownerPath = AssetDatabase.GetAssetPath(model.Owner);

@@ -7,10 +7,6 @@ using UnityEngine;
 // 非泛型 base：Verify 與編輯器不必帶泛型參數就能取節點、結果型別與型別相容判定。
 public abstract class FormulaSlotBase
 {
-    internal abstract string DebugTokenKey { get; }
-    public abstract bool IsSelfReferencing { get; }
-    internal abstract void SetDictKey(string key);
-
     /// <summary>目前接的節點。null＝常數模式，直接用預設值。</summary>
     public abstract GraphNode Node { get; }
 
@@ -19,6 +15,9 @@ public abstract class FormulaSlotBase
 
     /// <summary>求值結果型別（TResult）。</summary>
     public abstract Type ResultType { get; }
+
+    /// <summary>公式求值封包型別（TPack）。資產綁定驗證用。</summary>
+    public abstract Type PackType { get; }
 
     /// <summary>不分型別存取預設值，供編輯器輸入框讀寫。</summary>
     public abstract object DefaultObject { get; set; }
@@ -42,8 +41,6 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
     [SerializeReference]
     private GraphNode _node;
 
-    [NonSerialized] internal string _dictKey;
-
     // 型別不符每個 Slot 只吼一次，避免逐次求值洗版。
     [NonSerialized] private bool _loggedMismatch;
 
@@ -60,6 +57,7 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
     public override void SetNode(GraphNode node) => _node = node;
 
     public override Type ResultType => typeof(TResult);
+    public override Type PackType => typeof(TPack);
 
     public override object DefaultObject
     {
@@ -79,15 +77,13 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
     /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
     public TResult Default { get => _default; set => _default = value; }
 
-    internal override string DebugTokenKey => _node?.TokenKey;
-
-    public override bool IsSelfReferencing => _dictKey != null && _node?.TokenKey == _dictKey;
-
-    internal override void SetDictKey(string key) => _dictKey = key;
-
-    public async UniTask<TResult> Evaluate(TPack pack, TokenCache<TPack> tokens)
+    public async UniTask<TResult> Evaluate(TPack pack, TokenTable<TPack> tokens)
     {
-        if (_node == null) return _default;
+        // 停用與空槽走同一條路：都回保底值。企劃可以關掉一段公式而不必拆線。
+        if (_node == null || _node.Disabled) return _default;
+
+        if (_node.IsToken && tokens != null && tokens.HasOverride<TResult>(_node.TokenName))
+            return await tokens.ResolveOverride<TResult>(_node.TokenName, pack);
 
         switch (_node.Kind)
         {
@@ -101,16 +97,7 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
             {
                 var asset = _node.GetAsset<TAsset>();
                 if (asset == null) return Mismatch("資產");
-                return await asset.Evaluate(pack, tokens);
-            }
-            case NodeKind.Token:
-            {
-                string key = _node.TokenKey;
-                if (string.IsNullOrEmpty(key)) return _default;
-                if (IsSelfReferencing) return _default;
-                if (tokens == null || !tokens.Has<TResult>(key)) return _default;
-                if (tokens.IsResolving<TResult>(key)) return _default;
-                return await tokens.Resolve<TResult>(key, pack);
+                return await asset.Evaluate(pack, tokens, _node.Bindings);
             }
             default:
                 return _default;   // Empty：編輯中的空節點，存檔驗證會擋，runtime 走保底值續跑。

@@ -9,7 +9,7 @@ using UnityEngine;
 using UnityEditor;
 #endif
 
-public abstract class ActionAssetBase<TPack> : ScriptableObject
+public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionSystemAssetGraph
 {
     [SerializeReference]
     private ActionBase<TPack> _action;
@@ -18,13 +18,14 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject
     [SerializeReference, HideInInspector]
     private List<GraphNode> _orphans = new();
 
-    public async UniTask Execute(TPack pack, TokenCache<TPack> tokens)
+    public async UniTask Execute(TPack pack, TokenTable<TPack> caller, IReadOnlyList<NamedFormulaSlot> bindings = null)
     {
         if (_action == null)
         {
             Debug.LogWarning($"[ActionSystem] 動作資產 '{name}' 沒有內容，已跳過。");
             return;
         }
+        var tokens = TokenTable<TPack>.CreateAssetScope(this, bindings, caller);
         await _action.Execute(pack, tokens);
     }
 
@@ -33,6 +34,8 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject
     {
         get { _orphans ??= new List<GraphNode>(); return _orphans; }
     }
+
+    public object ContentObject => _action;
 
 #if UNITY_EDITOR
     public void SetTarget(ActionBase<TPack> action) => _action = action;

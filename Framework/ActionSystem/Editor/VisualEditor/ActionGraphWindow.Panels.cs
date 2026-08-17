@@ -29,34 +29,22 @@ public partial class ActionGraphWindow
         else DrawAssetLibrary(r, r.y + 48f);
     }
 
+    /// <summary>
+    /// 標註索引。標註化之後這裡不再是 CRUD 面板：建立與取消都在節點右鍵，
+    /// 這一欄只負責「有哪些對外端點」與「點了跳過去」。
+    /// </summary>
     private void DrawTokenLibrary(Rect r, float top, bool inAsset)
     {
         GUI.Label(new Rect(r.x + 6f, top, r.width - 12f, 16f),
-            new GUIContent(inAsset ? "呼叫端變數" : "共用變數",
-                inAsset ? "資產目前以名稱對應呼叫端的變數，沒有自己的參數宣告" : ""), AGStyles.Tiny);
+            new GUIContent("標註（對外端點）", "在節點上按右鍵「註冊為 Token」建立；點清單跳到那顆節點"), AGStyles.Tiny);
 
-        var createRect = new Rect(r.x + 2f, top + 18f, r.width - 4f, 28f);
-        AGStyles.Fill(createRect, AGStyles.PanelSection);
-        AGStyles.Frame(createRect, AGStyles.NodeBorder);
-
-        var kinds = model.TokenKinds();
-        GUI.enabled = !inAsset && kinds.Count > 0;
-        if (GUI.Button(new Rect(r.x + 4f, top + 21f, r.width - 8f, 22f), "新增變數")) ShowAddTokenMenu();
-        GUI.enabled = true;
-
-        var removeRect = new Rect(r.x + 4f, top + 50f, r.width - 8f, 20f);
-        bool canRemoveToken = !inAsset && focus.Kind == AGFocusKind.Token && focus.Token != null;
-        GUI.enabled = canRemoveToken;
-        if (GUI.Button(removeRect, "移除變數")) RemoveToken(focus.Token);
-        GUI.enabled = true;
-
-        var searchRect = new Rect(r.x + 4f, top + 74f, r.width - 8f, 20f);
+        var searchRect = new Rect(r.x + 4f, top + 20f, r.width - 8f, 20f);
         GUI.Label(new Rect(searchRect.x + 4f, searchRect.y + 2f, 16f, 16f),
-            EditorGUIUtility.IconContent("Search Icon", "搜尋變數"));
+            EditorGUIUtility.IconContent("Search Icon", "搜尋標註"));
         tokenSearch = EditorGUI.TextField(new Rect(searchRect.x + 20f, searchRect.y, searchRect.width - 20f, searchRect.height), tokenSearch);
 
-        var listRect = new Rect(r.x + 2f, top + 98f, r.width - 4f, r.yMax - top - 100f);
-        var tokens = model.ReadTokens();
+        var listRect = new Rect(r.x + 2f, top + 44f, r.width - 4f, r.yMax - top - 46f);
+        var tokens = model.ReadTokens(CurrentTokenScope());
         var shown = new List<AGToken>();
         foreach (var t in tokens)
             if (string.IsNullOrWhiteSpace(tokenSearch)
@@ -70,9 +58,8 @@ public partial class ActionGraphWindow
         {
             var token = shown[i];
             var row = new Rect(2f, i * TokenCellHeight + 2f, content.width - 4f, TokenCellHeight - 3f);
-            bool isFocus = focus.Kind == AGFocusKind.Token && focus.Token != null
-                && focus.Token.Key == token.Key && focus.Token.ResultType == token.ResultType;
-            // 變數＝橘→綠，和畫布上的變數節點同一條漸層。
+            bool isFocus = selectedIds.Contains(token.Node?.Id ?? "");
+            // 深綠→琥珀，和畫布上被標註的節點同一條漸層。
             DrawCellBackground(row, AGStyles.HeaderToken, AGStyles.HeaderFormula, i % 2 == 1, isFocus);
 
             GUI.Label(new Rect(row.x + 8f, row.y + 2f, row.width - 70f, 18f),
@@ -91,27 +78,26 @@ public partial class ActionGraphWindow
             var e = Event.current;
             if (e.type == EventType.MouseDown && row.Contains(e.mousePosition))
             {
-                if (e.button == 1) { ShowTokenMenu(token); e.Use(); }
-                else
-                {
-                    dragToken = token;
-                    pendingTokenFocus = token;
-                    e.Use();
-                }
-            }
-            if (e.type == EventType.MouseDrag && dragToken == token) dragTokenActive = true;
-            if (e.type == EventType.MouseUp && pendingTokenFocus != null
-                && pendingTokenFocus.Key == token.Key && pendingTokenFocus.ResultType == token.ResultType
-                && !dragTokenActive && row.Contains(e.mousePosition))
-            {
-                dragToken = null;
-                pendingTokenFocus = null;
-                if (isFocus) SetFocus(new AGFocus());
-                else SetFocus(new AGFocus { Kind = AGFocusKind.Token, Token = token });
+                if (e.button == 1) ShowTokenMenu(token);
+                else JumpToToken(token);
                 e.Use();
             }
         }
         GUI.EndScrollView();
+    }
+
+    /// <summary>跳到那顆被標註的節點。同一張畫布，只是把視野移過去並選取它。</summary>
+    private void JumpToToken(AGToken token)
+    {
+        if (token?.Node == null) return;
+        if (focus.Kind != AGFocusKind.Asset && focus.Kind != AGFocusKind.Timing) SetFocus(AllTimingsFocus());
+
+        selectedIds.Clear();
+        if (!string.IsNullOrEmpty(token.Node.Id)) selectedIds.Add(token.Node.Id);
+        // CenterOn 比對的是節點內容物件；資產節點沒有內容，退而求其次不移動視野。
+        pendingCenterTarget = token.Node.BodyObject;
+        graphDirty = true;
+        Repaint();
     }
 
     private void DrawAssetLibrary(Rect r, float top)
@@ -182,11 +168,8 @@ public partial class ActionGraphWindow
     private List<(Type acceptedAssetType, Type slotType)> AssetSlotTypes()
     {
         var result = new List<(Type acceptedAssetType, Type slotType)>();
-        foreach (var (_, list) in model.TokenKinds())
+        foreach (var (_, slotType) in model.FormulaKinds())
         {
-            Type entryType = list.GetType().GetGenericArguments()[0];
-            if (AGReflect.CreateInstance(entryType) is not ITokenEntry entry || entry.Slot == null) continue;
-            Type slotType = entry.Slot.GetType();
             Type accepted = AGReflect.AssetType(slotType);
             if (accepted != null) result.Add((accepted, slotType));
         }
@@ -205,26 +188,16 @@ public partial class ActionGraphWindow
         return null;
     }
 
+    /// <summary>這個標註有沒有問題。標註的問題掛在被標註節點的內容物件上（見 AGValidator）。</summary>
     private bool HasTokenIssue(AGToken token, out string reason, out bool isError)
     {
         reason = null; isError = false;
-        foreach (var issue in report.Issues)
-        {
-            if (issue.Focus == null || issue.Focus.Kind != AGFocusKind.Token) continue;
-            if (issue.Focus.Token == null || issue.Focus.Token.Key != token.Key) continue;
-            reason = issue.Line;
-            isError = issue.IsError;
-            if (isError) return true;
-        }
-        return reason != null;
-    }
+        object target = token?.Node;
+        if (target == null) return false;
 
-    private bool HasActionIssue(AGFocus action, out string reason, out bool isError)
-    {
-        reason = null; isError = false;
-        foreach (var issue in report.Issues)
+        foreach (var issue in Rep.Issues)
         {
-            if (issue.Focus == null || !issue.Focus.SameAs(action)) continue;
+            if (!ReferenceEquals(issue.Node, target)) continue;
             reason = issue.Line;
             isError = issue.IsError;
             if (isError) return true;
@@ -260,86 +233,48 @@ public partial class ActionGraphWindow
         return GUI.Button(r, GUIContent.none, GUIStyle.none);
     }
 
-    private void ShowAddTokenMenu()
+    private void ShowTokenMenu(AGToken token)
     {
+        if (token?.Node == null) return;
         var menu = new GenericMenu();
-        foreach (var (resultType, _) in model.TokenKinds())
-        {
-            var capturedType = resultType;
-            menu.AddItem(new GUIContent(AGReflect.ResultTypeName(capturedType)), false, () => AddToken(capturedType));
-        }
+
+        menu.AddItem(new GUIContent("跳到這顆節點"), false, () => JumpToToken(token));
+        menu.AddItem(new GUIContent("重新命名…"), false, () =>
+            AGPrompt.Show("標註名稱", "圖內引用是連線不受影響；會斷的是 Inspector 上指名這個字串的地方",
+                token.Key, key =>
+                {
+                    if (!model.SetTokenName(token.Node, key, CurrentTokenScope(), out string error))
+                    {
+                        EditorUtility.DisplayDialog("無法改名", error, "好");
+                        return;
+                    }
+                    Invalidate();
+                    Repaint();
+                }));
+
+        menu.AddSeparator("");
+        menu.AddItem(new GUIContent("取消標註"), false, () => UnregisterTokenNode(token));
         menu.ShowAsContext();
     }
 
-    private void AddToken(Type resultType)
+    /// <summary>
+    /// 取消標註。節點與它的子樹留在原地，只是不再是對外端點——所以圖內的連線一條都不會斷，
+    /// 會斷的是 Inspector 上指名這個字串的地方。
+    /// </summary>
+    private void UnregisterTokenNode(AGToken token)
     {
-        string typeName = AGReflect.ResultTypeName(resultType).ToLowerInvariant();
-        int index = 0;
-        string key;
-        do { key = $"t_{typeName}_{index++}"; }
-        while (TokenKeyExists(key));
-
-        if (!model.AddToken(resultType, key, out string error))
-        {
-            ShowNotification(new GUIContent(error));
-            return;
-        }
-        foreach (var token in model.ReadTokens())
-        {
-            if (token.Key != key || token.ResultType != resultType) continue;
-            SetFocus(new AGFocus { Kind = AGFocusKind.Token, Token = token });
-            break;
-        }
-        Invalidate();
-        Repaint();
-    }
-
-    private bool TokenKeyExists(string key)
-    {
-        foreach (var token in model.ReadTokens())
-            if (token.Key == key) return true;
-        return false;
-    }
-
-    private void RemoveToken(AGToken token)
-    {
-        if (token == null) return;
+        if (token?.Node == null) return;
         int refs = model.CountReferences(token);
         string msg = refs > 0
-            ? $"'{token.Key}' 還有 {refs} 個欄位在引用，刪除後那些欄位會指向不存在的變數。"
-            : $"確定刪除 '{token.Key}'？";
-        if (!EditorUtility.DisplayDialog("刪除變數", msg, "刪除", "取消")) return;
-        model.RemoveToken(token);
-        SetFocus(new AGFocus());
+            ? $"取消 '{token.Key}' 的標註？圖內還有 {refs} 個欄位接著這顆節點，那些連線不受影響。"
+            : $"取消 '{token.Key}' 的標註？Inspector 上指名這個名字的地方會查不到值。";
+        if (!EditorUtility.DisplayDialog("取消標註", msg, "取消標註", "保留")) return;
+
+        model.BreakUndoMerge();
+        model.ClearTokenName(token.Node);
         Invalidate();
         DoVerify(true);
         Repaint();
-    }
-
-    private void ShowTokenMenu(AGToken token)
-    {
-        var menu = new GenericMenu();
-        menu.AddItem(new GUIContent("改名"), false, () =>
-            AGPrompt.Show("變數改名", "輸入新名稱（所有引用處會同步更新）", token.Key, key =>
-            {
-                if (!model.RenameToken(token, key, out string error)) EditorUtility.DisplayDialog("無法改名", error, "好");
-                Invalidate();
-                Repaint();
-            }));
-        menu.AddItem(new GUIContent("刪除"), false, () =>
-        {
-            RemoveToken(token);
-        });
-        menu.ShowAsContext();
-    }
-
-    private void DrawDragTokenGhost()
-    {
-        if (dragToken == null) return;
-        var p = Event.current.mousePosition;
-        var r = new Rect(p.x + 8f, p.y + 8f, 140f, 18f);
-        AGStyles.GradientFill(r, AGStyles.HeaderToken, AGStyles.HeaderFormula, CellCornerRadius);
-        GUI.Label(r, $"@{dragToken.Key}", AGStyles.Chip);
     }
 
     private void DrawDragAssetGhost()
@@ -354,253 +289,137 @@ public partial class ActionGraphWindow
         GUI.Label(r, dragAsset.name, AGStyles.Chip);
     }
 
-    // ===== 右欄：時機與動作清單 =====
+    // ===== 時機選單 =====
+    // 所有時機畫在同一張畫布上，一個時機一顆節點：下拉是「跳到哪一顆」，新增走畫布右鍵。
+    // 舊的右欄（時機區 + 新增／移除動作鈕 + 動作清單）與「每張畫布一個時機」都已移除。
 
-    private void DrawTimingPanel(Rect r)
-    {
-        AGStyles.Fill(r, AGStyles.Panel);
-        AGStyles.Frame(r, AGStyles.NodeBorder);
-
-        var groups = model.ReadGroups();
-        var timingSection = new Rect(r.x + 2f, r.y + 2f, r.width - 4f, 50f);
-        AGStyles.Fill(timingSection, AGStyles.PanelSection);
-        AGStyles.Frame(timingSection, AGStyles.NodeBorder);
-        GUI.Label(new Rect(r.x + 4f, r.y + 4f, 120f, 18f), "時機", AGStyles.PanelHeader);
-
-        string timingLabel = currentTiming != null ? currentTiming.ToString() : "（選擇時機）";
-        var dropRect = new Rect(r.x + 4f, r.y + 26f, r.width - 8f, 24f);
-        if (EditorGUI.DropdownButton(dropRect, new GUIContent(timingLabel), FocusType.Keyboard))
-            ShowTimingMenu(groups);
-
-        AGTimingGroup current = null;
-        foreach (var g in groups)
-            if (currentTiming != null && Equals(g.Timing, currentTiming)) current = g;
-
-        GUI.enabled = currentTiming != null;
-        if (GUI.Button(new Rect(r.x + 4f, r.y + 56f, r.width - 8f, 20f), "新增動作"))
-            AddEmptyAction(currentTiming);
-        GUI.enabled = true;
-
-        var removeRect = new Rect(r.x + 4f, r.y + 78f, r.width - 8f, 20f);
-        bool canRemoveAction = focus.Kind == AGFocusKind.Action && focus.ActionSlot != null
-            && Equals(focus.Timing, currentTiming);
-        GUI.enabled = canRemoveAction;
-        if (GUI.Button(removeRect, "移除動作")) RemoveAction(focus);
-        GUI.enabled = true;
-
-        var listRect = new Rect(r.x + 2f, r.y + 102f, r.width - 4f, r.height - 104f);
-        AGStyles.Fill(listRect, AGStyles.PanelList);
-
-        if (current?.Actions != null) DrawActionList(listRect, current);
-
-    }
-
-    private void DrawActionList(Rect listRect, AGTimingGroup group)
-    {
-        var actions = group.Actions;
-        var content = new Rect(0f, 0f, listRect.width - 16f, actions.Count * ActionCellHeight + 4f);
-        actionScroll = GUI.BeginScrollView(listRect, actionScroll, content);
-
-        for (int i = 0; i < actions.Count; i++)
-        {
-            var slot = actions[i];
-            if (slot == null) continue;
-            var row = new Rect(2f, i * ActionCellHeight + 2f, content.width - 4f, ActionCellHeight - 3f);
-            bool isFocus = focus.Kind == AGFocusKind.Action && ReferenceEquals(focus.ActionSlot, slot);
-            // 動作沒有容器語意，單色。
-            DrawCellBackground(row, AGStyles.HeaderAction, AGStyles.HeaderAction, i % 2 == 1, isFocus);
-
-            GUI.Label(new Rect(row.x + 5f, row.y + 5f, 12f, 18f), "≡", AGStyles.Tiny);
-
-            bool disabled = AGReflect.GetDisabled(slot);
-            bool enabled = !disabled;
-            bool newEnabled = GUI.Toggle(new Rect(row.x + 20f, row.y + 6f, 16f, 16f), enabled, GUIContent.none);
-            if (newEnabled != enabled) { AGReflect.SetDisabled(slot, !newEnabled); Invalidate(); }
-
-            var focusOfRow = new AGFocus
-            {
-                Kind = AGFocusKind.Action,
-                Timing = group.Timing,
-                ActionList = actions,
-                ActionIndex = i,
-                ActionSlot = slot,
-            };
-
-            string typeName = AGFocus.ActionName(slot);
-            string label = AGReflect.GetLabel(slot);
-            string name = string.IsNullOrEmpty(label) ? typeName : label;
-            GUI.Label(new Rect(row.x + 42f, row.y + 2f, row.width - 60f, 18f), name, AGStyles.RowLabel);
-
-            if (HasActionIssue(focusOfRow, out string reason, out bool isError))
-            {
-                var dot = new Rect(row.xMax - 10f, row.y + 10f, 7f, 7f);
-                AGStyles.Fill(dot, isError ? AGStyles.Error : AGStyles.Warning);
-                GUI.Label(dot, new GUIContent("", reason));
-            }
-
-            var e = Event.current;
-            if (e.type == EventType.MouseDown && row.Contains(e.mousePosition))
-            {
-                if (e.button == 1) { ShowActionMenu(group, i); e.Use(); }
-                else
-                {
-                    pendingActionFocus = focusOfRow;
-                    e.Use();
-                }
-            }
-            if (e.type == EventType.MouseDrag && dragActionIndex < 0
-                && pendingActionFocus != null && ReferenceEquals(pendingActionFocus.ActionSlot, slot))
-                dragActionIndex = i;
-            if (e.type == EventType.MouseDrag && dragActionIndex >= 0 && dragActionIndex < actions.Count)
-            {
-                int target = Mathf.Clamp(Mathf.FloorToInt(e.mousePosition.y / ActionCellHeight), 0, actions.Count - 1);
-                if (target != dragActionIndex)
-                {
-                    var moved = actions[dragActionIndex];
-                    actions.RemoveAt(dragActionIndex);
-                    actions.Insert(target, moved);
-                    dragActionIndex = target;
-                    RefreshActionIndices(actions);
-                    Invalidate();
-                }
-            }
-            if (e.type == EventType.MouseUp && pendingActionFocus != null
-                && ReferenceEquals(pendingActionFocus.ActionSlot, slot) && dragActionIndex < 0 && row.Contains(e.mousePosition))
-            {
-                var nextFocus = pendingActionFocus;
-                pendingActionFocus = null;
-                if (isFocus) SetFocus(new AGFocus());
-                else SetFocus(nextFocus);
-                e.Use();
-            }
-        }
-        GUI.EndScrollView();
-    }
-
-    private void ShowTimingMenu(List<AGTimingGroup> groups)
+    /// <summary>畫布右上角的時機下拉：已建立的跳過去，還沒建立的直接在 createPos 建一顆。</summary>
+    private void ShowTimingMenu(Vector2 createPos)
     {
         var menu = new GenericMenu();
+        var groups = model.ReadGroups();
+
         foreach (Enum timing in Enum.GetValues(model.TimingType))
         {
             AGTimingGroup group = null;
             foreach (var candidate in groups)
                 if (Equals(candidate.Timing, timing)) { group = candidate; break; }
 
-            int actionCount = group?.Actions?.Count ?? 0;
-            int errors = 0;
-            if (group?.Actions != null)
-            {
-                for (int i = 0; i < group.Actions.Count; i++)
-                {
-                    var f = new AGFocus
-                    {
-                        Kind = AGFocusKind.Action, Timing = group.Timing,
-                        ActionList = group.Actions, ActionIndex = i, ActionSlot = group.Actions[i],
-                    };
-                    report.CountFor(f, out int e, out _);
-                    errors += e;
-                }
-            }
-            string countLabel = actionCount > 0 ? actionCount.ToString() : "+";
-            string label = errors > 0
-                ? $"{timing} ({countLabel})　{errors} 個錯誤"
-                : $"{timing} ({countLabel})";
             var captured = timing;
-            menu.AddItem(new GUIContent(label), Equals(currentTiming, timing), () =>
+            if (group == null)
             {
-                currentTiming = captured;
-                SaveCurrentTiming();
-                Repaint();
-            });
+                menu.AddItem(new GUIContent($"{timing}（尚未建立）"), false, () => AddTimingGroup(captured, createPos));
+                continue;
+            }
+
+            int actionCount = group.Actions?.Count ?? 0;
+            int errors = ErrorsOfGroup(group);
+            string label = errors > 0
+                ? $"{timing} ({actionCount})　{errors} 個錯誤"
+                : $"{timing} ({actionCount})";
+            menu.AddItem(new GUIContent(label), false, () => JumpToTiming(captured));
         }
         menu.ShowAsContext();
     }
 
-    private void AddEmptyAction(Enum timing)
+    private int ErrorsOfGroup(AGTimingGroup group)
     {
-        var slotType = model.ActionSlotType;
-        if (slotType == null || timing == null) return;
-        var slot = AGReflect.CreateInstance(slotType);
-        if (slot == null) return;
+        if (group?.Actions == null) return 0;
+        int errors = 0;
+        for (int i = 0; i < group.Actions.Count; i++)
+        {
+            var f = new AGFocus
+            {
+                Kind = AGFocusKind.Action, Timing = group.Timing,
+                ActionList = group.Actions, ActionIndex = i, ActionSlot = group.Actions[i],
+            };
+            report.CountFor(f, out int e, out _);
+            errors += e;
+        }
+        return errors;
+    }
+
+    /// <summary>時機節點的新增入口。已經存在的時機一律停用——一個時機只能有一顆節點。</summary>
+    private void AddTimingMenuItems(GenericMenu menu, string prefix, Vector2 createPos)
+    {
+        foreach (Enum timing in Enum.GetValues(model.TimingType))
+        {
+            var content = new GUIContent(prefix + timing);
+            if (model.HasGroup(timing)) { menu.AddDisabledItem(content); continue; }
+            var captured = timing;
+            menu.AddItem(content, false, () => AddTimingGroup(captured, createPos));
+        }
+    }
+
+    private void ShowAddTimingMenu(Vector2 createPos)
+    {
+        var menu = new GenericMenu();
+        AddTimingMenuItems(menu, "", createPos);
+        menu.ShowAsContext();
+    }
+
+    /// <summary>在指定位置建立一顆時機節點。空的時機節點是合法狀態，動作由它本體的清單「＋」新增。</summary>
+    private void AddTimingGroup(Enum timing, Vector2 pos)
+    {
+        if (timing == null) return;
+        if (model.HasGroup(timing))
+        {
+            ShowNotification(new GUIContent($"{timing} 已經有節點了"));
+            return;
+        }
 
         model.BreakUndoMerge();
         var group = model.AddGroup(timing);
-        if (group?.Actions == null) return;
-        group.Actions.Add(slot);
-
-        SetFocus(new AGFocus
+        if (group?.Group == null)
         {
-            Kind = AGFocusKind.Action, Timing = group.Timing,
-            ActionList = group.Actions, ActionIndex = group.Actions.Count - 1, ActionSlot = slot,
-        });
+            Debug.LogWarning($"[ActionGraph] 建立時機群組 '{timing}' 失敗，可能是 ActionGroups 型別不符。");
+            return;
+        }
+
+        // 建在使用者按下右鍵的位置，不要丟去自動排版的角落。
+        AGReflect.SetHeadPos(group.Group, SnapToGrid(pos));
+        if (focus.Kind != AGFocusKind.Timing) SetFocus(AllTimingsFocus());
+        selectedIds.Clear();
+        selectedIds.Add(AGGraph.GroupHeadId(group.Group));
         Invalidate();
         Repaint();
     }
 
-    private void ShowActionMenu(AGTimingGroup group, int index)
+    /// <summary>刪掉一顆時機節點＝刪掉那個群組與它底下的動作。</summary>
+    private void RemoveTimingGroup(AGNode node)
     {
-        var menu = new GenericMenu();
-        var slot = group.Actions[index];
+        if (node?.Obj == null) return;
 
-        menu.AddItem(new GUIContent("設定標籤"), false, () =>
-            AGPrompt.Show("動作標籤", "用來區分同名動作（例如：主傷害 / 濺射）", AGReflect.GetLabel(slot) ?? "", text =>
-            {
-                AGReflect.SetLabel(slot, text);
-                Invalidate();
-                Repaint();
-            }));
+        int count = (AGReflect.Get(node.Obj, "Actions") as IList)?.Count ?? 0;
+        if (count > 0 && !EditorUtility.DisplayDialog("刪除時機",
+                $"'{node.Title}' 底下還有 {count} 個動作，會一起刪掉。確定嗎？", "刪除", "取消"))
+            return;
 
-        menu.AddItem(new GUIContent(AGReflect.GetDisabled(slot) ? "啟用" : "停用"), false, () =>
+        model.BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        foreach (var g in model.ReadGroups())
         {
-            AGReflect.SetDisabled(slot, !AGReflect.GetDisabled(slot));
-            Invalidate();
-            Repaint();
-        });
-
-        menu.AddItem(new GUIContent("刪除"), false, () =>
-        {
-            RemoveAction(new AGFocus
-            {
-                Kind = AGFocusKind.Action, Timing = group.Timing,
-                ActionList = group.Actions, ActionIndex = index, ActionSlot = slot,
-            });
-        });
-        menu.ShowAsContext();
-    }
-
-    private void RemoveAction(AGFocus action)
-    {
-        if (action?.ActionList == null || action.ActionSlot == null) return;
-        int index = IndexOfReference(action.ActionList, action.ActionSlot);
-        if (index < 0) return;
-        if (!EditorUtility.DisplayDialog("刪除動作", "確定刪除這個動作？", "刪除", "取消")) return;
-        action.ActionList.RemoveAt(index);
-        foreach (var group in model.ReadGroups())
-        {
-            if (!ReferenceEquals(group.Actions, action.ActionList)) continue;
-            if (group.Actions.Count == 0) model.RemoveGroup(group);
+            if (!ReferenceEquals(g.Group, node.Obj)) continue;
+            model.RemoveGroup(g);
             break;
         }
-        SetFocus(new AGFocus());
+        selectedIds.Remove(node.Id);
         Invalidate();
-        DoVerify(true);
         Repaint();
     }
 
-    private void RefreshActionIndices(IList actions)
+    /// <summary>跳到某顆時機節點。同一張畫布，所以只是把視野移過去，不換焦點。</summary>
+    private void JumpToTiming(Enum timing)
     {
-        if (focus.Kind == AGFocusKind.Action && ReferenceEquals(focus.ActionList, actions))
-            focus.ActionIndex = IndexOfReference(actions, focus.ActionSlot);
-        if (pendingActionFocus != null && ReferenceEquals(pendingActionFocus.ActionList, actions))
-            pendingActionFocus.ActionIndex = IndexOfReference(actions, pendingActionFocus.ActionSlot);
-    }
-
-    private static int IndexOfReference(IList list, object item)
-    {
-        if (list == null || item == null) return -1;
-        for (int i = 0; i < list.Count; i++)
-            if (ReferenceEquals(list[i], item)) return i;
-        return -1;
+        if (focus.Kind != AGFocusKind.Timing) SetFocus(AllTimingsFocus());
+        foreach (var g in model.ReadGroups())
+        {
+            if (!Equals(g.Timing, timing)) continue;
+            pendingCenterTarget = g.Group;
+            graphDirty = true;
+            break;
+        }
+        Repaint();
     }
 
     // ===== 右欄（資產焦點）：引用清單 =====
@@ -679,9 +498,9 @@ public partial class ActionGraphWindow
                 var system = field?.GetValue(so);
                 if (system == null) continue;
 
-                foreach (var slot in AGModel.SlotsOfSystem(system))
+                foreach (var referenced in AGModel.ReferencedAssetsOfSystem(system))
                 {
-                    if (AGReflect.GetAsset(slot) != asset) continue;
+                    if (referenced != asset) continue;
                     found.Add(so);
                     break;
                 }
@@ -800,7 +619,13 @@ public partial class ActionGraphWindow
 
     private void JumpTo(AGIssue issue)
     {
-        if (issue.Focus != null && !issue.Focus.SameAs(focus)) SetFocus(issue.Focus);
+        // 動作的問題全部落在同一張時機畫布上，所以只要確定人在那張畫布，不必也不該切成單一動作焦點。
+        if (issue.Focus == null) { }
+        else if (issue.Focus.Kind == AGFocusKind.Action)
+        {
+            if (focus.Kind != AGFocusKind.Timing) SetFocus(AllTimingsFocus());
+        }
+        else if (!issue.Focus.SameAs(focus)) SetFocus(issue.Focus);
         pendingCenterTarget = issue.Slot ?? issue.Node;
         graphDirty = true;
         Repaint();

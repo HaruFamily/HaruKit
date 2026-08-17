@@ -1,8 +1,10 @@
 namespace PinPlugin.ActionSystem.Editor.Tests
 {
+using Cysharp.Threading.Tasks;
 using NUnit.Framework;
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using UnityEngine;
 
 public class ActionSystemDeepCopyTests
@@ -83,6 +85,82 @@ public class ActionSystemDeepCopyTests
         UnityEngine.Object.DestroyImmediate(asset);
     }
 
+    [Test]
+    public void Copy_ClonesAssetBindingsAndTheirGraphs()
+    {
+        var asset = ScriptableObject.CreateInstance<TestFormulaAsset>();
+        var source = new GraphNode();
+        source.SetAsset(asset);
+        var child = new GraphNode(new TestFormula());
+        var slot = new TestSlot(3);
+        slot.SetNode(child);
+        source.Bindings.Add(new NamedFormulaSlot("amount", slot) { OverrideEnabled = true });
+
+        var copy = ActionSystemDeepCopy.Copy(source);
+
+        Assert.That(copy, Is.Not.Null);
+        Assert.That(copy.AssetObject, Is.SameAs(asset));
+        Assert.That(copy.Bindings, Has.Count.EqualTo(1));
+        Assert.That(copy.Bindings[0], Is.Not.SameAs(source.Bindings[0]));
+        Assert.That(copy.Bindings[0].Slot, Is.Not.SameAs(slot));
+        Assert.That(copy.Bindings[0].Slot.Node, Is.Not.SameAs(child));
+        Assert.That(copy.Bindings[0].OverrideEnabled, Is.True);
+
+        UnityEngine.Object.DestroyImmediate(asset);
+    }
+
+    [Test]
+    public async Task TokenTable_Resolve_ReevaluatesEveryTime()
+    {
+        var formula = new CountingFormula();
+        var node = new GraphNode(formula);
+        node.SetTokenName("value");
+        var table = new TokenTable<TestPack>();
+        table.Register("value", node);
+
+        int first = await table.Resolve<int>("value", default).AsTask();
+        int second = await table.Resolve<int>("value", default).AsTask();
+
+        Assert.That(first, Is.EqualTo(1));
+        Assert.That(second, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task AssetBinding_UsesExplicitOverrideAndIsolatesCallerTable()
+    {
+        var asset = ScriptableObject.CreateInstance<TestFormulaAsset>();
+        var internalNode = new GraphNode(new TestFormula());
+        internalNode.SetTokenName("amount");
+        var target = new PassFormula();
+        target.Value.SetNode(internalNode);
+        asset.SetTarget(target);
+
+        var assetCarrier = new GraphNode();
+        assetCarrier.SetAsset(asset);
+        var bindingSlot = new TestSlot(7);
+        var binding = new NamedFormulaSlot("amount", bindingSlot);
+        assetCarrier.Bindings.Add(binding);
+        var call = new TestSlot();
+        call.SetNode(assetCarrier);
+        var caller = new TokenTable<TestPack>();
+
+        int internalValue = await call.Evaluate(default, caller).AsTask();
+        binding.OverrideEnabled = true;
+        int overrideValue = await call.Evaluate(default, caller).AsTask();
+
+        Assert.That(internalValue, Is.EqualTo(1));
+        Assert.That(overrideValue, Is.EqualTo(7));
+
+        asset.SetTarget(new ResolveFormula());
+        var ownerNode = new GraphNode(new TestFormula());
+        ownerNode.SetTokenName("owner");
+        caller.Register("owner", ownerNode);
+        int leakedValue = await call.Evaluate(default, caller).AsTask();
+        Assert.That(leakedValue, Is.EqualTo(0), "資產內容不可直接解析 caller token");
+
+        UnityEngine.Object.DestroyImmediate(asset);
+    }
+
     [Serializable]
     private sealed class CarrierHolder
     {
@@ -112,5 +190,48 @@ public class ActionSystemDeepCopyTests
     }
 
     private sealed class CloneAsset : ScriptableObject { }
+
+    private struct TestPack { }
+
+    [Serializable]
+    private sealed class TestFormula : FormulaBase<int, TestPack>
+    {
+        protected override UniTask<int> OnEvaluate(TestPack pack, TokenTable<TestPack> tokens)
+            => UniTask.FromResult(1);
+    }
+
+    private sealed class TestFormulaAsset : FormulaAsset<int, TestPack> { }
+
+    [Serializable]
+    private sealed class CountingFormula : FormulaBase<int, TestPack>
+    {
+        public int Calls;
+
+        protected override UniTask<int> OnEvaluate(TestPack pack, TokenTable<TestPack> tokens)
+            => UniTask.FromResult(++Calls);
+    }
+
+    [Serializable]
+    private sealed class PassFormula : FormulaBase<int, TestPack>
+    {
+        public TestSlot Value = new();
+
+        protected override async UniTask<int> OnEvaluate(TestPack pack, TokenTable<TestPack> tokens)
+            => await Value.Evaluate(pack, tokens);
+    }
+
+    [Serializable]
+    private sealed class ResolveFormula : FormulaBase<int, TestPack>
+    {
+        protected override async UniTask<int> OnEvaluate(TestPack pack, TokenTable<TestPack> tokens)
+            => await tokens.Resolve<int>("owner", pack);
+    }
+
+    [Serializable]
+    private sealed class TestSlot : FormulaSlot<int, TestFormulaAsset, TestFormula, TestPack>
+    {
+        public TestSlot() { }
+        public TestSlot(int value) : base(value) { }
+    }
 }
 }

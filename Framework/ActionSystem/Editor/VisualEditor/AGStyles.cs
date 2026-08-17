@@ -8,7 +8,7 @@ using UnityEngine;
 public static class AGStyles
 {
     // 配色原則：**灰是結構，色只留給語意**。畫布、面板、節點本體、線全部無彩，
-    // 只有「節點身分」（四種 Header）與「狀態」（選取、錯誤、警告）帶色相，色彩因此永遠等於資訊。
+    // 只有「節點身分」（五種 Header）與「狀態」（選取、錯誤、警告）帶色相，色彩因此永遠等於資訊。
     public static readonly Color Canvas = new(0.145f, 0.145f, 0.145f);
     public static readonly Color Grid = new(0.19f, 0.19f, 0.19f);
     public static readonly Color GridBold = new(0.24f, 0.24f, 0.24f);
@@ -24,15 +24,27 @@ public static class AGStyles
 
     /// <summary>HEAD 專用外框：純白灰，靠明度而不是色相和選取分開。</summary>
     public static readonly Color HeadBorder = new(0.93f, 0.93f, 0.93f);
+
+    /// <summary>
+    /// HEAD 專用 Header 底色。深紫紅代表流程入口，和 Action 的洋紅以明度與色相分開：前者是從哪裡開始，後者是做什麼。
+    /// 保留白外框與光暈，在任何縮放下都認得出起點。
+    /// </summary>
+    public static readonly Color HeaderHead = new(0.447f, 0.227f, 0.408f);       // 深紫紅 #723A68
+
+    /// <summary>停用節點蓋在最上層的暗紗：停用是狀態不是身分，所以壓明度、不換色相。</summary>
+    public static readonly Color DisabledVeil = new(0.08f, 0.08f, 0.08f, 0.55f);
+
+    /// <summary>接到停用節點的連線：同樣只壓明度，維持「灰是結構」的規則。</summary>
+    public static readonly Color LinkDisabled = new(1f, 1f, 1f, 0.22f);
     public static readonly Color NodeNote = new(0.26f, 0.26f, 0.26f);
     public static readonly Color NodeNoteBorder = new(0.62f, 0.62f, 0.62f);
 
-    // Header 是唯一帶色相的節點元素。四個身分刻意分佈在色環的四個象限，
-    // 而且明度各自不同（琥珀最亮、綠最暗）——只靠色相會在縮小或色弱時糊成一團。
-    public static readonly Color HeaderAction = new(0.70f, 0.29f, 0.45f);    // 洋紅
-    public static readonly Color HeaderFormula = new(0.75f, 0.52f, 0.20f);   // 琥珀
-    public static readonly Color HeaderAsset = new(0.27f, 0.45f, 0.77f);     // 靛藍
-    public static readonly Color HeaderToken = new(0.16f, 0.42f, 0.31f);     // 青綠
+    // Header 是唯一帶色相的節點元素。暖色是會執行或求值的動態邏輯，冷色是可重用的靜態引用。
+    // 五種身分分開色相與明度，縮小或色弱時仍可辨識。
+    public static readonly Color HeaderAction = new(0.722f, 0.231f, 0.451f);  // 洋紅 #B83B73
+    public static readonly Color HeaderFormula = new(0.750f, 0.520f, 0.200f); // 琥珀 #BF8533
+    public static readonly Color HeaderAsset = new(0.270f, 0.450f, 0.770f);   // 靛藍 #4573C4
+    public static readonly Color HeaderToken = new(0.160f, 0.420f, 0.310f);   // 深綠 #296B4F
 
     /// <summary>Header 是深色，上面的字與小圖示一律近白。</summary>
     public static readonly Color HeaderInk = new(0.97f, 0.93f, 0.95f);
@@ -44,7 +56,6 @@ public static class AGStyles
     public static readonly Color Link = new(0.80f, 0.80f, 0.82f);
     public static readonly Color PortEmpty = new(0.42f, 0.42f, 0.43f);
     public static readonly Color PortLive = new(0.80f, 0.80f, 0.82f);
-    public static readonly Color PortToken = new(0.66f, 0.60f, 0.74f);
 
     public static readonly Color Muted = new(0.74f, 0.74f, 0.75f);
     public static readonly Color RowAlt = new(1f, 1f, 1f, 0.04f);

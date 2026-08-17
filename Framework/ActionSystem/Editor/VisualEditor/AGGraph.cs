@@ -30,6 +30,7 @@ public class AGRow
     public object Slot;              // Kind == Slot
     public Type ResultType;          // Slot 的結果型別；ActionSlot 為 null
     public bool IsActionSlot;
+    public NamedFormulaSlot AssetBinding;
 
     public object Target;            // Kind == Value：欄位所屬物件
     public FieldInfo Field;
@@ -44,6 +45,9 @@ public class AGRow
 
     /// <summary>欄位在節點內的唯一路徑（`/action/steps[2]/value`），折疊狀態靠它記憶。</summary>
     public string Path;
+
+    /// <summary>這一列屬於哪個節點。折疊與分支收合的 key 都是「節點 Id + Path」，繪製時不必再回頭找主人。</summary>
+    public string OwnerNodeId;
 
     /// <summary>清單元素本身：只有它畫序號欄與刪除鈕。</summary>
     public bool IsListElement;
@@ -81,15 +85,25 @@ public class AGNode
     public object Obj;                    // ActionSystemNode（公式 / 動作）；資產、變數、空節點為 null
     public UnityEngine.Object Asset;      // 資產節點目前指到的資產（可為 null＝尚未指定）
     public bool IsAssetNode;              // 資產節點（不論有沒有指定資產）
-    public string TokenKey;               // 變數節點
+    /// <summary>載體上的標註名稱（沒標註為 null）。它是「這顆節點是這張圖的對外端點」，不是一種內容。</summary>
+    public string TokenName;
     public Type ResultType;               // 資產／變數節點的結果型別
     public string Id;
     public string Title;                  // Header 主文字＝具體型別／變數／資產名稱，節點靠它辨識
     public string Chip;                   // Header 右側的結果型別標籤（契約），null 就不畫
     public string Desc;
     public bool IsRoot;
+    /// <summary>這顆是時機群組節點（Header＝時機名、本體＝該時機的動作清單）。刪除與右鍵選單都要認它。</summary>
+    public bool IsTimingGroup;
     public bool IsPlaceholder;            // Slot 尚未指定具體 Action／Formula
     public bool IsActionNode;
+    /// <summary>自己或某個祖先被停用：整段不會求值，畫布上要一起壓暗。多路徑共用時只要有一條啟用就是 false。</summary>
+    public bool InDisabledSubtree;
+    /// <summary>
+    /// 被 Slot 的分支收合收起來：不畫、不命中、不能當拉線目標。純視覺，資料一點都沒變。
+    /// 圖照樣建到底——引用數要走完整張圖才算得準，收起來只是最後一步的標記。
+    /// </summary>
+    public bool Hidden;
     public string Tips;
     /// <summary>註解框被打開但還沒有內容：只有這顆節點被選取時才成立，取消選取就收起來。</summary>
     public bool NoteOpen;
@@ -98,14 +112,16 @@ public class AGNode
     public AGRow ParentRow;
 
     public List<AGRow> Rows = new();
-    public Rect TitleRect;                // Header 名稱區（graph space）：整塊就是換來源的按鈕，繪製時寫入
+    public Rect TitleRect;                // Header 名稱區（graph space）：拖曳抓取區，繪製時寫入
+    /// <summary>Header 右端的 ▾（graph space）：換來源的唯一入口。整塊名稱區可按會跟拖曳打架。</summary>
+    public Rect SourceMenuRect;
     public Vector2 Pos;
     public float Width = AGGraph.NodeWidth;
     public float Height = 60f;
     public float ContentHeight;
     public float TipsHeight;
-    // 換來源的入口是 Header 的名稱區；Root HEAD 的來源走它自己的「來源」參數列接點，所以不畫。
-    public bool HasSourceSelector => !IsRoot && (IsPlaceholder || Obj != null || TokenKey != null || IsAssetNode);
+    // 換來源的入口是 Header 右端的 ▾；Root HEAD 的來源走它自己的「來源」參數列接點，所以不畫。
+    public bool HasSourceSelector => !IsRoot && (IsPlaceholder || Obj != null || IsAssetNode);
 
     public Rect Rect => new Rect(Pos.x, Pos.y, Width, Height);
     public Vector2 OutputPort => new Vector2(Pos.x + AGGraph.PortRadius, Pos.y + AGGraph.HeaderHeight * 0.5f);
@@ -120,6 +136,12 @@ public class AGGraphView
 
     // 同一個載體被多個欄位指到＝共用來源：只畫一個節點，連線各自一條。GraphNode 沒有覆寫 Equals，預設就是參考比對。
     public Dictionary<GraphNode, AGNode> ByCarrier = new();
+
+    /// <summary>
+    /// 這張圖裡有幾個欄位指著同一個載體。給「隱藏子樹時要不要留下共用節點」用——隱藏是視覺操作，
+    /// 只算畫得出來的引用。要問「停用會影響幾個欄位」是全域問題，那走 ActionGraphWindow.CarrierUsers。
+    /// </summary>
+    public Dictionary<GraphNode, int> CarrierUsers = new();
 
     public AGNode FindByObject(object obj)
     {
@@ -166,21 +188,30 @@ public static class AGGraph
     };
 
     /// <summary>
-    /// 建圖。rootSlot 畫成固定 HEAD；orphans 是本焦點的候選節點（含拖進畫布的獨立 Token／資產節點）。
+    /// 建圖。每個 root 畫成一顆固定 HEAD；orphans 是本焦點的候選節點（含拖進畫布的獨立 Token／資產節點）。
     /// headTitle 是編輯對象自己的名稱（動作標籤／變數名／資產名），直接當 HEAD 的 Header。
+    ///
+    /// root 有兩種：多數焦點給的是**一個** Slot 頭端；Timing 焦點給的是**全部** ActionTimingGroup 物件，
+    /// 每個畫成一顆節點，本體就是那個時機的動作清單。同一張畫布才拉得到跨時機的共用來源。
     /// </summary>
-    public static AGGraphView Build(AGModel model, object rootSlot, IList orphans, string focusId, string headTitle,
-        IReadOnlyDictionary<string, bool> listCollapse = null, string noteOpenId = null,
-        ICollection<string> noteCollapsed = null)
+    public static AGGraphView Build(AGModel model, IReadOnlyList<object> roots, IList orphans, string focusId,
+        string headTitle, IReadOnlyDictionary<string, bool> listCollapse = null,
+        string noteOpenId = null, ICollection<string> noteCollapsed = null)
     {
         var view = new AGGraphView();
-        if (rootSlot == null) return view;
 
         // 每次重建都重新登記 id → 載體，座標與備註的讀寫才找得到人。
         model.ClearCarriers();
 
-        var root = MakeHeadNode(model, rootSlot, focusId, headTitle);
-        Collect(model, root, view, 0, listCollapse);
+        // 一顆 HEAD 都沒有仍要往下走：時機畫布可能還沒建任何時機節點，但候選節點得畫得出來。
+        foreach (var root in roots ?? Array.Empty<object>())
+        {
+            if (root == null) continue;
+            var rootNode = AGReflect.IsSlotType(root.GetType())
+                ? MakeHeadNode(model, root, focusId, headTitle)
+                : MakeGroupNode(model, root);
+            Collect(model, rootNode, view, 0, listCollapse, false);
+        }
 
         if (orphans != null)
         {
@@ -190,7 +221,7 @@ public static class AGGraph
                 if (view.ByCarrier.ContainsKey(carrier)) continue;
                 // 候選不需要額外標記：沒有連入線本身就是訊號。
                 var node = MakeNodeForCarrier(model, carrier, null, null);
-                Collect(model, node, view, 0, listCollapse);
+                Collect(model, node, view, 0, listCollapse, false);
             }
         }
 
@@ -200,6 +231,36 @@ public static class AGGraph
     }
 
     // ===== 節點建立 =====
+
+    /// <summary>
+    /// 把一個 `ActionTimingGroup` 畫成 HEAD：Header 是時機名，本體就是那個時機的動作清單，
+    /// 所以每個動作直接是清單的一列——序號、拖曳把手、刪除鈕、折疊、斑馬紋全部沿用清單那一套，
+    /// 不需要為動作另做一組互動。一張畫布上有幾個時機就有幾顆。
+    /// </summary>
+    private static AGNode MakeGroupNode(AGModel model, object group)
+    {
+        var node = MakeNodeForObject(group, null, null, null);
+        node.Id = GroupHeadId(group);
+        node.IsRoot = true;
+        node.IsTimingGroup = true;
+        // ActionTimingGroup 不是 ActionBase，但它的本體是 ActionSlot 清單，Header 應導向 Action 流程色。
+        node.IsActionNode = true;
+        node.Title = GroupTitle(group);
+        node.Chip = "時機";      // 群組不回傳值，chip 改寫身分：一眼分得出時機節點與動作節點
+        node.Desc = null;
+
+        // 時機值不可就地改：改下去會跟別的群組撞同一個時機。要換時機就刪掉這顆、重新建一顆。
+        node.Rows.RemoveAll(r => r.Field != null && r.Field.Name == "Timing");
+
+        model.RegisterCarrier(node.Id, group);
+        return node;
+    }
+
+    /// <summary>時機群組節點的識別碼。時機值本身就是身分，enum 不可重複，所以不必再配流水號。</summary>
+    public static string GroupHeadId(object group) => "head:tim:" + GroupTitle(group);
+
+    public static string GroupTitle(object group)
+        => (AGReflect.Get(group, "Timing") as Enum)?.ToString() ?? "（未指定時機）";
 
     private static AGNode MakeHeadNode(AGModel model, object rootSlot, string focusId, string headTitle)
     {
@@ -223,7 +284,7 @@ public static class AGGraph
 
     public static string HeadId(string focusId) => "head:" + (focusId ?? "?");
 
-    /// <summary>一個載體＝一個節點。內容種類決定畫成公式／動作、資產葉、變數葉或編輯中的空節點。</summary>
+    /// <summary>一個載體＝一個節點。內容種類決定畫成公式／動作、資產葉或編輯中的空節點。</summary>
     private static AGNode MakeNodeForCarrier(AGModel model, GraphNode carrier, object parentSlot, AGRow parentRow)
     {
         string id = carrier.EnsureId();
@@ -250,20 +311,14 @@ public static class AGGraph
                     Title = "Asset",
                     Chip = ChipText(assetResult, assetResult == null),
                 };
-                break;
-            }
-
-            case NodeKind.Token:
-            {
-                string key = carrier.TokenKey ?? "";
-                Type tokenResult = slotResultType ?? DeclaredTokenType(model, key);
-                node = new AGNode
+                foreach (var binding in carrier.Bindings)
                 {
-                    TokenKey = key,
-                    ResultType = tokenResult,
-                    Title = "Token",
-                    Chip = ChipText(tokenResult, false),
-                };
+                    if (binding?.Slot == null) continue;
+                    var row = SlotRow(binding.Slot, binding.Name, 0);
+                    row.AssetBinding = binding;
+                    row.Path = "/binding/" + binding.Name;
+                    node.Rows.Add(row);
+                }
                 break;
             }
 
@@ -286,20 +341,10 @@ public static class AGGraph
         node.Id = id;
         node.ParentSlot = parentSlot;
         node.ParentRow = parentRow;
+        // 標註是載體上的一個名字，跟內容種類無關：公式、資產、甚至編輯中的空節點都可能有。
+        node.TokenName = carrier.TokenName;
         model.RegisterCarrier(id, carrier);
         return node;
-    }
-
-    /// <summary>
-    /// 候選池裡的變數節點沒有父欄位可以推型別，改查變數宣告本身。
-    /// 型別不只影響 chip：拉線相容性（`CanConnectLink`）與「編輯這個變數」都比對 `AGNode.ResultType`。
-    /// </summary>
-    private static Type DeclaredTokenType(AGModel model, string key)
-    {
-        if (model == null || string.IsNullOrEmpty(key)) return null;
-        foreach (var token in model.ReadTokens())
-            if (token.Key == key) return token.ResultType;
-        return null;
     }
 
     /// <summary>Header 右側的契約標籤：公式看結果型別，動作沒有結果型別就標 Action。</summary>
@@ -332,13 +377,17 @@ public static class AGGraph
 
     /// <summary>把節點與其子樹加入視圖。已經畫過的載體只補一條連線，不重複建節點。</summary>
     private static void Collect(AGModel model, AGNode node, AGGraphView view, int depth,
-        IReadOnlyDictionary<string, bool> listCollapse)
+        IReadOnlyDictionary<string, bool> listCollapse, bool disabled)
     {
         if (depth > 24) return;                       // 資料異常時不讓編輯器堆疊爆掉
+        node.InDisabledSubtree = disabled || (node.Carrier != null && node.Carrier.Disabled);
         view.Nodes.Add(node);
         if (node.Carrier != null) view.ByCarrier[node.Carrier] = node;
         if (node.ParentSlot != null) view.BySlot[node.ParentSlot] = node;
         if (node.ParentRow != null) view.Links.Add(new AGLink { ParentRow = node.ParentRow, Target = node });
+        // 節點 Id 到這裡才確定，所以列的歸屬也在這裡補；折疊與分支收合都靠它組 key。
+        foreach (var row in AllRows(node.Rows)) row.OwnerNodeId = node.Id;
+
         // 折疊狀態要在量測之前套用：節點高度直接受它影響。節點 Id 到這裡才確定，所以不能在 BuildRows 做。
         ApplyListCollapse(node, listCollapse);
         MeasureNode(node);
@@ -349,18 +398,41 @@ public static class AGGraph
 
             var carrier = AGReflect.GetNode(row.Slot);
             if (carrier == null) continue;            // 常數／空槽留在列上，不長節點
-            if (row.IsActionSlot && carrier.Kind == NodeKind.Token) continue;   // 動作欄位不接變數
+
+            view.CarrierUsers.TryGetValue(carrier, out int users);
+            view.CarrierUsers[carrier] = users + 1;
 
             // 共用來源：同一個載體被多個欄位指到時只有一個節點，這裡只補連線。
             if (view.ByCarrier.TryGetValue(carrier, out var existing))
             {
                 view.Links.Add(new AGLink { ParentRow = row, Target = existing });
                 view.BySlot[row.Slot] = existing;
+                // 這條路徑沒被停用就整顆恢復：共用節點只要還有一條會求值的路徑，它就不是停用的。
+                bool rowDisabled = row.AssetBinding != null && !row.AssetBinding.OverrideEnabled;
+                if (!node.InDisabledSubtree && !rowDisabled) ClearDisabledSubtree(existing, view);
                 continue;
             }
 
             var child = MakeNodeForCarrier(model, carrier, row.Slot, row);
-            Collect(model, child, view, depth + 1, listCollapse);
+            bool childDisabled = node.InDisabledSubtree || (row.AssetBinding != null && !row.AssetBinding.OverrideEnabled);
+            Collect(model, child, view, depth + 1, listCollapse, childDisabled);
+        }
+    }
+
+    /// <summary>
+    /// 共用節點先被停用路徑走到、之後又被啟用路徑指上時，把整棵子樹的壓暗狀態撤回。
+    /// 自己被明確停用的節點不撤——那不是繼承來的。已經是 false 就直接回，順便擋住環。
+    /// </summary>
+    private static void ClearDisabledSubtree(AGNode node, AGGraphView view)
+    {
+        if (node == null || !node.InDisabledSubtree) return;
+        if (node.Carrier != null && node.Carrier.Disabled) return;
+        node.InDisabledSubtree = false;
+
+        foreach (var row in AllRows(node.Rows))
+        {
+            if (row.Slot == null) continue;
+            if (view.BySlot.TryGetValue(row.Slot, out var child)) ClearDisabledSubtree(child, view);
         }
     }
 
@@ -553,8 +625,16 @@ public static class AGGraph
     /// <summary>清單裡的 Slot 顯示它目前接了什麼，企劃不用逐一點開。</summary>
     private static string SlotShortName(object slot)
     {
-        int useType = AGReflect.UseType(slot);
         bool isAction = AGReflect.IsActionSlotType(slot.GetType());
+
+        // 動作欄位的自訂標籤優先：它存在的目的就是區分同型別的動作（「主傷害」「濺射」）。
+        if (isAction)
+        {
+            string label = AGReflect.GetLabel(slot);
+            if (!string.IsNullOrEmpty(label)) return label;
+        }
+
+        int useType = AGReflect.UseType(slot);
         switch (useType)
         {
             case 1:
@@ -563,9 +643,6 @@ public static class AGGraph
             case 2:
                 var a = AGReflect.GetAsset(slot);
                 return a != null ? a.name : "（空資產）";
-            case 3:
-                var k = AGReflect.GetTokenKey(slot);
-                return string.IsNullOrEmpty(k) ? "（空變數）" : "@" + k;
             default:
                 return isAction ? "（未啟用）" : "常數";
         }
@@ -607,18 +684,16 @@ public static class AGGraph
             : Mathf.Clamp(EditorStyles.textArea.CalcHeight(new GUIContent(node.Tips ?? ""), node.Width - 16f),
                 EditorGUIUtility.singleLineHeight, 160f);
 
-        // 葉節點：Header 決定身分，本體有一列「選哪一個變數／資產」的下拉。
         // 空節點還沒決定身分，沒有東西可選，維持單行。
-        if (node.IsAssetNode || node.TokenKey != null || node.IsPlaceholder)
+        if (node.IsPlaceholder)
         {
             float leafY = HeaderHeight;
-            if (!node.IsPlaceholder) leafY += RowHeight;
             if (node.TipsHeight > 0f) leafY += node.TipsHeight + 12f;
             node.ContentHeight = leafY;
             node.Height = leafY + NodeBottomPad;
             return;
         }
-        float y = MeasureRows(node.Rows, HeaderHeight);
+        float y = MeasureRows(node.Rows, HeaderHeight + (node.IsAssetNode ? RowHeight : 0f));
         if (node.TipsHeight > 0f) y += node.TipsHeight + 10f;
         node.ContentHeight = Mathf.Max(y, HeaderHeight + 8f);
         node.Height = node.ContentHeight + NodeBottomPad;
@@ -710,11 +785,15 @@ public static class AGGraph
             else roots.Add(n);
         }
 
+        // HEAD 先排、候選後排：候選節點不該插進 HEAD 前面。
+        // 刻意不用 List.Sort——它不穩定，會把候選之間的相對順序打亂。
+        var heads = new List<AGNode>();
+        var loose = new List<AGNode>();
+        foreach (var r in roots) (r.IsRoot ? heads : loose).Add(r);
+
         float cursorY = 40f;
-        foreach (var r in roots)
-        {
-            cursorY = Place(r, 40f, cursorY, children) + NodeGap * 2f;
-        }
+        foreach (var r in heads) cursorY = Place(r, 40f, cursorY, children) + NodeGap * 2f;
+        foreach (var r in loose) cursorY = Place(r, 40f, cursorY, children) + NodeGap * 2f;
 
         foreach (var n in view.Nodes)
         {

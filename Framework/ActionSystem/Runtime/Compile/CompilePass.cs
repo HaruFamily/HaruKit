@@ -3,8 +3,8 @@ namespace PinPlugin.ActionSystem
 using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
 
-// Description 編譯引擎的「一段處理」契約。具體 token 語法（Block / Detail / Times / Simple）住在
-// Project 端，透過 TokenEntryPack<TPack>.CompilePasses 供給；Core 引擎只負責依序跑、不認得任何語法。
+// Description 編譯引擎的「一段處理」契約。具體語法由 Compile 呼叫端提供；
+// Core 引擎只負責依序執行，不認得任何專案語法。
 public interface ICompilePass<TPack>
 {
     UniTask Run(CompileContext<TPack> ctx);
@@ -16,7 +16,7 @@ public sealed class CompileContext<TPack>
 {
     public string Text;
     public TPack Pack;
-    public TokenCache<TPack> Tokens;
+    public TokenTable<TPack> Tokens;
     public readonly List<object> Artifacts = new();
 }
 
