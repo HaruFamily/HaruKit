@@ -102,6 +102,13 @@ public static class AGReflect
         return args != null && args.Length == 4 ? args[2] : null;
     }
 
+    /// <summary>FormulaSlot 的 TPack；不是 FormulaSlot 回 null。列舉公式族時用它排除別的 pack。</summary>
+    public static Type FormulaSlotPack(Type slotType)
+    {
+        var args = FormulaSlotArgs(slotType);
+        return args != null && args.Length == 4 ? args[3] : null;
+    }
+
     /// <summary>Slot 可接的 Formula Asset 型別（例如 IntAsset）。</summary>
     public static Type AssetType(Type slotType)
     {
@@ -172,7 +179,8 @@ public static class AGReflect
         return node;
     }
 
-    /// <summary>相容既有呼叫端的模式碼：0 常數／空槽、1 公式或動作（含編輯中空節點）、2 資產、3 變數。</summary>
+    /// <summary>相容既有呼叫端的模式碼：0 常數／空槽、1 公式或動作（含編輯中空節點）、2 資產。</summary>
+    // 3（變數引用）已隨 Token 標註化移除：圖內引用一律是連線，沒有「以名稱引用」的節點。
     public static int UseType(object slot)
     {
         var node = GetNode(slot);
@@ -180,7 +188,6 @@ public static class AGReflect
         return node.Kind switch
         {
             NodeKind.Asset => 2,
-            NodeKind.Token => 3,
             _ => 1,   // Inline 與 Empty 都畫成來源節點，Empty 由驗證擋存檔
         };
     }
@@ -211,9 +218,8 @@ public static class AGReflect
     public static void SetAsset(object slot, UnityEngine.Object asset)
         => EnsureNode(slot).SetAsset(asset as UnityEngine.ScriptableObject);
 
-    public static string GetTokenKey(object slot) => GetNode(slot)?.TokenKey;
-
-    public static void SetTokenKey(object slot, string key) => EnsureNode(slot).SetToken(key);
+    /// <summary>這個欄位接的載體上掛的標註名稱（沒接或沒標註回 null）。</summary>
+    public static string GetTokenName(object slot) => GetNode(slot)?.TokenName;
 
     /// <summary>斷開來源：公式欄位回常數、動作欄位回空槽。</summary>
     public static void ClearNode(object slot) => SetNode(slot, null);
@@ -240,9 +246,12 @@ public static class AGReflect
         if (slot is FormulaSlotBase fsb) fsb.DefaultObject = value;
     }
 
+    /// <summary>
+    /// 動作欄位自己的停用旗標（`ActionSlot._disabled`）。舊資產仍可能有這個值，執行期照樣擋，
+    /// 但編輯器不再提供入口——要關掉一段行為改成停用它接的節點（`GraphNode.Disabled`），
+    /// 那是共用單位，語意也更一致。因此這裡只有 Get。
+    /// </summary>
     public static bool GetDisabled(object actionSlot) => GetMember(actionSlot, "Disabled") as bool? ?? false;
-
-    public static void SetDisabled(object actionSlot, bool value) => SetMember(actionSlot, "Disabled", value);
 
     public static string GetLabel(object actionSlot) => GetMember(actionSlot, "Label") as string;
 
@@ -261,7 +270,7 @@ public static class AGReflect
     /// <summary>複製頭端後換新識別碼，否則兩個頭端共用同一筆座標與焦點。</summary>
     public static void ResetSlotEditorId(object slot) => CallMethod(slot, "ResetId");
 
-    /// <summary>頭端座標。動作頭端與 Token 頭端都有。</summary>
+    /// <summary>頭端座標。動作頭端與時機群組都有。</summary>
     public static bool GetHeadPos(object head, out UnityEngine.Vector2 pos)
     {
         pos = default;
@@ -275,7 +284,7 @@ public static class AGReflect
 
     public static void ClearHeadPos(object head) => CallMethod(head, "ClearPos");
 
-    /// <summary>頭端自己的候選節點池（動作頭端、Token 頭端、資產各自一份）。</summary>
+    /// <summary>畫布主人的候選節點池（ActionSystem、資產各一份；動作頭端上的那份只為讀回舊資料）。</summary>
     public static List<GraphNode> Orphans(object head) => GetMember(head, "Orphans") as List<GraphNode>;
 
     // 泛型成員只能靠名稱呼叫：ActionSlot<TPack> 的 TPack 在 Editor 端是未知的。
@@ -419,8 +428,13 @@ public static class AGReflect
         return f.GetCustomAttribute<ASDescriptionAttribute>(false)?.Text ?? "";
     }
 
+    /// <summary>
+    /// 這個欄位要不要畫出來。`[ASHide]` 是明講的；`[HideInInspector]` 也算——節點圖就是 Inspector 的替代品，
+    /// 而 Core 用它標的都是編輯期內部欄位（座標、識別碼、候選池），出現在節點上只是雜訊。
+    /// </summary>
     public static bool IsHidden(FieldInfo f)
-        => f?.IsDefined(typeof(ASHideAttribute), false) ?? false;
+        => f != null && (f.IsDefined(typeof(ASHideAttribute), false)
+                      || f.IsDefined(typeof(UnityEngine.HideInInspector), false));
 
     public static bool IsLabelHidden(FieldInfo f)
         => f?.GetCustomAttribute<ASLabelAttribute>(false)?.Mode == ASLabelMode.Hide;

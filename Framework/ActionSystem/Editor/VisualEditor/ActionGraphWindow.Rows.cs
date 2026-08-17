@@ -110,8 +110,26 @@ public partial class ActionGraphWindow
         return new Rect(r.x + left, r.y + 1f, Mathf.Max(8f, r.width - left - right), r.height - 2f);
     }
 
-    /// <summary>清單元素右端固定讓出刪除鈕的位置，欄位寬度才不會被 ✕ 蓋住。</summary>
-    private static float ListRightInset(AGRow row) => row.IsListElement ? AGGraph.ListDeleteWidth : 0f;
+    /// <summary>
+    /// 列右端由右往左的固定順序：**接點 → 收合鈕 → ✕**。接點永遠貼齊節點右緣（所有接點要排成
+    /// 一條垂直線），另外兩個往左推。位置固定不隨「有沒有接來源」滑動，欄位寬度才不會跳。
+    /// 這裡回傳 ✕ 佔掉的橫向空間，清單元素才有。
+    /// </summary>
+    private static float ListRightInset(AGRow row)
+        => row.IsListElement ? AGGraph.ListDeleteWidth : 0f;
+
+    /// <summary>接點固定佔住的右緣寬度。收合鈕與 ✕ 都從這裡往左推。</summary>
+    private const float PortReserve = AGGraph.PortDiameter;
+
+    /// <summary>收合鈕：接點左邊。</summary>
+    private static Rect ViewToggleRectOf(Rect rowRect)
+        => new Rect(rowRect.xMax - PortReserve - ViewToggleWidth,
+            rowRect.y + rowRect.height * 0.5f - AGGraph.PortRadius + 1f, 12f, 12f);
+
+    /// <summary>清單元素的刪除鈕：排在收合鈕左邊，不搶右緣那條接點垂直線。</summary>
+    private static Rect DeleteRectOf(Rect rowRect)
+        => new Rect(rowRect.xMax - PortReserve - ViewToggleWidth - AGGraph.ListDeleteWidth,
+            rowRect.y + 3f, 14f, rowRect.height - 6f);
 
     /// <summary>
     /// 清單底帶的左右邊界（高度由呼叫端填）。標題列與元素列都用它，斑馬紋才會和底帶切齊。
@@ -155,15 +173,16 @@ public partial class ActionGraphWindow
         bool fixedSize = owner.List.IsFixedSize;
 
         // 序號與把手各佔控制欄一半：序號是順序資訊，把手是操作入口，兩件事不該互相取代。
+        // 把手排在最前面——它是這一列的抓取點，放在最外緣最好瞄準。
         float x = rowRect.x + 4f + row.Depth * AGGraph.IndentWidth + row.LeftPad - AGGraph.ListGutter;
-        var index = new Rect(x, rowRect.y, 15f, rowRect.height);
-        var handle = new Rect(x + 15f, rowRect.y, 13f, rowRect.height);
+        var handle = new Rect(x, rowRect.y, 13f, rowRect.height);
+        var index = new Rect(x + 13f, rowRect.y, 15f, rowRect.height);
         GUI.Label(index, new GUIContent((row.ListIndex + 1) + ".", "序號即執行順序"), AGStyles.ListIndex);
         GUI.Label(handle,
             new GUIContent("≡", fixedSize ? "陣列長度固定，不能重排" : "拖曳可調整順序；右鍵有插入與刪除"),
             dragging ? AGStyles.RowLabel : AGStyles.Tiny);
 
-        var remove = new Rect(rowRect.xMax - AGGraph.ListDeleteWidth - 2f, rowRect.y + 3f, 14f, rowRect.height - 6f);
+        var remove = DeleteRectOf(rowRect);
         GUI.enabled = !fixedSize;
         bool clickedRemove = GUI.Button(remove,
             new GUIContent("✕", fixedSize ? "陣列不能刪除項目" : "刪除這一項（可用 Ctrl+Z 復原）"),
@@ -264,11 +283,25 @@ public partial class ActionGraphWindow
         bool hasIssue = Rep.HasIssue(slot, out bool isError);
 
         var labelRect = Indent(new Rect(rowRect.x, rowRect.y, rowRect.width * 0.42f, rowRect.height), row, false);
+        if (row.AssetBinding != null)
+        {
+            var toggleRect = new Rect(labelRect.x + 2f, labelRect.y + 2f, 16f, labelRect.height - 4f);
+            EditorGUI.BeginChangeCheck();
+            bool enabled = EditorGUI.Toggle(toggleRect, row.AssetBinding.OverrideEnabled);
+            if (EditorGUI.EndChangeCheck())
+            {
+                row.AssetBinding.OverrideEnabled = enabled;
+                Invalidate();
+            }
+            labelRect.xMin += 20f;
+        }
         var labelStyle = hasIssue && isError ? AGStyles.RowLabelError : AGStyles.RowLabel;
         if (!row.HideLabel)
             GUI.Label(labelRect, AGStyles.Elide(row.Label, labelStyle, labelRect.width, AGReflect.FieldDescription(row.Field)), labelStyle);
 
-        float portInset = AGGraph.PortDiameter + 10f + ListRightInset(row);
+        bool hasView = AGReflect.GetNode(slot) != null;
+        // 收合鈕的位置永遠保留，即使目前沒有接來源不畫它——否則接上線的瞬間欄位會縮一截。
+        float portInset = PortReserve + ViewToggleWidth + ListRightInset(row) + 10f;
         var fieldRect = row.HideLabel
             ? new Rect(labelRect.x, rowRect.y + 1f, Mathf.Max(20f, rowRect.xMax - labelRect.x - portInset), rowRect.height - 3f)
             : new Rect(rowRect.x + rowRect.width * 0.42f, rowRect.y + 1f,
@@ -295,21 +328,53 @@ public partial class ActionGraphWindow
                 _ => null,
             };
             EditorGUI.BeginChangeCheck();
-            var value = useType == 0
+            bool muted = row.AssetBinding != null && !row.AssetBinding.OverrideEnabled;
+            var value = useType == 0 && !muted
                 ? AGValueField.Draw(fieldRect, row.ResultType, AGReflect.GetDefault(slot), row.IsEnum)
                 : AGValueField.DrawMuted(fieldRect, row.ResultType, AGReflect.GetDefault(slot), tooltip, row.IsEnum);
             if (EditorGUI.EndChangeCheck()) { AGReflect.SetDefault(slot, value); Invalidate(); }
         }
 
-        var portRect = new Rect(rowRect.xMax - AGGraph.PortDiameter,
+        // 位置要和 UpdateRowGeometry 算的 PortPos、PortRectOf 畫的圓一致，三者對不上就會變成
+        // 「看得到的圓」和「接得到的位置」不同一個地方。
+        var portRect = new Rect(rowRect.xMax - PortReserve,
             rowRect.y + rowRect.height * 0.5f - AGGraph.PortRadius,
             AGGraph.PortDiameter, AGGraph.PortDiameter);
+
+        // 由右往左：接點 → 收合鈕 → ✕（清單元素才有）。
+        if (hasView) DrawViewToggle(row, ViewToggleRectOf(rowRect));
+
         var e = Event.current;
         if (e.type == EventType.MouseDown)
         {
             if (e.button == 0 && portRect.Contains(e.mousePosition)) { BeginLinkFromRow(row); e.Use(); }
             else if (e.button == 1 && rowRect.Contains(e.mousePosition)) { ShowSlotMenu(row); e.Use(); }
         }
+    }
+
+    /// <summary>接點左邊留給收合鈕的寬度。永遠保留同一個寬度，欄位才不會因為接了東西而跳。</summary>
+    private const float ViewToggleWidth = 16f;
+
+    /// <summary>
+    /// Slot 的收合鈕：收起這個欄位底下的整段子樹。Alt 按＝solo，只留這一段、其餘全收，再按一次還原。
+    /// 純視覺，資料一點都沒動；圖形上刻意不用圓形——圓形在這張圖裡專屬於接點。
+    /// </summary>
+    private void DrawViewToggle(AGRow row, Rect r)
+    {
+        string key = AGGraph.CollapseKey(row.OwnerNodeId, row);
+        bool solo = soloSlotKey == key;
+        bool hidden = effectiveHidden.Contains(key);
+
+        // solo 額外墊一層底：它和一般展開都顯示 -，靠底色分辨「只看這一段」。
+        if (solo) AGStyles.RoundedFill(r, AGStyles.HeaderOverlay, 2f);
+
+        GUI.Label(r, hidden && !solo ? "+" : "-", hidden ? AGStyles.HeaderButton : AGStyles.HeaderButtonDim);
+
+        // 不掛 tooltip：這顆開關就在滑鼠移動的必經路徑上，跳說明框只會擋住底下的圖。
+        // +／- 本身已經說完了它的狀態。
+        if (!GUI.Button(r, GUIContent.none, GUIStyle.none)) return;
+
+        ToggleSlotVisibility(key, Event.current.alt);
     }
 
     private void DrawValueRow(AGRow row, Rect rowRect)

@@ -73,25 +73,21 @@ public static class AGValidator
         if (model?.Data == null) return report;
 
         var tokens = model.ReadTokens();
-        var usedTokens = new HashSet<string>();
         var checkedAssets = new HashSet<UnityEngine.Object>();
+        // 標註節點就住在時機畫布上，所以它們的問題一律跳回那張畫布再對焦。
+        var tokenFocus = new AGFocus { Kind = AGFocusKind.Timing, Data = model.Data };
 
-        // 1. Token 本身：空 Key、重複 Key、循環
+        // 1. 標註本身：名稱重複（一張圖內全域唯一）、內容殘缺
+        //    「宣告後沒有欄位引用」那條規則已隨標註化刪除：標註的用途就是被圖外面用，
+        //    沒有連入線是正常狀態，不是可疑狀態。
         var seen = new HashSet<string>();
         foreach (var t in tokens)
         {
-            var focus = new AGFocus { Kind = AGFocusKind.Token, Token = t };
-            if (string.IsNullOrWhiteSpace(t.Key))
-            {
-                Warn(report, focus, "變數清單", "Token 名稱為空", "補上名稱，否則沒有任何欄位引用得到它。", t.Slot, null);
-                continue;
-            }
-            if (!seen.Add(TokenId(t)))
-                Err(report, focus, $"變數 {t.Key}", "名稱重複", "改成唯一名稱，重複的 Key 會互相覆蓋。", t.Slot, null);
+            if (!seen.Add(t.Key))
+                Err(report, tokenFocus, $"標註 {t.Key}", "名稱重複",
+                    "改成唯一名稱；同一張圖內撞名時外部只查得到其中一顆。", null, t.Node?.BodyObject);
 
-            var path = new List<string>();
-            if (DetectCycle(t, tokens, new HashSet<string>(), path))
-                Err(report, focus, $"變數 {t.Key}", $"循環引用：{string.Join(" → ", path)}", "把其中一段改成常數或另一個變數，切斷環路。", t.Slot, null);
+            ValidateToken(report, model, tokenFocus, t);
         }
 
         // 2. 每個動作、每個 Token 的節點樹
@@ -110,29 +106,32 @@ public static class AGValidator
                     ActionIndex = i,
                     ActionSlot = slot,
                 };
+                bool disabled = AGReflect.GetDisabled(slot) || (AGReflect.GetNode(slot)?.Disabled ?? false);
                 if (AGReflect.UseType(slot) == 0)
-                    Err(report, focus, $"{g.Timing} 第 {i + 1} 個動作", "尚未指定 Action 類型",
+                    Issue(report, disabled, focus, $"{g.Timing} 第 {i + 1} 個動作", "尚未指定 Action 類型",
                         "在空 Action Node 的下拉選單選擇一個 Action。", slot, null);
-                WalkTree(report, model, focus, slot, tokens, usedTokens, $"{g.Timing} 第 {i + 1} 個動作");
+                WalkTree(report, model, focus, slot, $"{g.Timing} 第 {i + 1} 個動作", disabled);
                 ValidateAssetCycles(report, focus, slot, null, $"{g.Timing} 第 {i + 1} 個動作", checkedAssets);
             }
         }
 
+        // 標註節點多半沒有連入線（住在候選池），但從它開始整棵子樹都是正式資料，要跟動作樹一樣驗。
         foreach (var t in tokens)
         {
-            if (t.Slot == null) continue;
-            var focus = new AGFocus { Kind = AGFocusKind.Token, Token = t };
-            WalkTree(report, model, focus, t.Slot, tokens, usedTokens, $"變數 {t.Key}");
-            ValidateAssetCycles(report, focus, t.Slot, null, $"變數 {t.Key}", checkedAssets);
+            WalkTokenCarrier(report, model, tokenFocus, t, checkedAssets, null);
         }
 
-        // 3. 未使用的 Token
-        foreach (var t in tokens)
+        // 2.1 Owner 指名了不存在的標註。runtime 只是 Has 回 false 然後靜默跳過，
+        //     所以打錯一個字的結果是「功能整個不會發生」，什麼訊息都沒有。
+        foreach (var key in ExternalTokenKeys(model.Owner))
         {
-            if (string.IsNullOrWhiteSpace(t.Key)) continue;
-            if (usedTokens.Contains(TokenId(t))) continue;
-            var focus = new AGFocus { Kind = AGFocusKind.Token, Token = t };
-            Warn(report, focus, $"變數 {t.Key}", "宣告後沒有任何欄位引用", "確認是否還需要，或把它接到某個參數欄位。", t.Slot, null);
+            bool declared = false;
+            foreach (var t in tokens)
+                if (t.Key == key) { declared = true; break; }
+            if (declared) continue;
+            Err(report, null, model.Owner != null ? model.Owner.name : "編輯對象",
+                $"Inspector 指名了不存在的標註 '{key}'",
+                "把圖上對應的節點標註成同一個名字，或修正 Inspector 上的名稱；查不到的 key 會被靜默跳過。", null, null);
         }
 
         // 4. SerializeReference 型別遺失（類別被改名或刪掉）
@@ -152,70 +151,150 @@ public static class AGValidator
         return report;
     }
 
-    /// <summary>只驗一棵子樹（資產焦點用）。變數以 Owner 的變數清單為準——資產目前就是以名稱對應呼叫端變數。</summary>
-    public static AGReport RunSubtree(AGModel model, AGFocus focus, object rootSlot, string where)
+    /// <summary>只驗一棵子樹（資產焦點用）。</summary>
+    public static AGReport RunSubtree(AGModel model, AGFocus focus, object rootSlot,
+        IEnumerable<GraphNode> orphans, string where)
     {
         var report = new AGReport();
         if (model?.Data == null || rootSlot == null) return report;
 
-        var tokens = model.ReadTokens();
-        var used = new HashSet<string>();
-        WalkTree(report, model, focus, rootSlot, tokens, used, where);
+        WalkTree(report, model, focus, rootSlot, where, false);
         ValidateAssetCycles(report, focus, rootSlot, focus?.AssetObject, where, new HashSet<UnityEngine.Object>());
+
+        var rootCarrier = AGReflect.GetNode(rootSlot);
+        if (rootCarrier?.IsToken == true)
+            Err(report, focus, where, "資產根節點不能標註",
+                "取消根節點標註；請標註內部子節點或候選節點作為參數。", rootSlot, rootCarrier);
+
+        var roots = new[] { rootSlot };
+        var tokens = model.ReadTokens(model.CarriersOf(roots, orphans));
+        var seen = new HashSet<string>();
+        foreach (var token in tokens)
+        {
+            if (!seen.Add(token.Key))
+                Err(report, focus, $"標註 {token.Key}", "名稱重複",
+                    "改成這個資產內的唯一名稱。", null, token.Node);
+            ValidateToken(report, model, focus, token);
+            WalkTokenCarrier(report, model, focus, token, new HashSet<UnityEngine.Object>(), focus?.AssetObject);
+        }
         return report;
+    }
+
+    private static void ValidateToken(AGReport report, AGModel model, AGFocus focus, AGToken token)
+    {
+        if (token?.Node == null) return;
+        bool disabled = token.Node.Disabled;
+        if (token.ResultType == null)
+            Issue(report, disabled, focus, $"標註 {token.Key}",
+                "標註必須掛在可求值的公式或公式資產節點上", "取消標註，或把節點換成公式來源。", null, token.Node);
+
+        switch (token.Node.Kind)
+        {
+            case NodeKind.Empty:
+                Issue(report, disabled, focus, $"標註 {token.Key}", "被標註的節點還沒有內容",
+                    "選一個公式，或取消這個標註。", null, token.Node);
+                break;
+            case NodeKind.Inline when token.Node.BodyObject == null:
+                Issue(report, disabled, focus, $"標註 {token.Key}", "內嵌內容是空的",
+                    "重新指定公式，或取消這個標註。", null, token.Node);
+                break;
+            case NodeKind.Asset when token.Node.AssetObject == null:
+                Issue(report, disabled, focus, $"標註 {token.Key}", "沒有指定公式資產",
+                    "指定公式資產，或取消這個標註。", null, token.Node);
+                break;
+        }
+    }
+
+    private static void WalkTokenCarrier(AGReport report, AGModel model, AGFocus focus, AGToken token,
+        HashSet<UnityEngine.Object> checkedAssets, UnityEngine.Object rootAsset)
+    {
+        if (token?.Node == null) return;
+        string where = $"標註 {token.Key}";
+        var visited = new HashSet<object>(AGRefComparer.Instance);
+        if (token.Node.Kind == NodeKind.Inline && token.Node.BodyObject != null)
+            WalkNode(report, model, focus, token.Node.BodyObject, where, visited, token.Node.Disabled);
+        else if (token.Node.Kind == NodeKind.Asset)
+        {
+            ValidateAssetBindings(report, focus, token.Node, where);
+            foreach (var binding in token.Node.Bindings)
+                if (binding?.Slot != null)
+                    WalkSlot(report, model, focus, binding.Slot, $"{where}.{binding.Name}", visited,
+                        token.Node.Disabled || !binding.OverrideEnabled);
+        }
+        ValidateAssetCycles(report, focus, token.Node, rootAsset, where, checkedAssets);
     }
 
     // ===== 節點樹走訪 =====
 
     private static void WalkTree(AGReport report, AGModel model, AGFocus focus, object slot,
-        List<AGToken> tokens, HashSet<string> usedTokens, string where)
+        string where, bool disabled)
     {
         var visited = new HashSet<object>(AGRefComparer.Instance);
-        WalkSlot(report, model, focus, slot, tokens, usedTokens, where, visited);
+        WalkSlot(report, model, focus, slot, where, visited, disabled);
     }
 
     private static void WalkSlot(AGReport report, AGModel model, AGFocus focus, object slot,
-        List<AGToken> tokens, HashSet<string> usedTokens, string where, HashSet<object> visited)
+        string where, HashSet<object> visited, bool disabled)
     {
         if (slot == null || !visited.Add(slot)) return;
 
-        bool isAction = AGReflect.IsActionSlotType(slot.GetType());
         int useType = AGReflect.UseType(slot);
+
+        // 停用往下傳染：載體停用後整棵子樹都不求值，殘缺一律降成警告。
+        disabled = disabled || (AGReflect.GetNode(slot)?.Disabled ?? false);
 
         if (useType == 1)
         {
             var formula = AGReflect.GetFormula(slot);
             if (formula == null)
-                Err(report, focus, where, "欄位設為公式，但內容是空的", "選一個公式，或把模式改回常數。", slot, null);
+                Issue(report, disabled, focus, where, "欄位設為公式，但內容是空的", "選一個公式，或把模式改回常數。", slot, null);
             else
-                WalkNode(report, model, focus, formula, tokens, usedTokens, where, visited);
+                WalkNode(report, model, focus, formula, where, visited, disabled);
         }
         else if (useType == 2)
         {
             if (AGReflect.GetAsset(slot) == null)
-                Err(report, focus, where, "欄位設為資產，但沒有指定資產", "指定一個資產，或把模式改回常數。", slot, null);
-        }
-        else if (!isAction && useType == 3)
-        {
-            string key = AGReflect.GetTokenKey(slot);
-            if (string.IsNullOrEmpty(key))
+                Issue(report, disabled, focus, where, "欄位設為資產，但沒有指定資產", "指定一個資產，或把模式改回常數。", slot, null);
+            var carrier = AGReflect.GetNode(slot);
+            ValidateAssetBindings(report, focus, carrier, where);
+            if (carrier != null)
             {
-                Err(report, focus, where, "欄位設為變數，但沒有指定變數", "從左欄拖一個變數進來，或把模式改回常數。", slot, null);
-            }
-            else
-            {
-                var rt = AGReflect.ResultType(slot.GetType());
-                bool found = false;
-                foreach (var t in tokens)
-                    if (t.Key == key && t.ResultType == rt) { found = true; break; }
-                if (found) usedTokens.Add(TokenId(rt, key));
-                else Err(report, focus, where, $"引用了不存在的變數 '{key}'", "新增同名同型別的變數，或改指向現有變數。", slot, null);
+                foreach (var binding in carrier.Bindings)
+                    if (binding?.Slot != null)
+                        WalkSlot(report, model, focus, binding.Slot, $"{where}.{binding.Name}", visited,
+                            disabled || !binding.OverrideEnabled);
             }
         }
     }
 
+    private static void ValidateAssetBindings(AGReport report, AGFocus focus, GraphNode carrier, string where)
+    {
+        if (carrier?.AssetObject == null) return;
+        var parameters = AssetGraphSchema.Read(carrier.AssetObject, out var duplicates);
+        foreach (var duplicate in duplicates)
+            Err(report, focus, where, $"資產參數標註名稱重複：'{duplicate}'", "進入資產並改成唯一名稱。", null, carrier);
+
+        var byName = new Dictionary<string, AssetParameterDefinition>();
+        foreach (var parameter in parameters)
+            if (!byName.ContainsKey(parameter.Name)) byName.Add(parameter.Name, parameter);
+        var seen = new HashSet<string>();
+        foreach (var binding in carrier.Bindings)
+        {
+            if (binding == null) { Err(report, focus, where, "有空的資產參數綁定", "移除空綁定。", null, carrier); continue; }
+            if (!seen.Add(binding.Name))
+                Err(report, focus, where, $"資產參數綁定重複：'{binding.Name}'", "移除重複綁定。", binding.Slot, carrier);
+            if (!byName.TryGetValue(binding.Name, out var parameter))
+            {
+                Err(report, focus, where, $"資產已沒有參數 '{binding.Name}'", "切換資產或移除這筆舊綁定。", binding.Slot, carrier);
+                continue;
+            }
+            if (binding.Slot == null || binding.Slot.ResultType != parameter.ResultType || binding.Slot.PackType != parameter.PackType)
+                Err(report, focus, where, $"資產參數 '{binding.Name}' 型別不相容", "重新建立這筆綁定。", binding.Slot, carrier);
+        }
+    }
+
     private static void WalkNode(AGReport report, AGModel model, AGFocus focus, object node,
-        List<AGToken> tokens, HashSet<string> usedTokens, string where, HashSet<object> visited)
+        string where, HashSet<object> visited, bool disabled)
     {
         if (node == null || !visited.Add(node)) return;
         string nodeWhere = $"{where} → {AGReflect.TypeName(node.GetType())}";
@@ -231,7 +310,7 @@ public static class AGValidator
 
             if (AGReflect.IsSlotType(t))
             {
-                WalkSlot(report, model, focus, val, tokens, usedTokens, $"{nodeWhere}.{AGReflect.FieldLabel(f)}", visited);
+                WalkSlot(report, model, focus, val, $"{nodeWhere}.{AGReflect.FieldLabel(f)}", visited, disabled);
                 continue;
             }
 
@@ -247,50 +326,18 @@ public static class AGValidator
                         continue;
                     }
                     if (AGReflect.IsSlotType(item.GetType()))
-                        WalkSlot(report, model, focus, item, tokens, usedTokens, itemWhere, visited);
+                        WalkSlot(report, model, focus, item, itemWhere, visited, disabled);
                     else if (!item.GetType().IsPrimitive && item is not string && item is not UnityEngine.Object)
-                        WalkNode(report, model, focus, item, tokens, usedTokens, itemWhere, visited);
+                        WalkNode(report, model, focus, item, itemWhere, visited, disabled);
                 }
                 continue;
             }
 
-            WalkNode(report, model, focus, val, tokens, usedTokens, nodeWhere, visited);
+            WalkNode(report, model, focus, val, nodeWhere, visited, disabled);
         }
     }
 
-    // ===== 循環偵測 =====
-
-    private static bool DetectCycle(AGToken start, List<AGToken> tokens, HashSet<string> stack, List<string> path)
-    {
-        path.Add(start.Key);
-        if (!stack.Add(TokenId(start))) return true;
-
-        bool cycle = false;
-        foreach (var slot in SlotsOf(start.Slot))
-        {
-            if (AGReflect.UseType(slot) != 3) continue;
-            string key = AGReflect.GetTokenKey(slot);
-            if (string.IsNullOrEmpty(key)) continue;
-            var rt = AGReflect.ResultType(slot.GetType());
-
-            foreach (var t in tokens)
-            {
-                if (t.Key != key || t.ResultType != rt) continue;
-                if (DetectCycle(t, tokens, stack, path)) { cycle = true; break; }
-            }
-            if (cycle) break;
-        }
-
-        stack.Remove(TokenId(start));
-        if (!cycle) path.RemoveAt(path.Count - 1);
-        return cycle;
-    }
-
-    private static IEnumerable<object> SlotsOf(object slot)
-    {
-        var visited = new HashSet<object>(AGRefComparer.Instance);
-        foreach (var s in AGModel.WalkSlots(slot, visited)) yield return s;
-    }
+    // Token 循環偵測已隨標註化移除：圖內引用一律是連線，環在拉線當下就被 CanConnectLink 擋掉。
 
     // ===== Asset 參照循環 =====
 
@@ -340,6 +387,18 @@ public static class AGValidator
             cycle = FindAssetCycle(child, stack, path, completed);
             if (cycle != null) break;
         }
+        if (cycle == null && asset is UnityEngine.ScriptableObject scriptable)
+        {
+            foreach (var parameter in AssetGraphSchema.Read(scriptable, out _))
+            {
+                foreach (var child in DirectAssetReferences(parameter.Node))
+                {
+                    cycle = FindAssetCycle(child, stack, path, completed);
+                    if (cycle != null) break;
+                }
+                if (cycle != null) break;
+            }
+        }
         path.RemoveAt(path.Count - 1);
         stack.Remove(asset);
         completed.Add(asset);
@@ -364,7 +423,13 @@ public static class AGValidator
             if (useType == 1)
                 CollectDirectAssetReferences(AGReflect.GetFormula(node), visited, result);
             else if (useType == 2 && AGReflect.GetAsset(node) is UnityEngine.Object asset)
+            {
                 result.Add(asset);
+                var carrier = AGReflect.GetNode(node);
+                if (carrier != null)
+                    foreach (var binding in carrier.Bindings)
+                        if (binding?.Slot != null) CollectDirectAssetReferences(binding.Slot, visited, result);
+            }
             return;
         }
         if (node is UnityEngine.Object) return;
@@ -396,13 +461,34 @@ public static class AGValidator
     private static object AssetContent(UnityEngine.Object asset)
         => AGReflect.Get(asset, "_action") ?? AGReflect.Get(asset, "_target");
 
-    private static string TokenId(AGToken t) => TokenId(t.ResultType, t.Key);
+    /// <summary>
+    /// Owner 宣告「我會從圖外用字串 key 求值」的那些變數名。編輯器不認得任何專案型別，
+    /// 所以走 Core 的 `IExternalTokenKeys` 介面問，不是去讀 AffixDefinition 之類的欄位。
+    /// </summary>
+    private static HashSet<string> ExternalTokenKeys(UnityEngine.Object owner)
+    {
+        var keys = new HashSet<string>();
+        if (owner is not IExternalTokenKeys declaring) return keys;
 
-    private static string TokenId(Type resultType, string key)
-        => (resultType?.AssemblyQualifiedName ?? "?") + "|" + key;
+        var declared = declaring.ExternalTokenKeys;
+        if (declared == null) return keys;
+        foreach (var key in declared)
+            if (!string.IsNullOrWhiteSpace(key)) keys.Add(key);
+        return keys;
+    }
 
     private static void Err(AGReport r, AGFocus focus, string where, string message, string fix, object slot, object node)
         => r.Issues.Add(new AGIssue { IsError = true, Focus = focus, Where = where, Message = message, Fix = fix, Slot = slot, Node = node });
+
+    /// <summary>
+    /// 停用路徑上的殘缺降成警告：那段 runtime 直接回保底值、不求值，擋存檔只會妨礙測試。
+    /// 共用載體若同時被啟用路徑指著，那條路徑會另外走一遍並報成錯誤，所以不必在這裡取聯集。
+    /// </summary>
+    private static void Issue(AGReport r, bool disabled, AGFocus focus, string where, string message, string fix, object slot, object node)
+    {
+        if (disabled) Warn(r, focus, where, message, fix, slot, node);
+        else Err(r, focus, where, message, fix, slot, node);
+    }
 
     private static void Warn(AGReport r, AGFocus focus, string where, string message, string fix, object slot, object node)
         => r.Issues.Add(new AGIssue { IsError = false, Focus = focus, Where = where, Message = message, Fix = fix, Slot = slot, Node = node });

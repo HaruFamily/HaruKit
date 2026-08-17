@@ -8,15 +8,13 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 
-/// <summary>一筆 Token 的可編輯視圖：Key、結果型別、所屬清單與索引。</summary>
+/// <summary>一個標註（Token）的視圖：名字掛在哪顆載體上，以及那顆載體算出什麼型別。</summary>
+// 標註化之後 Token 不再是獨立宣告，而是「某顆節點掛了一個名字」，所以這裡只是查詢結果，不持有資料。
 public class AGToken
 {
     public string Key;
     public Type ResultType;
-    public object Entry;        // ITokenEntry 實例
-    public object Slot;         // entry.Slot（FormulaSlotBase）
-    public IList List;          // 所屬的 List<XEntry>
-    public int Index;
+    public GraphNode Node;      // 被標註的載體
 
     public string TypeName => AGReflect.ResultTypeName(ResultType);
 }
@@ -37,12 +35,14 @@ public class AGModel
 {
     // Owner 不限 ScriptableObject：Hierarchy 上掛 ActionSystem 的 MonoBehaviour 也能編。
     public UnityEngine.Object Owner { get; private set; }
-    public object Data { get; private set; }        // ActionSystem<TTiming, TPack, TTokenEntryPack> 工作副本
+    public object Data { get; private set; }        // ActionSystem<TTiming, TPack> 工作副本
     public Type TimingType { get; private set; }
     public Type PackType { get; private set; }
     public bool Dirty { get; private set; }
+    public bool TrackChanges { get; set; } = true;
 
     private FieldInfo systemField;                    // Owner 上放 ActionSystem 的欄位
+    private readonly Dictionary<ScriptableObject, List<AssetParameterDefinition>> assetParameterCache = new();
 
     // ===== 綁定 =====
 
@@ -57,7 +57,7 @@ public class AGModel
         foreach (var f in AGReflect.Fields(ownerType))
         {
             var t = f.FieldType;
-            if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(ActionSystem<,,>)) return f;
+            if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(ActionSystem<,>)) return f;
         }
         return null;
     }
@@ -124,6 +124,7 @@ public class AGModel
 
     public void MarkDirty()
     {
+        if (!TrackChanges) return;
         if (Data == null) return;
         double now = EditorApplication.timeSinceStartup;
 
@@ -239,6 +240,14 @@ public class AGModel
         return result;
     }
 
+    /// <summary>時機是否已經有群組（enum 不可重複，新增選單靠它決定哪些還能選）。</summary>
+    public bool HasGroup(Enum timing)
+    {
+        foreach (var g in ReadGroups())
+            if (Equals(g.Timing, timing)) return true;
+        return false;
+    }
+
     /// <summary>新增一個時機群組；已存在同一個時機則回傳既有的。</summary>
     public AGTimingGroup AddGroup(Enum timing)
     {
@@ -270,142 +279,178 @@ public class AGModel
         return AGReflect.CreateInstance(slotType);
     }
 
-    // ===== Token =====
-
-    public object TokenPack => AGReflect.Get(Data, "TokenEntry");
-
-    /// <summary>列出所有 kind 的 Token（依 TokenEntryPack 上的 List 欄位順序）。</summary>
-    public List<AGToken> ReadTokens()
+    /// <summary>
+    /// 本 pack 的所有公式族：(結果型別, 具體 Slot 型別)。掃專案裡所有具體 FormulaSlot 子類，
+    /// 與資料內容無關，也不會漏掉尚未被使用的公式族。
+    /// </summary>
+    public List<(Type resultType, Type slotType)> FormulaKinds()
     {
-        var result = new List<AGToken>();
-        var pack = TokenPack;
-        if (pack == null) return result;
+        var kinds = new List<(Type, Type)>();
+        if (PackType == null) return kinds;
 
-        foreach (var f in AGReflect.Fields(pack.GetType()))
+        var seen = new HashSet<Type>();
+        foreach (var t in UnityEditor.TypeCache.GetTypesDerivedFrom<FormulaSlotBase>())
         {
-            if (!AGReflect.IsList(f.FieldType, out var elem)) continue;
-            if (!typeof(ITokenEntry).IsAssignableFrom(elem)) continue;
-
-            var list = f.GetValue(pack) as IList;
-            if (list == null) continue;
-            for (int i = 0; i < list.Count; i++)
-            {
-                if (list[i] is not ITokenEntry entry) continue;
-                var slot = entry.Slot;
-                result.Add(new AGToken
-                {
-                    Key = entry.Key,
-                    ResultType = slot != null ? AGReflect.ResultType(slot.GetType()) : null,
-                    Entry = entry,
-                    Slot = slot,
-                    List = list,
-                    Index = i,
-                });
-            }
-        }
-        return result;
-    }
-
-    /// <summary>可新增的 Token 型別：(結果型別, 所屬清單)。</summary>
-    public List<(Type resultType, IList list)> TokenKinds()
-    {
-        var kinds = new List<(Type, IList)>();
-        var pack = TokenPack;
-        if (pack == null) return kinds;
-
-        foreach (var f in AGReflect.Fields(pack.GetType()))
-        {
-            if (!AGReflect.IsList(f.FieldType, out var elem)) continue;
-            if (!typeof(ITokenEntry).IsAssignableFrom(elem)) continue;
-
-            var list = AGReflect.EnsureList(pack, f);
-            var probe = AGReflect.CreateInstance(elem) as ITokenEntry;
-            var rt = probe?.Slot != null ? AGReflect.ResultType(probe.Slot.GetType()) : null;
-            if (rt == null) continue;
-            kinds.Add((rt, list));
+            if (t.IsAbstract || t.ContainsGenericParameters) continue;
+            if (AGReflect.FormulaSlotPack(t) != PackType) continue;
+            var rt = AGReflect.ResultType(t);
+            if (rt == null || !seen.Add(rt)) continue;
+            kinds.Add((rt, t));
         }
         return kinds;
     }
 
-    /// <summary>新增 Token。名稱重複回 false。</summary>
-    public bool AddToken(Type resultType, string key, out string error)
+    public void ClearAssetParameterCache() => assetParameterCache.Clear();
+
+    public List<AssetParameterDefinition> AssetParameters(ScriptableObject asset)
     {
-        error = null;
-        if (string.IsNullOrWhiteSpace(key)) { error = "名稱不可為空。"; return false; }
-        key = key.Trim();
-
-        foreach (var t in ReadTokens())
-            if (t.Key == key) { error = $"已存在名為 '{key}' 的 Token。"; return false; }
-
-        foreach (var (rt, list) in TokenKinds())
-        {
-            if (rt != resultType) continue;
-            var elem = list.GetType().GetGenericArguments()[0];
-            if (AGReflect.CreateInstance(elem) is not ITokenEntry entry) { error = $"建立 {elem.Name} 失敗。"; return false; }
-            entry.Key = key;
-            list.Add(entry);
-            MarkDirty();
-            return true;
-        }
-        error = $"找不到 {AGReflect.ResultTypeName(resultType)} 的 Token 清單。";
-        return false;
+        if (asset == null) return new List<AssetParameterDefinition>();
+        if (assetParameterCache.TryGetValue(asset, out var cached)) return cached;
+        cached = AssetGraphSchema.Read(asset, out _);
+        assetParameterCache[asset] = cached;
+        return cached;
     }
 
-    /// <summary>改名並同步所有引用處。</summary>
-    public bool RenameToken(AGToken token, string newKey, out string error)
+    /// <summary>補齊資產節點的參數列。新列預設不覆蓋，因此不改變執行結果。</summary>
+    public bool EnsureAssetBindings(GraphNode carrier)
     {
-        error = null;
-        if (string.IsNullOrWhiteSpace(newKey)) { error = "名稱不可為空。"; return false; }
-        newKey = newKey.Trim();
-        if (newKey == token.Key) return true;
-
-        foreach (var t in ReadTokens())
-            if (t.Key == newKey) { error = $"已存在名為 '{newKey}' 的 Token。"; return false; }
-
-        // 節點的座標與焦點歸屬跟著載體走，改名只要換掉引用它的節點內容。
-        string oldKey = token.Key;
-        foreach (var slot in AllFormulaSlots())
+        if (carrier?.Kind != NodeKind.Asset || carrier.AssetObject == null) return false;
+        bool changed = false;
+        foreach (var parameter in AssetParameters(carrier.AssetObject))
         {
-            if (AGReflect.UseType(slot) != 3) continue;
-            if (AGReflect.GetTokenKey(slot) != oldKey) continue;
-            if (AGReflect.ResultType(slot.GetType()) != token.ResultType) continue;
-            AGReflect.SetTokenKey(slot, newKey);
+            NamedFormulaSlot binding = null;
+            foreach (var current in carrier.Bindings)
+                if (current?.Name == parameter.Name) { binding = current; break; }
+            if (binding != null) continue;
+
+            Type slotType = null;
+            foreach (var kind in FormulaKinds())
+            {
+                if (kind.resultType != parameter.ResultType || AGReflect.FormulaSlotPack(kind.slotType) != parameter.PackType) continue;
+                slotType = kind.slotType;
+                break;
+            }
+            if (AGReflect.CreateInstance(slotType) is FormulaSlotBase slot)
+            {
+                carrier.Bindings.Add(new NamedFormulaSlot(parameter.Name, slot));
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    // ===== Token（標註）=====
+    // Token 不再是獨立宣告，而是「某顆載體掛了一個名字」。左欄只是索引，資料住在節點上。
+
+    /// <summary>走訪整張圖的所有載體：動作樹上的、候選池裡的，以及它們的子樹。</summary>
+    public IEnumerable<GraphNode> AllCarriers()
+    {
+        var seen = new HashSet<GraphNode>();
+        foreach (var slot in AllSlots())
+        {
+            var node = AGReflect.GetNode(slot);
+            if (node != null && seen.Add(node)) yield return node;
         }
         foreach (var node in AllOrphanNodes())
-            if (node.Kind == NodeKind.Token && node.TokenKey == oldKey) node.SetToken(newKey);
+            if (seen.Add(node)) yield return node;
+    }
 
-        if (token.Entry is ITokenEntry entry) entry.Key = newKey;
-        token.Key = newKey;
+    /// <summary>指定圖域內的所有載體。資產焦點用它隔離 Owner 與資產的標註名稱作用域。</summary>
+    public IEnumerable<GraphNode> CarriersOf(IEnumerable<object> roots, IEnumerable<GraphNode> orphans)
+    {
+        var seen = new HashSet<GraphNode>();
+        var visited = new HashSet<object>(AGRefComparer.Instance);
+        if (roots != null)
+        {
+            foreach (var root in roots)
+                foreach (var carrier in WalkCarriers(root, visited))
+                    if (seen.Add(carrier)) yield return carrier;
+        }
+        if (orphans == null) yield break;
+        foreach (var orphan in orphans)
+        {
+            foreach (var carrier in WalkCarriers(orphan, visited))
+                if (seen.Add(carrier)) yield return carrier;
+        }
+    }
+
+    /// <summary>圖上所有被標註的節點。順序不保證穩定，顯示端自行排序。</summary>
+    public List<AGToken> ReadTokens()
+        => ReadTokens(AllCarriers());
+
+    public List<AGToken> ReadTokens(IEnumerable<GraphNode> carriers)
+    {
+        var result = new List<AGToken>();
+        if (carriers == null) return result;
+        foreach (var node in carriers)
+        {
+            if (!node.IsToken) continue;
+            result.Add(new AGToken
+            {
+                Key = node.TokenName,
+                ResultType = CarrierResultType(node),
+                Node = node,
+            });
+        }
+        result.Sort((a, b) => string.CompareOrdinal(a.Key, b.Key));
+        return result;
+    }
+
+    /// <summary>載體算得出什麼型別：內嵌看公式型別，資產看資產型別，空節點無從得知。</summary>
+    public static Type CarrierResultType(GraphNode node)
+    {
+        if (node == null) return null;
+        if (node.Kind == NodeKind.Inline && node.BodyObject != null)
+            return AGReflect.FormulaResultType(node.BodyObject.GetType());
+        if (node.Kind == NodeKind.Asset && node.AssetObject != null)
+            return AGReflect.AssetResultType(node.AssetObject);
+        return null;
+    }
+
+    /// <summary>
+    /// 標註一顆節點，或替既有標註改名。名稱在一張圖內全域唯一（不分結果型別）——
+    /// 外部是用裸字串查的，同名不同型會讓「查到哪一個」變成隱式規則。
+    /// </summary>
+    public bool SetTokenName(GraphNode node, string key, IEnumerable<GraphNode> scope, out string error)
+    {
+        error = null;
+        if (node == null) { error = "沒有可標註的節點。"; return false; }
+        if (CarrierResultType(node) == null) { error = "只有可求值的公式或公式資產節點能標註。"; return false; }
+        if (string.IsNullOrWhiteSpace(key)) { error = "名稱不可為空。"; return false; }
+        key = key.Trim();
+        if (key == node.TokenName) return true;
+
+        foreach (var other in scope ?? AllCarriers())
+        {
+            if (ReferenceEquals(other, node) || !other.IsToken) continue;
+            if (other.TokenName != key) continue;
+            error = $"已存在名為 '{key}' 的標註。";
+            return false;
+        }
+
+        node.SetTokenName(key);
         MarkDirty();
         return true;
     }
 
-    public void RemoveToken(AGToken token)
+    public bool SetTokenName(GraphNode node, string key, out string error)
+        => SetTokenName(node, key, AllCarriers(), out error);
+
+    /// <summary>取消標註。節點與它的子樹留在原地，只是不再是對外端點。</summary>
+    public void ClearTokenName(GraphNode node)
     {
-        // 候選池裡引用這個變數的獨立節點一起移除；仍接在欄位上的引用留著，由驗證報「引用不存在的變數」。
-        foreach (var head in Heads())
-        {
-            var list = AGReflect.Orphans(head);
-            if (list == null) continue;
-            for (int i = list.Count - 1; i >= 0; i--)
-                if (list[i] != null && list[i].Kind == NodeKind.Token && list[i].TokenKey == token.Key)
-                    list.RemoveAt(i);
-        }
-        token.List?.Remove(token.Entry);
+        if (node == null || !node.IsToken) return;
+        node.SetTokenName(null);
         MarkDirty();
     }
 
-    /// <summary>某 Token 被幾個參數欄位引用。</summary>
+    /// <summary>這顆標註節點在圖內被幾個參數欄位接著。0＝純對外端點，不是錯誤。</summary>
     public int CountReferences(AGToken token)
     {
+        if (token?.Node == null) return 0;
         int n = 0;
-        foreach (var slot in AllFormulaSlots())
-        {
-            if (AGReflect.UseType(slot) != 3) continue;
-            if (AGReflect.GetTokenKey(slot) != token.Key) continue;
-            if (AGReflect.ResultType(slot.GetType()) != token.ResultType) continue;
-            n++;
-        }
+        foreach (var slot in AllSlots())
+            if (ReferenceEquals(AGReflect.GetNode(slot), token.Node)) n++;
         return n;
     }
 
@@ -429,7 +474,12 @@ public class AGModel
     public void RemoveOrphan(GraphNode node)
     {
         if (node == null) return;
-        Orphans?.Remove(node);
+        if (Orphans?.Remove(node) != true)
+        {
+            // 時機畫布合併前的候選掛在個別動作頭端上，不在目前頭端的池裡；不掃就會刪不掉。
+            foreach (var head in Heads())
+                if (AGReflect.Orphans(head)?.Remove(node) == true) break;
+        }
         MarkDirty();
     }
 
@@ -440,7 +490,7 @@ public class AGModel
 
     public void ClearCarriers() => carriers.Clear();
 
-    /// <summary>建圖時登記一個節點的載體：GraphNode，或頭端（ActionSlot / TokenEntryBase）。</summary>
+    /// <summary>建圖時登記一個節點的載體：GraphNode、ActionSlot 或 ActionTimingGroup 頭端。</summary>
     public void RegisterCarrier(string nodeId, object carrier)
     {
         if (string.IsNullOrEmpty(nodeId) || carrier == null) return;
@@ -490,6 +540,17 @@ public class AGModel
         MarkDirty();
     }
 
+    /// <summary>
+    /// 切換節點停用。停用的載體不求值，所有指著它的欄位一律取自己的保底值（Action 直接跳過）。
+    /// 這是資料變更不是視覺狀態，所以走 MarkDirty；HEAD 沒有載體，改不到。
+    /// </summary>
+    public void SetNodeDisabled(string nodeId, bool disabled)
+    {
+        if (Carrier(nodeId) is not GraphNode node || node.Disabled == disabled) return;
+        node.Disabled = disabled;
+        MarkDirty();
+    }
+
     /// <summary>忘掉手動座標，讓自動排版重新接手（整理版面）。</summary>
     public void ClearPosition(string nodeId)
     {
@@ -528,24 +589,23 @@ public class AGModel
             foreach (var a in g.Actions)
                 if (a != null) yield return a;
         }
-        foreach (var t in ReadTokens())
-            if (t.Slot != null) yield return t.Slot;
-
         foreach (var node in AllOrphanNodes())
-            if (node.Kind == NodeKind.Inline && node.BodyObject != null) yield return node.BodyObject;
+            yield return node;
     }
 
-    /// <summary>所有頭端：時機群組裡的動作欄位，以及每個 Token 宣告。候選池掛在它們身上。</summary>
+    /// <summary>
+    /// 所有候選池掛點：時機畫布本身（ActionSystem）與時機群組裡的動作欄位。
+    /// 動作頭端上那份只為了讀回合併畫布之前存下來的候選。
+    /// </summary>
     public IEnumerable<object> Heads()
     {
+        if (Data != null) yield return Data;
         foreach (var g in ReadGroups())
         {
             if (g.Actions == null) continue;
             foreach (var a in g.Actions)
                 if (a != null) yield return a;
         }
-        foreach (var t in ReadTokens())
-            if (t.Entry != null) yield return t.Entry;
     }
 
     /// <summary>所有頭端的候選節點。</summary>
@@ -580,18 +640,13 @@ public class AGModel
             }
         }
 
-        var pack = AGReflect.Get(system, "TokenEntry");
-        if (pack == null) yield break;
-        foreach (var f in AGReflect.Fields(pack.GetType()))
+        // 標註節點多半沒有連入線、住在候選池裡，但它是正式資料（對外端點），資產引用要算它一份。
+        if (AGReflect.Get(system, "Orphans") is not IList orphans) yield break;
+        foreach (var o in orphans)
         {
-            if (!AGReflect.IsList(f.FieldType, out var elem)) continue;
-            if (!typeof(ITokenEntry).IsAssignableFrom(elem)) continue;
-            if (f.GetValue(pack) is not IList list) continue;
-            foreach (var e in list)
-            {
-                if (e is not ITokenEntry entry || entry.Slot == null) continue;
-                foreach (var s in WalkSlots(entry.Slot, visited)) yield return s;
-            }
+            if (o is not GraphNode node || !node.IsToken) continue;
+            if (node.Kind != NodeKind.Inline || node.BodyObject == null) continue;
+            foreach (var s in WalkSlots(node.BodyObject, visited)) yield return s;
         }
     }
 
@@ -634,9 +689,9 @@ public class AGModel
         if (AGReflect.IsSlotType(type))
         {
             yield return node;
-            var inner = AGReflect.GetFormula(node);
-            if (inner != null)
-                foreach (var s in WalkSlots(inner, visited)) yield return s;
+            var carrier = AGReflect.GetNode(node);
+            if (carrier != null)
+                foreach (var s in WalkSlots(carrier, visited)) yield return s;
             yield break;
         }
 
@@ -658,6 +713,117 @@ public class AGModel
             }
 
             foreach (var s in WalkSlots(val, visited)) yield return s;
+        }
+    }
+
+    /// <summary>
+    /// 正式資料引用的資產：動作執行樹，以及每個候選池中被標註的端點子樹。
+    /// 未標註候選只是編輯暫存，不得污染 subscriber。
+    /// </summary>
+    public static HashSet<ScriptableObject> ReferencedAssetsOfSystem(object system)
+    {
+        var result = new HashSet<ScriptableObject>();
+        if (system == null) return result;
+
+        var visited = new HashSet<object>(AGRefComparer.Instance);
+        if (AGReflect.Get(system, "ActionGroups") is IList groups)
+        {
+            foreach (var group in groups)
+            {
+                if (group == null || AGReflect.Get(group, "Actions") is not IList actions) continue;
+                foreach (var action in actions) CollectFormalAssets(action, visited, result);
+            }
+        }
+
+        CollectMarkedOrphanAssets(AGReflect.Orphans(system), visited, result);
+        foreach (var slot in SlotsOfSystem(system))
+        {
+            if (!AGReflect.IsActionSlotType(slot.GetType())) continue;
+            CollectMarkedOrphanAssets(AGReflect.Orphans(slot), visited, result);
+        }
+        return result;
+    }
+
+    private static void CollectMarkedOrphanAssets(IEnumerable<GraphNode> orphans,
+        HashSet<object> visited, HashSet<ScriptableObject> result)
+    {
+        if (orphans == null) return;
+        foreach (var orphan in orphans)
+            if (orphan?.IsToken == true) CollectFormalAssets(orphan, visited, result);
+    }
+
+    private static void CollectFormalAssets(object node, HashSet<object> visited, HashSet<ScriptableObject> result)
+    {
+        if (node == null || !visited.Add(node)) return;
+
+        if (AGReflect.IsSlotType(node.GetType()))
+        {
+            CollectFormalAssets(AGReflect.GetNode(node), visited, result);
+            return;
+        }
+        if (node is GraphNode carrier)
+        {
+            if (carrier.Kind == NodeKind.Asset && carrier.AssetObject != null) result.Add(carrier.AssetObject);
+            else if (carrier.Kind == NodeKind.Inline) CollectFormalAssets(carrier.BodyObject, visited, result);
+            foreach (var binding in carrier.Bindings)
+                if (binding?.Slot != null) CollectFormalAssets(binding.Slot, visited, result);
+            return;
+        }
+        if (node is UnityEngine.Object) return;
+
+        var type = node.GetType();
+        if (type.IsPrimitive || type.IsEnum || node is string) return;
+        if (node is IList list)
+        {
+            foreach (var item in list) CollectFormalAssets(item, visited, result);
+            return;
+        }
+
+        foreach (var field in AGReflect.Fields(type))
+        {
+            if (field.IsStatic || field.IsNotSerialized) continue;
+            CollectFormalAssets(field.GetValue(node), visited, result);
+        }
+    }
+
+    private static IEnumerable<GraphNode> WalkCarriers(object node, HashSet<object> visited)
+    {
+        if (node == null || !visited.Add(node)) yield break;
+
+        if (AGReflect.IsSlotType(node.GetType()))
+        {
+            var carrier = AGReflect.GetNode(node);
+            if (carrier != null)
+                foreach (var found in WalkCarriers(carrier, visited)) yield return found;
+            yield break;
+        }
+
+        if (node is GraphNode graphNode)
+        {
+            yield return graphNode;
+            if (graphNode.Kind == NodeKind.Inline && graphNode.BodyObject != null)
+                foreach (var found in WalkCarriers(graphNode.BodyObject, visited)) yield return found;
+            foreach (var binding in graphNode.Bindings)
+                if (binding?.Slot != null)
+                    foreach (var found in WalkCarriers(binding.Slot, visited)) yield return found;
+            yield break;
+        }
+
+        if (node is UnityEngine.Object) yield break;
+        var type = node.GetType();
+        if (type.IsPrimitive || type.IsEnum || node is string) yield break;
+
+        if (node is IList list)
+        {
+            foreach (var item in list)
+                foreach (var found in WalkCarriers(item, visited)) yield return found;
+            yield break;
+        }
+
+        foreach (var field in AGReflect.Fields(type))
+        {
+            if (field.IsStatic || field.IsNotSerialized) continue;
+            foreach (var found in WalkCarriers(field.GetValue(node), visited)) yield return found;
         }
     }
 }

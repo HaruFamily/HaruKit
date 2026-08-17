@@ -76,12 +76,8 @@ public class FormulaKindScaffolder : EditorWindow
         AssetDatabase.ImportAsset(path);
         AssetDatabase.Refresh();
 
-        // 接線片段：ForEachKind 不可自動改（在使用端 Pack 內），印出供貼上。
-        Debug.Log(
-            $"[FormulaKindScaffolder] 已產生 {path}\n" +
-            $"請在 {packType}（: TokenEntryPack<{packType}>）內補：\n" +
-            $"  欄位：public System.Collections.Generic.List<{kind}Entry> {kind}Tokens = new();\n" +
-            $"  ForEachKind：visitor.Visit<{resultType}, {kind}Entry>(\"{kind}\", {kind}Tokens);");
+        // 標註化之後不需要任何接線：Token 是節點上的一個名字，不是每個 kind 各一份宣告清單。
+        Debug.Log($"[FormulaKindScaffolder] 已產生 {path}（無須接線）");
 
         var obj = AssetDatabase.LoadAssetAtPath<MonoScript>(path);
         if (obj != null) EditorGUIUtility.PingObject(obj);
@@ -95,8 +91,7 @@ using UnityEngine;
 
 {NamespaceOpen()}
 
-// ===== {kind} token 族（result 型別：{resultType}）— FormulaKindScaffolder 產生 =====
-// 接線：在 {packType} 內加欄位 + ForEachKind 一行（見產生時 Console 提示）。
+// ===== {kind} 公式族（result 型別：{resultType}）— FormulaKindScaffolder 產生 =====
 // 具體算式：class XxxFormula : {kind}Formula {{ 覆寫 OnEvaluate }}。
 
 /// <summary>{kind} 算式分類 base：節點選單只列此類下的 {resultType} 公式。</summary>
@@ -105,22 +100,12 @@ public abstract class {kind}Formula : FormulaBase<{resultType}, {packType}> {{ }
 /// <summary>{kind} 公式經 Graph 抽出成共用 SO 時的資產型別。</summary>
 public class {kind}Asset : FormulaAsset<{resultType}, {packType}> {{ }}
 
-/// <summary>{kind} 求值槽：沒接節點＝常數，接了節點＝公式 / 資產 / 變數。</summary>
+/// <summary>{kind} 求值槽：沒接節點＝常數，接了節點＝公式或資產。</summary>
 [Serializable]
 public class {kind}Slot : FormulaSlot<{resultType}, {kind}Asset, {kind}Formula, {packType}>
 {{
     public {kind}Slot() {{ }}
     public {kind}Slot({resultType} defaultValue) : base(defaultValue) {{ }}
-}}
-
-/// <summary>{kind} token 定義：Key + Slot，登記於 {packType}.{kind}Tokens。</summary>
-[Serializable]
-public class {kind}Entry : TokenEntryBase
-{{
-    [SerializeField]
-    private {kind}Slot _slot = new {kind}Slot();
-
-    public override FormulaSlotBase Slot => _slot;
 }}
 {NamespaceClose()}
 ";

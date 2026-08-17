@@ -56,6 +56,15 @@ public partial class ActionGraphWindow
         return false;
     }
 
+    /// <summary>從引用清單裡挑一個可以當上下文的 Owner。清單沒同步過時會是空的。</summary>
+    private static ScriptableObject FindContextOwner(ScriptableObject asset)
+    {
+        if (AGReflect.Get(asset, "_subscribers") is not IList subs) return null;
+        foreach (var s in subs)
+            if (s is ScriptableObject so && AGModel.CanEdit(so)) return so;
+        return null;
+    }
+
     /// <summary>資產本身沒有變數清單與欄位型別，必須借一個引用它的 Owner 當上下文。</summary>
     private void OpenSharedAsset(ScriptableObject asset)
     {
@@ -67,16 +76,24 @@ public partial class ActionGraphWindow
         }
         if (TryEnterSharedAsset(asset)) return;
 
-        ScriptableObject owner = null;
-        if (AGReflect.Get(asset, "_subscribers") is IList subs)
+        var owner = FindContextOwner(asset);
+        if (owner == null)
         {
-            foreach (var s in subs)
-                if (s is ScriptableObject so && AGModel.CanEdit(so)) { owner = so; break; }
+            // 引用清單是衍生快取，只在 Owner 存檔時同步，沒同步過就是空的。
+            // 不能只叫使用者去按「重建引用清單」——那顆按鈕在資產編輯畫面裡，而現在正是進不去那個畫面。
+            if (!EditorUtility.DisplayDialog("找不到引用者",
+                $"'{asset.name}' 的引用清單是空的。\n資產本身沒有變數清單與欄位型別，必須借一個引用它的對象當上下文。\n\n要掃描整個專案找出引用它的對象嗎？",
+                "掃描專案", "取消"))
+                return;
+
+            RebuildReferences(asset);
+            owner = FindContextOwner(asset);
         }
         if (owner == null)
         {
-            EditorUtility.DisplayDialog("無法開啟",
-                "這個資產沒有登記引用者，找不到可用的上下文。\n請改從引用它的對象進入，或先在資產編輯畫面按「重建引用清單」。", "好");
+            EditorUtility.DisplayDialog("找不到引用者",
+                $"專案裡沒有任何已存檔的對象引用 '{asset.name}'。\n\n若引用它的對象還沒存檔，先存檔再試；" +
+                "或直接從那個對象的圖上雙擊這顆資產節點下鑽。", "好");
             return;
         }
 
@@ -122,9 +139,7 @@ public partial class ActionGraphWindow
         var system = field?.GetValue(owner);
         if (system == null) return false;
 
-        foreach (var slot in AGModel.SlotsOfSystem(system))
-            if (AGReflect.GetAsset(slot) == asset) return true;
-        return false;
+        return AGModel.ReferencedAssetsOfSystem(system).Contains(asset);
     }
 
     /// <summary>Owner 存檔時才依最終工作副本同步訂閱，取消與 Undo 不會污染衍生快取。</summary>
@@ -132,13 +147,13 @@ public partial class ActionGraphWindow
     {
         if (model?.Owner is not ScriptableObject owner) return;
 
-        var referenced = CollectAssets(model.AllSlots());
+        var referenced = AGModel.ReferencedAssetsOfSystem(model.Data);
         var candidates = new HashSet<ScriptableObject>(referenced);
 
         var field = AGModel.FindSystemField(owner);
         var storedSystem = field?.GetValue(owner);
         if (storedSystem != null)
-            foreach (var asset in CollectAssets(AGModel.SlotsOfSystem(storedSystem))) candidates.Add(asset);
+            foreach (var asset in AGModel.ReferencedAssetsOfSystem(storedSystem)) candidates.Add(asset);
 
         // 涵蓋「剛轉存後又刪除」：它不在舊資料與新資料內，但可能殘留舊版立即登記的 subscriber。
         foreach (var entry in AGAssetIndex.Entries)
@@ -151,21 +166,12 @@ public partial class ActionGraphWindow
         }
     }
 
-    private static HashSet<ScriptableObject> CollectAssets(IEnumerable<object> slots)
-    {
-        var result = new HashSet<ScriptableObject>();
-        foreach (var slot in slots)
-            if (AGReflect.GetAsset(slot) is ScriptableObject asset) result.Add(asset);
-        return result;
-    }
-
     public bool Bind(UnityEngine.Object owner)
     {
         if (HasUnsavedWork && !EditorUtility.DisplayDialog(
                 "尚未儲存", $"'{(model?.Owner != null ? model.Owner.name : "?")}' 有未儲存的修改，切換後會遺失。要繼續嗎？", "捨棄並切換", "取消"))
             return false;
 
-        SaveCurrentTiming();
         returnFocus = null;
         assetDirty = false;
         assetReport = new AGReport();
@@ -181,15 +187,31 @@ public partial class ActionGraphWindow
         pendingTarget = null;
 
         focus = new AGFocus();
-        RestoreCurrentTiming();
+        ClearViewState();
         graphDirty = true;
         verifiedOnce = false;
         report = AGValidator.Run(model, includeMissingTypes: true);
         verifiedOnce = true;
         reportStale = false;
+
+        // 所有時機共用一張畫布，綁定後直接進去；不再有「記住上次看的是哪個時機」這件事。
+        SetFocus(AllTimingsFocus());
+
         UpdateUnsavedState();
         Repaint();
         return true;
+    }
+
+    /// <summary>
+    /// 左上角選擇器選定：綁定成功後把 Inspector 也帶過去，兩邊看的是同一個對象。
+    /// 順序不可顛倒——先設 Selection 會讓 OnSelectionChange 搶先 Bind 一次，接著這裡再 Bind 一次。
+    /// 先 Bind 的話，OnSelectionChange 會因為「選到的就是目前 Owner」而直接跳過。
+    /// </summary>
+    private void PickOwner(ScriptableObject owner)
+    {
+        if (!Bind(owner)) return;
+        Selection.activeObject = owner;
+        Repaint();
     }
 
     /// <summary>從 Project／Hierarchy 選到支援的對象就自動聚焦。有未儲存變更時不硬切，改成在工具列問。</summary>
@@ -285,7 +307,6 @@ public partial class ActionGraphWindow
     /// <summary>清除工作副本與互動狀態，保留視窗的閒置三欄版型。</summary>
     private void ReturnToIdle()
     {
-        SaveCurrentTiming();
         model = null;
         focus = new AGFocus();
         graph = null;
@@ -296,13 +317,12 @@ public partial class ActionGraphWindow
         reportStale = false;
         assetVerifiedOnce = false;
         assetReportStale = false;
-        currentTiming = null;
         tokenSearch = "";
         assetSearch = "";
         pendingTarget = null;
         returnFocus = null;
         assetDirty = false;
-        selectedIds.Clear();
+        ClearViewState();
         UpdateUnsavedState();
         Repaint();
     }
@@ -333,7 +353,6 @@ public partial class ActionGraphWindow
 
     private void OnDisable()
     {
-        SaveCurrentTiming();
         EditorPrefs.SetFloat(PrefConsoleHeight, consoleHeight);
         EditorPrefs.SetBool(PrefConsoleCollapsed, consoleCollapsed);
         EditorPrefs.SetFloat(PrefLeftWidth, leftWidth);
@@ -368,7 +387,7 @@ public partial class ActionGraphWindow
         if (model?.Dirty == true)
         {
             model.Reload();
-            focus = new AGFocus();
+            focus = AllTimingsFocus();
             graphDirty = true;
         }
         UpdateUnsavedState();
@@ -386,38 +405,11 @@ public partial class ActionGraphWindow
             : $"'{ownerName}' 有未儲存的修改。是否在關閉前存檔？";
     }
 
-    private string TimingPrefKey()
-    {
-        if (model?.Owner == null) return null;
-        string path = AssetDatabase.GetAssetPath(model.Owner);
-        if (string.IsNullOrEmpty(path)) return null;
-        return PrefTimingPrefix + AssetDatabase.AssetPathToGUID(path);
-    }
-
-    private void SaveCurrentTiming()
-    {
-        string key = TimingPrefKey();
-        if (key == null) return;
-        if (currentTiming == null) EditorPrefs.DeleteKey(key);
-        else EditorPrefs.SetString(key, currentTiming.ToString());
-    }
-
-    private void RestoreCurrentTiming()
-    {
-        currentTiming = null;
-        string key = TimingPrefKey();
-        if (key == null || !EditorPrefs.HasKey(key)) return;
-
-        string saved = EditorPrefs.GetString(key);
-        if (!Enum.IsDefined(model.TimingType, saved)) return;
-        currentTiming = Enum.Parse(model.TimingType, saved) as Enum;
-    }
-
     private void DoVerify(bool silent)
     {
         if (focus.Kind == AGFocusKind.Asset)
         {
-            assetReport = AGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
+            assetReport = AGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.AssetOrphans, focus.Title);
             assetVerifiedOnce = true;
             assetReportStale = false;
             if (assetReport.ErrorCount > 0) { consoleCollapsed = false; consoleTab = 1; }
@@ -463,7 +455,8 @@ public partial class ActionGraphWindow
                 "捨棄修改", "會丟掉自上次存檔以來的所有修改，確定嗎？", "捨棄", "繼續編輯"))
             return;
         model.Reload();
-        focus = new AGFocus();
+        // 重抓工作副本＝焦點抓的是舊資料，直接回到時機畫布（不回去的話畫面會空白）。
+        focus = AllTimingsFocus();
         selectedIds.Clear();
         graphDirty = true;
         DoVerify(true);
@@ -498,7 +491,14 @@ public partial class ActionGraphWindow
         if (target is ActionSystemNode source) AGReflect.SetFormula(host, source.EditorClone());
         else AGReflect.ClearNode(host);
 
-        SetFocus(new AGFocus { Kind = AGFocusKind.Asset, AssetObject = asset, AssetHostSlot = host });
+        var orphanCopy = ActionSystemDeepCopy.Copy(AGReflect.Orphans(asset)) ?? new List<GraphNode>();
+        SetFocus(new AGFocus
+        {
+            Kind = AGFocusKind.Asset,
+            AssetObject = asset,
+            AssetHostSlot = host,
+            AssetOrphans = orphanCopy,
+        });
         returnFocus = back ?? new AGFocus();
         assetDirty = false;
         assetVerifiedOnce = false;
@@ -539,6 +539,13 @@ public partial class ActionGraphWindow
             return false;
         }
         setTarget.Invoke(asset, new object[] { content });
+        var storedOrphans = AGReflect.Orphans(asset);
+        if (storedOrphans != null)
+        {
+            storedOrphans.Clear();
+            var copy = ActionSystemDeepCopy.Copy(focus.AssetOrphans);
+            if (copy != null) storedOrphans.AddRange(copy);
+        }
         EditorUtility.SetDirty(asset);
         AssetDatabase.SaveAssets();
         NotifyAssetSubscribers(asset);
@@ -574,7 +581,7 @@ public partial class ActionGraphWindow
         assetVerifiedOnce = false;
         assetReportStale = false;
         assetReport = new AGReport();
-        SetFocus(back ?? new AGFocus());
+        SetFocus(back != null && back.Kind != AGFocusKind.None ? back : AllTimingsFocus());
         DoVerify(true);
         UpdateUnsavedState();
         Repaint();

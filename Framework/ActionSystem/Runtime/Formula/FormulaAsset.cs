@@ -9,10 +9,11 @@ using UnityEditor;
 #endif
 
 // 非泛型 base：給 Editor walker 不必反射就能取 _target 與候選池。
-public abstract class FormulaAssetBase : ScriptableObject
+public abstract class FormulaAssetBase : ScriptableObject, IActionSystemAssetGraph
 {
     /// <summary>本資產的候選節點清單。僅視覺化編輯器使用。</summary>
     public abstract List<GraphNode> Orphans { get; }
+    public abstract object ContentObject { get; }
 
 #if UNITY_EDITOR
     internal abstract object EditorGetTargetObject();
@@ -28,12 +29,19 @@ public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
     [SerializeReference, HideInInspector]
     private List<GraphNode> _orphans = new();
 
-    public async UniTask<T> Evaluate(TPack pack, TokenCache<TPack> tokens) => _target != null ? await _target.Evaluate(pack, tokens) : default;
+    public async UniTask<T> Evaluate(TPack pack, TokenTable<TPack> caller, IReadOnlyList<NamedFormulaSlot> bindings = null)
+    {
+        if (_target == null) return default;
+        var tokens = TokenTable<TPack>.CreateAssetScope(this, bindings, caller);
+        return await _target.Evaluate(pack, tokens);
+    }
 
     public override List<GraphNode> Orphans
     {
         get { _orphans ??= new List<GraphNode>(); return _orphans; }
     }
+
+    public override object ContentObject => _target;
 
 #if UNITY_EDITOR
     public void SetTarget(FormulaBase<T, TPack> target) => _target = target;
