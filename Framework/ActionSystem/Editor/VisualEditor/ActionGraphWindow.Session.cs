@@ -409,7 +409,7 @@ public partial class ActionGraphWindow
     {
         if (focus.Kind == AGFocusKind.Asset)
         {
-            assetReport = AGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.AssetOrphans, focus.Title);
+            assetReport = AGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
             assetVerifiedOnce = true;
             assetReportStale = false;
             if (assetReport.ErrorCount > 0) { consoleCollapsed = false; consoleTab = 1; }
@@ -472,11 +472,67 @@ public partial class ActionGraphWindow
         EnterAsset(node.Asset, node.ParentSlot.GetType());
     }
 
+    /// <summary>
+    /// 下鑽進一個變數的畫布。端點是頭端，它的取值欄位是唯一的來源接點，候選池也掛在它身上。
+    /// 資產的變數留在 Asset 焦點裡（只換頭端），資產的存檔交易因此不受影響。
+    /// </summary>
+    private void EnterVariable(GraphEndpoint endpoint)
+    {
+        if (endpoint == null) return;
+        if (ReferenceEquals(focus.Endpoint, endpoint)) return;
+
+        if (focus.Kind == AGFocusKind.Asset)
+        {
+            SetFocus(new AGFocus
+            {
+                Kind = AGFocusKind.Asset,
+                AssetObject = focus.AssetObject,
+                AssetHostSlot = focus.AssetHostSlot,
+                AssetOrphans = focus.AssetOrphans,
+                AssetEndpoints = focus.AssetEndpoints,
+                Endpoint = endpoint,
+            });
+        }
+        else
+        {
+            SetFocus(new AGFocus { Kind = AGFocusKind.Variable, Endpoint = endpoint });
+        }
+        selectedIds.Clear();
+        graphDirty = true;
+        Repaint();
+    }
+
+    /// <summary>離開變數畫布：資產的變數回資產本體，Owner 的變數回時機畫布。</summary>
+    private void ExitVariable()
+    {
+        if (focus.Endpoint == null) return;
+        if (focus.Kind == AGFocusKind.Asset)
+        {
+            SetFocus(new AGFocus
+            {
+                Kind = AGFocusKind.Asset,
+                AssetObject = focus.AssetObject,
+                AssetHostSlot = focus.AssetHostSlot,
+                AssetOrphans = focus.AssetOrphans,
+                AssetEndpoints = focus.AssetEndpoints,
+            });
+        }
+        else SetFocus(AllTimingsFocus());
+        selectedIds.Clear();
+        graphDirty = true;
+        Repaint();
+    }
+
     /// <summary>slotType 只是用來合成一個型別正確的容器槽，讓資產內容能沿用一般的節點圖流程。</summary>
     private void EnterAsset(UnityEngine.Object asset, Type slotType)
     {
         if (asset == null) return;
-        if (focus.Kind == AGFocusKind.Asset && focus.AssetObject == asset) return;
+        // 已經在這個資產裡：從變數子畫布回到資產本體，不重開交易。
+        if (focus.Kind == AGFocusKind.Asset && focus.AssetObject == asset)
+        {
+            if (focus.Endpoint != null) ExitVariable();
+            return;
+        }
         AGFocus back = focus.Kind == AGFocusKind.Asset ? returnFocus : focus;
         if (focus.Kind == AGFocusKind.Asset && !ConfirmLeaveAsset()) return;
 
@@ -487,17 +543,24 @@ public partial class ActionGraphWindow
             return;
         }
 
-        var target = AGReflect.Get(asset, "_target") ?? AGReflect.Get(asset, "_action");
-        if (target is ActionSystemNode source) AGReflect.SetFormula(host, source.EditorClone());
+        // 內容、候選與變數必須同一次複製：變數節點指著端點物件，分幾次抄就會抄成幾份不相干的端點。
+        var pack = new List<object>
+        {
+            AGReflect.Get(asset, "_target") ?? AGReflect.Get(asset, "_action"),
+            AGReflect.Orphans(asset) ?? new List<GraphNode>(),
+            AGReflect.Endpoints(asset) ?? new List<GraphEndpoint>(),
+        };
+        var packCopy = ActionSystemDeepCopy.Copy(pack);
+        if (packCopy?[0] is ActionSystemNode source) AGReflect.SetFormula(host, source);
         else AGReflect.ClearNode(host);
 
-        var orphanCopy = ActionSystemDeepCopy.Copy(AGReflect.Orphans(asset)) ?? new List<GraphNode>();
         SetFocus(new AGFocus
         {
             Kind = AGFocusKind.Asset,
             AssetObject = asset,
             AssetHostSlot = host,
-            AssetOrphans = orphanCopy,
+            AssetOrphans = packCopy?[1] as List<GraphNode> ?? new List<GraphNode>(),
+            AssetEndpoints = packCopy?[2] as List<GraphEndpoint> ?? new List<GraphEndpoint>(),
         });
         returnFocus = back ?? new AGFocus();
         assetDirty = false;
@@ -531,20 +594,33 @@ public partial class ActionGraphWindow
             return false;
         }
 
-        var content = useType == 1 ? AGReflect.GetFormula(host) : null;
         var setTarget = asset.GetType().GetMethod("SetTarget");
         if (setTarget == null)
         {
             Debug.LogError($"[ActionGraph] {asset.GetType().Name} 沒有 SetTarget，無法寫回。");
             return false;
         }
-        setTarget.Invoke(asset, new object[] { content });
+
+        // 寫回也是一次抄三份：內容裡的變數節點與變數清單必須指到同一批端點物件。
+        var pack = new List<object>
+        {
+            useType == 1 ? AGReflect.GetFormula(host) : null,
+            focus.AssetOrphans ?? new List<GraphNode>(),
+            focus.AssetEndpoints ?? new List<GraphEndpoint>(),
+        };
+        var packCopy = ActionSystemDeepCopy.Copy(pack);
+        setTarget.Invoke(asset, new object[] { packCopy?[0] });
+
         var storedOrphans = AGReflect.Orphans(asset);
         if (storedOrphans != null)
         {
             storedOrphans.Clear();
-            var copy = ActionSystemDeepCopy.Copy(focus.AssetOrphans);
-            if (copy != null) storedOrphans.AddRange(copy);
+            if (packCopy?[1] is List<GraphNode> orphanCopy) storedOrphans.AddRange(orphanCopy);
+        }
+        if (AGReflect.Endpoints(asset) is List<GraphEndpoint> storedEndpoints)
+        {
+            storedEndpoints.Clear();
+            if (packCopy?[2] is List<GraphEndpoint> endpointCopy) storedEndpoints.AddRange(endpointCopy);
         }
         EditorUtility.SetDirty(asset);
         AssetDatabase.SaveAssets();

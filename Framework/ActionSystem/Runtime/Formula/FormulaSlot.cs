@@ -27,6 +27,9 @@ public abstract class FormulaSlotBase
 
     /// <summary>這個欄位能不能接這個資產。</summary>
     public abstract bool AcceptsAsset(ScriptableObject asset);
+
+    /// <summary>這個欄位能不能接這個具名變數。結果型別與封包型別都要一致。</summary>
+    public abstract bool AcceptsEndpoint(GraphEndpoint endpoint);
 }
 
 [Serializable]
@@ -74,16 +77,18 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
 
     public override bool AcceptsAsset(ScriptableObject asset) => asset is TAsset;
 
+    public override bool AcceptsEndpoint(GraphEndpoint endpoint) => endpoint?.Slot is IFormulaSlot<TResult, TPack>;
+
     /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
     public TResult Default { get => _default; set => _default = value; }
 
     public async UniTask<TResult> Evaluate(TPack pack, TokenTable<TPack> tokens)
     {
-        // 停用與空槽走同一條路：都回保底值。企劃可以關掉一段公式而不必拆線。
-        if (_node == null || _node.Disabled) return _default;
+        // 空槽回保底值。企劃可以關掉一段公式而不必拆線。
+        if (_node == null) return _default;
 
-        if (_node.IsToken && tokens != null && tokens.HasOverride<TResult>(_node.TokenName))
-            return await tokens.ResolveOverride<TResult>(_node.TokenName, pack);
+        // 停用與空槽走同一條路：都回保底值。
+        if (_node.Disabled) return _default;
 
         switch (_node.Kind)
         {
@@ -98,6 +103,15 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
                 var asset = _node.GetAsset<TAsset>();
                 if (asset == null) return Mismatch("資產");
                 return await asset.Evaluate(pack, tokens, _node.Bindings);
+            }
+            case NodeKind.Token:
+            {
+                // 求值一律經過 TokenTable：呼叫端的參數覆蓋與循環偵測都在那裡，
+                // 直接呼叫端點的 Slot 會繞過兩者。
+                var endpoint = _node.Endpoint;
+                if (endpoint == null || string.IsNullOrEmpty(endpoint.Name)) return _default;
+                if (tokens == null || !tokens.Has<TResult>(endpoint.Name)) return _default;
+                return await tokens.Resolve<TResult>(endpoint.Name, pack);
             }
             default:
                 return _default;   // Empty：編輯中的空節點，存檔驗證會擋，runtime 走保底值續跑。

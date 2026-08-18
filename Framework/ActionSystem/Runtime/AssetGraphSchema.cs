@@ -1,16 +1,17 @@
 namespace PinPlugin.ActionSystem
 {
 using System;
-using System.Collections;
 using System.Collections.Generic;
-using System.Reflection;
 using UnityEngine;
 
-/// <summary>公式與動作資產共同提供的內部圖。資產標註由這個邊界掃描，不會外洩到 Owner 圖。</summary>
+/// <summary>公式與動作資產共同提供的內部圖。資產的參數就是它自己的具名端點清單。</summary>
 public interface IActionSystemAssetGraph
 {
     object ContentObject { get; }
     List<GraphNode> Orphans { get; }
+
+    /// <summary>本資產的具名變數。對呼叫端而言就是這個資產的參數介面。</summary>
+    List<GraphEndpoint> Endpoints { get; }
 }
 
 public sealed class AssetParameterDefinition
@@ -18,124 +19,64 @@ public sealed class AssetParameterDefinition
     public string Name;
     public Type ResultType;
     public Type PackType;
-    public GraphNode Node;
+    public FormulaSlotBase Slot;
+    public GraphEndpoint Endpoint;
 }
 
-/// <summary>從資產內容與被標註候選建立穩定的參數 schema。</summary>
+/// <summary>把資產的端點清單讀成參數 schema。清單即介面，不必掃圖。</summary>
 public static class AssetGraphSchema
 {
+    // 求值期每次都重建參數清單太貴（拖曳預覽會逐格逐詞綴呼叫）。schema 只在資產端點變動時才會變，
+    // 所以求值路徑走這份快取；編輯器與 Verify 一律走未快取的 Read，看到的永遠是當下資料。
+    private static readonly Dictionary<ScriptableObject, List<AssetParameterDefinition>> Cache = new();
+
+    /// <summary>求值路徑專用：同一個資產只讀一次。編輯期改完圖由 <see cref="InvalidateCache"/> 清掉。</summary>
+    public static List<AssetParameterDefinition> ReadCached(ScriptableObject asset)
+    {
+        if (asset == null) return new List<AssetParameterDefinition>();
+        if (Cache.TryGetValue(asset, out var cached)) return cached;
+        cached = Read(asset, out _);
+        Cache[asset] = cached;
+        return cached;
+    }
+
+    /// <summary>清掉求值快取。編輯器每次重建圖都會呼叫；runtime 資產不會變，不必呼叫。</summary>
+    public static void InvalidateCache() => Cache.Clear();
+
+#if UNITY_EDITOR
+    // 關掉 Domain Reload 時 static 會跨 Play 存活，進 Play 一定要丟掉編輯期留下的舊 schema。
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetCacheOnPlay() => Cache.Clear();
+#endif
+
+    /// <summary>讀出參數清單。duplicates 收「型別＋名稱」撞號的名字，由呼叫端報錯。</summary>
     public static List<AssetParameterDefinition> Read(ScriptableObject asset, out List<string> duplicates)
     {
         duplicates = new List<string>();
         var result = new List<AssetParameterDefinition>();
-        if (asset is not IActionSystemAssetGraph graph) return result;
+        if (asset is not IActionSystemAssetGraph graph || graph.Endpoints == null) return result;
 
-        var nodes = new List<GraphNode>();
-        var visited = new HashSet<object>(ReferenceComparer.Instance);
-        Collect(graph.ContentObject, visited, nodes);
-        if (graph.Orphans != null)
+        var seen = new HashSet<(Type, string)>();
+        foreach (var endpoint in graph.Endpoints)
         {
-            foreach (var orphan in graph.Orphans)
-                if (orphan?.IsToken == true) Collect(orphan, visited, nodes);
-        }
+            if (endpoint == null) continue;
+            string name = endpoint.Name;
+            var resultType = endpoint.ResultType;
+            // 名字或 Slot 沒填完的端點對外不成立參數；Verify 會另外報，這裡直接略過。
+            if (string.IsNullOrEmpty(name) || resultType == null) continue;
+            if (!seen.Add((resultType, name))) { duplicates.Add(name); continue; }
 
-        var names = new HashSet<string>();
-        foreach (var node in nodes)
-        {
-            if (!node.IsToken) continue;
-            if (!TryFormulaTypes(node, out var resultType, out var packType)) continue;
-            if (!names.Add(node.TokenName)) duplicates.Add(node.TokenName);
             result.Add(new AssetParameterDefinition
             {
-                Name = node.TokenName,
+                Name = name,
                 ResultType = resultType,
-                PackType = packType,
-                Node = node,
+                PackType = endpoint.PackType,
+                Slot = endpoint.Slot,
+                Endpoint = endpoint,
             });
         }
         result.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
         return result;
-    }
-
-    public static bool TryFormulaTypes(GraphNode node, out Type resultType, out Type packType)
-    {
-        resultType = null;
-        packType = null;
-        if (node == null) return false;
-        Type type = node.Kind switch
-        {
-            NodeKind.Inline => node.BodyObject?.GetType(),
-            NodeKind.Asset => node.AssetObject?.GetType(),
-            _ => null,
-        };
-        if (type == null) return false;
-
-        for (var current = type; current != null && current != typeof(object); current = current.BaseType)
-        {
-            if (!current.IsGenericType) continue;
-            Type definition = current.GetGenericTypeDefinition();
-            if (definition != typeof(FormulaBase<,>) && definition != typeof(FormulaAsset<,>)) continue;
-            var args = current.GetGenericArguments();
-            resultType = args[0];
-            packType = args[1];
-            return true;
-        }
-        return false;
-    }
-
-    private static void Collect(object value, HashSet<object> visited, List<GraphNode> nodes)
-    {
-        if (value == null || !visited.Add(value)) return;
-        if (value is FormulaSlotBase formulaSlot)
-        {
-            Collect(formulaSlot.Node, visited, nodes);
-            return;
-        }
-        if (IsActionSlot(value.GetType()))
-        {
-            Collect(value.GetType().GetProperty("Node")?.GetValue(value), visited, nodes);
-            return;
-        }
-        if (value is GraphNode node)
-        {
-            nodes.Add(node);
-            if (node.Kind == NodeKind.Inline) Collect(node.BodyObject, visited, nodes);
-            foreach (var binding in node.Bindings)
-                if (binding?.Slot != null) Collect(binding.Slot, visited, nodes);
-            return;
-        }
-        if (value is UnityEngine.Object) return;
-
-        var type = value.GetType();
-        if (type.IsPrimitive || type.IsEnum || value is string) return;
-        if (value is IList list)
-        {
-            foreach (var item in list) Collect(item, visited, nodes);
-            return;
-        }
-        foreach (var field in Fields(type)) Collect(field.GetValue(value), visited, nodes);
-    }
-
-    private static bool IsActionSlot(Type type)
-    {
-        for (var current = type; current != null && current != typeof(object); current = current.BaseType)
-            if (current.IsGenericType && current.GetGenericTypeDefinition() == typeof(ActionSlot<>)) return true;
-        return false;
-    }
-
-    private static IEnumerable<FieldInfo> Fields(Type type)
-    {
-        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
-        for (var current = type; current != null && current != typeof(object); current = current.BaseType)
-            foreach (var field in current.GetFields(flags))
-                if (!field.IsStatic && !field.IsNotSerialized) yield return field;
-    }
-
-    private sealed class ReferenceComparer : IEqualityComparer<object>
-    {
-        public static readonly ReferenceComparer Instance = new();
-        public new bool Equals(object left, object right) => ReferenceEquals(left, right);
-        public int GetHashCode(object value) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(value);
     }
 }
 }

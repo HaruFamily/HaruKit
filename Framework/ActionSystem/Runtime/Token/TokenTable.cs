@@ -6,25 +6,28 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// 一次求值期間的具名端點表：名稱 → 被標註的載體。
+/// 一次求值期間的具名變數表：（結果型別, 名稱）→ 端點的取值欄位。
 ///
-/// 名稱在一張圖內全域唯一（不分結果型別），所以這裡只有一張表；型別檢查留到 Has/Resolve
-/// 那一刻用 GetBody/GetAsset 做，不合型別就當作沒有這個值。
+/// 名稱唯一性含結果型別，所以同名不同型可以並存；查詢一律帶 T，取不到就當作沒有這個值。
+/// 求值不做記憶化：同一個名字被引用兩次就算兩次，非純函式（如 Random）每次都是新的結果。
 /// </summary>
 public class TokenTable<TPack>
 {
-    private readonly Dictionary<string, GraphNode> _nodes = new();
+    private readonly Dictionary<(Type, string), FormulaSlotBase> _slots = new();
     private readonly HashSet<(Type, string)> _inFlight = new();
     private readonly Dictionary<string, NamedFormulaSlot> _overrides = new();
     private readonly HashSet<(Type, string)> _overrideInFlight = new();
     private TokenTable<TPack> _caller;
 
+    // 沒有登記任何端點、也不會被寫入，所以共用一份就夠。
+    private static readonly TokenTable<TPack> EmptyCaller = new();
+
     internal static TokenTable<TPack> CreateAssetScope(ScriptableObject asset,
         IReadOnlyList<NamedFormulaSlot> bindings, TokenTable<TPack> caller)
     {
         var table = new TokenTable<TPack> { _caller = caller };
-        foreach (var parameter in AssetGraphSchema.Read(asset, out _))
-            table.Register(parameter.Name, parameter.Node);
+        foreach (var parameter in AssetGraphSchema.ReadCached(asset))
+            table.Register(parameter.Name, parameter.ResultType, parameter.Slot);
         if (bindings != null)
         {
             foreach (var binding in bindings)
@@ -36,14 +39,23 @@ public class TokenTable<TPack>
         return table;
     }
 
-    /// <summary>登記一個標註端點。同名後到者不覆蓋——重複名稱由 Verify 擋，runtime 取先到的那個。</summary>
-    public void Register(string name, GraphNode node)
+    /// <summary>登記一個具名端點。同名同型後到者不覆蓋——重複由 Verify 擋，runtime 取先到的那個。</summary>
+    public void Register(GraphEndpoint endpoint)
     {
-        if (string.IsNullOrEmpty(name) || node == null) return;
-        if (!_nodes.ContainsKey(name)) _nodes[name] = node;
+        if (endpoint == null) return;
+        Register(endpoint.Name, endpoint.ResultType, endpoint.Slot);
     }
 
-    public bool Has<T>(string key) => TryGetSource<T>(key, out _);
+    private void Register(string name, Type resultType, FormulaSlotBase slot)
+    {
+        if (string.IsNullOrEmpty(name) || resultType == null || slot == null) return;
+        var key = (resultType, name);
+        if (!_slots.ContainsKey(key)) _slots[key] = slot;
+    }
+
+    /// <summary>這個名稱在 T 型別下求得出值嗎。呼叫端的覆蓋優先，其次才是本圖登記的端點。</summary>
+    public bool Has<T>(string key)
+        => HasOverride<T>(key) || (!string.IsNullOrEmpty(key) && _slots.ContainsKey((typeof(T), key)));
 
     internal bool HasOverride<T>(string key)
         => !string.IsNullOrEmpty(key)
@@ -52,7 +64,7 @@ public class TokenTable<TPack>
 
     internal async UniTask<T> ResolveOverride<T>(string key, TPack pack)
     {
-        if (!HasOverride<T>(key) || _caller == null) return default;
+        if (!HasOverride<T>(key)) return default;
         var cycleKey = (typeof(T), key);
         if (!_overrideInFlight.Add(cycleKey))
         {
@@ -61,7 +73,9 @@ public class TokenTable<TPack>
         }
         try
         {
-            return await ((IFormulaSlot<T, TPack>)_overrides[key].Slot).Evaluate(pack, _caller);
+            // 綁定住在呼叫端的圖，所以用呼叫端的表求值。沒有呼叫端表（頂層傳了 null）時用空表：
+            // 綁定自己的子樹照算，只有它裡面的具名查詢查無值，不會整條回 default(T)。
+            return await ((IFormulaSlot<T, TPack>)_overrides[key].Slot).Evaluate(pack, _caller ?? EmptyCaller);
         }
         finally
         {
@@ -74,58 +88,29 @@ public class TokenTable<TPack>
 
     public async UniTask<T> Resolve<T>(string key, TPack pack)
     {
-        if (!TryGetSource<T>(key, out var node)) return default;
+        // 字串查詢與欄位取值必須給同一個答案：資產參數被呼叫端覆蓋時，兩條路徑都要拿到覆蓋值，
+        // 否則資產內部用名字查自己的參數會靜默拿到內部端點的值。
+        if (HasOverride<T>(key)) return await ResolveOverride<T>(key, pack);
 
+        if (string.IsNullOrEmpty(key)) return default;
         var ck = (typeof(T), key);
+        if (!_slots.TryGetValue(ck, out var slot) || slot is not IFormulaSlot<T, TPack> typed) return default;
+
         if (_inFlight.Contains(ck))
         {
-            Debug.LogWarning($"[TokenTable] {typeof(T).Name} token '{key}' 發生循環參照");
+            Debug.LogWarning($"[TokenTable] {typeof(T).Name} 變數 '{key}' 發生循環參照");
             return default;
         }
 
         _inFlight.Add(ck);
         try
         {
-            return await Evaluate<T>(node, pack);
+            // 端點沒接來源時，這裡回的就是它自己的常數值。
+            return await typed.Evaluate(pack, this);
         }
         finally
         {
             _inFlight.Remove(ck);
-        }
-    }
-
-    /// <summary>這個名稱在 T 型別下求得出值嗎。沒登記、停用、空節點或型別不符都回 false。</summary>
-    private bool TryGetSource<T>(string key, out GraphNode node)
-    {
-        node = null;
-        if (string.IsNullOrEmpty(key)) return false;
-        if (!_nodes.TryGetValue(key, out node) || node == null) return false;
-        if (node.Disabled) return false;   // 停用端點＝沒有這個值，呼叫端走自己的保底值
-
-        return node.Kind switch
-        {
-            NodeKind.Inline => node.GetBody<FormulaBase<T, TPack>>() != null,
-            NodeKind.Asset => node.GetAsset<FormulaAsset<T, TPack>>() != null,
-            _ => false,
-        };
-    }
-
-    private async UniTask<T> Evaluate<T>(GraphNode node, TPack pack)
-    {
-        switch (node.Kind)
-        {
-            case NodeKind.Inline:
-            {
-                var formula = node.GetBody<FormulaBase<T, TPack>>();
-                return formula != null ? await formula.Evaluate(pack, this) : default;
-            }
-            case NodeKind.Asset:
-            {
-                var asset = node.GetAsset<FormulaAsset<T, TPack>>();
-                return asset != null ? await asset.Evaluate(pack, this, node.Bindings) : default;
-            }
-            default:
-                return default;
         }
     }
 }

@@ -14,6 +14,7 @@ public abstract class FormulaAssetBase : ScriptableObject, IActionSystemAssetGra
     /// <summary>本資產的候選節點清單。僅視覺化編輯器使用。</summary>
     public abstract List<GraphNode> Orphans { get; }
     public abstract object ContentObject { get; }
+    public abstract List<GraphEndpoint> Endpoints { get; }
 
 #if UNITY_EDITOR
     internal abstract object EditorGetTargetObject();
@@ -29,6 +30,10 @@ public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
     [SerializeReference, HideInInspector]
     private List<GraphNode> _orphans = new();
 
+    // 本資產的具名變數，同時就是它對呼叫端的參數介面。
+    [SerializeReference, HideInInspector]
+    private List<GraphEndpoint> _endpoints = new();
+
     public async UniTask<T> Evaluate(TPack pack, TokenTable<TPack> caller, IReadOnlyList<NamedFormulaSlot> bindings = null)
     {
         if (_target == null) return default;
@@ -39,6 +44,11 @@ public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
     public override List<GraphNode> Orphans
     {
         get { _orphans ??= new List<GraphNode>(); return _orphans; }
+    }
+
+    public override List<GraphEndpoint> Endpoints
+    {
+        get { _endpoints ??= new List<GraphEndpoint>(); return _endpoints; }
     }
 
     public override object ContentObject => _target;

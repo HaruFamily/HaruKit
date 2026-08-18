@@ -112,11 +112,10 @@ public class ActionSystemDeepCopyTests
     [Test]
     public async Task TokenTable_Resolve_ReevaluatesEveryTime()
     {
-        var formula = new CountingFormula();
-        var node = new GraphNode(formula);
-        node.SetTokenName("value");
+        var slot = new TestSlot();
+        slot.SetNode(new GraphNode(new CountingFormula()));
         var table = new TokenTable<TestPack>();
-        table.Register("value", node);
+        table.Register(new GraphEndpoint("value", slot));
 
         int first = await table.Resolve<int>("value", default).AsTask();
         int second = await table.Resolve<int>("value", default).AsTask();
@@ -129,11 +128,17 @@ public class ActionSystemDeepCopyTests
     public async Task AssetBinding_UsesExplicitOverrideAndIsolatesCallerTable()
     {
         var asset = ScriptableObject.CreateInstance<TestFormulaAsset>();
-        var internalNode = new GraphNode(new TestFormula());
-        internalNode.SetTokenName("amount");
+        var internalSlot = new TestSlot();
+        internalSlot.SetNode(new GraphNode(new TestFormula()));
+        var parameter = new GraphEndpoint("amount", internalSlot);
+        asset.Endpoints.Add(parameter);
+
+        var proxy = new GraphNode();
+        proxy.SetEndpoint(parameter);
         var target = new PassFormula();
-        target.Value.SetNode(internalNode);
+        target.Value.SetNode(proxy);
         asset.SetTarget(target);
+        AssetGraphSchema.InvalidateCache();
 
         var assetCarrier = new GraphNode();
         assetCarrier.SetAsset(asset);
@@ -152,9 +157,9 @@ public class ActionSystemDeepCopyTests
         Assert.That(overrideValue, Is.EqualTo(7));
 
         asset.SetTarget(new ResolveFormula());
-        var ownerNode = new GraphNode(new TestFormula());
-        ownerNode.SetTokenName("owner");
-        caller.Register("owner", ownerNode);
+        var ownerSlot = new TestSlot();
+        ownerSlot.SetNode(new GraphNode(new TestFormula()));
+        caller.Register(new GraphEndpoint("owner", ownerSlot));
         int leakedValue = await call.Evaluate(default, caller).AsTask();
         Assert.That(leakedValue, Is.EqualTo(0), "資產內容不可直接解析 caller token");
 

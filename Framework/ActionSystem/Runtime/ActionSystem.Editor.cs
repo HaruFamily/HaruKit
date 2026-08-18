@@ -56,14 +56,10 @@ where TTiming : Enum
         _errors.Clear();
         _warnings.Clear();
 
-        // 標註表要照現在的資料重建一次，不能沿用上一輪的快取。
-        _tokenNodes = null;
-        var tokenNodes = TokenNodes();
-
-        ReportDuplicateTokenNames();
+        ReportDuplicateEndpointNames();
         ReportDuplicateTimings();
         ReportEmptyRootActions();
-        ReportCarrierCycles(tokenNodes);
+        ReportCarrierCycles();
 
         // 節點內容：空節點、內容為 null、型別與欄位不相容。
         // 跑兩趟：先只走啟用路徑（殘缺＝錯誤），再補走停用子樹（殘缺＝警告）。
@@ -73,15 +69,15 @@ where TTiming : Enum
         _checkedNodes.Clear();
 
         _walkDisabled = false;
-        ValidateTokenNodes(tokenNodes);
+        ValidateEndpoints();
         ValidateActionSlotSources();
 
         _walkDisabled = true;
-        ValidateTokenNodes(tokenNodes);
+        ValidateEndpoints();
         ValidateActionSlotSources();
         _walkDisabled = false;
 
-        ReportAssetCycles(tokenNodes);
+        ReportAssetCycles();
 
         bool ok = _errors.Count == 0;
         _validated = ok;
@@ -128,14 +124,20 @@ where TTiming : Enum
         else    Debug.LogError(body);
     }
 
-    /// <summary>標註名稱在一張圖內全域唯一：撞名時外部只查得到其中一顆，另一顆等於默默失效。</summary>
-    private void ReportDuplicateTokenNames()
+    /// <summary>變數唯一性是「結果型別＋名稱」：撞號時外部只查得到其中一個，另一個等於默默失效。</summary>
+    private void ReportDuplicateEndpointNames()
     {
-        if (_duplicateTokenNames == null) return;
+        var seen = new HashSet<(Type, string)>();
         var reported = new HashSet<string>();
-        foreach (var name in _duplicateTokenNames)
-            if (reported.Add(name))
-                Err($"標註名稱重複：'{name}'（同一張圖內必須唯一，不分結果型別）");
+        foreach (var endpoint in Endpoints)
+        {
+            if (endpoint == null) { Err("變數清單裡有空項目"); continue; }
+            if (endpoint.Slot == null) { Err($"變數 '{endpoint.Name ?? "(未命名)"}' 沒有指定結果型別"); continue; }
+            if (string.IsNullOrEmpty(endpoint.Name)) { Err($"有一個 {endpoint.ResultType?.Name} 變數沒有名稱"); continue; }
+
+            if (!seen.Add((endpoint.ResultType, endpoint.Name)) && reported.Add(endpoint.Name))
+                Err($"變數名稱重複：'{endpoint.Name}'（同型別內必須唯一）");
+        }
     }
 
     private void ReportDuplicateTimings()
@@ -173,7 +175,7 @@ where TTiming : Enum
         }
     }
 
-    private void ReportAssetCycles(IReadOnlyDictionary<string, GraphNode> tokenNodes)
+    private void ReportAssetCycles()
     {
         var completed = new HashSet<UnityEngine.Object>();
         if (ActionGroups != null)
@@ -185,8 +187,8 @@ where TTiming : Enum
                     ValidateAssetCycles(group.Actions[i], $"{group.Timing} 第 {i + 1} 個動作", completed);
             }
         }
-        foreach (var pair in tokenNodes)
-            ValidateAssetCycles(pair.Value, $"標註 '{pair.Key}'", completed);
+        foreach (var endpoint in Endpoints)
+            if (endpoint?.Slot != null) ValidateAssetCycles(endpoint.Slot, $"變數 '{endpoint.Name}'", completed);
     }
 
     private void ValidateAssetCycles(object root, string where, HashSet<UnityEngine.Object> completed)
@@ -229,7 +231,7 @@ where TTiming : Enum
         {
             foreach (var parameter in AssetGraphSchema.Read(scriptable, out _))
             {
-                foreach (var child in DirectAssetReferences(parameter.Node))
+                foreach (var child in DirectAssetReferences(parameter.Slot))
                 {
                     cycle = FindAssetCycle(child, stack, path, completed);
                     if (cycle != null) break;
@@ -246,7 +248,7 @@ where TTiming : Enum
     private List<UnityEngine.Object> DirectAssetReferences(object root)
     {
         var result = new List<UnityEngine.Object>();
-        CollectDirectAssetReferences(root, new HashSet<object>(), result);
+        CollectDirectAssetReferences(root, new HashSet<object>(ReferenceComparer.Instance), result);
         return result;
     }
 
@@ -303,57 +305,23 @@ where TTiming : Enum
     // ===== 節點內容檢查（空節點 / 內容為 null / 型別與欄位不相容）=====
 
     /// <summary>
-    /// 被標註的節點是這張圖的對外端點，從它開始整棵子樹都是正式資料，所以要跟動作樹一樣驗。
-    /// 它多半沒有連入線（住在候選池），沒有父欄位可以判定型別相容，所以只驗「內容有沒有」。
+    /// 端點是這張圖的對外介面，從它的取值欄位開始整棵子樹都是正式資料，跟動作樹一樣驗。
+    /// 沒接來源的端點是具名常數，合法，不必檢查內容。
     /// </summary>
-    private void ValidateTokenNodes(IReadOnlyDictionary<string, GraphNode> tokenNodes)
+    private void ValidateEndpoints()
     {
-        var visited = new HashSet<object>();
-        foreach (var pair in tokenNodes)
+        var visited = new HashSet<object>(ReferenceComparer.Instance);
+        foreach (var endpoint in Endpoints)
         {
-            var node = pair.Value;
-            if (node == null) continue;
-            if (node.Disabled && !_walkDisabled) continue;   // 停用端點留到第二趟
-
-            bool first = _checkedNodes.Add(node);
-            if (first || !_walkDisabled)
-            {
-                if (first && !IsFormulaToken(node))
-                    Issue($"標註 '{pair.Key}' 必須掛在可求值的公式或公式資產節點上");
-
-                switch (node.Kind)
-                {
-                    case NodeKind.Empty:
-                        if (first) Issue($"標註 '{pair.Key}' 的節點尚未指定內容");
-                        break;
-                    case NodeKind.Inline:
-                        if (node.BodyObject == null && first) Issue($"標註 '{pair.Key}' 的節點設為內嵌內容，但內容是空的");
-                        break;
-                    case NodeKind.Asset:
-                        if (node.AssetObject == null && first) Issue($"標註 '{pair.Key}' 的節點設為資產，但沒有指定資產");
-                        break;
-                }
-            }
-
-            ValidateSlotSources(node, visited);
+            if (endpoint?.Slot == null) continue;   // 空項目與缺 Slot 由 ReportDuplicateEndpointNames 報
+            ValidateSlotSources(endpoint.Slot, visited);
         }
-    }
-
-    private static bool IsFormulaToken(GraphNode node)
-    {
-        if (node == null) return false;
-        if (node.Kind == NodeKind.Asset) return node.AssetObject is FormulaAssetBase;
-        if (node.Kind != NodeKind.Inline || node.BodyObject == null) return false;
-
-        for (var type = node.BodyObject.GetType(); type != null && type != typeof(object); type = type.BaseType)
-            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(FormulaBase<,>)) return true;
-        return false;
     }
 
     private void ValidateActionSlotSources()
     {
         if (ActionGroups == null) return;
-        var visited = new HashSet<object>();
+        var visited = new HashSet<object>(ReferenceComparer.Instance);
         foreach (var g in ActionGroups)
         {
             if (g?.Actions == null) continue;
@@ -369,24 +337,25 @@ where TTiming : Enum
         if (node is IActionSystemAssetGraph assetGraph)
         {
             ValidateSlotSources(assetGraph.ContentObject, visited);
-            if (assetGraph.Orphans != null)
-                foreach (var orphan in assetGraph.Orphans)
-                    if (orphan?.IsToken == true) ValidateSlotSources(orphan, visited);
+            // 資產的端點就是它的參數介面，跟內容一樣是正式資料；候選池不驗。
+            if (assetGraph.Endpoints != null)
+                foreach (var endpoint in assetGraph.Endpoints)
+                    if (endpoint?.Slot != null) ValidateSlotSources(endpoint.Slot, visited);
             return;
         }
 
-        // 欄位只往目前接的節點下沉；沒有標註的候選節點不執行、不驗證。
+        // 欄位只往目前接的節點下沉；候選節點不執行、不驗證。
         if (node is ActionSlot<TPack> a)
         {
             // 停用的動作欄位不執行，整棵子樹留到第二趟走，殘缺降成警告。
             if (a.Disabled && !_walkDisabled) return;
-            CheckNode(a.Node, "動作欄位", a.AcceptsBody, a.AcceptsAsset);
+            CheckNode(a.Node, "動作欄位", a.AcceptsBody, a.AcceptsAsset, a.AcceptsEndpoint);
             ValidateSlotSources(a.Node, visited);
             return;
         }
         if (node is FormulaSlotBase fsb)
         {
-            CheckNode(fsb.Node, fsb.GetType().Name, fsb.AcceptsBody, fsb.AcceptsAsset);
+            CheckNode(fsb.Node, fsb.GetType().Name, fsb.AcceptsBody, fsb.AcceptsAsset, fsb.AcceptsEndpoint);
             ValidateSlotSources(fsb.Node, visited);
             return;
         }
@@ -445,7 +414,7 @@ where TTiming : Enum
         }
     }
 
-    private void ReportCarrierCycles(IReadOnlyDictionary<string, GraphNode> tokenNodes)
+    private void ReportCarrierCycles()
     {
         var completed = new HashSet<GraphNode>();
         if (ActionGroups != null)
@@ -455,16 +424,19 @@ where TTiming : Enum
                 if (group?.Actions == null) continue;
                 foreach (var action in group.Actions)
                 {
-                    if (!HasCarrierCycle(action, new HashSet<GraphNode>(), completed, new HashSet<object>())) continue;
+                    if (!HasCarrierCycle(action, new HashSet<GraphNode>(), completed,
+                        new HashSet<object>(ReferenceComparer.Instance))) continue;
                     Err($"{group.Timing} 的動作圖有節點連線循環");
                     return;
                 }
             }
         }
-        foreach (var pair in tokenNodes)
+        foreach (var endpoint in Endpoints)
         {
-            if (!HasCarrierCycle(pair.Value, new HashSet<GraphNode>(), completed, new HashSet<object>())) continue;
-            Err($"標註 '{pair.Key}' 的節點圖有連線循環");
+            if (endpoint?.Slot == null) continue;
+            if (!HasCarrierCycle(endpoint.Slot, new HashSet<GraphNode>(), completed,
+                new HashSet<object>(ReferenceComparer.Instance))) continue;
+            Err($"變數 '{endpoint.Name}' 的節點圖有連線循環");
             return;
         }
     }
@@ -480,8 +452,13 @@ where TTiming : Enum
             if (stack.Contains(carrier)) return true;
             if (completed.Contains(carrier)) return false;
             stack.Add(carrier);
-            bool cycle = carrier.Kind == NodeKind.Inline
-                && HasCarrierCycle(carrier.BodyObject, stack, completed, visitedObjects);
+            // 變數節點要下沉到端點的取值欄位，否則「A 變數引用 B、B 又引用 A」這種跨端點的環抓不到。
+            bool cycle = carrier.Kind switch
+            {
+                NodeKind.Inline => HasCarrierCycle(carrier.BodyObject, stack, completed, visitedObjects),
+                NodeKind.Token => HasCarrierCycle(carrier.Endpoint?.Slot, stack, completed, visitedObjects),
+                _ => false,
+            };
             if (!cycle)
             {
                 foreach (var binding in carrier.Bindings)
@@ -543,7 +520,8 @@ where TTiming : Enum
 
     // 節點是唯一來源，所以只需檢查「這個節點的內容有沒有、對不對型別」一件事。
     private void CheckNode(GraphNode node, string where,
-        Func<ActionSystemNode, bool> acceptsBody, Func<ScriptableObject, bool> acceptsAsset)
+        Func<ActionSystemNode, bool> acceptsBody, Func<ScriptableObject, bool> acceptsAsset,
+        Func<GraphEndpoint, bool> acceptsEndpoint)
     {
         if (node == null) return;   // 動作＝空槽、公式＝常數，都是合法狀態
 
@@ -569,6 +547,14 @@ where TTiming : Enum
                 if (node.AssetObject == null) { if (first) Issue($"{where} 的節點設為資產，但沒有指定資產"); return; }
                 if (!acceptsAsset(node.AssetObject))
                     Issue($"{where} 接的資產型別不相容：{node.AssetObject.GetType().Name}");
+                return;
+
+            case NodeKind.Token:
+                // 端點被刪掉時參照直接變 null，看得見；不會像字串 key 一樣留著一個查不到的名字。
+                if (node.Endpoint == null) { if (first) Issue($"{where} 的節點設為變數，但沒有指定變數"); return; }
+                if (string.IsNullOrEmpty(node.Endpoint.Name)) { if (first) Issue($"{where} 接的變數沒有名稱"); return; }
+                if (!acceptsEndpoint(node.Endpoint))
+                    Issue($"{where} 接的變數 '{node.Endpoint.Name}' 型別不相容：{node.Endpoint.ResultType?.Name ?? "未指定"}");
                 return;
         }
     }

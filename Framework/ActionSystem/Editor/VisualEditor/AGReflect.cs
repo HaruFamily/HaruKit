@@ -179,8 +179,7 @@ public static class AGReflect
         return node;
     }
 
-    /// <summary>相容既有呼叫端的模式碼：0 常數／空槽、1 公式或動作（含編輯中空節點）、2 資產。</summary>
-    // 3（變數引用）已隨 Token 標註化移除：圖內引用一律是連線，沒有「以名稱引用」的節點。
+    /// <summary>相容既有呼叫端的模式碼：0 常數／空槽、1 公式或動作（含編輯中空節點）、2 資產、3 具名變數。</summary>
     public static int UseType(object slot)
     {
         var node = GetNode(slot);
@@ -188,6 +187,7 @@ public static class AGReflect
         return node.Kind switch
         {
             NodeKind.Asset => 2,
+            NodeKind.Token => 3,
             _ => 1,   // Inline 與 Empty 都畫成來源節點，Empty 由驗證擋存檔
         };
     }
@@ -218,8 +218,19 @@ public static class AGReflect
     public static void SetAsset(object slot, UnityEngine.Object asset)
         => EnsureNode(slot).SetAsset(asset as UnityEngine.ScriptableObject);
 
-    /// <summary>這個欄位接的載體上掛的標註名稱（沒接或沒標註回 null）。</summary>
-    public static string GetTokenName(object slot) => GetNode(slot)?.TokenName;
+    /// <summary>這個欄位接的具名變數（沒接或不是變數節點回 null）。</summary>
+    public static GraphEndpoint GetEndpoint(object slot) => GetNode(slot)?.Endpoint;
+
+    /// <summary>換成具名變數引用：節點 Id、座標、備註與連入邊全部保留，只換內容。</summary>
+    public static void SetEndpoint(object slot, GraphEndpoint endpoint)
+    {
+        if (endpoint == null)
+        {
+            GetNode(slot)?.Clear();
+            return;
+        }
+        EnsureNode(slot).SetEndpoint(endpoint);
+    }
 
     /// <summary>斷開來源：公式欄位回常數、動作欄位回空槽。</summary>
     public static void ClearNode(object slot) => SetNode(slot, null);
@@ -237,6 +248,14 @@ public static class AGReflect
         var so = asset as UnityEngine.ScriptableObject;
         if (slot is FormulaSlotBase fsb) return fsb.AcceptsAsset(so);
         return CallMethod(slot, "AcceptsAsset", so) as bool? ?? false;
+    }
+
+    /// <summary>這個欄位能不能接這個具名變數。動作欄位一律不能。</summary>
+    public static bool AcceptsEndpoint(object slot, GraphEndpoint endpoint)
+    {
+        if (endpoint == null) return false;
+        if (slot is FormulaSlotBase fsb) return fsb.AcceptsEndpoint(endpoint);
+        return CallMethod(slot, "AcceptsEndpoint", endpoint) as bool? ?? false;
     }
 
     public static object GetDefault(object slot) => (slot as FormulaSlotBase)?.DefaultObject;
@@ -286,6 +305,10 @@ public static class AGReflect
 
     /// <summary>畫布主人的候選節點池（ActionSystem、資產各一份；動作頭端上的那份只為讀回舊資料）。</summary>
     public static List<GraphNode> Orphans(object head) => GetMember(head, "Orphans") as List<GraphNode>;
+
+    /// <summary>圖主人的具名變數清單（ActionSystem、公式／動作資產各一份）。</summary>
+    // 走 GetMember 而不是 Get：Endpoints 是屬性，Get 只找欄位，拿到的會是 null。
+    public static List<GraphEndpoint> Endpoints(object owner) => GetMember(owner, "Endpoints") as List<GraphEndpoint>;
 
     // 泛型成員只能靠名稱呼叫：ActionSlot<TPack> 的 TPack 在 Editor 端是未知的。
     private static object GetMember(object target, string name)

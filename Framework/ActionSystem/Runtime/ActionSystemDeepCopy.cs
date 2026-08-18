@@ -85,12 +85,5 @@ public static class ActionSystemDeepCopy
             foreach (var field in current.GetFields(flags))
                 if (!field.IsStatic && !field.IsNotSerialized && !field.IsInitOnly) yield return field;
     }
-
-    private sealed class ReferenceComparer : IEqualityComparer<object>
-    {
-        public static readonly ReferenceComparer Instance = new();
-        public new bool Equals(object left, object right) => ReferenceEquals(left, right);
-        public int GetHashCode(object value) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(value);
-    }
 }
 }
