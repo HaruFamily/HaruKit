@@ -27,6 +27,44 @@ public partial class ActionGraphWindow
         AssignAsset(row.Slot, dragAsset);
     }
 
+    /// <summary>變數落到畫布上：落在參數列就直接接上，空白處就建立候選節點。拖曳與「建立節點」共用。</summary>
+    private void DropEndpointOn(GraphEndpoint endpoint, Vector2 graphMouse)
+    {
+        if (endpoint == null) return;
+        var row = RowAt(graphMouse, out _);
+        if (row == null)
+        {
+            AddVariableReferenceNode(endpoint, graphMouse);
+            return;
+        }
+        if (row.IsActionSlot || !AGReflect.AcceptsEndpoint(row.Slot, endpoint))
+        {
+            ShowNotification(new GUIContent("變數型別不符，無法接到這個欄位"));
+            return;
+        }
+        model.BreakUndoMerge();
+        AssignEndpoint(row.Slot, endpoint);
+    }
+
+    /// <summary>把變數拖到空白畫布：建立一個沒有連線的候選載體。</summary>
+    private void AddVariableReferenceNode(GraphEndpoint endpoint, Vector2 graphMouse)
+    {
+        if (!CanCreateReferenceNode())
+        {
+            ShowNotification(new GUIContent("先指定根公式或動作，才能放入參照節點"));
+            return;
+        }
+        if (endpoint == null) return;
+
+        model.BreakUndoMerge();
+        var carrier = new GraphNode();
+        carrier.EnsureId();
+        carrier.SetEndpoint(endpoint);
+        carrier.Pos = SnapToGrid(graphMouse);
+        model.AddOrphan(carrier);
+        Invalidate();
+    }
+
     /// <summary>把 Project 的共用資產拖到空白畫布：建立一個沒有連線的候選載體。</summary>
     private void AddAssetReferenceNode(UnityEngine.Object asset, Vector2 graphMouse)
     {
@@ -98,13 +136,13 @@ public partial class ActionGraphWindow
         if (node == null) return;
         var options = new List<AGSourceOption>();
         object slot = SourceSlot(node);
-        bool isAction = slot != null
-            ? AGReflect.IsActionSlotType(slot.GetType())
-            : node.IsActionNode || (node.IsAssetNode && node.ResultType == null);
 
-        // 同一個結果型別的 Formula／Asset 一律可以互換，包含候選池裡沒有父欄位的節點：
+        // 同一個結果型別的 Formula／Asset／Token 一律可以互換，包含候選池裡沒有父欄位的節點：
         // 型別關係靠「代表性的 Slot 型別」推導，推不出來才退回用目前內容的基底型別。
         Type slotType = slot?.GetType() ?? RepresentativeSlotType(node);
+        bool isAction = slotType != null
+            ? AGReflect.IsActionSlotType(slotType)
+            : node.IsActionNode || (node.IsAssetNode && node.ResultType == null);
         Type baseType = slotType != null
             ? (isAction ? AGReflect.ActionBaseType(slotType) : AGReflect.FormulaBaseType(slotType))
             : AGReflect.NodeBaseType(node.Obj?.GetType());
@@ -138,6 +176,24 @@ public partial class ActionGraphWindow
                     Name = entry.Name,
                     IsCurrent = node.Asset == asset,
                     Apply = () => ChangeNodeToAsset(node, asset),
+                });
+            }
+        }
+
+        // 變數與 Formula／Asset 同一層：三者都能填同一個結果型別的欄位，所以換來源選單一律列在一起。
+        // 判準用上面推出來的 resultType，和 Formula／Asset 兩組同源；動作欄位沒有結果型別，天然排除。
+        if (resultType != null)
+        {
+            foreach (var token in AGModel.ReadTokens(CurrentEndpoints()))
+            {
+                if (token.ResultType != resultType) continue;
+                var endpoint = token.Endpoint;
+                options.Add(new AGSourceOption
+                {
+                    Group = "Token",
+                    Name = token.Key,
+                    IsCurrent = ReferenceEquals(node.Endpoint, endpoint),
+                    Apply = () => ChangeNodeToVariable(node, endpoint),
                 });
             }
         }
@@ -198,7 +254,7 @@ public partial class ActionGraphWindow
 
     /// <summary>
     /// 這個節點「相當於掛在哪一種 Slot 上」。候選池的節點沒有父欄位，型別關係只能這樣推：
-    /// 父欄位 → 連入邊的欄位 → 目前資產對應的欄位。
+    /// 父欄位 → 連入邊的欄位 → 目前資產對應的欄位 → 建立當下記下的族。
     /// </summary>
     private Type RepresentativeSlotType(AGNode node)
     {
@@ -220,6 +276,7 @@ public partial class ActionGraphWindow
             if (fromAsset != null) return fromAsset;
         }
 
+        if (!string.IsNullOrEmpty(node.Id) && orphanKindHints.TryGetValue(node.Id, out var hint)) return hint;
         return null;
     }
 
@@ -320,6 +377,25 @@ public partial class ActionGraphWindow
         return n;
     }
 
+    /// <summary>欄位長出一顆變數節點。與 <see cref="AssignAsset"/> 對稱：先長節點，選哪一個變數在節點本體那一列。</summary>
+    private void AssignEndpoint(object slot, GraphEndpoint endpoint)
+    {
+        PreserveVisibleNodePositions();
+        SoloSource(slot).SetEndpoint(endpoint);
+        Invalidate();
+    }
+
+    /// <summary>放置模式落下：在點擊處長一顆空節點並接上欄位，內容由使用者在節點 Header 選。</summary>
+    // 和「拉線到空白處」同一條路徑，只是起點是右鍵選單而不是接點。
+    private void PlaceNewSource(object slot, Vector2 graphMouse)
+    {
+        if (slot == null) return;
+        model.BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        NewSource(slot).Pos = SnapToGrid(graphMouse);
+        Invalidate();
+    }
+
     private void AssignAsset(object slot, UnityEngine.Object asset)
     {
         if (asset is not ScriptableObject so) return;
@@ -376,8 +452,6 @@ public partial class ActionGraphWindow
         var slot = row.Slot;
         var menu = new GenericMenu();
         int useType = AGReflect.UseType(slot);
-        // GenericMenu 的回呼在 OnGUI 之外執行，Event.current 會是 null → 先把滑鼠位置抓下來。
-        var menuPos = Event.current.mousePosition;
 
         if (!row.IsActionSlot)
         {
@@ -397,21 +471,9 @@ public partial class ActionGraphWindow
                     }));
         }
 
-        menu.AddItem(new GUIContent(row.IsActionSlot ? "指定動作…" : "指定公式…"), false, () =>
-        {
-            var baseType = row.IsActionSlot
-                ? AGReflect.ActionBaseType(slot.GetType())
-                : AGReflect.FormulaBaseType(slot.GetType());
-            AGTypeCatalog.ShowPicker(new Rect(menuPos, Vector2.one), baseType,
-                row.IsActionSlot ? "選擇動作" : "選擇公式", type =>
-                {
-                    var instance = AGReflect.CreateInstance(type);
-                    if (instance != null) Connect(slot, instance);
-                    Repaint();
-                });
-        });
-
-        menu.AddItem(new GUIContent("接資產（長出資產節點）"), useType == 2, () => AssignAsset(slot, AGReflect.GetAsset(slot)));
+        // 公式／資產／變數三種來源都只是「節點裡裝什麼」，換內容在節點 Header 的 ▾，
+        // 所以這裡只留一條「長一顆節點出來」，不再分三條。
+        menu.AddItem(new GUIContent("建立節點"), false, () => placingSlot = slot);
 
         if (useType != 0)
         {
@@ -449,100 +511,185 @@ public partial class ActionGraphWindow
     }
 
     /// <summary>
-    /// 標註一顆節點：從此它是這張圖的對外端點，Inspector 可以用這個名字查它的值。
-    /// 內容不搬、載體不換、連線不動——標註只是在載體上加一個名字。
+    /// 轉存為變數：新建一個端點，把這顆節點搬進它自己的畫布，原欄位改接一顆變數節點。
+    /// 和「轉存為資產」同一個手勢，差別是變數留在這張圖裡，不另外開檔。
     /// </summary>
-    private void RegisterToken(AGNode node, string key)
+    private void ExtractVariable(AGNode node)
     {
-        if (node?.Carrier == null) return;
-        if (!model.SetTokenName(node.Carrier, key, CurrentTokenScope(), out string error))
+        if (node?.Carrier == null || node.ResultType == null) return;
+        var scope = CurrentEndpoints();
+        if (scope == null) return;
+
+        Type slotType = null;
+        foreach (var kind in model.FormulaKinds())
+            if (kind.resultType == node.ResultType) { slotType = kind.slotType; break; }
+
+        model.BreakUndoMerge();
+        var endpoint = model.CreateEndpoint(scope, slotType, out string error);
+        if (endpoint == null)
         {
-            EditorUtility.DisplayDialog("無法標註", error, "好");
+            EditorUtility.DisplayDialog("無法轉存為變數", error, "好");
             return;
         }
-        Invalidate();
-        Repaint();
+
+        // 端點的取值欄位接下這顆載體；它的子樹整棵跟著搬進變數畫布。
+        AGReflect.SetNode(endpoint.Slot, node.Carrier);
+
+        if (node.ParentSlot != null)
+        {
+            var proxy = new GraphNode();
+            proxy.EnsureId();
+            proxy.SetEndpoint(endpoint);
+            AGReflect.SetNode(node.ParentSlot, proxy);
+        }
+        else model.RemoveOrphan(node.Carrier);   // 原本是候選節點：搬走就不再掛在這張畫布上
+
+        MarkGraphChanged();
     }
 
-    private void UnregisterToken(AGNode node)
+    /// <summary>只列這個節點收得下的變數。與 <see cref="ShowAssetPicker"/> 同一種版型。</summary>
+    private void ShowVariablePicker(AGNode node, Rect anchor)
     {
-        if (node?.Carrier == null) return;
+        var options = new List<AGSourceOption>();
+        foreach (var token in AGModel.ReadTokens(CurrentEndpoints()))
+        {
+            var endpoint = token.Endpoint;
+            if (!CanReplaceVariableNode(node, endpoint)) continue;
+            options.Add(new AGSourceOption
+            {
+                Name = $"{token.Key}　({token.TypeName})",
+                IsCurrent = ReferenceEquals(endpoint, node.Endpoint),
+                Apply = () => ChangeNodeToVariable(node, endpoint),
+            });
+        }
+
+        if (options.Count == 0)
+        {
+            ShowNotification(new GUIContent("這張圖還沒有型別相容的變數"));
+            return;
+        }
+        AGTypeCatalog.ShowSourcePicker(anchor, options, "選擇變數");
+    }
+
+    /// <summary>這個節點能不能換成這個變數。判定路徑與 <see cref="CanReplaceAssetNode"/> 一致。</summary>
+    private bool CanReplaceVariableNode(AGNode node, GraphEndpoint endpoint)
+    {
+        if (endpoint?.Slot == null) return false;
+        if (node?.ParentSlot != null) return AGReflect.AcceptsEndpoint(node.ParentSlot, endpoint);
+
+        bool hasLink = false;
+        if (graph?.Links != null)
+        {
+            foreach (var link in graph.Links)
+            {
+                if (!ReferenceEquals(link.Target, node)) continue;
+                hasLink = true;
+                if (link.ParentRow?.Slot == null || !AGReflect.AcceptsEndpoint(link.ParentRow.Slot, endpoint)) return false;
+            }
+        }
+        if (hasLink) return true;
+
+        // 候選池裡沒有連入線的節點：拿代表性 Slot 的結果型別比對。
+        Type slotType = RepresentativeSlotType(node);
+        Type resultType = slotType != null ? AGReflect.ResultType(slotType) : node?.ResultType;
+        return resultType == null || resultType == endpoint.ResultType;
+    }
+
+    private void ChangeNodeToVariable(AGNode node, GraphEndpoint endpoint)
+    {
+        if (node?.Carrier == null || endpoint == null || ReferenceEquals(node.Endpoint, endpoint)) return;
+
         model.BreakUndoMerge();
-        model.ClearTokenName(node.Carrier);
+        PreserveVisibleNodePositions();
+        if (node.Carrier.Kind != NodeKind.Token) DetachChildSourcesForReplacement(node);
+        node.Carrier.SetEndpoint(endpoint);
         Invalidate();
         Repaint();
     }
 
+    /// <summary>
+    /// 節點右鍵。不論哪一種節點都是同四段、同順序：**下鑽 → 編輯這顆 → 刪除 → 畫布**。
+    /// 分隔線由 <c>Sep()</c> 依實際有沒有項目補，所以某一段缺席不會留下空隙。
+    /// </summary>
+    // 換來源走 Header 的 ▾、換引用對象走本體那列下拉、中斷連線雙擊連線，三者都不重複放進右鍵。
     private void ShowNodeMenu(AGNode node)
     {
-        // 換來源走 Header 名稱區、中斷連線走連線本身（雙擊），兩者都不重複放進右鍵選單。
         var menu = new GenericMenu();
+        int section = 0;
+        void Sep()
+        {
+            if (menu.GetItemCount() > section) menu.AddSeparator("");
+            section = menu.GetItemCount();
+        }
 
+        // 時機節點沒有內容也沒有引用，只有「刪掉這個時機」與畫布操作。
         if (node.IsTimingGroup)
         {
             menu.AddItem(new GUIContent("刪除這個時機"), false, () => RemoveTimingGroup(node));
-            menu.AddSeparator("");
-            menu.AddItem(new GUIContent("聚焦全部節點"), false, FrameAll);
-            menu.AddItem(new GUIContent("整理版面"), false, ResetLayout);
+            AddCanvasMenuItems(menu, Sep);
             menu.ShowAsContext();
             return;
         }
 
-        if (node.IsPlaceholder && node.ParentSlot != null)
-        {
-            if (!node.IsRoot) menu.AddItem(new GUIContent("清除空 Node"), false, () => DeleteNode(node));
-            menu.ShowAsContext();
-            return;
-        }
+        // 下鑽走雙擊、換引用對象走本體那列下拉、改名走左欄或變數畫布的標題，都不重複放進右鍵。
 
-        // 標註只適用可求值節點；資產根載體不會被資產格式保存，因此禁止標註。
+        // === 1. 轉存 ===
+        // 資產根載體不會被資產格式保存；變數畫布的根載體同理，轉存後那張畫布就空了。
         bool assetRoot = focus.Kind == AGFocusKind.Asset && ReferenceEquals(node.ParentSlot, focus.AssetHostSlot);
-        if (node.Carrier != null && node.ResultType != null && !assetRoot)
-        {
-            if (node.TokenName != null)
-            {
-                menu.AddItem(new GUIContent($"重新命名標註（目前 @{node.TokenName}）…"), false, () =>
-                    AGPrompt.Show("標註名稱", "外部（Inspector）用這個名字查這顆節點的值",
-                        node.TokenName, key => RegisterToken(node, key)));
-                menu.AddItem(new GUIContent("取消標註"), false, () => UnregisterToken(node));
-            }
-            else
-            {
-                menu.AddItem(new GUIContent("註冊為 Token…"), false, () =>
-                    AGPrompt.Show("標註名稱", "外部（Inspector）用這個名字查這顆節點的值",
-                        "", key => RegisterToken(node, key)));
-            }
-            menu.AddSeparator("");
-        }
+        bool variableRoot = focus.Endpoint != null && ReferenceEquals(node.ParentSlot, focus.Endpoint.Slot);
+        bool canExtract = !node.IsPlaceholder && !assetRoot && !variableRoot;
 
-        if (node.Obj != null)
-        {
-            bool isAction = node.ParentSlot != null
-                ? AGReflect.IsActionSlotType(node.ParentSlot.GetType())
-                : ActionBaseTypeOfCurrentSystem()?.IsInstanceOfType(node.Obj) ?? false;
-            menu.AddItem(new GUIContent(isAction ? "轉存為動作資產" : "轉存為公式資產"), false, () => ExtractAsset(node));
-        }
+        // 變數節點自己就是變數，沒有「再轉存成變數」這回事。
+        if (canExtract && !node.IsVariableNode && node.Carrier != null && node.ResultType != null)
+            menu.AddItem(new GUIContent("轉存為變數"), false, () => ExtractVariable(node));
 
-        if (!node.IsRoot && (node.Obj != null || node.IsAssetNode))
-            menu.AddItem(new GUIContent("刪除"), false, () => DeleteNode(node));
+        if (canExtract && (node.Obj != null || node.IsVariableNode))
+            menu.AddItem(new GUIContent("轉存為資產"), false, () => ExtractAsset(node));
+        Sep();
 
-        if (node.IsAssetNode && node.Asset != null)
-        {
-            menu.AddSeparator("");
-            menu.AddItem(new GUIContent("編輯這個資產"), false, () => EnterAsset(node));
-            menu.AddItem(new GUIContent("在 Project 中顯示"), false, () => EditorGUIUtility.PingObject(node.Asset));
-        }
+        // === 2. 刪除 ===
+        if (!node.IsRoot && node.Carrier != null)
+            menu.AddItem(new GUIContent(node.IsPlaceholder ? "清除空 Node" : "刪除"), false, () => DeleteNode(node));
 
-        menu.AddSeparator("");
-        menu.AddItem(new GUIContent("聚焦全部節點"), false, FrameAll);
-        menu.AddItem(new GUIContent("整理版面"), false, ResetLayout);
+        // === 3. 畫布 ===
+        AddCanvasMenuItems(menu, Sep);
         menu.ShowAsContext();
     }
 
-    private IEnumerable<GraphNode> CurrentTokenScope()
+    /// <summary>每個右鍵選單最後一段都一樣：整張畫布的操作。</summary>
+    private void AddCanvasMenuItems(GenericMenu menu, Action separator)
+    {
+        separator();
+        menu.AddItem(new GUIContent("聚焦全部節點"), false, FrameAll);
+        menu.AddItem(new GUIContent("整理版面"), false, ResetLayout);
+    }
+
+    /// <summary>目前這張圖的變數清單。資產焦點是資產的工作副本，其餘是 Owner 的工作副本。</summary>
+    private List<GraphEndpoint> CurrentEndpoints()
+        => focus.Kind == AGFocusKind.Asset ? focus.AssetEndpoints : model.OwnerEndpoints;
+
+    /// <summary>目前這張圖的所有載體。刪變數要靠它把指著那個變數的節點一起清掉。</summary>
+    private IEnumerable<GraphNode> CurrentCarrierScope()
     {
         if (focus.Kind != AGFocusKind.Asset) return model.AllCarriers();
-        return model.CarriersOf(focus.Roots, focus.AssetOrphans);
+
+        var roots = new List<object> { focus.AssetHostSlot };
+        foreach (var endpoint in focus.AssetEndpoints ?? new List<GraphEndpoint>())
+            if (endpoint?.Slot != null) roots.Add(endpoint.Slot);
+        return model.CarriersOf(roots, AssetAllOrphans());
+    }
+
+    /// <summary>資產交易裡所有候選節點：資產本體那份，加上每個變數畫布自己那份。</summary>
+    private IEnumerable<GraphNode> AssetAllOrphans()
+    {
+        foreach (var node in focus.AssetOrphans ?? new List<GraphNode>())
+            if (node != null) yield return node;
+        foreach (var endpoint in focus.AssetEndpoints ?? new List<GraphEndpoint>())
+        {
+            if (endpoint == null) continue;
+            foreach (var node in endpoint.Orphans)
+                if (node != null) yield return node;
+        }
     }
 
     private IEnumerable<object> SlotsInCurrentGraph()
@@ -555,16 +702,21 @@ public partial class ActionGraphWindow
 
         var visited = new HashSet<object>(AGRefComparer.Instance);
         foreach (var slot in AGModel.WalkSlots(focus.AssetHostSlot, visited)) yield return slot;
-        if (focus.AssetOrphans == null) yield break;
-        foreach (var orphan in focus.AssetOrphans)
+        // 變數的取值欄位也是這張圖的一部分：引用計數與拉線相容都要算進來。
+        foreach (var endpoint in focus.AssetEndpoints ?? new List<GraphEndpoint>())
+        {
+            if (endpoint?.Slot == null) continue;
+            foreach (var slot in AGModel.WalkSlots(endpoint.Slot, visited)) yield return slot;
+        }
+        foreach (var orphan in AssetAllOrphans())
             foreach (var slot in AGModel.WalkSlots(orphan, visited)) yield return slot;
     }
 
     private void ShowCanvasMenu(Vector2 graphMouse)
     {
         var menu = new GenericMenu();
-        var menuPos = Event.current.mousePosition;
-        bool canEditFocus = focus.Kind == AGFocusKind.Timing || focus.Kind == AGFocusKind.Action;
+        // 有頭端就有候選池可放，判準與拖曳放節點那條一致；變數與資產畫布也算。
+        bool canEditFocus = CanCreateReferenceNode();
 
         // 時機節點由使用者自己建，位置就是按下右鍵的地方。
         if (focus.Kind == AGFocusKind.Timing)
@@ -573,28 +725,21 @@ public partial class ActionGraphWindow
             menu.AddSeparator("");
         }
 
+        // 只選族（結果型別），不選具體 class：長出來的是「（選擇 Formula）」那種空節點，
+        // 型別留到 Header 的 ▾ 再挑。族要先決定，否則空節點沒有型別關係，▾ 也列不出東西。
         foreach (var (rt, slotType) in model.FormulaKinds())
         {
-            var baseType = AGReflect.FormulaBaseType(slotType);
-            if (baseType == null) continue;
-
-            var capturedBase = baseType;
+            var captured = slotType;
             var content = new GUIContent($"建立公式/{AGReflect.ResultTypeName(rt)}");
-            if (canEditFocus)
-                menu.AddItem(content, false, () =>
-                    AGTypeCatalog.ShowPicker(new Rect(menuPos, Vector2.one), capturedBase, "選擇公式",
-                        type => CreateOrphan(type, graphMouse)));
+            if (canEditFocus) menu.AddItem(content, false, () => CreateOrphan(graphMouse, captured));
             else menu.AddDisabledItem(content);
         }
 
-        var actionBase = ActionBaseTypeOfCurrentSystem();
-        if (actionBase != null)
+        Type actionSlotType = ActionSlotTypeOfCurrentSystem();
+        if (actionSlotType != null)
         {
             var content = new GUIContent("建立動作");
-            if (canEditFocus)
-                menu.AddItem(content, false, () =>
-                    AGTypeCatalog.ShowPicker(new Rect(menuPos, Vector2.one), actionBase, "選擇動作",
-                        type => CreateOrphan(type, graphMouse)));
+            if (canEditFocus) menu.AddItem(content, false, () => CreateOrphan(graphMouse, actionSlotType));
             else menu.AddDisabledItem(content);
         }
 
@@ -625,19 +770,43 @@ public partial class ActionGraphWindow
     /// <summary>把節點抽成獨立資產，原欄位改指向它。未連接節點則只建立資產。</summary>
     private void ExtractAsset(AGNode node)
     {
+        // 變數節點自己沒有內容：轉存的對象是它指向的那個變數的算式，變數本身留著。
+        if (node.IsVariableNode) { ExtractVariableContentAsset(node); return; }
+
         if (node.Obj is not ActionSystemNode source) return;
 
-        var assetType = AssetTypeFor(node, out _);
+        var assetType = AssetTypeFor(node);
         if (assetType == null)
         {
             EditorUtility.DisplayDialog("無法轉存", "找不到對應的資產型別。", "好");
             return;
         }
 
-        CreateExtractedAsset(node, source, assetType, AGReflect.TypeName(source.GetType()));
+        CreateExtractedAsset(node.Carrier, node.ParentSlot == null, source, assetType, AGReflect.TypeName(source.GetType()));
     }
 
-    private void CreateExtractedAsset(AGNode node, ActionSystemNode source, Type assetType, string assetName)
+    /// <summary>把變數的內容轉存成公式資產：變數與所有指著它的節點都不動，只是它的來源換成資產。</summary>
+    private void ExtractVariableContentAsset(AGNode node)
+    {
+        var slot = node.Endpoint?.Slot;
+        var inner = slot?.Node;
+        if (inner?.BodyObject is not ActionSystemNode source)
+        {
+            EditorUtility.DisplayDialog("無法轉存", "這個變數的內容不是可轉存的公式。", "好");
+            return;
+        }
+
+        var assetType = AGReflect.AssetType(slot.GetType());
+        if (assetType == null)
+        {
+            EditorUtility.DisplayDialog("無法轉存", "找不到對應的資產型別。", "好");
+            return;
+        }
+
+        CreateExtractedAsset(inner, false, source, assetType, AGReflect.TypeName(source.GetType()));
+    }
+
+    private void CreateExtractedAsset(GraphNode carrier, bool isOrphan, ActionSystemNode source, Type assetType, string assetName)
     {
         if (!AGAssetStore.TryGetUniquePath(assetName, out string path)) return;
 
@@ -664,35 +833,29 @@ public partial class ActionGraphWindow
 
         model.BreakUndoMerge();
         // 內容被「搬進資產」，所以是就地把載體換成資產引用，不留成候選。
-        if (node.Carrier != null) node.Carrier.SetAsset(asset);
-        if (node.ParentSlot == null) model.RemoveOrphan(node.Carrier);
+        carrier?.SetAsset(asset);
+        if (isOrphan) model.RemoveOrphan(carrier);
 
         Invalidate();
         EditorGUIUtility.PingObject(asset);
         ShowNotification(new GUIContent("已轉存為資產"));
     }
 
-    private Type AssetTypeFor(AGNode node, out bool isAction)
+    /// <summary>這顆節點的內容該存成哪一種資產。動作與公式各走各的資產族，呼叫端不必自己分辨。</summary>
+    private Type AssetTypeFor(AGNode node)
     {
-        isAction = false;
         if (node.ParentSlot != null)
         {
             var slotType = node.ParentSlot.GetType();
             if (AGReflect.IsActionSlotType(slotType))
-            {
-                isAction = true;
                 return ConcreteAssetType(AGReflect.ActionAssetType(slotType));
-            }
             return AGReflect.AssetType(slotType);
         }
 
         // 未連接節點沒有父欄位，靠型別回推它屬於哪一族。
         var actionBase = ActionBaseTypeOfCurrentSystem();
         if (actionBase != null && actionBase.IsInstanceOfType(node.Obj))
-        {
-            isAction = true;
             return ConcreteAssetType(ActionAssetTypeOfCurrentSystem());
-        }
 
         foreach (var (_, slotType) in model.FormulaKinds())
         {
@@ -735,17 +898,31 @@ public partial class ActionGraphWindow
     }
 
     // 候選池掛在焦點頭端上（資產有自己的一份），所以資產焦點也能建候選，不會污染 Owner。
-    private void CreateOrphan(Type type, Vector2 graphMouse)
+    /// <summary>
+    /// 在畫布上放一顆空節點，並記住它屬於哪一族（用代表性的 Slot 型別表示）。
+    /// 族只影響編輯期的型別推導，不進資料；視窗關掉後那顆節點就退回一般空節點，接上欄位一樣能選型別。
+    /// </summary>
+    private void CreateOrphan(Vector2 graphMouse, Type slotType)
     {
-        var instance = AGReflect.CreateInstance(type);
-        if (instance is not ActionSystemNode node) return;
-
-        var carrier = new GraphNode(node);
-        carrier.EnsureId();
-        carrier.Pos = graphMouse;
+        model.BreakUndoMerge();
+        var carrier = new GraphNode();
+        string id = carrier.EnsureId();
+        carrier.Pos = SnapToGrid(graphMouse);
         model.AddOrphan(carrier);
+        if (slotType != null) orphanKindHints[id] = slotType;
         Invalidate();
         Repaint();
+    }
+
+    /// <summary>本系統的動作欄位型別。建立動作用它當代表性 Slot。</summary>
+    private Type ActionSlotTypeOfCurrentSystem()
+    {
+        foreach (var g in model.ReadGroups())
+        {
+            if (g.Actions == null) continue;
+            return g.Actions.GetType().GetGenericArguments()[0];
+        }
+        return model.ActionSlotType;
     }
 }
 

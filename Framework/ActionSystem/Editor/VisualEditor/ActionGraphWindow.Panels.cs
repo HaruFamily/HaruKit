@@ -30,21 +30,23 @@ public partial class ActionGraphWindow
     }
 
     /// <summary>
-    /// 標註索引。標註化之後這裡不再是 CRUD 面板：建立與取消都在節點右鍵，
-    /// 這一欄只負責「有哪些對外端點」與「點了跳過去」。
+    /// 變數庫：這張圖有哪些對外端點。新增、改名、刪除都在這裡，點一筆進入它自己的畫布。
+    /// 資產焦點下列的是那個資產的變數（＝它對呼叫端的參數介面）。
     /// </summary>
     private void DrawTokenLibrary(Rect r, float top, bool inAsset)
     {
         GUI.Label(new Rect(r.x + 6f, top, r.width - 12f, 16f),
-            new GUIContent("標註（對外端點）", "在節點上按右鍵「註冊為 Token」建立；點清單跳到那顆節點"), AGStyles.Tiny);
+            new GUIContent("變數（對外端點）", "點一筆進入它自己的畫布；沒接來源時它就是具名常數"), AGStyles.Tiny);
 
-        var searchRect = new Rect(r.x + 4f, top + 20f, r.width - 8f, 20f);
+        if (GUI.Button(new Rect(r.x + 4f, top + 18f, r.width - 8f, 20f), "＋ 新增變數")) ShowCreateEndpointMenu();
+
+        var searchRect = new Rect(r.x + 4f, top + 42f, r.width - 8f, 20f);
         GUI.Label(new Rect(searchRect.x + 4f, searchRect.y + 2f, 16f, 16f),
-            EditorGUIUtility.IconContent("Search Icon", "搜尋標註"));
+            EditorGUIUtility.IconContent("Search Icon", "搜尋變數"));
         tokenSearch = EditorGUI.TextField(new Rect(searchRect.x + 20f, searchRect.y, searchRect.width - 20f, searchRect.height), tokenSearch);
 
-        var listRect = new Rect(r.x + 2f, top + 44f, r.width - 4f, r.yMax - top - 46f);
-        var tokens = model.ReadTokens(CurrentTokenScope());
+        var listRect = new Rect(r.x + 2f, top + 66f, r.width - 4f, r.yMax - top - 68f);
+        var tokens = AGModel.ReadTokens(CurrentEndpoints());
         var shown = new List<AGToken>();
         foreach (var t in tokens)
             if (string.IsNullOrWhiteSpace(tokenSearch)
@@ -58,8 +60,8 @@ public partial class ActionGraphWindow
         {
             var token = shown[i];
             var row = new Rect(2f, i * TokenCellHeight + 2f, content.width - 4f, TokenCellHeight - 3f);
-            bool isFocus = selectedIds.Contains(token.Node?.Id ?? "");
-            // 深綠→琥珀，和畫布上被標註的節點同一條漸層。
+            bool isFocus = ReferenceEquals(focus.Endpoint, token.Endpoint);
+            // 深綠→琥珀，和畫布上的變數節點同一條漸層。
             DrawCellBackground(row, AGStyles.HeaderToken, AGStyles.HeaderFormula, i % 2 == 1, isFocus);
 
             GUI.Label(new Rect(row.x + 8f, row.y + 2f, row.width - 70f, 18f),
@@ -79,24 +81,101 @@ public partial class ActionGraphWindow
             if (e.type == EventType.MouseDown && row.Contains(e.mousePosition))
             {
                 if (e.button == 1) ShowTokenMenu(token);
-                else JumpToToken(token);
+                else
+                {
+                    dragEndpoint = token.Endpoint;
+                    pendingVariableFocus = token.Endpoint;
+                }
+                e.Use();
+            }
+            if (e.type == EventType.MouseDrag && ReferenceEquals(dragEndpoint, token.Endpoint)) dragEndpointActive = true;
+            if (e.type == EventType.MouseUp && ReferenceEquals(pendingVariableFocus, token.Endpoint)
+                && !dragEndpointActive && row.Contains(e.mousePosition))
+            {
+                pendingVariableFocus = null;
+                dragEndpoint = null;
+                // 再點一次目前這格＝退出，不必去找返回鈕。
+                if (isFocus) ExitVariable();
+                else EnterVariable(token.Endpoint);
                 e.Use();
             }
         }
         GUI.EndScrollView();
     }
 
-    /// <summary>跳到那顆被標註的節點。同一張畫布，只是把視野移過去並選取它。</summary>
-    private void JumpToToken(AGToken token)
-    {
-        if (token?.Node == null) return;
-        if (focus.Kind != AGFocusKind.Asset && focus.Kind != AGFocusKind.Timing) SetFocus(AllTimingsFocus());
+    /// <summary>進入這個變數自己的畫布。</summary>
+    private void JumpToToken(AGToken token) => EnterVariable(token?.Endpoint);
 
-        selectedIds.Clear();
-        if (!string.IsNullOrEmpty(token.Node.Id)) selectedIds.Add(token.Node.Id);
-        // CenterOn 比對的是節點內容物件；資產節點沒有內容，退而求其次不移動視野。
-        pendingCenterTarget = token.Node.BodyObject;
-        graphDirty = true;
+    /// <summary>新增變數：先選結果型別，因為它決定端點的取值欄位，之後不再更動。</summary>
+    private void ShowCreateEndpointMenu()
+    {
+        var scope = CurrentEndpoints();
+        if (scope == null) return;
+
+        var menu = new GenericMenu();
+        foreach (var (resultType, slotType) in model.FormulaKinds())
+        {
+            var captured = slotType;
+            menu.AddItem(new GUIContent(AGReflect.ResultTypeName(resultType)), false, () =>
+            {
+                var endpoint = model.CreateEndpoint(scope, captured, out string error);
+                if (endpoint == null)
+                {
+                    EditorUtility.DisplayDialog("無法新增變數", error, "好");
+                    return;
+                }
+                MarkGraphChanged();
+                EnterVariable(endpoint);
+            });
+        }
+        menu.ShowAsContext();
+    }
+
+    private void ShowTokenMenu(AGToken token)
+    {
+        if (token?.Endpoint == null) return;
+        var endpoint = token.Endpoint;
+        var scope = CurrentEndpoints();
+        var menu = new GenericMenu();
+
+        menu.AddItem(new GUIContent("編輯"), false, () => EnterVariable(endpoint));
+        menu.AddItem(new GUIContent("重新命名…"), false, () =>
+            AGPrompt.Show("變數名稱", "外部（Inspector）用這個名字查它的值", endpoint.Name, name =>
+            {
+                if (!model.RenameEndpoint(endpoint, name, scope, out string error))
+                {
+                    EditorUtility.DisplayDialog("無法改名", error, "好");
+                    return;
+                }
+                MarkGraphChanged();
+            }));
+
+        menu.AddSeparator("");
+        int used = AGModel.CountReferences(endpoint, SlotsInCurrentGraph());
+        menu.AddItem(new GUIContent(used > 0 ? $"刪除（{used} 個欄位在用）" : "刪除"), false, () =>
+        {
+            if (!EditorUtility.DisplayDialog("刪除變數",
+                used > 0
+                    ? $"'{endpoint.Name}' 還有 {used} 個欄位在用，刪掉之後那些欄位會變成空節點。確定嗎？"
+                    : $"確定刪除 '{endpoint.Name}'？", "刪除", "取消")) return;
+
+            if (ReferenceEquals(focus.Endpoint, endpoint)) ExitVariable();
+            model.DeleteEndpoint(endpoint, scope, CurrentCarrierScope());
+            MarkGraphChanged();
+        });
+        menu.ShowAsContext();
+    }
+
+    /// <summary>圖改了：資產焦點記在資產交易上，Owner 焦點記在工作副本上。</summary>
+    private void MarkGraphChanged()
+    {
+        if (focus.Kind == AGFocusKind.Asset)
+        {
+            assetDirty = true;
+            assetReportStale = true;
+        }
+        else reportStale = true;
+        Invalidate();
         Repaint();
     }
 
@@ -157,7 +236,9 @@ public partial class ActionGraphWindow
             {
                 pendingAssetFocus = null;
                 dragAsset = null;
-                EnterAsset(asset, shown[i].slotType);
+                // 再點一次目前這格＝退出（在它的變數子畫布時先回到資產本體，由 EnterAsset 處理）。
+                if (isFocus && focus.Endpoint == null) CancelAsset();
+                else EnterAsset(asset, shown[i].slotType);
                 e.Use();
             }
         }
@@ -192,7 +273,7 @@ public partial class ActionGraphWindow
     private bool HasTokenIssue(AGToken token, out string reason, out bool isError)
     {
         reason = null; isError = false;
-        object target = token?.Node;
+        object target = token?.Endpoint;
         if (target == null) return false;
 
         foreach (var issue in Rep.Issues)
@@ -233,48 +314,29 @@ public partial class ActionGraphWindow
         return GUI.Button(r, GUIContent.none, GUIStyle.none);
     }
 
-    private void ShowTokenMenu(AGToken token)
+    private void DrawDragVariableGhost()
     {
-        if (token?.Node == null) return;
-        var menu = new GenericMenu();
-
-        menu.AddItem(new GUIContent("跳到這顆節點"), false, () => JumpToToken(token));
-        menu.AddItem(new GUIContent("重新命名…"), false, () =>
-            AGPrompt.Show("標註名稱", "圖內引用是連線不受影響；會斷的是 Inspector 上指名這個字串的地方",
-                token.Key, key =>
-                {
-                    if (!model.SetTokenName(token.Node, key, CurrentTokenScope(), out string error))
-                    {
-                        EditorUtility.DisplayDialog("無法改名", error, "好");
-                        return;
-                    }
-                    Invalidate();
-                    Repaint();
-                }));
-
-        menu.AddSeparator("");
-        menu.AddItem(new GUIContent("取消標註"), false, () => UnregisterTokenNode(token));
-        menu.ShowAsContext();
+        if (dragEndpoint == null) return;
+        Vector2 p = Event.current.mousePosition;
+        var r = new Rect(p.x + 8f, p.y + 8f, 160f, 18f);
+        AGStyles.GradientFill(r, AGStyles.HeaderToken, AGStyles.HeaderFormula, CellCornerRadius);
+        GUI.Label(r, dragEndpoint.Name ?? "（未命名）", AGStyles.Chip);
     }
 
     /// <summary>
-    /// 取消標註。節點與它的子樹留在原地，只是不再是對外端點——所以圖內的連線一條都不會斷，
-    /// 會斷的是 Inspector 上指名這個字串的地方。
+    /// 放置模式的殘影：長什麼樣就是等一下會生出來的那顆空節點，配色與標題都照 placeholder 走。
+    /// 沒有「放開」這個訊號，所以要寫清楚怎麼落下、怎麼取消。
     /// </summary>
-    private void UnregisterTokenNode(AGToken token)
+    private void DrawPlacingGhost()
     {
-        if (token?.Node == null) return;
-        int refs = model.CountReferences(token);
-        string msg = refs > 0
-            ? $"取消 '{token.Key}' 的標註？圖內還有 {refs} 個欄位接著這顆節點，那些連線不受影響。"
-            : $"取消 '{token.Key}' 的標註？Inspector 上指名這個名字的地方會查不到值。";
-        if (!EditorUtility.DisplayDialog("取消標註", msg, "取消標註", "保留")) return;
+        bool isAction = placingSlot != null && AGReflect.IsActionSlotType(placingSlot.GetType());
+        Color kind = isAction ? AGStyles.HeaderAction : AGStyles.HeaderFormula;
 
-        model.BreakUndoMerge();
-        model.ClearTokenName(token.Node);
-        Invalidate();
-        DoVerify(true);
-        Repaint();
+        Vector2 p = Event.current.mousePosition;
+        var r = new Rect(p.x + 8f, p.y + 8f, 160f, 18f);
+        AGStyles.RoundedFill(r, kind, CellCornerRadius);
+        GUI.Label(r, isAction ? "（選擇 Action）" : "（選擇 Formula）", AGStyles.Chip);
+        GUI.Label(new Rect(r.x, r.yMax + 2f, 200f, 16f), "點一下放置　Esc 取消", AGStyles.Tiny);
     }
 
     private void DrawDragAssetGhost()

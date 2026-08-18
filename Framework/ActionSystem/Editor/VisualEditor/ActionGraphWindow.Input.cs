@@ -29,6 +29,15 @@ public partial class ActionGraphWindow
                     e.Use();
                     break;
                 }
+                // 放置模式吃掉這一下點擊：左鍵落下節點，右鍵取消，兩者都不再往下走選取與框選。
+                if (placingSlot != null)
+                {
+                    if (e.button == 0) PlaceNewSource(placingSlot, graphMouse);
+                    placingSlot = null;
+                    e.Use();
+                    break;
+                }
+
                 var hit = NodeAt(graphMouse);
                 if (e.button == 1)
                 {
@@ -39,6 +48,8 @@ public partial class ActionGraphWindow
                 else if (e.button == 0)
                 {
                     if (e.clickCount == 2 && hit != null && hit.IsAssetNode && hit.Asset != null) { EnterAsset(hit); e.Use(); break; }
+                    // 雙擊變數節點＝下鑽進那個變數的畫布，跟雙擊資產節點同一個手勢。
+                    if (e.clickCount == 2 && hit != null && hit.IsVariableNode && hit.Endpoint != null) { EnterVariable(hit.Endpoint); e.Use(); break; }
 
                     var link = LinkAt(graphMouse);
                     if (link != null) { CutLink(link); e.Use(); break; }
@@ -154,6 +165,14 @@ public partial class ActionGraphWindow
                     dragAssetActive = false;
                     dragAsset = null;
                     pendingAssetFocus = null;
+                    e.Use();
+                }
+                if (dragEndpointActive && dragEndpoint != null)
+                {
+                    DropEndpointOn(dragEndpoint, graphMouse);
+                    dragEndpointActive = false;
+                    dragEndpoint = null;
+                    pendingVariableFocus = null;
                     e.Use();
                 }
                 break;

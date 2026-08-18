@@ -18,6 +18,10 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionSystemAs
     [SerializeReference, HideInInspector]
     private List<GraphNode> _orphans = new();
 
+    // 本資產的具名變數，同時就是它對呼叫端的參數介面。
+    [SerializeReference, HideInInspector]
+    private List<GraphEndpoint> _endpoints = new();
+
     public async UniTask Execute(TPack pack, TokenTable<TPack> caller, IReadOnlyList<NamedFormulaSlot> bindings = null)
     {
         if (_action == null)
@@ -33,6 +37,11 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionSystemAs
     public List<GraphNode> Orphans
     {
         get { _orphans ??= new List<GraphNode>(); return _orphans; }
+    }
+
+    public List<GraphEndpoint> Endpoints
+    {
+        get { _endpoints ??= new List<GraphEndpoint>(); return _endpoints; }
     }
 
     public object ContentObject => _action;

@@ -85,8 +85,9 @@ public class AGNode
     public object Obj;                    // ActionSystemNode（公式 / 動作）；資產、變數、空節點為 null
     public UnityEngine.Object Asset;      // 資產節點目前指到的資產（可為 null＝尚未指定）
     public bool IsAssetNode;              // 資產節點（不論有沒有指定資產）
-    /// <summary>載體上的標註名稱（沒標註為 null）。它是「這顆節點是這張圖的對外端點」，不是一種內容。</summary>
-    public string TokenName;
+    /// <summary>這顆節點指到的具名變數（不是變數節點就是 null）。內容住在變數自己的畫布。</summary>
+    public GraphEndpoint Endpoint;
+    public bool IsVariableNode;           // 變數節點（不論有沒有指定變數）
     public Type ResultType;               // 資產／變數節點的結果型別
     public string Id;
     public string Title;                  // Header 主文字＝具體型別／變數／資產名稱，節點靠它辨識
@@ -121,7 +122,7 @@ public class AGNode
     public float ContentHeight;
     public float TipsHeight;
     // 換來源的入口是 Header 右端的 ▾；Root HEAD 的來源走它自己的「來源」參數列接點，所以不畫。
-    public bool HasSourceSelector => !IsRoot && (IsPlaceholder || Obj != null || IsAssetNode);
+    public bool HasSourceSelector => !IsRoot && (IsPlaceholder || Obj != null || IsAssetNode || IsVariableNode);
 
     public Rect Rect => new Rect(Pos.x, Pos.y, Width, Height);
     public Vector2 OutputPort => new Vector2(Pos.x + AGGraph.PortRadius, Pos.y + AGGraph.HeaderHeight * 0.5f);
@@ -196,7 +197,7 @@ public static class AGGraph
     /// </summary>
     public static AGGraphView Build(AGModel model, IReadOnlyList<object> roots, IList orphans, string focusId,
         string headTitle, IReadOnlyDictionary<string, bool> listCollapse = null,
-        string noteOpenId = null, ICollection<string> noteCollapsed = null)
+        string noteOpenId = null, ICollection<string> noteCollapsed = null, object headCarrier = null)
     {
         var view = new AGGraphView();
 
@@ -208,7 +209,7 @@ public static class AGGraph
         {
             if (root == null) continue;
             var rootNode = AGReflect.IsSlotType(root.GetType())
-                ? MakeHeadNode(model, root, focusId, headTitle)
+                ? MakeHeadNode(model, root, focusId, headTitle, headCarrier)
                 : MakeGroupNode(model, root);
             Collect(model, rootNode, view, 0, listCollapse, false);
         }
@@ -262,7 +263,8 @@ public static class AGGraph
     public static string GroupTitle(object group)
         => (AGReflect.Get(group, "Timing") as Enum)?.ToString() ?? "（未指定時機）";
 
-    private static AGNode MakeHeadNode(AGModel model, object rootSlot, string focusId, string headTitle)
+    // headCarrier：HEAD 的座標主人。變數焦點傳 GraphEndpoint，位置才記得住；其他焦點沿用 rootSlot。
+    private static AGNode MakeHeadNode(AGModel model, object rootSlot, string focusId, string headTitle, object headCarrier)
     {
         bool isAction = AGReflect.IsActionSlotType(rootSlot.GetType());
         Type resultType = isAction ? null : AGReflect.ResultType(rootSlot.GetType());
@@ -278,7 +280,7 @@ public static class AGGraph
             ResultType = resultType,
         };
         node.Rows.Add(SlotRow(rootSlot, "來源", 0));
-        model.RegisterCarrier(node.Id, rootSlot);
+        model.RegisterCarrier(node.Id, headCarrier ?? rootSlot);
         return node;
     }
 
@@ -322,6 +324,22 @@ public static class AGGraph
                 break;
             }
 
+            case NodeKind.Token:
+            {
+                var endpoint = carrier.Endpoint;
+                Type variableResult = endpoint?.ResultType ?? slotResultType;
+                node = new AGNode
+                {
+                    Endpoint = endpoint,
+                    IsVariableNode = true,
+                    ResultType = variableResult,
+                    // 與資產節點同一種版型：Header 只表明身分，選哪一個變數是本體那一列在做。
+                    Title = "Token",
+                    Chip = ChipText(variableResult, false),
+                };
+                break;
+            }
+
             default:
             {
                 bool isAction = parentSlot != null && AGReflect.IsActionSlotType(parentSlot.GetType());
@@ -341,8 +359,6 @@ public static class AGGraph
         node.Id = id;
         node.ParentSlot = parentSlot;
         node.ParentRow = parentRow;
-        // 標註是載體上的一個名字，跟內容種類無關：公式、資產、甚至編輯中的空節點都可能有。
-        node.TokenName = carrier.TokenName;
         model.RegisterCarrier(id, carrier);
         return node;
     }
@@ -693,7 +709,8 @@ public static class AGGraph
             node.Height = leafY + NodeBottomPad;
             return;
         }
-        float y = MeasureRows(node.Rows, HeaderHeight + (node.IsAssetNode ? RowHeight : 0f));
+        // 資產與變數的本體第一列是「選哪一個」的下拉，它不在 Rows 裡，高度要另外加。
+        float y = MeasureRows(node.Rows, HeaderHeight + (node.IsAssetNode || node.IsVariableNode ? RowHeight : 0f));
         if (node.TipsHeight > 0f) y += node.TipsHeight + 10f;
         node.ContentHeight = Mathf.Max(y, HeaderHeight + 8f);
         node.Height = node.ContentHeight + NodeBottomPad;

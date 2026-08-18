@@ -87,6 +87,15 @@ public partial class ActionGraphWindow : EditorWindow
     private ScriptableObject dragAsset;
     private bool dragAssetActive;
     private ScriptableObject pendingAssetFocus;
+    // 變數的拖曳與下鑽和資產同一套：按下先記著，拖出去是建節點，原地放開是進它的畫布。
+    private GraphEndpoint dragEndpoint;
+    private bool dragEndpointActive;
+    private GraphEndpoint pendingVariableFocus;
+    // 「建立節點」的放置模式：新節點跟著滑鼠，點一下才落在畫布上。Esc 或右鍵取消。
+    private object placingSlot;
+    // 候選池裡的空節點屬於哪一族（值＝代表性的 Slot 型別）。key 是載體 Id，所以撐得過 Undo 與重建圖。
+    // 純編輯期提示，不進資料：視窗關掉就沒了，那顆節點退回一般空節點。
+    private readonly Dictionary<string, Type> orphanKindHints = new();
     // 選取用 id 記，節點物件每次重建圖都會換一份。
     private readonly HashSet<string> selectedIds = new();
     // 空註解框是暫態：只跟著這一顆被選取的節點活著，不寫進資料。
@@ -153,7 +162,14 @@ public partial class ActionGraphWindow : EditorWindow
 
         HandleGlobalKeys();
         EnsureGraph();
+
+        // 新的一次按下代表上一次拖曳一定結束了。清在這裡是因為 MouseUp 不保證收得到——
+        // 在視窗外放開就沒有那個事件，狀態會一直掛著，之後任何一次拖曳都會被誤判成「還在拖那個東西」。
+        // 順序很重要：先清，再讓左欄在同一個 MouseDown 裡重新設定。
+        if (Event.current.type == EventType.MouseDown) ClearPendingLibraryDrag();
+
         if (Event.current.type == EventType.MouseDrag && dragAsset != null) dragAssetActive = true;
+        if (Event.current.type == EventType.MouseDrag && dragEndpoint != null) dragEndpointActive = true;
 
         // 縮放畫布先畫；固定面板最後畫，吸收 IMGUI 縮放在邊界可能漏出的次像素。
         DrawCenter(center);
@@ -163,12 +179,14 @@ public partial class ActionGraphWindow : EditorWindow
         DrawPanelResizeHandles(leftHandle, rightHandle);
 
         if (dragAssetActive) DrawDragAssetGhost();
+        // 放置模式沒有按住按鍵，收不到 MouseDrag；要 MouseMove 殘影才跟得上滑鼠。
+        wantsMouseMove = placingSlot != null;
+        if (dragEndpointActive) DrawDragVariableGhost();
+        if (placingSlot != null) DrawPlacingGhost();
         if (Event.current.rawType == EventType.MouseUp)
         {
             if (Event.current.button == 0) EndLink();
-            dragAssetActive = false;
-            dragAsset = null;
-            pendingAssetFocus = null;
+            ClearPendingLibraryDrag();
             // 放開才真的搬：拖曳中途放棄不會留下任何改動。
             if (dragListRow != null && dragListTarget >= 0 && dragListTarget != dragListIndex)
                 MoveListItem(dragListRow, dragListIndex, dragListTarget);
@@ -176,8 +194,20 @@ public partial class ActionGraphWindow : EditorWindow
             dragListIndex = -1;
             dragListTarget = -1;
         }
-        if (Event.current.type == EventType.MouseDrag || linking || dragAssetActive) Repaint();
+        if (Event.current.type == EventType.MouseDrag || linking || dragAssetActive || dragEndpointActive
+            || placingSlot != null) Repaint();
         UpdateUnsavedState();
+    }
+
+    /// <summary>清掉左欄拖曳（資產／變數）的待處理狀態。按下與放開都要清，兩邊都不能只靠一邊。</summary>
+    private void ClearPendingLibraryDrag()
+    {
+        dragAssetActive = false;
+        dragAsset = null;
+        pendingAssetFocus = null;
+        dragEndpointActive = false;
+        dragEndpoint = null;
+        pendingVariableFocus = null;
     }
 
     private void GetLayout(out Rect toolbar, out Rect left, out Rect right, out Rect center, out Rect leftHandle, out Rect rightHandle)
@@ -329,7 +359,7 @@ public partial class ActionGraphWindow : EditorWindow
         model.ClearAssetParameterCache();
 
         bool bindingsChanged = false;
-        foreach (var carrier in CurrentTokenScope())
+        foreach (var carrier in CurrentCarrierScope())
             if (model.EnsureAssetBindings(carrier)) bindingsChanged = true;
         if (bindingsChanged)
         {
@@ -353,7 +383,7 @@ public partial class ActionGraphWindow : EditorWindow
         graph = focus.Kind == AGFocusKind.None
             ? new AGGraphView()
             : AGGraph.Build(model, focus.Roots, OrphansOfCurrentFocus(), focus.Id, focus.HeadTitle,
-                listCollapse, noteOpenId, noteCollapsed);
+                listCollapse, noteOpenId, noteCollapsed, focus.Endpoint);
 
         ApplyVisibility();
         if (pendingCenterTarget != null) { CenterOn(pendingCenterTarget); pendingCenterTarget = null; }
@@ -608,7 +638,7 @@ public partial class ActionGraphWindow : EditorWindow
         if (focus.Kind == AGFocusKind.Asset)
         {
             if (focus.AssetHostSlot == null) return;
-            assetReport = AGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.AssetOrphans, focus.Title);
+            assetReport = AGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
             assetVerifiedOnce = true;
             return;
         }
@@ -622,7 +652,17 @@ public partial class ActionGraphWindow : EditorWindow
     private void HandleGlobalKeys()
     {
         var e = Event.current;
-        if (e.type != EventType.KeyDown || !e.control) return;
+        if (e.type != EventType.KeyDown) return;
+
+        // 放置模式攔在最前面：Esc 取消，不必先把滑鼠移回畫布。
+        if (e.keyCode == KeyCode.Escape && placingSlot != null)
+        {
+            placingSlot = null;
+            e.Use();
+            Repaint();
+            return;
+        }
+        if (!e.control) return;
 
         if (focus.Kind == AGFocusKind.Asset && (e.keyCode == KeyCode.Z || e.keyCode == KeyCode.Y))
         {

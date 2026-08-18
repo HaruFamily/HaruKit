@@ -264,7 +264,7 @@ public partial class ActionGraphWindow
         // 真正的空白處放開：先建立空 Node，讓使用者在 Node 上決定具體型別。
         model.BreakUndoMerge();
         PreserveVisibleNodePositions();
-        NewSource(linkRow.Slot).Pos = graphMouse;
+        NewSource(linkRow.Slot).Pos = SnapToGrid(graphMouse);
         Invalidate();
         Repaint();
     }
@@ -299,6 +299,14 @@ public partial class ActionGraphWindow
         if (row?.Slot == null || target?.Carrier == null) return false;
         if (target.IsAssetNode)
             return CanAssignAsset(row, target.Asset) && !WouldCreateCycle(row.Slot, target.Carrier);
+        // 變數節點沒有內容，型別由端點的取值欄位決定；環偵測要走進端點的子樹。
+        if (target.IsVariableNode)
+            return AGReflect.AcceptsEndpoint(row.Slot, target.Endpoint)
+                && !WouldCreateCycle(row.Slot, target.Endpoint?.Slot);
+
+        // 空節點還沒有身分，接上去才由父欄位決定它能變成哪一族；沒有內容就沒有型別可牴觸。
+        if (target.IsPlaceholder) return !WouldCreateCycle(row.Slot, target.Carrier);
+
         if (target.Obj == null) return false;
 
         object slot = row.Slot;

@@ -8,14 +8,13 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 
-/// <summary>一個標註（Token）的視圖：名字掛在哪顆載體上，以及那顆載體算出什麼型別。</summary>
-// 標註化之後 Token 不再是獨立宣告，而是「某顆節點掛了一個名字」，所以這裡只是查詢結果，不持有資料。
+/// <summary>左欄清單用的一筆變數視圖。資料住在 <see cref="GraphEndpoint"/>，這裡只是查詢結果。</summary>
 public class AGToken
 {
-    public string Key;
-    public Type ResultType;
-    public GraphNode Node;      // 被標註的載體
+    public GraphEndpoint Endpoint;
 
+    public string Key => Endpoint?.Name;
+    public Type ResultType => Endpoint?.ResultType;
     public string TypeName => AGReflect.ResultTypeName(ResultType);
 }
 
@@ -43,6 +42,9 @@ public class AGModel
 
     private FieldInfo systemField;                    // Owner 上放 ActionSystem 的欄位
     private readonly Dictionary<ScriptableObject, List<AssetParameterDefinition>> assetParameterCache = new();
+
+    // 建不出參數列的那些參數只吼一次：EnsureAssetBindings 每次重建圖都會跑，不去重會洗版。
+    private readonly HashSet<string> loggedUnbindableParameters = new();
 
     // ===== 綁定 =====
 
@@ -300,7 +302,12 @@ public class AGModel
         return kinds;
     }
 
-    public void ClearAssetParameterCache() => assetParameterCache.Clear();
+    // 連求值端的 schema 快取一起清：編輯期資產內容會變，求值端那份不清就會拿到舊參數列。
+    public void ClearAssetParameterCache()
+    {
+        assetParameterCache.Clear();
+        AssetGraphSchema.InvalidateCache();
+    }
 
     public List<AssetParameterDefinition> AssetParameters(ScriptableObject asset)
     {
@@ -334,13 +341,22 @@ public class AGModel
             {
                 carrier.Bindings.Add(new NamedFormulaSlot(parameter.Name, slot));
                 changed = true;
+                continue;
             }
+
+            // 沒有對應的 FormulaSlot 型別就生不出參數列，企劃只會看到「這個參數不見了」。
+            string key = $"{carrier.AssetObject.name}/{parameter.Name}";
+            if (loggedUnbindableParameters.Add(key))
+                Debug.LogWarning($"[ActionGraph] 資產 '{carrier.AssetObject.name}' 的參數 '{parameter.Name}' " +
+                    $"找不到對應的 FormulaSlot 型別（結果 {AGReflect.ResultTypeName(parameter.ResultType)}），無法建立參數列。" +
+                    "請補上這個結果型別的 Formula / Asset / Slot 三件組。");
         }
         return changed;
     }
 
-    // ===== Token（標註）=====
-    // Token 不再是獨立宣告，而是「某顆載體掛了一個名字」。左欄只是索引，資料住在節點上。
+    // ===== 具名變數（端點）=====
+    // 一個變數＝一顆 GraphEndpoint：自己的名字、自己的取值欄位、自己的畫布與候選池。
+    // 圖裡引用它的是 NodeKind.Token 節點，存的是物件參照，不是名字字串。
 
     /// <summary>走訪整張圖的所有載體：動作樹上的、候選池裡的，以及它們的子樹。</summary>
     public IEnumerable<GraphNode> AllCarriers()
@@ -374,29 +390,22 @@ public class AGModel
         }
     }
 
-    /// <summary>圖上所有被標註的節點。順序不保證穩定，顯示端自行排序。</summary>
-    public List<AGToken> ReadTokens()
-        => ReadTokens(AllCarriers());
+    /// <summary>Owner 工作副本的變數清單。資產焦點請改用焦點自己那份工作副本。</summary>
+    public List<GraphEndpoint> OwnerEndpoints
+        => AGReflect.Endpoints(Data) ?? new List<GraphEndpoint>();
 
-    public List<AGToken> ReadTokens(IEnumerable<GraphNode> carriers)
+    /// <summary>把一份端點清單讀成顯示用的視圖，依名稱排序。</summary>
+    public static List<AGToken> ReadTokens(IEnumerable<GraphEndpoint> endpoints)
     {
         var result = new List<AGToken>();
-        if (carriers == null) return result;
-        foreach (var node in carriers)
-        {
-            if (!node.IsToken) continue;
-            result.Add(new AGToken
-            {
-                Key = node.TokenName,
-                ResultType = CarrierResultType(node),
-                Node = node,
-            });
-        }
+        if (endpoints == null) return result;
+        foreach (var endpoint in endpoints)
+            if (endpoint != null) result.Add(new AGToken { Endpoint = endpoint });
         result.Sort((a, b) => string.CompareOrdinal(a.Key, b.Key));
         return result;
     }
 
-    /// <summary>載體算得出什麼型別：內嵌看公式型別，資產看資產型別，空節點無從得知。</summary>
+    /// <summary>載體算得出什麼型別：內嵌看公式型別，資產看資產型別，變數看端點，空節點無從得知。</summary>
     public static Type CarrierResultType(GraphNode node)
     {
         if (node == null) return null;
@@ -404,53 +413,88 @@ public class AGModel
             return AGReflect.FormulaResultType(node.BodyObject.GetType());
         if (node.Kind == NodeKind.Asset && node.AssetObject != null)
             return AGReflect.AssetResultType(node.AssetObject);
+        if (node.Kind == NodeKind.Token) return node.Endpoint?.ResultType;
         return null;
     }
 
     /// <summary>
-    /// 標註一顆節點，或替既有標註改名。名稱在一張圖內全域唯一（不分結果型別）——
-    /// 外部是用裸字串查的，同名不同型會讓「查到哪一個」變成隱式規則。
+    /// 建一個新變數並加進清單。名稱唯一性是「結果型別＋名稱」，所以同名不同型可以並存。
+    /// slotType 決定結果型別，建立後不再更動——要換型別就刪掉重建。
     /// </summary>
-    public bool SetTokenName(GraphNode node, string key, IEnumerable<GraphNode> scope, out string error)
+    public GraphEndpoint CreateEndpoint(List<GraphEndpoint> scope, Type slotType, out string error)
     {
         error = null;
-        if (node == null) { error = "沒有可標註的節點。"; return false; }
-        if (CarrierResultType(node) == null) { error = "只有可求值的公式或公式資產節點能標註。"; return false; }
-        if (string.IsNullOrWhiteSpace(key)) { error = "名稱不可為空。"; return false; }
-        key = key.Trim();
-        if (key == node.TokenName) return true;
-
-        foreach (var other in scope ?? AllCarriers())
+        if (scope == null) { error = "這張圖沒有變數清單。"; return null; }
+        if (AGReflect.CreateInstance(slotType) is not FormulaSlotBase slot)
         {
-            if (ReferenceEquals(other, node) || !other.IsToken) continue;
-            if (other.TokenName != key) continue;
-            error = $"已存在名為 '{key}' 的標註。";
+            error = "建不出這個結果型別的取值欄位。";
+            return null;
+        }
+
+        var endpoint = new GraphEndpoint(NextTokenName(scope, slot.ResultType), slot);
+        endpoint.EnsureId();
+        scope.Add(endpoint);
+        MarkDirty();
+        return endpoint;
+    }
+
+    /// <summary>替變數改名。同型別內不可重複；空名稱不允許（外部是用名字查的）。</summary>
+    public bool RenameEndpoint(GraphEndpoint endpoint, string name, List<GraphEndpoint> scope, out string error)
+    {
+        error = null;
+        if (endpoint == null) { error = "沒有可改名的變數。"; return false; }
+        if (string.IsNullOrWhiteSpace(name)) { error = "名稱不可為空。"; return false; }
+        name = name.Trim();
+        if (name == endpoint.Name) return true;
+
+        foreach (var other in scope ?? new List<GraphEndpoint>())
+        {
+            if (other == null || ReferenceEquals(other, endpoint)) continue;
+            if (other.Name != name || other.ResultType != endpoint.ResultType) continue;
+            error = $"已存在名為 '{name}' 的 {AGReflect.ResultTypeName(endpoint.ResultType)} 變數。";
             return false;
         }
 
-        node.SetTokenName(key);
+        endpoint.Name = name;
         MarkDirty();
         return true;
     }
 
-    public bool SetTokenName(GraphNode node, string key, out string error)
-        => SetTokenName(node, key, AllCarriers(), out error);
-
-    /// <summary>取消標註。節點與它的子樹留在原地，只是不再是對外端點。</summary>
-    public void ClearTokenName(GraphNode node)
+    /// <summary>取一個在 scope 內同型別不重複的預設名（Token1、Token2…）。</summary>
+    public string NextTokenName(IEnumerable<GraphEndpoint> scope, Type resultType)
     {
-        if (node == null || !node.IsToken) return;
-        node.SetTokenName(null);
+        var used = new HashSet<string>();
+        foreach (var other in scope ?? new List<GraphEndpoint>())
+            if (other != null && other.ResultType == resultType && !string.IsNullOrEmpty(other.Name))
+                used.Add(other.Name);
+
+        for (int i = 1; ; i++)
+        {
+            string key = "Token" + i;
+            if (!used.Contains(key)) return key;
+        }
+    }
+
+    /// <summary>
+    /// 刪掉一個變數。指著它的節點會一起清空——留著會變成「參照得到但查不到值」的靜默失效，
+    /// 清空後那些節點是空節點，存檔驗證擋得住。
+    /// </summary>
+    public void DeleteEndpoint(GraphEndpoint endpoint, List<GraphEndpoint> scope, IEnumerable<GraphNode> carriers)
+    {
+        if (endpoint == null) return;
+        scope?.Remove(endpoint);
+        foreach (var node in carriers ?? AllCarriers())
+            if (node != null && ReferenceEquals(node.Endpoint, endpoint)) node.Clear();
         MarkDirty();
     }
 
-    /// <summary>這顆標註節點在圖內被幾個參數欄位接著。0＝純對外端點，不是錯誤。</summary>
-    public int CountReferences(AGToken token)
+    /// <summary>這個變數在圖內被幾個欄位接著。0＝純對外端點，不是錯誤。</summary>
+    public static int CountReferences(GraphEndpoint endpoint, IEnumerable<object> slots)
     {
-        if (token?.Node == null) return 0;
+        if (endpoint == null || slots == null) return 0;
         int n = 0;
-        foreach (var slot in AllSlots())
-            if (ReferenceEquals(AGReflect.GetNode(slot), token.Node)) n++;
+        foreach (var slot in slots)
+            if (ReferenceEquals(AGReflect.GetNode(slot)?.Endpoint, endpoint)) n++;
         return n;
     }
 
@@ -589,17 +633,22 @@ public class AGModel
             foreach (var a in g.Actions)
                 if (a != null) yield return a;
         }
+        // 變數的取值欄位也是根：它的子樹是正式資料，走訪、驗證與資產引用都要算進來。
+        foreach (var endpoint in OwnerEndpoints)
+            if (endpoint?.Slot != null) yield return endpoint.Slot;
         foreach (var node in AllOrphanNodes())
             yield return node;
     }
 
     /// <summary>
-    /// 所有候選池掛點：時機畫布本身（ActionSystem）與時機群組裡的動作欄位。
+    /// 所有候選池掛點：時機畫布本身（ActionSystem）、每個變數端點，與時機群組裡的動作欄位。
     /// 動作頭端上那份只為了讀回合併畫布之前存下來的候選。
     /// </summary>
     public IEnumerable<object> Heads()
     {
         if (Data != null) yield return Data;
+        foreach (var endpoint in OwnerEndpoints)
+            if (endpoint != null) yield return endpoint;
         foreach (var g in ReadGroups())
         {
             if (g.Actions == null) continue;
@@ -640,13 +689,13 @@ public class AGModel
             }
         }
 
-        // 標註節點多半沒有連入線、住在候選池裡，但它是正式資料（對外端點），資產引用要算它一份。
-        if (AGReflect.Get(system, "Orphans") is not IList orphans) yield break;
-        foreach (var o in orphans)
+        // 變數的子樹是正式資料（對外端點），資產引用要算它一份；候選池不算。
+        var endpoints = AGReflect.Endpoints(system);
+        if (endpoints == null) yield break;
+        foreach (var e in endpoints)
         {
-            if (o is not GraphNode node || !node.IsToken) continue;
-            if (node.Kind != NodeKind.Inline || node.BodyObject == null) continue;
-            foreach (var s in WalkSlots(node.BodyObject, visited)) yield return s;
+            if (e is not GraphEndpoint endpoint || endpoint.Slot == null) continue;
+            foreach (var s in WalkSlots(endpoint.Slot, visited)) yield return s;
         }
     }
 
@@ -717,8 +766,8 @@ public class AGModel
     }
 
     /// <summary>
-    /// 正式資料引用的資產：動作執行樹，以及每個候選池中被標註的端點子樹。
-    /// 未標註候選只是編輯暫存，不得污染 subscriber。
+    /// 正式資料引用的資產：動作執行樹，以及每個變數端點的子樹。
+    /// 候選池只是編輯暫存，不得污染 subscriber。
     /// </summary>
     public static HashSet<ScriptableObject> ReferencedAssetsOfSystem(object system)
     {
@@ -735,21 +784,13 @@ public class AGModel
             }
         }
 
-        CollectMarkedOrphanAssets(AGReflect.Orphans(system), visited, result);
-        foreach (var slot in SlotsOfSystem(system))
+        if (AGReflect.Endpoints(system) is List<GraphEndpoint> endpoints)
         {
-            if (!AGReflect.IsActionSlotType(slot.GetType())) continue;
-            CollectMarkedOrphanAssets(AGReflect.Orphans(slot), visited, result);
+            foreach (var e in endpoints)
+                if (e is GraphEndpoint endpoint && endpoint.Slot != null)
+                    CollectFormalAssets(endpoint.Slot, visited, result);
         }
         return result;
-    }
-
-    private static void CollectMarkedOrphanAssets(IEnumerable<GraphNode> orphans,
-        HashSet<object> visited, HashSet<ScriptableObject> result)
-    {
-        if (orphans == null) return;
-        foreach (var orphan in orphans)
-            if (orphan?.IsToken == true) CollectFormalAssets(orphan, visited, result);
     }
 
     private static void CollectFormalAssets(object node, HashSet<object> visited, HashSet<ScriptableObject> result)

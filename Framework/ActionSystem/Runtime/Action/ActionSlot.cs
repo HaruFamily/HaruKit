@@ -92,6 +92,9 @@ public class ActionSlot<TPack>
 
     public bool AcceptsAsset(ScriptableObject asset) => asset is ActionAssetBase<TPack>;
 
+    /// <summary>動作欄位不能接具名變數：變數是公式端點，求值不執行副作用。</summary>
+    public bool AcceptsEndpoint(GraphEndpoint endpoint) => false;
+
     public async UniTask Execute(TPack pack, TokenTable<TPack> tokens)
     {
         if (_disabled) return;

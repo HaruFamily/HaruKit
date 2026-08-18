@@ -42,8 +42,23 @@ public partial class ActionGraphWindow
             var banner = new Rect(r.x + 2f, r.y + 2f, r.width - 4f, 18f);
             AGStyles.Fill(banner, new Color(0.45f, 0.32f, 0.18f));
             GUI.Label(banner, "　共用資產：修改會影響所有引用它的對象。存檔是獨立的一次交易。", AGStyles.RowLabel);
-            GUI.Label(new Rect(r.x + 6f, r.y + 22f, r.width - 12f, 18f),
-                focus.AssetObject != null ? focus.AssetObject.name : "（資產遺失）", EditorStyles.boldLabel);
+            if (focus.Endpoint != null)
+            {
+                DrawVariableName(new Rect(r.x, r.y + 20f, r.width - 100f, 22f), focus.Endpoint);
+                if (GUI.Button(new Rect(r.xMax - 96f, r.y + 22f, 90f, 18f), "← 回資產本體")) ExitVariable();
+            }
+            else GUI.Label(new Rect(r.x + 6f, r.y + 22f, r.width - 12f, 18f), focus.Title, EditorStyles.boldLabel);
+            return;
+        }
+
+        if (focus.Kind == AGFocusKind.Variable)
+        {
+            DrawVariableName(new Rect(r.x, r.y, r.width - 100f, 22f), focus.Endpoint);
+            GUI.Label(new Rect(r.x + 28f, r.y + 22f, r.width - 130f, 16f),
+                focus.Endpoint?.Slot?.Node == null
+                    ? "沒接來源＝具名常數，值直接填在 HEAD 的來源欄位。"
+                    : "這個變數的值由下面這棵子樹算出來。外部用它的名字查值。", AGStyles.Tiny);
+            if (GUI.Button(new Rect(r.xMax - 96f, r.y + 20f, 90f, 18f), "← 回時機畫布")) ExitVariable();
             return;
         }
 
@@ -85,6 +100,22 @@ public partial class ActionGraphWindow
     }
 
     /// <summary>焦點名稱平常只讀；按左側按鈕才進入編輯，再按一次才提交。</summary>
+    /// <summary>變數畫布的標題就地改名。名字是外部查詢的 key，改名不影響圖內連線（那是物件參照）。</summary>
+    private void DrawVariableName(Rect header, GraphEndpoint endpoint)
+    {
+        if (endpoint == null) return;
+        DrawFocusName(header, endpoint, endpoint.Name ?? "", name =>
+        {
+            if (model.RenameEndpoint(endpoint, name, CurrentEndpoints(), out string error))
+            {
+                MarkGraphChanged();
+                return true;
+            }
+            ShowNotification(new GUIContent(error));
+            return false;
+        });
+    }
+
     private void DrawFocusName(Rect header, object target, string displayName, Func<string, bool> submit)
     {
         bool editing = ReferenceEquals(editingNameTarget, target);
@@ -438,9 +469,8 @@ public partial class ActionGraphWindow
     }
 
     /// <summary>
-    /// Header 底色：HEAD 深紫紅、Action 洋紅、Formula 琥珀、Asset 靛藍、標註 深綠。
-    /// 容器型節點用漸層表達「容器 → 它承載的東西」：Action 型資產是靛藍→洋紅。
-    /// **被標註的節點一律從深綠漸層出去**——標註是狀態不是內容，所以只換起點色，終點仍是它本來的身分色。
+    /// Header 底色：HEAD 深紫紅、Action 洋紅、Formula 琥珀、Asset 靛藍、變數 深綠。
+    /// 容器型節點用漸層表達「容器 → 它承載的東西」：Action 型資產是靛藍→洋紅，變數是深綠→結果型別色。
     /// </summary>
     private static void HeaderColors(AGNode node, out Color from, out Color to)
     {
@@ -451,12 +481,10 @@ public partial class ActionGraphWindow
             to = node.IsActionNode ? AGStyles.HeaderAction : AGStyles.HeaderFormula;
             return;
         }
-        if (node.TokenName != null)
+        if (node.IsVariableNode)
         {
             from = AGStyles.HeaderToken;
-            to = node.IsAssetNode
-                ? AGStyles.HeaderAsset
-                : node.IsActionNode ? AGStyles.HeaderAction : AGStyles.HeaderFormula;
+            to = AGStyles.HeaderFormula;
             return;
         }
         if (node.IsAssetNode)
@@ -480,7 +508,8 @@ public partial class ActionGraphWindow
         // Header 由右往左排：停用 → 註解 ✎ → 結果型別 chip，剩下的寬度全給名稱區（＝換來源的按鈕）。
         // 節點層級的問題畫在節點底部的色條（不佔 Header，也不和身分色搶）；參數列層級的問題直接把該列標紅。
         // 資產／空節點自己沒有物件，問題掛在父欄位上，改查父欄位才看得到。
-        object issueTarget = node.Obj ?? (node.IsAssetNode || node.IsPlaceholder ? node.ParentSlot : null);
+        object issueTarget = node.Obj
+            ?? (node.IsAssetNode || node.IsVariableNode || node.IsPlaceholder ? node.ParentSlot : null);
         bool hasNodeIssue = Rep.HasIssue(issueTarget, out bool nodeError);
 
         float headerRight = rect.xMax - 4f;
@@ -548,26 +577,22 @@ public partial class ActionGraphWindow
         if (node.HasSourceSelector)
         {
             // 只有右端這顆 ▾ 是換來源的按鈕，名稱區其餘部分留給拖曳。
-            // 整塊可按的舊做法會讓「想搬節點」變成「開了選單」——Header 本來就是唯一的拖曳抓取區。
-            // 例外是空節點：它沒有本體、沒有別的入口，整塊名稱區就是「選一個來源」，維持整塊可按。
+            // 整塊可按會讓「想搬節點」變成「開了選單」——Header 本來就是唯一的拖曳抓取區。
+            // 空節點也一樣，不再例外：它同樣要能被拖著擺位。
             var lift = AGStyles.HeaderOverlay;
             var arrow = new Rect(titleRect.xMax - SourceArrowWidth, titleRect.y + 2f,
                 SourceArrowWidth, titleRect.height - 4f);
-            var hot = node.IsPlaceholder
-                ? new Rect(titleRect.x, titleRect.y + 2f, titleRect.width, titleRect.height - 4f)
-                : arrow;
+            var hot = arrow;
             AGStyles.RoundedFill(hot, new Color(lift.r, lift.g, lift.b, lift.a * 0.65f), 3f);
             GUI.Label(arrow, new GUIContent("▾", node.IsPlaceholder ? "選擇來源" : "換來源"), AGStyles.HeaderButton);
             // 命中測試在 zoom clip 外做，所以存 graph space。
             node.SourceMenuRect = new Rect(hot.position - pan, hot.size);
             textWidth = titleWidth - SourceArrowWidth - 2f;
         }
-        // 標註的名字要看得到：外部是用這個字串查的，光有深綠漸層認不出是哪一個。
-        string title = node.TokenName != null ? $"@{node.TokenName}　{node.Title}" : node.Title;
-        GUI.Label(titleRect, AGStyles.Elide(title, AGStyles.NodeTitle, textWidth), AGStyles.NodeTitle);
+        GUI.Label(titleRect, AGStyles.Elide(node.Title, AGStyles.NodeTitle, textWidth), AGStyles.NodeTitle);
 
-        // 資產的本體是一列「選哪一個」的下拉；一般節點畫自己的參數列；空節點兩者都沒有。
-        if (node.IsAssetNode)
+        // 資產與變數的本體是一列「選哪一個」的下拉；一般節點畫自己的參數列；空節點兩者都沒有。
+        if (node.IsAssetNode || node.IsVariableNode)
         {
             DrawReferencePickerRow(node, rect);
             DrawRows(node, node.Rows, rect);
@@ -646,15 +671,20 @@ public partial class ActionGraphWindow
         var row = new Rect(nodeRect.x, nodeRect.y + AGGraph.HeaderHeight, nodeRect.width, AGGraph.RowHeight);
         float labelWidth = row.width * 0.34f;
 
-        GUI.Label(new Rect(row.x + 6f, row.y + 1f, labelWidth - 8f, row.height - 2f), "資產", AGStyles.RowLabel);
+        bool isVariable = node.IsVariableNode;
+        GUI.Label(new Rect(row.x + 6f, row.y + 1f, labelWidth - 8f, row.height - 2f),
+            isVariable ? "變數" : "資產", AGStyles.RowLabel);
 
         var picker = new Rect(row.x + labelWidth, row.y + 1f, row.width - labelWidth - 8f, row.height - 3f);
-        string label = node.Asset != null ? node.Asset.name : "（未指定）";
+        string label = isVariable
+            ? (node.Endpoint != null ? node.Endpoint.Name ?? "（未命名）" : "（未指定）")
+            : (node.Asset != null ? node.Asset.name : "（未指定）");
 
         if (!EditorGUI.DropdownButton(picker,
                 AGStyles.Elide(label, EditorStyles.miniPullDown, picker.width - 20f), FocusType.Keyboard)) return;
 
-        ShowAssetPicker(node, picker);
+        if (isVariable) ShowVariablePicker(node, picker);
+        else ShowAssetPicker(node, picker);
     }
 
     /// <summary>只列這個欄位收得下的資產。</summary>

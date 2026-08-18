@@ -30,20 +30,23 @@ where TTiming : Enum
     [SerializeReference, HideInInspector]
     private List<GraphNode> _orphans = new();
 
-    /// <summary>時機畫布的候選節點清單。未標註者只供編輯；被標註者是正式對外端點。</summary>
+    /// <summary>時機畫布的候選節點清單。只供編輯，不執行、不驗證。</summary>
     public List<GraphNode> Orphans
     {
         get { _orphans ??= new List<GraphNode>(); return _orphans; }
     }
 
+    // 具名變數的頭端清單：每一筆有自己的畫布與候選池，是這張圖的對外端點。
+    [SerializeReference, HideInInspector]
+    private List<GraphEndpoint> _endpoints = new();
+
+    /// <summary>本圖的具名變數。從端點開始的整棵子樹都是正式資料。</summary>
+    public List<GraphEndpoint> Endpoints
+    {
+        get { _endpoints ??= new List<GraphEndpoint>(); return _endpoints; }
+    }
+
     [NonSerialized] private bool _hasLoggedValidationFailure;
-
-    // 名稱 → 被標註的載體。整張圖走一次才建得出來，所以建一次就留著；
-    // runtime 的這份是 DeepCopy 出來的實體副本，結構不會再變。
-    [NonSerialized] private Dictionary<string, GraphNode> _tokenNodes;
-
-    // 建表時撞名的名字，Verify 讀它報錯。runtime 不看——先到先得已經給出確定結果。
-    [NonSerialized] private List<string> _duplicateTokenNames;
 
     public bool IsValidated => _validated;
 
@@ -51,7 +54,6 @@ where TTiming : Enum
     {
         _validated = false;
         _hasLoggedValidationFailure = false;
-        _tokenNodes = null;
     }
 
     /// <summary>執行期標記已驗證。僅供程式建立且已自行驗證的空圖或資料；編輯器內容一律走 Verify()，勿用此繞過驗證閘。</summary>
@@ -72,7 +74,8 @@ where TTiming : Enum
     public bool HasContent()
     {
         return (ActionGroups?.Count ?? 0) > 0
-            || (_orphans?.Count ?? 0) > 0;
+            || (_orphans?.Count ?? 0) > 0
+            || (_endpoints?.Count ?? 0) > 0;
     }
 
     public TokenTable<TPack> CreateTokenTable()
@@ -88,82 +91,8 @@ where TTiming : Enum
         }
 
         var table = new TokenTable<TPack>();
-        foreach (var pair in TokenNodes()) table.Register(pair.Key, pair.Value);
+        foreach (var endpoint in Endpoints) table.Register(endpoint);
         return table;
-    }
-
-    /// <summary>
-    /// 名稱 → 被標註的載體。第一次呼叫時走一次全圖，之後沿用。
-    /// 走訪範圍含候選池：對外端點通常沒有連入線，本來就住在候選池裡（見 PLAN 的「正式資料邊界」）。
-    /// 不下沉到資產內部——資產的標註是它自己的參數，不是這張圖的端點。
-    /// </summary>
-    public IReadOnlyDictionary<string, GraphNode> TokenNodes()
-    {
-        if (_tokenNodes != null) return _tokenNodes;
-
-        _tokenNodes = new Dictionary<string, GraphNode>();
-        _duplicateTokenNames = null;
-        var visited = new HashSet<object>();
-
-        if (ActionGroups != null)
-        {
-            foreach (var group in ActionGroups)
-            {
-                if (group?.Actions == null) continue;
-                foreach (var slot in group.Actions) CollectTokenNodes(slot, visited);
-            }
-        }
-        foreach (var node in Orphans) CollectTokenNodes(node, visited);
-
-        return _tokenNodes;
-    }
-
-    private void CollectTokenNodes(object node, HashSet<object> visited)
-    {
-        if (node == null || !visited.Add(node)) return;
-
-        if (node is ActionSlot<TPack> actionSlot)
-        {
-            CollectTokenNodes(actionSlot.Node, visited);
-            // 合併時機畫布前的候選仍序列化在個別 ActionSlot 上，必須維持可求值。
-            foreach (var orphan in actionSlot.Orphans) CollectTokenNodes(orphan, visited);
-            return;
-        }
-        if (node is FormulaSlotBase formulaSlot) { CollectTokenNodes(formulaSlot.Node, visited); return; }
-
-        if (node is GraphNode carrier)
-        {
-            if (carrier.IsToken)
-            {
-                // 先到先得；重複的留給 Verify 報，runtime 仍然有一個確定的解析結果。
-                if (!_tokenNodes.ContainsKey(carrier.TokenName)) _tokenNodes[carrier.TokenName] = carrier;
-                else (_duplicateTokenNames ??= new List<string>()).Add(carrier.TokenName);
-            }
-            // 資產是另一張圖，它的標註是它自己的參數；這裡不下沉。
-            if (carrier.Kind == NodeKind.Inline) CollectTokenNodes(carrier.BodyObject, visited);
-            foreach (var binding in carrier.Bindings)
-                if (binding?.Slot != null) CollectTokenNodes(binding.Slot, visited);
-            return;
-        }
-
-        if (node is UnityEngine.Object) return;
-
-        var type = node.GetType();
-        if (type.IsPrimitive || type.IsEnum || node is string) return;
-        string ns = type.Namespace;
-        if (ns != null && (ns == "UnityEngine" || ns.StartsWith("UnityEngine."))) return;
-
-        if (node is System.Collections.IList list)
-        {
-            foreach (var item in list) CollectTokenNodes(item, visited);
-            return;
-        }
-
-        foreach (var field in InstanceFields(type))
-        {
-            if (field.IsStatic || field.IsNotSerialized) continue;
-            CollectTokenNodes(field.GetValue(node), visited);
-        }
     }
 
     // 衍生型別 GetFields 不會回 base class 的 private 欄位 — 手動沿繼承鏈往上抓 DeclaredOnly。
