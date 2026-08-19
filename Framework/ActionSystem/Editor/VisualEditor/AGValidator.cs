@@ -318,7 +318,25 @@ public static class AGValidator
             else if (!AGReflect.AcceptsEndpoint(slot, endpoint))
                 Err(report, focus, where, $"接的變數 '{endpoint.Name}' 型別不相容",
                     "改接同結果型別的變數。", slot, AGReflect.GetNode(slot));
+            else if (!InScope(model, focus, endpoint))
+                Err(report, focus, where, $"接的變數 '{endpoint.Name}' 不屬於這張圖",
+                    "改接本圖變數清單裡的變數；求值是用名字在本圖的變數表查的，跨圖引用永遠查不到，會靜默取預設值。",
+                    slot, AGReflect.GetNode(slot));
         }
+    }
+
+    /// <summary>
+    /// 這個端點在不在當前這張圖的變數清單裡。資產焦點看資產自己的清單，其餘看 Owner 的。
+    /// </summary>
+    // 求值時 Token 節點是拿「名字」去當前作用域的 TokenTable 查（資產作用域只登記資產自己的參數），
+    // 所以引用到別張圖的端點物件不會報錯、也不會求出值，只會回預設值——這是唯一擋得住的地方。
+    private static bool InScope(AGModel model, AGFocus focus, GraphEndpoint endpoint)
+    {
+        var scope = focus != null && focus.Kind == AGFocusKind.Asset ? focus.AssetEndpoints : model?.OwnerEndpoints;
+        if (scope == null) return true;   // 讀不到清單就不判，寧可不報也不要誤報
+        foreach (var other in scope)
+            if (ReferenceEquals(other, endpoint)) return true;
+        return false;
     }
 
     private static void ValidateAssetBindings(AGReport report, AGFocus focus, GraphNode carrier, string where)

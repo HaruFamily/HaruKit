@@ -64,15 +64,12 @@ public partial class ActionGraphWindow
 
         if (focus.Kind == AGFocusKind.Variable)
         {
-            DrawVariableName(new Rect(r.x, r.y, r.width - 196f, 22f), focus.Endpoint);
-            if (GUI.Button(new Rect(r.xMax - 190f, r.y + 3f, 86f, 18f),
-                new GUIContent("移除變數", "刪掉之後還在用它的欄位會變成空節點")))
-                RemoveEndpoint(focus.Endpoint);
-            GUI.Label(new Rect(r.x + 6f, r.y + 22f, r.width - 130f, 16f),
+            // 移除／返回都在左欄變數庫：點同一格退出、拖到「－ 移除變數」刪除，標頭不重複這兩顆。
+            DrawVariableName(new Rect(r.x, r.y, r.width - 12f, 22f), focus.Endpoint);
+            GUI.Label(new Rect(r.x + 6f, r.y + 22f, r.width - 12f, 16f),
                 focus.Endpoint?.Slot?.Node == null
                     ? "沒接來源＝具名常數，值直接填在 HEAD 的來源欄位。"
                     : "這個變數的值由下面這棵子樹算出來。外部用它的名字查值。", AGStyles.Tiny);
-            if (GUI.Button(new Rect(r.xMax - 96f, r.y + 20f, 90f, 18f), "← 回時機畫布")) ExitVariable();
             return;
         }
 

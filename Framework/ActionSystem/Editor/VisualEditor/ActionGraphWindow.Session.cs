@@ -291,6 +291,7 @@ public partial class ActionGraphWindow
         consoleCollapsed = EditorPrefs.GetBool(PrefConsoleCollapsed, false);
         leftWidth = EditorPrefs.GetFloat(PrefLeftWidth, DefaultLeftWidth);
         rightWidth = EditorPrefs.GetFloat(PrefRightWidth, DefaultRightWidth);
+        tokenSectionHeight = EditorPrefs.GetFloat(PrefTokenSection, DefaultTokenSection);
         UpdateUnsavedState();
     }
 
@@ -300,6 +301,7 @@ public partial class ActionGraphWindow
         EditorPrefs.SetBool(PrefConsoleCollapsed, consoleCollapsed);
         EditorPrefs.SetFloat(PrefLeftWidth, leftWidth);
         EditorPrefs.SetFloat(PrefRightWidth, rightWidth);
+        EditorPrefs.SetFloat(PrefTokenSection, tokenSectionHeight);
     }
 
     public override void SaveChanges()

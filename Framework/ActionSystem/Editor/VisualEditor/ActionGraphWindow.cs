@@ -27,10 +27,15 @@ public partial class ActionGraphWindow : EditorWindow
     private const float LinkThickness = 4f;
     private const float TokenCellHeight = 30f;
     private const float AssetCellHeight = 30f;
+    /// <summary>左欄變數區的最小高度：三顆固定控制項 + 一列，再小就有東西被切掉（標題由面板標題兼任）。</summary>
+    private const float MinTokenSection = 106f;
+    private const float MinAssetSection = 80f;
+    private const float DefaultTokenSection = 240f;
     private const string PrefConsoleHeight = "ActionGraph.ConsoleHeight";
     private const string PrefConsoleCollapsed = "ActionGraph.ConsoleCollapsed";
     private const string PrefLeftWidth = "ActionGraph.LeftWidth";
     private const string PrefRightWidth = "ActionGraph.RightWidth";
+    private const string PrefTokenSection = "ActionGraph.TokenSectionHeight";
 
     private AGModel model;
     private AGFocus focus = new();
@@ -59,7 +64,9 @@ public partial class ActionGraphWindow : EditorWindow
     private bool resizingLeftPanel;
     private bool resizingRightPanel;
     private int consoleTab;                  // 0 全部 / 1 錯誤 / 2 警告
-    private int libraryTab;                  // 0 變數 / 1 資產
+    // 左欄變數／資產上下分區：存變數區的高度，資產區吃剩下的。編資產時兩份清單要同時看得到，不能再用分頁互斥。
+    private float tokenSectionHeight = DefaultTokenSection;
+    private bool resizingLibrarySplit;
     private string tokenSearch = "";
     private string assetSearch = "";
     private object editingNameTarget;
@@ -357,7 +364,7 @@ public partial class ActionGraphWindow : EditorWindow
         x -= 62f; GUI.Button(new Rect(x, toolbar.y + 1f, 60f, 19f), "取消");
         GUI.enabled = true;
 
-        DrawIdlePanel(left, "資料庫");
+        DrawIdlePanel(left, "變數庫");
         DrawIdlePanel(right, "引用");
 
         AGStyles.Fill(center, AGStyles.Canvas);
