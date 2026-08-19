@@ -10,9 +10,21 @@ using UnityEngine;
 /// <summary>ActionSystem 序列化圖的反射深複製：保留 Unity 物件參考、共享參考與循環。</summary>
 public static class ActionSystemDeepCopy
 {
-    public static T Copy<T>(T source) where T : class
+    public static T Copy<T>(T source) where T : class => Copy(source, null);
+
+    /// <summary>
+    /// 深複製，但 <paramref name="shared"/> 裡的物件原樣沿用、不跟著複製。
+    /// 複製整張圖時不需要它；**複製圖裡的一小塊時需要**：那一塊裡指向具名變數的節點應該還是指向
+    /// 同一個變數，跟著抄一份就會變成不在清單裡的孤兒端點——參照得到、卻永遠查不到值。
+    /// </summary>
+    public static T Copy<T>(T source, IEnumerable<object> shared) where T : class
     {
-        try { return CopyObject(source, new Dictionary<object, object>(ReferenceComparer.Instance)) as T; }
+        var copied = new Dictionary<object, object>(ReferenceComparer.Instance);
+        if (shared != null)
+            foreach (var item in shared)
+                if (item != null) copied[item] = item;
+
+        try { return CopyObject(source, copied) as T; }
         catch (Exception e)
         {
             Debug.LogError($"[ActionSystem] 深複製失敗：{e.Message}");

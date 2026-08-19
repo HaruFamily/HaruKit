@@ -447,69 +447,6 @@ public partial class ActionGraphWindow
 
     // ===== 右鍵選單 =====
 
-    private void ShowSlotMenu(AGRow row)
-    {
-        var slot = row.Slot;
-        var menu = new GenericMenu();
-        int useType = AGReflect.UseType(slot);
-
-        if (!row.IsActionSlot)
-        {
-            menu.AddItem(new GUIContent("設為常數"), useType == 0, () => CutLink(slot));
-        }
-        else
-        {
-            // 動作欄位的標籤：清單列上只顯示不編輯，改名的入口放這裡。
-            menu.AddItem(new GUIContent("設定標籤…"), false, () =>
-                AGPrompt.Show("動作標籤", "用來區分同型別的動作（例如：主傷害 / 濺射）；留空就顯示型別名",
-                    AGReflect.GetLabel(slot) ?? "", text =>
-                    {
-                        model.BreakUndoMerge();
-                        AGReflect.SetLabel(slot, text.Trim());
-                        Invalidate();
-                        Repaint();
-                    }));
-        }
-
-        // 公式／資產／變數三種來源都只是「節點裡裝什麼」，換內容在節點 Header 的 ▾，
-        // 所以這裡只留一條「長一顆節點出來」，不再分三條。
-        menu.AddItem(new GUIContent("建立節點"), false, () => placingSlot = slot);
-
-        if (useType != 0)
-        {
-            menu.AddSeparator("");
-            menu.AddItem(new GUIContent("清除這個欄位"), false, () => CutLink(slot));
-        }
-        if (row.AssetBinding != null && model.Carrier(row.OwnerNodeId) is GraphNode assetCarrier
-            && IsStaleBinding(assetCarrier, row.AssetBinding))
-        {
-            menu.AddSeparator("");
-            menu.AddItem(new GUIContent("移除失效的資產參數綁定"), false, () =>
-            {
-                var child = row.AssetBinding.Slot?.Node;
-                if (child != null)
-                {
-                    row.AssetBinding.Slot.SetNode(null);
-                    model.AddOrphan(child);
-                }
-                assetCarrier.Bindings.Remove(row.AssetBinding);
-                Invalidate();
-                Repaint();
-            });
-        }
-        menu.ShowAsContext();
-    }
-
-    private bool IsStaleBinding(GraphNode carrier, NamedFormulaSlot binding)
-    {
-        if (carrier?.AssetObject == null || binding?.Slot == null) return true;
-        foreach (var parameter in model.AssetParameters(carrier.AssetObject))
-            if (parameter.Name == binding.Name
-                && parameter.ResultType == binding.Slot.ResultType
-                && parameter.PackType == binding.Slot.PackType) return false;
-        return true;
-    }
-
     /// <summary>
     /// 轉存為變數：新建一個端點，把這顆節點搬進它自己的畫布，原欄位改接一顆變數節點。
     /// 和「轉存為資產」同一個手勢，差別是變數留在這張圖裡，不另外開檔。
@@ -528,7 +465,7 @@ public partial class ActionGraphWindow
         var endpoint = model.CreateEndpoint(scope, slotType, out string error);
         if (endpoint == null)
         {
-            EditorUtility.DisplayDialog("無法轉存為變數", error, "好");
+            ShowNotification(new GUIContent(error));
             return;
         }
 
@@ -778,11 +715,12 @@ public partial class ActionGraphWindow
         var assetType = AssetTypeFor(node);
         if (assetType == null)
         {
-            EditorUtility.DisplayDialog("無法轉存", "找不到對應的資產型別。", "好");
+            ShowNotification(new GUIContent("找不到對應的資產型別"));
             return;
         }
 
-        CreateExtractedAsset(node.Carrier, node.ParentSlot == null, source, assetType, AGReflect.TypeName(source.GetType()));
+        CreateExtractedAsset(node.Carrier, node.ParentSlot == null, source, assetType,
+            AGReflect.TypeName(source.GetType()), node.ParentSlot?.GetType());
     }
 
     /// <summary>把變數的內容轉存成公式資產：變數與所有指著它的節點都不動，只是它的來源換成資產。</summary>
@@ -792,21 +730,23 @@ public partial class ActionGraphWindow
         var inner = slot?.Node;
         if (inner?.BodyObject is not ActionSystemNode source)
         {
-            EditorUtility.DisplayDialog("無法轉存", "這個變數的內容不是可轉存的公式。", "好");
+            ShowNotification(new GUIContent("這個變數的內容不是可轉存的公式"));
             return;
         }
 
         var assetType = AGReflect.AssetType(slot.GetType());
         if (assetType == null)
         {
-            EditorUtility.DisplayDialog("無法轉存", "找不到對應的資產型別。", "好");
+            ShowNotification(new GUIContent("找不到對應的資產型別"));
             return;
         }
 
-        CreateExtractedAsset(inner, false, source, assetType, AGReflect.TypeName(source.GetType()));
+        CreateExtractedAsset(inner, false, source, assetType, AGReflect.TypeName(source.GetType()), slot.GetType());
     }
 
-    private void CreateExtractedAsset(GraphNode carrier, bool isOrphan, ActionSystemNode source, Type assetType, string assetName)
+    /// hostSlotType：轉存後拿來驗新資產內容的欄位型別；未連接節點沒有父欄位，傳 null 就略過那次驗證。
+    private void CreateExtractedAsset(GraphNode carrier, bool isOrphan, ActionSystemNode source, Type assetType,
+        string assetName, Type hostSlotType)
     {
         if (!AGAssetStore.TryGetUniquePath(assetName, out string path)) return;
 
@@ -830,6 +770,11 @@ public partial class ActionGraphWindow
 
         AssetDatabase.SaveAssets();
         AGAssetIndex.Refresh();
+
+        // 轉存的內容來自已驗證的圖，這一關正常一定過；沒過代表轉存本身把內容抄壞了，
+        // 當場報出來，而不是等別人存檔時被 Core 擋在「Owner 未寫入」那個沒有細節的對話框。
+        if (hostSlotType != null && AGValidator.AssetHasError(model, hostSlotType, asset))
+            Debug.LogError($"[ActionGraph] 轉存出來的資產 '{asset.name}' 內部有錯誤，請雙擊它進入資產畫布查看驗證訊息。", asset);
 
         model.BreakUndoMerge();
         // 內容被「搬進資產」，所以是就地把載體換成資產引用，不留成候選。
@@ -897,19 +842,30 @@ public partial class ActionGraphWindow
         return null;
     }
 
-    // 候選池掛在焦點頭端上（資產有自己的一份），所以資產焦點也能建候選，不會污染 Owner。
     /// <summary>
-    /// 在畫布上放一顆空節點，並記住它屬於哪一族（用代表性的 Slot 型別表示）。
-    /// 族只影響編輯期的型別推導，不進資料；視窗關掉後那顆節點就退回一般空節點，接上欄位一樣能選型別。
+    /// 記住一顆空候選節點屬於哪一族（用代表性的 Slot 型別表示）。族決定它 Header 上的型別標籤與編輯期的
+    /// 型別推導，**不進資料**；視窗關掉後那顆節點退回一般空節點，接上欄位一樣能選型別。
     /// </summary>
+    private void RememberOrphanKind(GraphNode carrier, Type slotType)
+    {
+        if (carrier == null || slotType == null) return;
+        // 有內容的載體型別看得出來，不需要族；資產與變數節點也各有自己的型別來源。
+        if (carrier.BodyObject != null || carrier.AssetObject != null || carrier.Endpoint != null) return;
+
+        string id = carrier.EnsureId();
+        if (!string.IsNullOrEmpty(id)) orphanKindHints[id] = slotType;
+    }
+
+    // 候選池掛在焦點頭端上（資產有自己的一份），所以資產焦點也能建候選，不會污染 Owner。
+    /// <summary>在畫布上放一顆空節點，並記住它屬於哪一族。</summary>
     private void CreateOrphan(Vector2 graphMouse, Type slotType)
     {
         model.BreakUndoMerge();
         var carrier = new GraphNode();
-        string id = carrier.EnsureId();
+        carrier.EnsureId();
         carrier.Pos = SnapToGrid(graphMouse);
         model.AddOrphan(carrier);
-        if (slotType != null) orphanKindHints[id] = slotType;
+        RememberOrphanKind(carrier, slotType);
         Invalidate();
         Repaint();
     }

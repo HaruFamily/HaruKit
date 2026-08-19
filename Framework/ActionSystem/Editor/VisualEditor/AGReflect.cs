@@ -198,17 +198,6 @@ public static class AGReflect
         return node != null && node.Kind == NodeKind.Inline ? node.BodyObject : null;
     }
 
-    /// <summary>換內嵌來源：節點 Id、座標、備註與連入邊全部保留，只換內容。</summary>
-    public static void SetFormula(object slot, object formula)
-    {
-        if (formula == null)
-        {
-            GetNode(slot)?.Clear();
-            return;
-        }
-        EnsureNode(slot).SetBody(formula as ActionSystemNode);
-    }
-
     public static UnityEngine.Object GetAsset(object slot)
     {
         var node = GetNode(slot);
@@ -305,6 +294,10 @@ public static class AGReflect
 
     /// <summary>畫布主人的候選節點池（ActionSystem、資產各一份；動作頭端上的那份只為讀回舊資料）。</summary>
     public static List<GraphNode> Orphans(object head) => GetMember(head, "Orphans") as List<GraphNode>;
+
+    /// <summary>資產根內容的載體。舊格式（只存裸內容）由資產自己就地補上載體，這裡一律拿得到 GraphNode。</summary>
+    // 走 GetMember：Root 是屬性，而且 ActionAssetBase&lt;TPack&gt; 的 TPack 在 Editor 端是未知的。
+    public static GraphNode AssetRoot(object asset) => GetMember(asset, "Root") as GraphNode;
 
     /// <summary>圖主人的具名變數清單（ActionSystem、公式／動作資產各一份）。</summary>
     // 走 GetMember 而不是 Get：Endpoints 是屬性，Get 只找欄位，拿到的會是 null。

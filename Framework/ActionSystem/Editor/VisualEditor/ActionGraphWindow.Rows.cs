@@ -111,8 +111,8 @@ public partial class ActionGraphWindow
     }
 
     /// <summary>
-    /// 列右端由右往左的固定順序：**接點 → 收合鈕 → ✕**。接點永遠貼齊節點右緣（所有接點要排成
-    /// 一條垂直線），另外兩個往左推。位置固定不隨「有沒有接來源」滑動，欄位寬度才不會跳。
+    /// 列右端由右往左的固定順序：**接點 → ✕**。接點永遠貼齊節點右緣（所有接點要排成
+    /// 一條垂直線），✕ 往左推。位置固定不隨「有沒有接來源」滑動，欄位寬度才不會跳。
     /// 這裡回傳 ✕ 佔掉的橫向空間，清單元素才有。
     /// </summary>
     private static float ListRightInset(AGRow row)
@@ -121,14 +121,40 @@ public partial class ActionGraphWindow
     /// <summary>接點固定佔住的右緣寬度。收合鈕與 ✕ 都從這裡往左推。</summary>
     private const float PortReserve = AGGraph.PortDiameter;
 
-    /// <summary>收合鈕：接點左邊。</summary>
-    private static Rect ViewToggleRectOf(Rect rowRect)
-        => new Rect(rowRect.xMax - PortReserve - ViewToggleWidth,
-            rowRect.y + rowRect.height * 0.5f - AGGraph.PortRadius + 1f, 12f, 12f);
+    /// <summary>
+    /// 型別 chip 的固定欄寬，與它右邊的間距。**寬度固定不隨文字長短浮動**：這樣同一顆節點的 chip
+    /// 與標籤各自排成一直排，掃視時兩欄都對得齊；寬度跟著文字走的話每一列的標籤起點都不一樣。
+    /// 裝不下的型別名在 chip 內截字，完整名進 tooltip，與節點內其他文字同一套規則。
+    /// </summary>
+    private const float SlotChipWidth = 44f;
+    private const float SlotChipGap = 4f;
 
-    /// <summary>清單元素的刪除鈕：排在收合鈕左邊，不搶右緣那條接點垂直線。</summary>
+    /// <summary>畫了 chip 後標籤至少要留下這麼寬；深層縮排到剩這麼點寬度時 chip 就不畫，標籤優先。</summary>
+    private const float SlotChipMinLabelWidth = 34f;
+
+    /// <summary>
+    /// 標籤最前面的型別 chip，內容與 Header 右側那顆一致（`AGReflect.ResultTypeName`）；
+    /// 回傳標籤剩下可用的矩形，不畫 chip 時原樣回傳。
+    /// </summary>
+    private static Rect DrawSlotChip(AGRow row, Rect labelRect)
+    {
+        // 動作欄位不畫：ActionSlot 沒有結果型別，整段動作清單標滿同一個「動作」只是噪音。
+        if (row.IsActionSlot || row.ResultType == null) return labelRect;
+        if (labelRect.width - SlotChipWidth - SlotChipGap < SlotChipMinLabelWidth) return labelRect;
+
+        string text = AGReflect.ResultTypeName(row.ResultType);
+        float height = Mathf.Min(14f, labelRect.height);
+        var chipRect = new Rect(labelRect.x, labelRect.y + (labelRect.height - height) * 0.5f, SlotChipWidth, height);
+        AGStyles.RoundedFill(chipRect, AGStyles.SlotChipBody, 2f);
+        GUI.Label(chipRect, AGStyles.Elide(text, AGStyles.SlotChip, SlotChipWidth - 4f, text), AGStyles.SlotChip);
+
+        labelRect.xMin += SlotChipWidth + SlotChipGap;
+        return labelRect;
+    }
+
+    /// <summary>清單元素的刪除鈕：排在接點左邊，不搶右緣那條接點垂直線。</summary>
     private static Rect DeleteRectOf(Rect rowRect)
-        => new Rect(rowRect.xMax - PortReserve - ViewToggleWidth - AGGraph.ListDeleteWidth,
+        => new Rect(rowRect.xMax - PortReserve - AGGraph.ListDeleteWidth,
             rowRect.y + 3f, 14f, rowRect.height - 6f);
 
     /// <summary>
@@ -183,11 +209,13 @@ public partial class ActionGraphWindow
             dragging ? AGStyles.RowLabel : AGStyles.Tiny);
 
         var remove = DeleteRectOf(rowRect);
-        GUI.enabled = !fixedSize;
+        // 存回原本的 GUI.enabled，不能寫死 true——外層可能正把整顆鎖定節點畫成不可編輯。
+        bool wasEnabled = GUI.enabled;
+        GUI.enabled = wasEnabled && !fixedSize;
         bool clickedRemove = GUI.Button(remove,
             new GUIContent("✕", fixedSize ? "陣列不能刪除項目" : "刪除這一項（可用 Ctrl+Z 復原）"),
             AGStyles.ListAdd);
-        GUI.enabled = true;
+        GUI.enabled = wasEnabled;
         if (clickedRemove && !fixedSize)
         {
             model.BreakUndoMerge();
@@ -195,7 +223,7 @@ public partial class ActionGraphWindow
             Invalidate();
             return;
         }
-        if (fixedSize) return;
+        if (fixedSize || !wasEnabled) return;     // 鎖定子樹裡不給重排與右鍵增刪
 
         if (e.type == EventType.MouseDown && e.button == 1 && hover)
         {
@@ -295,19 +323,47 @@ public partial class ActionGraphWindow
             }
             labelRect.xMin += 20f;
         }
-        var labelStyle = hasIssue && isError ? AGStyles.RowLabelError : AGStyles.RowLabel;
-        if (!row.HideLabel)
-            GUI.Label(labelRect, AGStyles.Elide(row.Label, labelStyle, labelRect.width, AGReflect.FieldDescription(row.Field)), labelStyle);
 
-        bool hasView = AGReflect.GetNode(slot) != null;
-        // 收合鈕的位置永遠保留，即使目前沒有接來源不畫它——否則接上線的瞬間欄位會縮一截。
-        float portInset = PortReserve + ViewToggleWidth + ListRightInset(row) + 10f;
+        // 沒勾覆蓋＝資產用自己內部的預設，這一列填什麼都不會被採用，所以連名稱帶欄位一起鎖住。
+        EditorGUI.BeginDisabledGroup(row.Locked);
+
+        var labelStyle = hasIssue && isError ? AGStyles.RowLabelError : AGStyles.RowLabel;
+
+        // 收合鈕已經併進接點自己（見 DrawPortGlyph），列上不再另外保留它的寬度。
+        float portInset = PortReserve + ListRightInset(row) + 10f;
+
+        // 動作清單的元素：標籤本身就是「現在接了什麼」（見 SlotShortName），右半再寫一次型別名只是重複，
+        // 接了什麼順著線看子節點的 Header 更完整。所以這種列讓標籤吃滿整列，右半不畫。
+        // 具名的動作欄位（「True 分支」之類）不同：標籤是欄位名，右半仍要寫內容。
+        bool labelIsContent = row.IsActionSlot && row.IsListElement;
+        if (labelIsContent) labelRect.xMax = rowRect.xMax - portInset;
+
+        if (!row.HideLabel)
+        {
+            // 只有動作清單的元素能就地改名：具名欄位那一列的標籤是欄位名，改了標籤也看不到。
+            if (labelIsContent) DrawActionLabel(row, labelRect, labelStyle);
+            else
+            {
+                // 標籤最前面放一顆型別 chip，寫法與 Header 右側那顆一致：常數框只有 int／bool／enum
+                // 這種有專屬 widget 的型別才隱含說得出型別，接了來源整格轉灰、或型別畫不出輸入框時
+                // 就完全沒有線索。放在最前面而不是標籤尾端：欄寬固定，chip 與標籤各自排成一直排；
+                // 尾端跟著文字走，長短不一還會和標籤擠在一起。
+                var nameRect = DrawSlotChip(row, labelRect);
+                GUI.Label(nameRect,
+                    AGStyles.Elide(row.Label, labelStyle, nameRect.width, AGReflect.FieldDescription(row.Field)), labelStyle);
+            }
+        }
+
         var fieldRect = row.HideLabel
             ? new Rect(labelRect.x, rowRect.y + 1f, Mathf.Max(20f, rowRect.xMax - labelRect.x - portInset), rowRect.height - 3f)
             : new Rect(rowRect.x + rowRect.width * 0.42f, rowRect.y + 1f,
                 Mathf.Max(20f, rowRect.width * 0.58f - portInset), rowRect.height - 3f);
 
-        if (row.IsActionSlot)
+        if (labelIsContent)
+        {
+            // 標籤已經說完：右半留白，不重複寫一次型別／資產名。
+        }
+        else if (row.IsActionSlot)
         {
             string text = useType switch
             {
@@ -319,7 +375,7 @@ public partial class ActionGraphWindow
         }
         else
         {
-            // 常數框永遠在、永遠可編輯。接了公式／資產／變數時它是解析失敗的保底值，只是視覺上轉灰。
+            // 常數框永遠在。接了公式／資產／變數時它是解析失敗的保底值，只是視覺上轉灰；鎖住時整列不可編。
             string tooltip = useType switch
             {
                 1 => "已接公式：公式解析失敗時回到這個值",
@@ -328,8 +384,7 @@ public partial class ActionGraphWindow
                 _ => null,
             };
             EditorGUI.BeginChangeCheck();
-            bool muted = row.AssetBinding != null && !row.AssetBinding.OverrideEnabled;
-            var value = useType == 0 && !muted
+            var value = useType == 0
                 ? AGValueField.Draw(fieldRect, row.ResultType, AGReflect.GetDefault(slot), row.IsEnum)
                 : AGValueField.DrawMuted(fieldRect, row.ResultType, AGReflect.GetDefault(slot), tooltip, row.IsEnum);
             if (EditorGUI.EndChangeCheck()) { AGReflect.SetDefault(slot, value); Invalidate(); }
@@ -341,40 +396,111 @@ public partial class ActionGraphWindow
             rowRect.y + rowRect.height * 0.5f - AGGraph.PortRadius,
             AGGraph.PortDiameter, AGGraph.PortDiameter);
 
-        // 由右往左：接點 → 收合鈕 → ✕（清單元素才有）。
-        if (hasView) DrawViewToggle(row, ViewToggleRectOf(rowRect));
+        EditorGUI.EndDisabledGroup();
 
+        // 接點一個熱區兩種手勢：原地放開＝收合這一段，拖出去＝拉線。這裡只記起點，判定在 HandleCanvasInput。
+        // 不在 MouseDown 當下就起拉線：想收合卻抖了一下的話，放開時會在畫布空白處建出一顆空節點。
+        // 鎖住的列照樣記：它不能拉線（接上去也不會被採用），但更需要收起來。
         var e = Event.current;
-        if (e.type == EventType.MouseDown)
+        if (e.type == EventType.MouseDown && e.button == 0 && portRect.Contains(e.mousePosition))
         {
-            if (e.button == 0 && portRect.Contains(e.mousePosition)) { BeginLinkFromRow(row); e.Use(); }
-            else if (e.button == 1 && rowRect.Contains(e.mousePosition)) { ShowSlotMenu(row); e.Use(); }
+            portClickRow = row;
+            portClickStart = e.mousePosition - pan;   // 群組座標扣掉 pan＝圖面座標，才和 graphMouse 同一套
+            e.Use();
         }
     }
 
-    /// <summary>接點左邊留給收合鈕的寬度。永遠保留同一個寬度，欄位才不會因為接了東西而跳。</summary>
-    private const float ViewToggleWidth = 16f;
+    /// <summary>
+    /// 就地改名：平常畫成一般標籤，雙擊變輸入框，Enter 提交、Esc 取消、點到別處也提交。
+    /// display 是平常顯示的字（可能是自動名），editSeed 是進入編輯時填進去的字（實際存的名字）。
+    /// submit 回傳 false＝名稱不合法，維持編輯狀態讓使用者改。回傳 true 代表這一格正在編輯，
+    /// 呼叫端要跳過自己的點擊處理，否則同一下會又改名又切焦點。
+    /// </summary>
+    private bool DrawInlineName(Rect rect, object target, string display, string editSeed,
+        GUIStyle style, string tooltip, Func<string, bool> submit)
+    {
+        var e = Event.current;
+        if (!ReferenceEquals(editingNameTarget, target))
+        {
+            GUI.Label(rect, AGStyles.Elide(display, style, rect.width, tooltip), style);
+            if (e.type != EventType.MouseDown || e.button != 0 || e.clickCount != 2) return false;
+            if (!rect.Contains(e.mousePosition)) return false;
+
+            editingNameTarget = target;
+            editingNameDraft = editSeed ?? "";
+            editingNameSubmit = submit;
+            GUI.FocusControl(null);
+            e.Use();
+            Repaint();
+            return true;
+        }
+
+        // 每幀重存：submit 是 closure，換一份資料就是換一個委派，留舊的會寫到上一輪的物件上。
+        editingNameSubmit = submit;
+
+        // 鍵盤事件要在畫欄位**之前**判斷：TextField 會把 Return 吃掉，畫完再問就永遠問不到。
+        bool enter = e.type == EventType.KeyDown
+            && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter);
+        bool escape = e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape;
+
+        GUI.SetNextControlName(InlineNameControl);
+        editingNameDraft = EditorGUI.TextField(rect, editingNameDraft);
+        EditorGUI.FocusTextInControl(InlineNameControl);
+
+        // 點到別的地方＝提交：改名是小編輯，留著一個開著的輸入框比直接收掉更容易誤觸。
+        bool clickedAway = e.type == EventType.MouseDown && !rect.Contains(e.mousePosition);
+        if (!clickedAway && !enter && !escape) return true;
+
+        if (escape) CancelInlineName();
+        else CommitInlineName();
+        if (enter || escape) e.Use();             // 點走的那一下要留給底下的控制項處理
+        Repaint();
+        return true;
+    }
+
+    private const string InlineNameControl = "agInlineName";
 
     /// <summary>
-    /// Slot 的收合鈕：收起這個欄位底下的整段子樹。Alt 按＝solo，只留這一段、其餘全收，再按一次還原。
-    /// 純視覺，資料一點都沒動；圖形上刻意不用圓形——圓形在這張圖裡專屬於接點。
+    /// 提交目前開著的就地改名（沒有就什麼都不做）。名稱不合法時保持編輯狀態。
+    /// **畫布也要呼叫它**：`HandleCanvasInput` 會把點擊 `e.Use()` 掉，畫在它後面的左欄與焦點標題列
+    /// 因此看不到那一下 MouseDown，自己收不了尾。
     /// </summary>
-    private void DrawViewToggle(AGRow row, Rect r)
+    private void CommitInlineName()
     {
-        string key = AGGraph.CollapseKey(row.OwnerNodeId, row);
-        bool solo = soloSlotKey == key;
-        bool hidden = effectiveHidden.Contains(key);
+        if (editingNameTarget == null) return;
+        if (editingNameSubmit != null && !editingNameSubmit(editingNameDraft.Trim())) return;
+        CancelInlineName();
+    }
 
-        // solo 額外墊一層底：它和一般展開都顯示 -，靠底色分辨「只看這一段」。
-        if (solo) AGStyles.RoundedFill(r, AGStyles.HeaderOverlay, 2f);
+    private void CancelInlineName()
+    {
+        editingNameTarget = null;
+        editingNameDraft = "";
+        editingNameSubmit = null;
+        GUI.FocusControl(null);
+    }
 
-        GUI.Label(r, hidden && !solo ? "+" : "-", hidden ? AGStyles.HeaderButton : AGStyles.HeaderButtonDim);
+    /// <summary>
+    /// 動作列的標籤：雙擊就地改名，清空＝拿掉標籤改回顯示型別／資產名。
+    /// 標籤是同型別動作之間的唯一區分（「主傷害」「濺射」），統一畫布之後這裡是唯一的改名入口。
+    /// </summary>
+    private void DrawActionLabel(AGRow row, Rect labelRect, GUIStyle labelStyle)
+    {
+        object slot = row.Slot;
+        if (row.Locked)
+        {
+            GUI.Label(labelRect, AGStyles.Elide(row.Label, labelStyle, labelRect.width), labelStyle);
+            return;
+        }
 
-        // 不掛 tooltip：這顆開關就在滑鼠移動的必經路徑上，跳說明框只會擋住底下的圖。
-        // +／- 本身已經說完了它的狀態。
-        if (!GUI.Button(r, GUIContent.none, GUIStyle.none)) return;
-
-        ToggleSlotVisibility(key, Event.current.alt);
+        DrawInlineName(labelRect, slot, row.Label, AGReflect.GetLabel(slot) ?? "", labelStyle,
+            "雙擊可改名；清空改回顯示型別／資產名", name =>
+            {
+                model.BreakUndoMerge();
+                AGReflect.SetLabel(slot, name);
+                Invalidate();
+                return true;
+            });
     }
 
     private void DrawValueRow(AGRow row, Rect rowRect)

@@ -85,6 +85,37 @@ public class ActionSystemDeepCopyTests
         UnityEngine.Object.DestroyImmediate(asset);
     }
 
+    /// <summary>
+    /// 複製圖裡的一小塊（例：複製一個變數）：`shared` 裡的具名變數必須原樣沿用。
+    /// 跟著抄一份就變成不在清單裡的孤兒端點——參照得到、卻永遠查不到值。
+    /// </summary>
+    [Test]
+    public void Copy_WithShared_KeepsSharedObjectsUncopied()
+    {
+        var otherSlot = new TestSlot(5);
+        var other = new GraphEndpoint("other", otherSlot);
+        other.EnsureId();
+
+        var reference = new GraphNode();
+        reference.SetEndpoint(other);
+        var sourceSlot = new TestSlot();
+        sourceSlot.SetNode(reference);
+        var source = new GraphEndpoint("source", sourceSlot);
+        source.EnsureId();
+
+        var copy = ActionSystemDeepCopy.Copy(source, new object[] { other });
+
+        Assert.That(copy, Is.Not.Null);
+        Assert.That(copy, Is.Not.SameAs(source));
+        Assert.That(copy.Slot, Is.Not.SameAs(sourceSlot));
+        Assert.That(copy.Slot.Node, Is.Not.SameAs(reference), "載體本身仍要複製");
+        Assert.That(copy.Slot.Node.Endpoint, Is.SameAs(other), "共用變數不可跟著複製");
+
+        // 沒給 shared 就是整棵抄：這正是複製單一子圖不能用它的原因。
+        var plain = ActionSystemDeepCopy.Copy(source);
+        Assert.That(plain.Slot.Node.Endpoint, Is.Not.SameAs(other));
+    }
+
     [Test]
     public void Copy_ClonesAssetBindingsAndTheirGraphs()
     {

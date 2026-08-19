@@ -1,13 +1,12 @@
 namespace PinPlugin.ActionSystem.Editor
 {
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
 /// <summary>
-/// 開窗入口、Owner 綁定、選取切換、存檔／取消／驗證交易，以及共用資產焦點的進出與訂閱同步。
+/// 開窗入口、Owner 綁定、選取切換、存檔／取消／驗證交易，以及共用資產焦點的進出與引用者重驗。
 /// </summary>
 public partial class ActionGraphWindow
 {
@@ -56,12 +55,11 @@ public partial class ActionGraphWindow
         return false;
     }
 
-    /// <summary>從引用清單裡挑一個可以當上下文的 Owner。清單沒同步過時會是空的。</summary>
+    /// <summary>從引用者裡挑一個可以當上下文的 Owner。索引是現算的，只有專案裡真的沒人引用時才是空的。</summary>
     private static ScriptableObject FindContextOwner(ScriptableObject asset)
     {
-        if (AGReflect.Get(asset, "_subscribers") is not IList subs) return null;
-        foreach (var s in subs)
-            if (s is ScriptableObject so && AGModel.CanEdit(so)) return so;
+        foreach (var so in AGReferenceIndex.Users(asset))
+            if (so != null && AGModel.CanEdit(so)) return so;
         return null;
     }
 
@@ -77,16 +75,10 @@ public partial class ActionGraphWindow
         if (TryEnterSharedAsset(asset)) return;
 
         var owner = FindContextOwner(asset);
+        // 索引可能是這個 session 早先算的，中間有人在別的視窗存了檔。重掃一次再判定「真的沒人引用」。
         if (owner == null)
         {
-            // 引用清單是衍生快取，只在 Owner 存檔時同步，沒同步過就是空的。
-            // 不能只叫使用者去按「重建引用清單」——那顆按鈕在資產編輯畫面裡，而現在正是進不去那個畫面。
-            if (!EditorUtility.DisplayDialog("找不到引用者",
-                $"'{asset.name}' 的引用清單是空的。\n資產本身沒有變數清單與欄位型別，必須借一個引用它的對象當上下文。\n\n要掃描整個專案找出引用它的對象嗎？",
-                "掃描專案", "取消"))
-                return;
-
-            RebuildReferences(asset);
+            AGReferenceIndex.Refresh();
             owner = FindContextOwner(asset);
         }
         if (owner == null)
@@ -100,7 +92,7 @@ public partial class ActionGraphWindow
         if (!Bind(owner)) return;
         if (TryEnterSharedAsset(asset)) return;
         EditorUtility.DisplayDialog("找不到引用點",
-            $"'{owner.name}' 的引用清單登記了這個資產，但實際內容裡找不到指向它的欄位。\n請在資產編輯畫面重建引用清單。", "好");
+            $"索引說 '{owner.name}' 引用這個資產，但它的內容裡找不到指向它的欄位。\n磁碟上的資料可能剛被外部改過，重開視窗再試。", "好");
     }
 
     private bool TryEnterSharedAsset(ScriptableObject asset)
@@ -116,54 +108,9 @@ public partial class ActionGraphWindow
         Type compatibleSlot = SlotTypeForAsset(asset, AssetSlotTypes());
         if (compatibleSlot == null) return false;
 
-        // 磁碟上的 Owner 已不再引用時，這筆 subscriber 是舊快取；資產仍可借其型別上下文獨立編輯。
-        if (model.Owner is ScriptableObject owner && !OwnerReferencesAsset(owner, asset))
-            RemoveStaleSubscriber(asset, owner);
-
+        // 目前的 Owner 沒有引用它也沒關係：資產只是借它的型別當上下文，不需要真的連著。
         EnterAsset(asset, compatibleSlot);
         return true;
-    }
-
-    private static void RemoveStaleSubscriber(ScriptableObject asset, ScriptableObject owner)
-    {
-        if (asset == null || owner == null) return;
-        if (AGReflect.Get(asset, "_subscribers") is not IList subscribers || !subscribers.Contains(owner)) return;
-
-        asset.GetType().GetMethod("UnregisterSubscriber")?.Invoke(asset, new object[] { owner });
-        AssetDatabase.SaveAssets();
-    }
-
-    private static bool OwnerReferencesAsset(ScriptableObject owner, ScriptableObject asset)
-    {
-        var field = AGModel.FindSystemField(owner);
-        var system = field?.GetValue(owner);
-        if (system == null) return false;
-
-        return AGModel.ReferencedAssetsOfSystem(system).Contains(asset);
-    }
-
-    /// <summary>Owner 存檔時才依最終工作副本同步訂閱，取消與 Undo 不會污染衍生快取。</summary>
-    private void SyncOwnerAssetSubscriptions()
-    {
-        if (model?.Owner is not ScriptableObject owner) return;
-
-        var referenced = AGModel.ReferencedAssetsOfSystem(model.Data);
-        var candidates = new HashSet<ScriptableObject>(referenced);
-
-        var field = AGModel.FindSystemField(owner);
-        var storedSystem = field?.GetValue(owner);
-        if (storedSystem != null)
-            foreach (var asset in AGModel.ReferencedAssetsOfSystem(storedSystem)) candidates.Add(asset);
-
-        // 涵蓋「剛轉存後又刪除」：它不在舊資料與新資料內，但可能殘留舊版立即登記的 subscriber。
-        foreach (var entry in AGAssetIndex.Entries)
-            if (entry.Asset != null) candidates.Add(entry.Asset);
-
-        foreach (var asset in candidates)
-        {
-            string method = referenced.Contains(asset) ? "RegisterSubscriber" : "UnregisterSubscriber";
-            asset.GetType().GetMethod(method)?.Invoke(asset, new object[] { owner });
-        }
     }
 
     public bool Bind(UnityEngine.Object owner)
@@ -173,7 +120,7 @@ public partial class ActionGraphWindow
             return false;
 
         returnFocus = null;
-        assetDirty = false;
+        ClearAssetDirty();
         assetReport = new AGReport();
         assetVerifiedOnce = false;
         assetReportStale = false;
@@ -262,12 +209,8 @@ public partial class ActionGraphWindow
                 RestoreOwnerSelection();
                 return false;
             }
-            if (choice == 0)
-            {
-                SaveAsset();
-                if (focus.Kind == AGFocusKind.Asset) return false;
-            }
-            else ExitAsset();
+            // 存檔本身不再退出資產，所以要自己往上退；存檔失敗就留在原畫面。
+            if (choice == 0 && !SaveAsset()) return false;
         }
 
         if (focus.Kind == AGFocusKind.Asset) ExitAsset();
@@ -321,7 +264,7 @@ public partial class ActionGraphWindow
         assetSearch = "";
         pendingTarget = null;
         returnFocus = null;
-        assetDirty = false;
+        ClearAssetDirty();
         ClearViewState();
         UpdateUnsavedState();
         Repaint();
@@ -432,17 +375,19 @@ public partial class ActionGraphWindow
         {
             consoleCollapsed = false;
             consoleTab = 1;
+            // Console 已經被展開切到錯誤頁，細節都在那裡；再彈一個要按「好」的框只是多一次跨螢幕來回。
             if (showDialog)
-                EditorUtility.DisplayDialog("無法存檔", $"還有 {report.ErrorCount} 個錯誤，請先在 Console 修正。", "好");
+                ShowNotification(new GUIContent($"無法存檔：還有 {report.ErrorCount} 個錯誤，請先在 Console 修正"));
             return false;
         }
         if (!model.Save())
         {
             if (showDialog)
-                EditorUtility.DisplayDialog("無法存檔", "Core 驗證未通過，Owner 未寫入。請查看 Unity Console。", "好");
+                ShowNotification(new GUIContent("無法存檔：Core 驗證未通過，Owner 未寫入。詳見 Unity Console"));
             return false;
         }
-        SyncOwnerAssetSubscriptions();
+        // Owner 的引用內容變了，反向索引跟著失效。下次要用時才重算，這裡不掃。
+        AGReferenceIndex.Invalidate();
         AssetDatabase.SaveAssets();
         UpdateUnsavedState();
         ShowNotification(new GUIContent("已存檔"));
@@ -539,20 +484,20 @@ public partial class ActionGraphWindow
         object host = slotType != null ? AGReflect.CreateInstance(slotType) : null;
         if (host == null)
         {
-            EditorUtility.DisplayDialog("無法編輯", "找不到這個資產對應的欄位型別。", "好");
+            ShowNotification(new GUIContent("無法編輯：找不到這個資產對應的欄位型別"));
             return;
         }
 
         // 內容、候選與變數必須同一次複製：變數節點指著端點物件，分幾次抄就會抄成幾份不相干的端點。
         var pack = new List<object>
         {
-            AGReflect.Get(asset, "_target") ?? AGReflect.Get(asset, "_action"),
+            AGReflect.AssetRoot(asset),
             AGReflect.Orphans(asset) ?? new List<GraphNode>(),
             AGReflect.Endpoints(asset) ?? new List<GraphEndpoint>(),
         };
         var packCopy = ActionSystemDeepCopy.Copy(pack);
-        if (packCopy?[0] is ActionSystemNode source) AGReflect.SetFormula(host, source);
-        else AGReflect.ClearNode(host);
+        // 根節點連載體一起抄進容器槽：座標、備註、Id 都在載體上，容器槽本身是拋棄式的。
+        AGReflect.SetNode(host, packCopy?[0] as GraphNode);
 
         SetFocus(new AGFocus
         {
@@ -563,7 +508,7 @@ public partial class ActionGraphWindow
             AssetEndpoints = packCopy?[2] as List<GraphEndpoint> ?? new List<GraphEndpoint>(),
         });
         returnFocus = back ?? new AGFocus();
-        assetDirty = false;
+        ClearAssetDirty();
         assetVerifiedOnce = false;
         assetReportStale = false;
         DoVerify(true);
@@ -577,12 +522,13 @@ public partial class ActionGraphWindow
         if (asset == null || host == null) return false;
 
         DoVerify(true);
-        if (!assetReport.CanSave)
+        // 只搬過座標時不擋：寫回去的內容跟磁碟上完全一樣，錯誤是它本來就有的，沒必要連位置都存不了。
+        if (assetContentDirty && !assetReport.CanSave)
         {
             consoleCollapsed = false;
             consoleTab = 1;
             if (showDialog)
-                EditorUtility.DisplayDialog("無法存檔", $"這個資產還有 {assetReport.ErrorCount} 個錯誤。", "好");
+                ShowNotification(new GUIContent($"無法存檔：這個資產還有 {assetReport.ErrorCount} 個錯誤"));
             return false;
         }
 
@@ -590,26 +536,26 @@ public partial class ActionGraphWindow
         if (useType == 2 || useType == 3)
         {
             if (showDialog)
-                EditorUtility.DisplayDialog("無法存檔", "資產的內容只能是公式或動作，不能再指向另一個資產或變數。", "好");
+                ShowNotification(new GUIContent("無法存檔：資產的內容只能是公式或動作，不能再指向另一個資產或變數"));
             return false;
         }
 
-        var setTarget = asset.GetType().GetMethod("SetTarget");
-        if (setTarget == null)
+        var setRoot = asset.GetType().GetMethod("SetRoot");
+        if (setRoot == null)
         {
-            Debug.LogError($"[ActionGraph] {asset.GetType().Name} 沒有 SetTarget，無法寫回。");
+            Debug.LogError($"[ActionGraph] {asset.GetType().Name} 沒有 SetRoot，無法寫回。");
             return false;
         }
 
         // 寫回也是一次抄三份：內容裡的變數節點與變數清單必須指到同一批端點物件。
         var pack = new List<object>
         {
-            useType == 1 ? AGReflect.GetFormula(host) : null,
+            useType == 1 ? AGReflect.GetNode(host) : null,
             focus.AssetOrphans ?? new List<GraphNode>(),
             focus.AssetEndpoints ?? new List<GraphEndpoint>(),
         };
         var packCopy = ActionSystemDeepCopy.Copy(pack);
-        setTarget.Invoke(asset, new object[] { packCopy?[0] });
+        setRoot.Invoke(asset, new object[] { packCopy?[0] as GraphNode });
 
         var storedOrphans = AGReflect.Orphans(asset);
         if (storedOrphans != null)
@@ -624,19 +570,21 @@ public partial class ActionGraphWindow
         }
         EditorUtility.SetDirty(asset);
         AssetDatabase.SaveAssets();
-        NotifyAssetSubscribers(asset);
-        AssetDatabase.SaveAssets();
+        // 內容沒變就不要驚動別人：座標是編輯器視覺，改它不會讓任何引用者的驗證結果不一樣。
+        if (assetContentDirty) VerifyAssetUsers(asset);
 
-        assetDirty = false;
+        ClearAssetDirty();
         assetVerifiedOnce = true;
         assetReportStale = false;
+        // 存檔只是寫回資產，不退出畫布：接著要繼續編輯還是按「返回」由使用者決定。
         ShowNotification(new GUIContent("資產已存檔"));
-        ExitAsset();
         UpdateUnsavedState();
+        Repaint();
         return true;
     }
 
-    private void CancelAsset()
+    /// <summary>返回上一層。存檔是另一顆按鈕，所以這裡只負責退出；還有沒存的修改就先問。</summary>
+    private void LeaveAsset()
     {
         if (!ConfirmLeaveAsset()) return;
         ExitAsset();
@@ -646,14 +594,14 @@ public partial class ActionGraphWindow
     {
         if (!assetDirty) return true;
         return EditorUtility.DisplayDialog("捨棄資產修改",
-            "這個資產自進入後的修改會被丟掉，確定嗎？", "捨棄", "繼續編輯");
+            "這個資產還有尚未存檔的修改，返回會丟掉它們，確定嗎？", "捨棄", "繼續編輯");
     }
 
     private void ExitAsset()
     {
         var back = returnFocus;
         returnFocus = null;
-        assetDirty = false;
+        ClearAssetDirty();
         assetVerifiedOnce = false;
         assetReportStale = false;
         assetReport = new AGReport();
@@ -663,16 +611,39 @@ public partial class ActionGraphWindow
         Repaint();
     }
 
-    /// <summary>資產內容變了，所有引用它的 Owner 都要重新驗證。</summary>
-    private static void NotifyAssetSubscribers(UnityEngine.Object asset)
+    /// <summary>
+    /// 資產內容變了，所有引用它的 Owner 都要重新驗證。**當場驗完**而不是只標記未驗證：
+    /// 「未驗證」在別人的畫面上看不出來，等到執行時才被 runtime 擋下就太晚了。
+    ///
+    /// 驗證本身不碰檔案，所以名單再長也只是跑一遍記憶體。**只有驗證結果真的翻轉的 Owner 才 SetDirty**
+    /// ——沒被改壞的人不該因為別人存了個資產就被改寫一次。
+    /// </summary>
+    private static void VerifyAssetUsers(UnityEngine.Object asset)
     {
-        if (AGReflect.Get(asset, "_subscribers") is not IList subscribers) return;
-        foreach (var s in subscribers)
+        var failed = new List<string>();
+        var touched = 0;
+        foreach (var so in AGReferenceIndex.Users(asset as ScriptableObject))
         {
-            if (s is not IActionSystemOwner owner) continue;
+            // 索引是這個 session 算的，中間可能有人刪掉資產；碰 name 前先擋掉已銷毀的引用。
+            if (so == null || so is not IActionSystemOwner owner) continue;
+
+            bool wasValidated = owner.IsActionSystemValidated();
             owner.MarkActionSystemDirty();
-            if (s is UnityEngine.Object so) EditorUtility.SetDirty(so);
+            owner.VerifyActionSystem();
+            bool nowValidated = owner.IsActionSystemValidated();
+
+            if (!nowValidated) failed.Add(so.name);
+            if (wasValidated == nowValidated) continue;
+
+            EditorUtility.SetDirty(so);
+            touched++;
         }
+
+        if (touched > 0) AssetDatabase.SaveAssets();
+        if (failed.Count == 0) return;
+
+        Debug.LogError($"[ActionGraph] 資產 '{asset.name}' 存檔後，這些引用它的對象驗證不通過（多半是參數被改名／刪除／換型別）：" +
+            string.Join("、", failed), asset);
     }
 }
 
