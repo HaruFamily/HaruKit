@@ -13,40 +13,86 @@ public partial class ActionGraphWindow
 {
     // ===== 左欄：Token／Asset 庫 =====
 
+    /// <summary>
+    /// 變數與資產上下分區，中間可拖。刻意不用分頁：資產焦點下，變數列的是「這個資產對呼叫端的參數介面」，
+    /// 而資產列是「換去編哪一個」，兩件事交替發生，分頁會逼人每次來回切一趟。
+    /// 兩區都各自有 ScrollView，區塊被拖小了就滾動，不會把內容切掉。
+    /// </summary>
     private void DrawLibraryPanel(Rect r)
     {
         AGStyles.Fill(r, AGStyles.Panel);
         AGStyles.Frame(r, AGStyles.NodeBorder);
 
-        bool inAsset = focus.Kind == AGFocusKind.Asset;
-        GUI.Label(new Rect(r.x + 4f, r.y + 2f, 160f, 18f), "資料庫", AGStyles.PanelHeader);
+        // 面板標題直接當變數區的標題：上面已經沒有第三種東西，再加一條區段標題只是重複佔 20px。
+        GUI.Label(new Rect(r.x + 4f, r.y + 2f, 160f, 18f),
+            new GUIContent("變數庫", "對外端點；點一筆進入它自己的畫布，沒接來源時它就是具名常數"), AGStyles.PanelHeader);
 
-        float tabWidth = (r.width - 8f) * 0.5f;
-        if (DrawTab(new Rect(r.x + 4f, r.y + 22f, tabWidth, 22f), "變數", libraryTab == 0, AGStyles.HeaderToken)) libraryTab = 0;
-        if (DrawTab(new Rect(r.x + 4f + tabWidth, r.y + 22f, tabWidth, 22f), "資產", libraryTab == 1, AGStyles.HeaderAsset)) libraryTab = 1;
+        float top = r.y + 22f;
+        float avail = r.yMax - top - ResizeHandleWidth;
+        // 視窗太矮時連兩區的最小高度都放不下，這時各分一半；寧可擠也不要出現負高度的 Rect。
+        float minToken = Mathf.Min(MinTokenSection, avail * 0.5f);
+        float minAsset = Mathf.Min(MinAssetSection, avail * 0.5f);
+        float maxToken = Mathf.Max(minToken, avail - minAsset);
+        // 夾限後寫回欄位：拖曳是累加 delta，記著的值若跟畫面上的高度不同步，下一次拖會整段跳。
+        tokenSectionHeight = Mathf.Clamp(tokenSectionHeight, minToken, maxToken);
 
-        if (libraryTab == 0) DrawTokenLibrary(r, r.y + 48f, inAsset);
-        else DrawAssetLibrary(r, r.y + 48f);
+        var tokenRect = new Rect(r.x, top, r.width, tokenSectionHeight);
+        var handle = new Rect(r.x, tokenRect.yMax, r.width, ResizeHandleWidth);
+        var assetRect = new Rect(r.x, handle.yMax, r.width, r.yMax - handle.yMax);
+
+        HandleLibrarySplitResize(handle, minToken, maxToken);
+
+        DrawTokenLibrary(tokenRect, tokenRect.y + 2f);
+
+        // 資產區標題跟面板標題同一種寫法，兩區看起來才是同級的清單，不是主從。
+        GUI.Label(new Rect(assetRect.x + 4f, assetRect.y + 2f, 160f, 18f),
+            new GUIContent("資產庫", "點一筆進去編它；拖到畫布上＝建一顆引用節點"), AGStyles.PanelHeader);
+        DrawAssetLibrary(assetRect, assetRect.y + 24f);
+
+        DrawResizeGrip(handle, false, resizingLibrarySplit);
+    }
+
+    /// <summary>左欄上下分隔：拖動只改變數區高度，資產區吃剩下的。夾限與 Console 那條同一套。</summary>
+    private void HandleLibrarySplitResize(Rect handle, float min, float max)
+    {
+        EditorGUIUtility.AddCursorRect(handle, MouseCursor.ResizeVertical);
+        var e = Event.current;
+        if (e.type == EventType.MouseDown && e.button == 0 && handle.Contains(e.mousePosition))
+        {
+            resizingLibrarySplit = true;
+            e.Use();
+            return;
+        }
+        if (e.type == EventType.MouseDrag && resizingLibrarySplit)
+        {
+            tokenSectionHeight = Mathf.Clamp(tokenSectionHeight + e.delta.y, min, max);
+            e.Use();
+            Repaint();
+            return;
+        }
+        if (e.type == EventType.MouseUp && resizingLibrarySplit)
+        {
+            resizingLibrarySplit = false;
+            e.Use();
+        }
     }
 
     /// <summary>
     /// 變數庫：這張圖有哪些對外端點。新增、改名、刪除都在這裡，點一筆進入它自己的畫布。
     /// 資產焦點下列的是那個資產的變數（＝它對呼叫端的參數介面）。
     /// </summary>
-    private void DrawTokenLibrary(Rect r, float top, bool inAsset)
+    private void DrawTokenLibrary(Rect r, float top)
     {
-        GUI.Label(new Rect(r.x + 6f, top, r.width - 12f, 16f),
-            new GUIContent("變數（對外端點）", "點一筆進入它自己的畫布；沒接來源時它就是具名常數"), AGStyles.Tiny);
+        DrawCreateEndpointButton(new Rect(r.x + 4f, top, r.width - 8f, 20f));
+        DrawRemoveEndpointButton(new Rect(r.x + 4f, top + 22f, r.width - 8f, 20f));
 
-        DrawCreateEndpointButton(new Rect(r.x + 4f, top + 18f, r.width - 8f, 20f));
-        DrawRemoveEndpointButton(new Rect(r.x + 4f, top + 40f, r.width - 8f, 20f));
-
-        var searchRect = new Rect(r.x + 4f, top + 64f, r.width - 8f, 20f);
+        var searchRect = new Rect(r.x + 4f, top + 46f, r.width - 8f, 20f);
         GUI.Label(new Rect(searchRect.x + 4f, searchRect.y + 2f, 16f, 16f),
             EditorGUIUtility.IconContent("Search Icon", "搜尋變數"));
         tokenSearch = EditorGUI.TextField(new Rect(searchRect.x + 20f, searchRect.y, searchRect.width - 20f, searchRect.height), tokenSearch);
 
-        var listRect = new Rect(r.x + 2f, top + 88f, r.width - 4f, r.yMax - top - 90f);
+        // r 已經是這一區的範圍，yMax 就是分隔線；高度夾 0 以上，視窗擠到極限時不會出現負高度的 ScrollView。
+        var listRect = new Rect(r.x + 2f, top + 70f, r.width - 4f, Mathf.Max(0f, r.yMax - top - 72f));
         var tokens = AGModel.ReadTokens(CurrentEndpoints());
         var shown = new List<AGToken>();
         foreach (var t in tokens)
@@ -253,13 +299,14 @@ public partial class ActionGraphWindow
 
     private void DrawAssetLibrary(Rect r, float top)
     {
-        if (GUI.Button(new Rect(r.x + 4f, top, r.width - 8f, 22f), "重新掃描資產")) AGAssetIndex.Refresh();
-
-        var searchRect = new Rect(r.x + 4f, top + 26f, r.width - 8f, 20f);
+        // 重掃縮成搜尋列旁的圖示鈕：上下分區後高度是兩區共用的，整條寬按鈕不值那一列。
+        var searchRect = new Rect(r.x + 4f, top, r.width - 30f, 20f);
         GUI.Label(new Rect(searchRect.x + 4f, searchRect.y + 2f, 16f, 16f),
             EditorGUIUtility.IconContent("Search Icon", "搜尋資產"));
         assetSearch = EditorGUI.TextField(new Rect(searchRect.x + 20f, searchRect.y,
             searchRect.width - 20f, searchRect.height), assetSearch);
+        if (GUI.Button(new Rect(r.xMax - 24f, top, 20f, 20f),
+            EditorGUIUtility.IconContent("Refresh", "重新掃描資產"))) AGAssetIndex.Refresh();
 
         var shown = new List<(AGAssetEntry entry, Type slotType)>();
         var slotTypes = AssetSlotTypes();
@@ -275,7 +322,7 @@ public partial class ActionGraphWindow
             shown.Add((entry, slotType));
         }
 
-        var listRect = new Rect(r.x + 2f, top + 50f, r.width - 4f, r.yMax - top - 52f);
+        var listRect = new Rect(r.x + 2f, top + 24f, r.width - 4f, Mathf.Max(0f, r.yMax - top - 26f));
         var content = new Rect(0f, 0f, listRect.width - 16f, shown.Count * AssetCellHeight + 4f);
         assetLibraryScroll = GUI.BeginScrollView(listRect, assetLibraryScroll, content);
         for (int i = 0; i < shown.Count; i++)
@@ -409,13 +456,10 @@ public partial class ActionGraphWindow
     }
 
     /// <summary>Console 分頁沒有身分，走中性灰。</summary>
+    /// <summary>Console 分頁：選中才給滿色。</summary>
     private bool DrawTab(Rect r, string label, bool active)
-        => DrawTab(r, label, active, AGStyles.NodeBody);
-
-    /// <summary>左欄分頁：用該分頁清單的身分色，選中才給滿色。</summary>
-    private bool DrawTab(Rect r, string label, bool active, Color kind)
     {
-        AGStyles.RoundedFill(r, AGStyles.CellTint(kind, false, active), CellCornerRadius);
+        AGStyles.RoundedFill(r, AGStyles.CellTint(AGStyles.NodeBody, false, active), CellCornerRadius);
         GUI.Label(r, label, AGStyles.Tiny);
         return GUI.Button(r, GUIContent.none, GUIStyle.none);
     }

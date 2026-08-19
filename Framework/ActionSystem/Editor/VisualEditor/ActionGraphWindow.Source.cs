@@ -448,9 +448,11 @@ public partial class ActionGraphWindow
     // ===== 右鍵選單 =====
 
     /// <summary>
-    /// 轉存為變數：新建一個端點，把這顆節點搬進它自己的畫布，原欄位改接一顆變數節點。
+    /// 轉存為變數：新建一個端點，把這顆節點搬進它自己的畫布，**所有**指著它的欄位都改接變數節點。
     /// 和「轉存為資產」同一個手勢，差別是變數留在這張圖裡，不另外開檔。
     /// </summary>
+    // 共用載體在畫布上只畫一顆節點（AGNode.ParentSlot 只記走訪先到的那條邊），只改那一條的話，
+    // 其餘欄位會繼續直接指著同一顆載體——那顆載體同時是變數的內容，變成一份資料兩種身分的別名。
     private void ExtractVariable(AGNode node)
     {
         if (node?.Carrier == null || node.ResultType == null) return;
@@ -469,17 +471,24 @@ public partial class ActionGraphWindow
             return;
         }
 
+        // 先收集再改接：改完之後端點自己的取值欄位也指著這顆載體，邊掃邊改會把它一起換成變數節點。
+        var users = new List<object>();
+        foreach (var slot in SlotsInCurrentGraph())
+            if (slot != null && ReferenceEquals(AGReflect.GetNode(slot), node.Carrier)) users.Add(slot);
+
         // 端點的取值欄位接下這顆載體；它的子樹整棵跟著搬進變數畫布。
         AGReflect.SetNode(endpoint.Slot, node.Carrier);
 
-        if (node.ParentSlot != null)
+        // 每個欄位各給一顆變數節點：載體是座標與選取的單位，共用一顆會讓多個引用處黏在同一個位置。
+        foreach (var slot in users)
         {
             var proxy = new GraphNode();
             proxy.EnsureId();
             proxy.SetEndpoint(endpoint);
-            AGReflect.SetNode(node.ParentSlot, proxy);
+            AGReflect.SetNode(slot, proxy);
         }
-        else model.RemoveOrphan(node.Carrier);   // 原本是候選節點：搬走就不再掛在這張畫布上
+
+        if (node.ParentSlot == null) model.RemoveOrphan(node.Carrier);   // 原本是候選節點：搬走就不再掛在這張畫布上
 
         MarkGraphChanged();
     }
@@ -704,9 +713,34 @@ public partial class ActionGraphWindow
 
     // ===== 轉存為資產 =====
 
-    /// <summary>把節點抽成獨立資產，原欄位改指向它。未連接節點則只建立資產。</summary>
+    /// <summary>
+    /// 把節點抽成獨立資產，原欄位改指向它。未連接節點則只建立資產。
+    /// 子樹跨出資產邊界的兩件事在這裡收斂：變數引用抬成資產參數、被子樹外共用的節點複製一份留給外部。
+    /// </summary>
     private void ExtractAsset(AGNode node)
     {
+        if (node?.Carrier == null) return;
+
+        // 複製共用節點是語意改變（從此兩份各自獨立），不能默默做。
+        int shared = FindBoundaryShared(SubtreeRootOf(node)).Count;
+        if (shared == 0) { ExtractAssetConfirmed(node); return; }
+
+        RequestConfirm(GraphToWindowRect(new Rect(node.Pos.x, node.Pos.y, node.Width, AGGraph.HeaderHeight)),
+            $"這棵子樹裡有 {shared} 個節點還被子樹外的欄位使用，轉存時會各複製一份留給它們。"
+            + "轉存後兩份各自獨立，改一邊不會影響另一邊。",
+            "轉存", () => ExtractAssetConfirmed(node));
+    }
+
+    /// <summary>轉存的子樹根：變數節點轉存的是它指向的那個變數的內容，不是節點自己。</summary>
+    private static GraphNode SubtreeRootOf(AGNode node)
+        => node == null ? null : (node.IsVariableNode ? node.Endpoint?.Slot?.Node : node.Carrier);
+
+    private void ExtractAssetConfirmed(AGNode node)
+    {
+        if (node?.Carrier == null) return;
+
+        model.BreakUndoMerge();
+
         // 變數節點自己沒有內容：轉存的對象是它指向的那個變數的算式，變數本身留著。
         if (node.IsVariableNode) { ExtractVariableContentAsset(node); return; }
 
@@ -765,6 +799,13 @@ public partial class ActionGraphWindow
         }
         setTarget.Invoke(asset, new object[] { source });
 
+        // 這兩步都要在「原件還完整、且資產已確定會建出來」之間做：
+        // 使用者在檔名對話框按取消時上面就 return 了，圖不會被動到。
+        // 先複製共用點給外部（此時子樹裡的變數節點還指著本圖的變數，複本才會接對）。
+        DetachBoundaryShared(carrier);
+        // 抬參數要在寫檔之前：資產的變數清單就是它的參數介面，晚了就存不進 .asset。
+        var lifted = LiftTokensToParameters(asset);
+
         asset.name = System.IO.Path.GetFileNameWithoutExtension(path);
         AssetDatabase.CreateAsset(asset, path);
 
@@ -781,9 +822,173 @@ public partial class ActionGraphWindow
         carrier?.SetAsset(asset);
         if (isOrphan) model.RemoveOrphan(carrier);
 
+        // 參數列要現算：這個資產是剛剛才長出參數的，快取裡那份是空的。
+        model.ClearAssetParameterCache();
+        model.EnsureAssetBindings(carrier);
+        BindLiftedParameters(carrier, lifted);
+
         Invalidate();
         EditorGUIUtility.PingObject(asset);
         ShowNotification(new GUIContent("已轉存為資產"));
+    }
+
+    // ===== 轉存邊界 =====
+    // 資產是另一個序列化根，圖裡的共用跨不過去。子樹裡指向外面的兩種線都要在轉存當下處理掉，
+    // 否則存檔時 Unity 會各抄一份，變成看不見的分家：變數引用查不到值、共用節點默默變兩份。
+
+    /// <summary>
+    /// 把子樹裡的變數引用抬成資產參數：資產內建同型參數、內部的變數節點改指它，
+    /// 回傳「參數名 → 原本那個變數」讓呼叫點把線接回去。
+    /// </summary>
+    // 不抬的話：資產求值走的是自己的作用域（TokenTable.CreateAssetScope 只登記資產自己的參數），
+    // Owner 的變數名查不到，FormulaSlot 直接回預設值，畫布上與驗證上都看不出來。
+    private List<(string Name, GraphEndpoint Source)> LiftTokensToParameters(ScriptableObject asset)
+    {
+        var lifted = new List<(string, GraphEndpoint)>();
+        var parameters = AGReflect.Endpoints(asset);
+        if (parameters == null) return lifted;
+
+        var map = new Dictionary<GraphEndpoint, GraphEndpoint>();
+        foreach (var carrier in TokenCarriersIn(AGReflect.AssetRoot(asset)))
+        {
+            var source = carrier.Endpoint;
+            if (source == null) continue;
+            if (parameters.Contains(source)) continue;   // 已經是這個資產自己的參數，不必再抬一層
+
+            if (!map.TryGetValue(source, out var parameter))
+            {
+                if (AGReflect.CreateInstance(source.Slot?.GetType()) is not FormulaSlotBase slot)
+                {
+                    Debug.LogWarning($"[ActionGraph] 變數 '{source.Name}' 建不出資產參數欄位，"
+                        + "轉存後資產內這一格會取預設值，請手動改成常數或補上對應的 FormulaSlot 型別。");
+                    continue;
+                }
+                parameter = new GraphEndpoint(UniqueParameterName(parameters, source.Name, source.ResultType), slot);
+                parameter.EnsureId();
+                parameters.Add(parameter);
+                map[source] = parameter;
+                lifted.Add((parameter.Name, source));
+            }
+            carrier.SetEndpoint(parameter);
+        }
+        return lifted;
+    }
+
+    /// <summary>子樹裡所有變數引用節點。走訪在端點物件停住：變數的內容住在自己的畫布，不屬於這棵子樹。</summary>
+    // 一顆載體只回一次：共用的變數節點會被多個欄位走到，重複回傳會把剛抬上去的參數再抬一層。
+    private List<GraphNode> TokenCarriersIn(object root)
+    {
+        var result = new List<GraphNode>();
+        if (root == null) return result;
+
+        var visited = new HashSet<object>(AGRefComparer.Instance);
+        foreach (var endpoint in CurrentEndpoints() ?? new List<GraphEndpoint>())
+            if (endpoint != null) visited.Add(endpoint);
+
+        var seen = new HashSet<GraphNode>();
+        foreach (var slot in AGModel.WalkSlots(root, visited))
+        {
+            var carrier = AGReflect.GetNode(slot);
+            if (carrier != null && carrier.Kind == NodeKind.Token && seen.Add(carrier)) result.Add(carrier);
+        }
+        return result;
+    }
+
+    /// <summary>資產參數名：沿用原變數名，同結果型別撞名才加號碼。名稱是呼叫點綁定用的 key。</summary>
+    private static string UniqueParameterName(List<GraphEndpoint> scope, string preferred, Type resultType)
+    {
+        var used = new HashSet<string>();
+        foreach (var other in scope)
+            if (other != null && other.ResultType == resultType && !string.IsNullOrEmpty(other.Name))
+                used.Add(other.Name);
+
+        string root = string.IsNullOrEmpty(preferred) ? "Param" : preferred;
+        if (!used.Contains(root)) return root;
+        for (int i = 2; ; i++)
+            if (!used.Contains($"{root}{i}")) return $"{root}{i}";
+    }
+
+    /// <summary>呼叫點的參數列接回原本那個變數。</summary>
+    // 一定要打開覆蓋：抬上去的參數在資產內部沒有內容（等於具名常數），不覆蓋就是取那個空欄位的預設值，
+    // 值會從「Owner 的變數」默默變成 0。
+    private void BindLiftedParameters(GraphNode carrier, List<(string Name, GraphEndpoint Source)> lifted)
+    {
+        if (carrier == null || lifted == null) return;
+        foreach (var (name, source) in lifted)
+        {
+            NamedFormulaSlot binding = null;
+            foreach (var current in carrier.Bindings)
+                if (current?.Name == name) { binding = current; break; }
+
+            if (binding?.Slot == null)
+            {
+                Debug.LogWarning($"[ActionGraph] 資產參數 '{name}' 沒有參數列，"
+                    + $"請在這顆資產節點上手動把它接回變數 '{source?.Name}'。");
+                continue;
+            }
+            binding.OverrideEnabled = true;
+            AGReflect.SetEndpoint(binding.Slot, source);
+        }
+    }
+
+    /// <summary>子樹裡被子樹外欄位指著的載體 → 那些外部欄位。根自己不算：指著根的線會跟著它一起變成資產引用。</summary>
+    private Dictionary<GraphNode, List<object>> FindBoundaryShared(GraphNode root)
+    {
+        var result = new Dictionary<GraphNode, List<object>>();
+        if (root == null) return result;
+
+        // 端點先當成走過了：變數的內容不會跟著搬進資產，指著它的欄位也就不算跨邊界。
+        var visited = new HashSet<object>(AGRefComparer.Instance);
+        foreach (var endpoint in CurrentEndpoints() ?? new List<GraphEndpoint>())
+            if (endpoint != null) visited.Add(endpoint);
+
+        var innerSlots = new HashSet<object>(AGRefComparer.Instance);
+        foreach (var slot in AGModel.WalkSlots(root, visited)) innerSlots.Add(slot);
+
+        var innerCarriers = new HashSet<GraphNode>();
+        foreach (var slot in innerSlots)
+        {
+            var carrier = AGReflect.GetNode(slot);
+            if (carrier != null && !ReferenceEquals(carrier, root)) innerCarriers.Add(carrier);
+        }
+        if (innerCarriers.Count == 0) return result;
+
+        foreach (var slot in SlotsInCurrentGraph())
+        {
+            if (slot == null || innerSlots.Contains(slot)) continue;
+            var carrier = AGReflect.GetNode(slot);
+            if (carrier == null || !innerCarriers.Contains(carrier)) continue;
+
+            if (!result.TryGetValue(carrier, out var users)) result[carrier] = users = new List<object>();
+            users.Add(slot);
+        }
+        return result;
+    }
+
+    /// <summary>把邊界共用點複製一份給子樹外的欄位；原件隨資產搬走，兩份從此各自獨立。</summary>
+    // 一顆共用點只複製一份、外部所有欄位共指它：外部彼此之間原本的共用關係要留著。
+    private void DetachBoundaryShared(GraphNode root)
+    {
+        var boundary = FindBoundaryShared(root);
+        if (boundary.Count == 0) return;
+
+        // 變數一律沿用不複製：複本裡的變數節點要繼續指向同一個變數，跟著抄會變成查不到值的孤兒端點。
+        var shared = new List<object>();
+        foreach (var endpoint in CurrentEndpoints() ?? new List<GraphEndpoint>())
+            if (endpoint != null) shared.Add(endpoint);
+
+        foreach (var pair in boundary)
+        {
+            var copy = ActionSystemDeepCopy.Copy(pair.Key, shared);
+            if (copy == null)
+            {
+                Debug.LogError("[ActionGraph] 複製共用節點失敗，該欄位會跟著資產一起失去內容，詳見上一則訊息。");
+                continue;
+            }
+            // 新舊載體不可共用識別碼：座標與選取狀態都掛在它身上。
+            AGModel.ResetNodeIds(copy, shared);
+            foreach (var slot in pair.Value) AGReflect.SetNode(slot, copy);
+        }
     }
 
     /// <summary>這顆節點的內容該存成哪一種資產。動作與公式各走各的資產族，呼叫端不必自己分辨。</summary>
