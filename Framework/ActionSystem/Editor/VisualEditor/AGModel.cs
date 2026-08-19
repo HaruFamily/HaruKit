@@ -438,6 +438,49 @@ public class AGModel
         return endpoint;
     }
 
+    /// <summary>
+    /// 複製一個變數：新的頭端、新名字、內容整棵深拷貝（含候選池）。
+    /// 清單上的**其他變數一律共用**——子樹裡的 Token 節點還是指向原本那一個，不會抄出孤兒端點。
+    /// 資產是 UnityEngine.Object，深複製本來就只抄參考，共用資產不會被複製成第二份。
+    /// </summary>
+    public GraphEndpoint DuplicateEndpoint(GraphEndpoint source, List<GraphEndpoint> scope, out string error)
+    {
+        error = null;
+        if (source == null) { error = "沒有可複製的變數。"; return null; }
+        if (scope == null) { error = "這張圖沒有變數清單。"; return null; }
+
+        var shared = new List<object>();
+        foreach (var other in scope)
+            if (other != null && !ReferenceEquals(other, source)) shared.Add(other);
+
+        var copy = ActionSystemDeepCopy.Copy(source, shared);
+        if (copy == null) { error = "複製這個變數失敗，詳見 Console。"; return null; }
+
+        // 識別碼一定要換：頭端的 Id 決定焦點與座標，載體的 Id 決定節點座標與選取。
+        copy.ResetId();
+        copy.EnsureId();
+        ResetNodeIds(copy, shared);
+        copy.Name = CopyName(scope, source.Name, copy.ResultType);
+
+        scope.Add(copy);
+        MarkDirty();
+        return copy;
+    }
+
+    /// <summary>複本的名字：「原名 複本」，撞名就往後加號碼。唯一性和別處一樣是「結果型別＋名稱」。</summary>
+    private static string CopyName(IEnumerable<GraphEndpoint> scope, string sourceName, Type resultType)
+    {
+        var used = new HashSet<string>();
+        foreach (var other in scope ?? new List<GraphEndpoint>())
+            if (other != null && other.ResultType == resultType && !string.IsNullOrEmpty(other.Name))
+                used.Add(other.Name);
+
+        string root = string.IsNullOrEmpty(sourceName) ? "Token" : sourceName;
+        string candidate = root + " 複本";
+        for (int i = 2; used.Contains(candidate); i++) candidate = $"{root} 複本{i}";
+        return candidate;
+    }
+
     /// <summary>替變數改名。同型別內不可重複；空名稱不允許（外部是用名字查的）。</summary>
     public bool RenameEndpoint(GraphEndpoint endpoint, string name, List<GraphEndpoint> scope, out string error)
     {
@@ -700,9 +743,19 @@ public class AGModel
     }
 
     /// <summary>複製節點後清掉整棵樹的識別碼，避免新舊節點共用座標記錄。</summary>
-    public static void ResetNodeIds(object root)
+    public static void ResetNodeIds(object root) => ResetNodeIds(root, null);
+
+    /// <summary>
+    /// 同上，但 <paramref name="skip"/> 裡的物件當作走過了——走訪會在那裡停住。
+    /// 複製單一變數時要把清單上**其他變數**丟進來：子樹裡指向它們的 Token 節點是共用引用，
+    /// 一路走進去會把別人的載體識別碼一起清掉，那些圖的座標當場全部重來。
+    /// </summary>
+    public static void ResetNodeIds(object root, IEnumerable<object> skip)
     {
         var visited = new HashSet<object>(AGRefComparer.Instance);
+        if (skip != null)
+            foreach (var item in skip)
+                if (item != null) visited.Add(item);
         ResetNodeIdsInternal(root, visited);
     }
 

@@ -69,6 +69,7 @@ public static class AGValidator
     /// </summary>
     public static AGReport Run(AGModel model, bool includeMissingTypes = false)
     {
+        if (probeDepth == 0) assetHealth.Clear();
         var report = new AGReport();
         if (model?.Data == null) return report;
 
@@ -152,6 +153,7 @@ public static class AGValidator
     /// <summary>只驗一棵子樹（資產焦點用）。</summary>
     public static AGReport RunSubtree(AGModel model, AGFocus focus, object rootSlot, string where)
     {
+        if (probeDepth == 0) assetHealth.Clear();
         var report = new AGReport();
         if (model?.Data == null || rootSlot == null) return report;
 
@@ -175,6 +177,49 @@ public static class AGValidator
             WalkTokenCarrier(report, model, tokenFocus, token, new HashSet<UnityEngine.Object>(), focus?.AssetObject);
         }
         return report;
+    }
+
+    // 一次驗證裡同一個資產只探一次：巢狀資產與多處引用都會問到同一顆。
+    private static readonly Dictionary<UnityEngine.Object, bool> assetHealth = new();
+
+    // >0 代表正在探測資產內部，此時不可清快取（清掉會讓循環引用的探測無限遞迴）。
+    private static int probeDepth;
+
+    /// <summary>
+    /// 資產「存檔後的內容」自己還有沒有錯。規則與資產畫布完全相同（直接跑 <see cref="RunSubtree"/>），
+    /// 但呼叫端只拿一個是非——細項留在資產畫布裡報，才不會在改不了它的畫布上列一堆跳不過去的訊息。
+    /// </summary>
+    /// hostSlotType：資產內容要塞進哪一種欄位才驗得動（＝引用它的那個欄位型別）。資產本身不記這件事。
+    public static bool AssetHasError(AGModel model, Type hostSlotType, UnityEngine.Object asset)
+    {
+        if (model == null || asset == null || hostSlotType == null) return false;
+        if (assetHealth.TryGetValue(asset, out bool cached)) return cached;
+        // 先佔位：巢狀引用繞回自己時當成沒問題，循環本身由 ValidateAssetCycles 專門報。
+        assetHealth[asset] = false;
+
+        var root = AGReflect.AssetRoot(asset);
+        if (root == null) return false;   // 空資產：資產畫布也不報，這裡跟著不報
+        object host = AGReflect.CreateInstance(hostSlotType);
+        if (host == null) return false;
+        AGReflect.SetNode(host, root);
+
+        var probeFocus = new AGFocus
+        {
+            Kind = AGFocusKind.Asset,
+            AssetObject = asset,
+            AssetHostSlot = host,
+            AssetOrphans = AGReflect.Orphans(asset),
+            AssetEndpoints = AGReflect.Endpoints(asset),
+        };
+
+        probeDepth++;
+        AGReport probe;
+        try { probe = RunSubtree(model, probeFocus, host, asset.name); }
+        finally { probeDepth--; }
+
+        bool hasError = probe.ErrorCount > 0;
+        assetHealth[asset] = hasError;
+        return hasError;
     }
 
     /// <summary>問題要跳回那個變數自己的畫布。</summary>
@@ -244,10 +289,17 @@ public static class AGValidator
         }
         else if (useType == 2)
         {
-            if (AGReflect.GetAsset(slot) == null)
+            var asset = AGReflect.GetAsset(slot);
+            if (asset == null)
                 Issue(report, disabled, focus, where, "欄位設為資產，但沒有指定資產", "指定一個資產，或把模式改回常數。", slot, null);
             var carrier = AGReflect.GetNode(slot);
             ValidateAssetBindings(report, focus, carrier, where);
+
+            // 資產內部殘缺在這張畫布上修不了，所以只報一條入口級錯誤讓人跳進去；不報的話會變成
+            // 「視覺驗證全綠、存檔被 Core 擋住且沒有訊息」。細項在資產畫布自己的驗證裡。
+            if (AssetHasError(model, slot.GetType(), asset))
+                Issue(report, disabled, focus, where, $"資產 '{asset.name}' 內部有錯誤",
+                    "雙擊這顆節點進入資產畫布，依那裡的驗證訊息修正。", slot, carrier);
             if (carrier != null)
             {
                 foreach (var binding in carrier.Bindings)
@@ -460,8 +512,7 @@ public static class AGValidator
         }
     }
 
-    private static object AssetContent(UnityEngine.Object asset)
-        => AGReflect.Get(asset, "_action") ?? AGReflect.Get(asset, "_target");
+    private static object AssetContent(UnityEngine.Object asset) => AGReflect.AssetRoot(asset)?.BodyObject;
 
     /// <summary>
     /// Owner 宣告「我會從圖外用字串 key 求值」的那些變數名。編輯器不認得任何專案型別，

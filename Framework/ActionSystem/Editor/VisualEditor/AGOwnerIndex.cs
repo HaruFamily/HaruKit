@@ -28,6 +28,9 @@ public static class AGOwnerIndex
 
     public static void Refresh() => cache = Scan();
 
+    /// <summary>下次取用時才重掃。專案內容變動時由 <see cref="AGReferenceIndex"/> 呼叫。</summary>
+    public static void Invalidate() => cache = null;
+
     private static List<AGOwnerEntry> Scan()
     {
         var result = new List<AGOwnerEntry>();

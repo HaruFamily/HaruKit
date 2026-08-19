@@ -26,7 +26,7 @@ public partial class ActionGraphWindow : EditorWindow
     private const float LinkSnapDistance = 24f;
     private const float LinkThickness = 4f;
     private const float TokenCellHeight = 30f;
-    private const float AssetCellHeight = 34f;
+    private const float AssetCellHeight = 30f;
     private const string PrefConsoleHeight = "ActionGraph.ConsoleHeight";
     private const string PrefConsoleCollapsed = "ActionGraph.ConsoleCollapsed";
     private const string PrefLeftWidth = "ActionGraph.LeftWidth";
@@ -64,6 +64,8 @@ public partial class ActionGraphWindow : EditorWindow
     private string assetSearch = "";
     private object editingNameTarget;
     private string editingNameDraft = "";
+    // 就地改名的提交入口，由 DrawInlineName 每幀存進來：畫布吃掉點擊時，改名那一欄已經沒機會自己收尾。
+    private Func<string, bool> editingNameSubmit;
 
     // 互動
     private AGNode dragNode;
@@ -80,6 +82,17 @@ public partial class ActionGraphWindow : EditorWindow
     private bool linking;
     private AGRow linkRow;
     private AGNode linkNode;
+
+    // 接點一個熱區兩種手勢：按下先記著，移動超過 PortClickSlop 才起拉線，原地放開就是收合這一段。
+    // 判定跟 Header 的 ▾ 同一套。刻意不在 MouseDown 當下起拉線：想收合卻抖了一下的話，
+    // 放開時那條線會落在畫布空白處，於是憑空多一顆空節點。
+    private AGRow portClickRow;
+    private Vector2 portClickStart;
+    private const float PortClickSlop = 4f;
+
+    // 待開的就地確認框（見 RequestConfirm）。錨點是視窗座標。
+    private AGConfirmPopup pendingConfirm;
+    private Rect pendingConfirmAnchor;
 
     // 拉線期間的相容性：起手時對全圖判定一次，之後高亮與吸附都讀這份，不必每幀重算。
     private readonly HashSet<string> linkCompatibleNodeIds = new();
@@ -130,6 +143,10 @@ public partial class ActionGraphWindow : EditorWindow
     // 資產焦點（獨立存檔交易）
     private AGFocus returnFocus;
     private bool assetDirty;
+
+    // 內容真的變了（接線、換型別、綁定、刪節點）才會是 true；只搬座標不算。
+    // 只有它為 true 才需要擋存檔與通知 subscriber 重新驗證——搬個位置不該驚動任何引用者。
+    private bool assetContentDirty;
     private AGReport assetReport = new();
     private Vector2 referenceScroll;
 
@@ -196,7 +213,28 @@ public partial class ActionGraphWindow : EditorWindow
         }
         if (Event.current.type == EventType.MouseDrag || linking || dragAssetActive || dragEndpointActive
             || placingSlot != null) Repaint();
+        ShowPendingConfirm();
         UpdateUnsavedState();
+    }
+
+    /// <summary>
+    /// 待開的就地確認框。**一律排到 OnGUI 結尾才 Show**，因為 `PopupWindow.Show` 是拿當下的 GUI 座標
+    /// 換算螢幕位置的：在 ScrollView 或 zoom group 裡呼叫會偏掉，從 GenericMenu 的回呼呼叫更是完全沒有
+    /// GUI 座標可用。錨點 rect 由呼叫端先換成視窗座標存進來。
+    /// </summary>
+    private void RequestConfirm(Rect windowAnchor, string message, string confirmLabel, Action onConfirm)
+    {
+        pendingConfirmAnchor = windowAnchor;
+        pendingConfirm = new AGConfirmPopup(message, confirmLabel, onConfirm);
+        Repaint();
+    }
+
+    private void ShowPendingConfirm()
+    {
+        if (pendingConfirm == null || Event.current.type != EventType.Repaint) return;
+        var popup = pendingConfirm;
+        pendingConfirm = null;
+        PopupWindow.Show(pendingConfirmAnchor, popup);
     }
 
     /// <summary>清掉左欄拖曳（資產／變數）的待處理狀態。按下與放開都要清，兩邊都不能只靠一邊。</summary>
@@ -365,8 +403,7 @@ public partial class ActionGraphWindow : EditorWindow
         {
             if (focus.Kind == AGFocusKind.Asset)
             {
-                assetDirty = true;
-                assetReportStale = true;
+                MarkAssetContentChanged();
             }
             else
             {
@@ -383,7 +420,7 @@ public partial class ActionGraphWindow : EditorWindow
         graph = focus.Kind == AGFocusKind.None
             ? new AGGraphView()
             : AGGraph.Build(model, focus.Roots, OrphansOfCurrentFocus(), focus.Id, focus.HeadTitle,
-                listCollapse, noteOpenId, noteCollapsed, focus.Endpoint);
+                listCollapse, noteOpenId, noteCollapsed, focus.HeadCarrier, orphanKindHints);
 
         ApplyVisibility();
         if (pendingCenterTarget != null) { CenterOn(pendingCenterTarget); pendingCenterTarget = null; }
@@ -407,7 +444,7 @@ public partial class ActionGraphWindow : EditorWindow
             return;
         }
 
-        // 先把所有「該收起來」的欄位挑出來，再一起收：邊挑邊收會讓後面的欄位落在已經收掉的節點上而查不到。
+        // 收合的是**欄位**不是節點：先把所有「該收起來」的欄位挑出來。
         foreach (var n in graph.Nodes)
         {
             foreach (var row in AGGraph.AllRows(n.Rows))
@@ -417,15 +454,14 @@ public partial class ActionGraphWindow : EditorWindow
             }
         }
 
+        // 節點畫不畫，看它還有沒有一條「從 HEAD／候選出發、中途不經過任何收合欄位」的路徑。
+        // 共用節點因此在最後一個還要求顯示它的欄位被收起來時才跟著消失。用可達性算而不是引用計數：
+        // 計數擋不住「引用者自己也被收掉了」這種間接情況。
+        var visible = new HashSet<AGNode>();
         foreach (var n in graph.Nodes)
-        {
-            foreach (var row in AGGraph.AllRows(n.Rows))
-            {
-                if (row.Kind != AGRowKind.Slot || row.Slot == null) continue;
-                if (!effectiveHidden.Contains(AGGraph.CollapseKey(n.Id, row))) continue;
-                if (graph.BySlot.TryGetValue(row.Slot, out var target)) HideSubtree(target);
-            }
-        }
+            if (n.ParentRow == null) MarkVisibleFrom(n, visible);
+
+        foreach (var n in graph.Nodes) n.Hidden = !visible.Contains(n);
 
         MarkHiddenSlots();
     }
@@ -522,17 +558,29 @@ public partial class ActionGraphWindow : EditorWindow
         }
     }
 
-    private void HideSubtree(AGNode node)
+    /// <summary>
+    /// 這條線畫不畫。三種都要擋：目標被收起來、起點節點被收起來、以及**起點那一列自己被收合**——
+    /// 最後一種在目標被別的欄位撐著仍要顯示時才看得到差別，漏掉的話收合鈕畫成 + 卻還牽著一條線。
+    /// </summary>
+    private bool IsLinkVisible(AGLink link)
     {
-        if (node?.Carrier == null || node.IsRoot || node.Hidden) return;
-        // 被別的欄位共用的節點留著：它不只屬於這一段，收掉會讓另一條線斷在空白處。
-        if (graph.CarrierUsers.TryGetValue(node.Carrier, out int users) && users > 1) return;
+        if (link?.ParentRow == null || link.Target == null || link.Target.Hidden) return false;
+        if (link.Owner != null && link.Owner.Hidden) return false;
+        return !effectiveHidden.Contains(AGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow));
+    }
 
-        node.Hidden = true;
+    /// <summary>
+    /// 從這顆節點沿「沒有收起來」的欄位往下走，走得到的節點都要畫。沒有父列的節點（HEAD 與候選）
+    /// 是起點，永遠畫。visible 兼作環的護欄。
+    /// </summary>
+    private void MarkVisibleFrom(AGNode node, HashSet<AGNode> visible)
+    {
+        if (node == null || !visible.Add(node)) return;
         foreach (var row in AGGraph.AllRows(node.Rows))
         {
             if (row.Slot == null) continue;
-            if (graph.BySlot.TryGetValue(row.Slot, out var child)) HideSubtree(child);
+            if (effectiveHidden.Contains(AGGraph.CollapseKey(node.Id, row))) continue;
+            if (graph.BySlot.TryGetValue(row.Slot, out var child)) MarkVisibleFrom(child, visible);
         }
     }
 
@@ -608,14 +656,42 @@ public partial class ActionGraphWindow : EditorWindow
     /// <summary>目前畫面該用哪一份驗證結果：資產焦點只看資產自己的。</summary>
     private AGReport Rep => focus.Kind == AGFocusKind.Asset ? assetReport : report;
 
+    /// <summary>
+    /// 座標這種「寫進載體、但不動圖結構也不必重跑驗證」的修改。
+    /// Owner 焦點由 `AGModel.SetPosition` 內部的 `MarkDirty()` 記；**資產焦點的 `TrackChanges` 是關的**，
+    /// 那條路整個 early-return，所以要在這裡補記 `assetDirty`——否則搬完節點存檔鈕還是灰的，一離開位置就沒了。
+    /// </summary>
+    private void MarkPositionsChanged()
+    {
+        if (focus.Kind != AGFocusKind.Asset) return;
+        // 資產本體畫布的 HEAD 座標直接寫在資產 SO 上（不在工作副本裡），Unity 要 SetDirty 才會落檔。
+        if (focus.Endpoint == null && focus.AssetObject != null) EditorUtility.SetDirty(focus.AssetObject);
+        // 只設 assetDirty：座標不影響執行語意，存檔時不必重驗、也不必通知任何 subscriber。
+        assetDirty = true;
+        UpdateUnsavedState();
+    }
+
+    /// <summary>資產內容變更（會改變執行語意的修改）。純座標／視覺調整請走 <see cref="MarkPositionsChanged"/>。</summary>
+    private void MarkAssetContentChanged()
+    {
+        assetDirty = true;
+        assetContentDirty = true;
+        assetReportStale = true;
+    }
+
+    private void ClearAssetDirty()
+    {
+        assetDirty = false;
+        assetContentDirty = false;
+    }
+
     private void Invalidate()
     {
         graphDirty = true;
         // 資產是獨立存檔交易，改它不算改 Owner，也不進 Owner 的 Undo 堆疊。
         if (focus.Kind == AGFocusKind.Asset)
         {
-            assetDirty = true;
-            assetReportStale = true;
+            MarkAssetContentChanged();
         }
         else
         {
@@ -724,7 +800,12 @@ public partial class ActionGraphWindow : EditorWindow
 
         // 即時檢查一有錯就把存檔鈕關掉；沒有錯時仍可按，存檔當下再跑一次嚴格驗證。
         bool blocked = !Rep.CanSave;
-        bool hasChanges = inAsset ? assetDirty : model.Dirty;
+        // 資產只搬過座標時不擋：內容沒變，存回去的東西跟磁碟上一樣，不該被它本來就有的錯誤鎖住位置。
+        if (inAsset && !assetContentDirty) blocked = false;
+        // 共用資產存檔會把引用它的 Owner 標成未驗證，但工作副本一個字都沒改（Dirty=false）。
+        // 存檔是唯一會重跑 Core Verify 並寫回 Owner 的入口，這時候不開它就沒有任何路可以把圖救回已驗證。
+        bool needsRevalidate = !inAsset && model.Owner is IActionSystemOwner asOwner && !asOwner.IsActionSystemValidated();
+        bool hasChanges = inAsset ? assetDirty : (model.Dirty || needsRevalidate);
         bool canSave = hasChanges && !blocked;
 
         float x = r.xMax - 6f;
@@ -733,8 +814,10 @@ public partial class ActionGraphWindow : EditorWindow
         GUI.enabled = canSave;
         var saveColor = GUI.backgroundColor;
         if (canSave) GUI.backgroundColor = new Color(0.85f, 0.28f, 0.28f);
-        string saveLabel = blocked ? "存檔（有錯誤）" : inAsset ? "存檔並返回" : "存檔";
+        bool revalidateOnly = needsRevalidate && !model.Dirty;
+        string saveLabel = blocked ? "存檔（有錯誤）" : revalidateOnly ? "存檔（未驗證）" : "存檔";
         string saveTooltip = blocked ? "驗證有錯誤，先在 Console 修正才能存檔"
+            : revalidateOnly ? "這份圖目前未驗證（多半是引用的資產改過），按下後重跑 Core 驗證並寫回"
             : !hasChanges ? "目前沒有未儲存的修改"
             : !IsCurrentReportFresh ? "按下後先做完整驗證（含循環與型別遺失），通過才會存檔"
             : "驗證通過後寫回資產";
@@ -746,9 +829,13 @@ public partial class ActionGraphWindow : EditorWindow
         GUI.enabled = true;
 
         x -= 62f;
-        if (GUI.Button(new Rect(x, r.y + 1f, 60f, 19f), inAsset ? "捨棄返回" : "取消"))
+        // 資產焦點的「返回」與存檔分開：存檔留在畫布上，返回才退出（有未存修改會先問要不要捨棄）。
+        var backLabel = inAsset
+            ? new GUIContent("返回", "回到上一層；有未儲存的修改會先問要不要捨棄")
+            : new GUIContent("取消", "捨棄自上次存檔以來的所有修改");
+        if (GUI.Button(new Rect(x, r.y + 1f, 60f, 19f), backLabel))
         {
-            if (inAsset) CancelAsset(); else DoCancel();
+            if (inAsset) LeaveAsset(); else DoCancel();
         }
 
         x -= 48f;

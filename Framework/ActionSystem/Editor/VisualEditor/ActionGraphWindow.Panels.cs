@@ -38,14 +38,15 @@ public partial class ActionGraphWindow
         GUI.Label(new Rect(r.x + 6f, top, r.width - 12f, 16f),
             new GUIContent("變數（對外端點）", "點一筆進入它自己的畫布；沒接來源時它就是具名常數"), AGStyles.Tiny);
 
-        if (GUI.Button(new Rect(r.x + 4f, top + 18f, r.width - 8f, 20f), "＋ 新增變數")) ShowCreateEndpointMenu();
+        DrawCreateEndpointButton(new Rect(r.x + 4f, top + 18f, r.width - 8f, 20f));
+        DrawRemoveEndpointButton(new Rect(r.x + 4f, top + 40f, r.width - 8f, 20f));
 
-        var searchRect = new Rect(r.x + 4f, top + 42f, r.width - 8f, 20f);
+        var searchRect = new Rect(r.x + 4f, top + 64f, r.width - 8f, 20f);
         GUI.Label(new Rect(searchRect.x + 4f, searchRect.y + 2f, 16f, 16f),
             EditorGUIUtility.IconContent("Search Icon", "搜尋變數"));
         tokenSearch = EditorGUI.TextField(new Rect(searchRect.x + 20f, searchRect.y, searchRect.width - 20f, searchRect.height), tokenSearch);
 
-        var listRect = new Rect(r.x + 2f, top + 66f, r.width - 4f, r.yMax - top - 68f);
+        var listRect = new Rect(r.x + 2f, top + 88f, r.width - 4f, r.yMax - top - 90f);
         var tokens = AGModel.ReadTokens(CurrentEndpoints());
         var shown = new List<AGToken>();
         foreach (var t in tokens)
@@ -64,8 +65,19 @@ public partial class ActionGraphWindow
             // 深綠→琥珀，和畫布上的變數節點同一條漸層。
             DrawCellBackground(row, AGStyles.HeaderToken, AGStyles.HeaderFormula, i % 2 == 1, isFocus);
 
-            GUI.Label(new Rect(row.x + 8f, row.y + 2f, row.width - 70f, 18f),
-                string.IsNullOrEmpty(token.Key) ? "（未命名）" : token.Key, AGStyles.RowLabel);
+            var endpoint = token.Endpoint;
+            bool renaming = DrawInlineName(new Rect(row.x + 8f, row.y + 2f, row.width - 70f, 18f), endpoint,
+                string.IsNullOrEmpty(token.Key) ? "（未命名）" : token.Key, token.Key ?? "",
+                AGStyles.RowLabel, "雙擊可改名；外部（Inspector）用這個名字查它的值", name =>
+                {
+                    if (model.RenameEndpoint(endpoint, name, CurrentEndpoints(), out string error))
+                    {
+                        MarkGraphChanged();
+                        return true;
+                    }
+                    ShowNotification(new GUIContent(error));
+                    return false;
+                });
             var typeRect = new Rect(row.xMax - 58f, row.y + 6f, 42f, 15f);
             AGStyles.RoundedFill(typeRect, AGStyles.HeaderFormula, CellCornerRadius);
             GUI.Label(typeRect, AGStyles.Elide(token.TypeName, AGStyles.NodeChip, typeRect.width), AGStyles.NodeChip);
@@ -77,15 +89,14 @@ public partial class ActionGraphWindow
                 GUI.Label(dot, new GUIContent("", reason));
             }
 
+            if (renaming) continue;               // 正在改名的這一格不吃點擊，否則同一下會又改名又切焦點
+
             var e = Event.current;
-            if (e.type == EventType.MouseDown && row.Contains(e.mousePosition))
+            // 右鍵不做事：改名雙擊、刪除是上面那顆「－ 移除變數」，選單只是多一層要記的東西。
+            if (e.type == EventType.MouseDown && e.button == 0 && row.Contains(e.mousePosition))
             {
-                if (e.button == 1) ShowTokenMenu(token);
-                else
-                {
-                    dragEndpoint = token.Endpoint;
-                    pendingVariableFocus = token.Endpoint;
-                }
+                dragEndpoint = token.Endpoint;
+                pendingVariableFocus = token.Endpoint;
                 e.Use();
             }
             if (e.type == EventType.MouseDrag && ReferenceEquals(dragEndpoint, token.Endpoint)) dragEndpointActive = true;
@@ -121,7 +132,7 @@ public partial class ActionGraphWindow
                 var endpoint = model.CreateEndpoint(scope, captured, out string error);
                 if (endpoint == null)
                 {
-                    EditorUtility.DisplayDialog("無法新增變數", error, "好");
+                    ShowNotification(new GUIContent(error));
                     return;
                 }
                 MarkGraphChanged();
@@ -131,49 +142,110 @@ public partial class ActionGraphWindow
         menu.ShowAsContext();
     }
 
-    private void ShowTokenMenu(AGToken token)
+    /// <summary>
+    /// 「＋ 新增變數」：單擊開型別選單；把變數格**拖到這顆按鈕上放開＝複製那一個**（內容一起複製）。
+    /// </summary>
+    private void DrawCreateEndpointButton(Rect rect)
     {
-        if (token?.Endpoint == null) return;
-        var endpoint = token.Endpoint;
-        var scope = CurrentEndpoints();
-        var menu = new GenericMenu();
+        var e = Event.current;
+        bool dropping = dragEndpointActive && dragEndpoint != null;
+        bool hover = rect.Contains(e.mousePosition);
 
-        menu.AddItem(new GUIContent("編輯"), false, () => EnterVariable(endpoint));
-        menu.AddItem(new GUIContent("重新命名…"), false, () =>
-            AGPrompt.Show("變數名稱", "外部（Inspector）用這個名字查它的值", endpoint.Name, name =>
-            {
-                if (!model.RenameEndpoint(endpoint, name, scope, out string error))
-                {
-                    EditorUtility.DisplayDialog("無法改名", error, "好");
-                    return;
-                }
-                MarkGraphChanged();
-            }));
+        if (dropping && hover) AGStyles.Fill(rect, new Color(0.24f, 0.50f, 0.34f, 0.75f));
 
-        menu.AddSeparator("");
-        int used = AGModel.CountReferences(endpoint, SlotsInCurrentGraph());
-        menu.AddItem(new GUIContent(used > 0 ? $"刪除（{used} 個欄位在用）" : "刪除"), false, () =>
+        bool clicked = GUI.Button(rect, new GUIContent(
+            dropping ? "複製變數" : "＋ 新增變數",
+            "新增一個變數；把左邊的變數拖到這裡＝複製它"));
+
+        // 拖曳放開不會讓 GUI.Button 回 true（它沒在自己身上收到 MouseDown），所以自己判。
+        if (dropping && hover && e.rawType == EventType.MouseUp)
         {
-            if (!EditorUtility.DisplayDialog("刪除變數",
-                used > 0
-                    ? $"'{endpoint.Name}' 還有 {used} 個欄位在用，刪掉之後那些欄位會變成空節點。確定嗎？"
-                    : $"確定刪除 '{endpoint.Name}'？", "刪除", "取消")) return;
+            DuplicateEndpoint(dragEndpoint);
+            ClearPendingLibraryDrag();
+            e.Use();
+            return;
+        }
+        if (clicked && !dropping) ShowCreateEndpointMenu();
+    }
 
-            if (ReferenceEquals(focus.Endpoint, endpoint)) ExitVariable();
-            model.DeleteEndpoint(endpoint, scope, CurrentCarrierScope());
-            MarkGraphChanged();
-        });
-        menu.ShowAsContext();
+    /// <summary>
+    /// 「－ 移除變數」：單擊刪掉**目前正在編輯**的那一個，或把變數格**拖到這顆按鈕上放開**刪掉被拖的那一個。
+    /// 兩條路都要先表態（先點開它，或把它拖過來），所以不再問一次確認框——刪完用提示說明怎麼救回來。
+    /// </summary>
+    private void DrawRemoveEndpointButton(Rect rect)
+    {
+        var e = Event.current;
+        bool dropping = dragEndpointActive && dragEndpoint != null;
+        bool hover = rect.Contains(e.mousePosition);
+
+        // 拖曳中鋪一層紅底當落點：拖著變數在畫面上跑時，看得到「放這裡會刪掉」才敢放手。
+        // 字只拿掉開頭的「－」，不改寫成一句話——按鈕上的字換來換去比底色還吵。
+        if (dropping && hover) AGStyles.Fill(rect, new Color(0.62f, 0.24f, 0.26f, 0.75f));
+
+        bool hasFocusEndpoint = focus.Endpoint != null;
+        bool wasEnabled = GUI.enabled;
+        GUI.enabled = wasEnabled && (dropping || hasFocusEndpoint);
+        bool clicked = GUI.Button(rect, new GUIContent(
+            dropping ? "移除變數" : "－ 移除變數",
+            hasFocusEndpoint
+                ? "移除目前編輯中的變數；也可以把左邊的變數直接拖到這裡"
+                : "先點一個變數進去，或把變數拖到這裡"));
+        GUI.enabled = wasEnabled;
+
+        if (dropping && hover && e.rawType == EventType.MouseUp)
+        {
+            RemoveEndpoint(dragEndpoint);
+            ClearPendingLibraryDrag();
+            e.Use();
+            return;
+        }
+        if (clicked && hasFocusEndpoint) RemoveEndpoint(focus.Endpoint);
+    }
+
+    /// <summary>複製一個變數，並進去複本的畫布——複製完通常就是要改它。</summary>
+    private void DuplicateEndpoint(GraphEndpoint source)
+    {
+        var scope = CurrentEndpoints();
+        if (scope == null) return;
+
+        model.BreakUndoMerge();                   // 複製自成一步
+        var copy = model.DuplicateEndpoint(source, scope, out string error);
+        if (copy == null) { ShowNotification(new GUIContent(error)); return; }
+
+        MarkGraphChanged();
+        ShowNotification(new GUIContent($"已複製成 '{copy.Name}'"));
+        EnterVariable(copy);
+    }
+
+    /// <summary>
+    /// 移除一個變數：指著它的節點會一起清空（`AGModel.DeleteEndpoint`）。
+    /// 不問確認——Owner 焦點 Ctrl+Z 復原得回來，資產焦點按「取消」可整批捨棄，提示裡直接寫出來。
+    /// </summary>
+    private void RemoveEndpoint(GraphEndpoint endpoint)
+    {
+        if (endpoint == null) return;
+        // scope 與引用數都要在 ExitVariable 之前取：退出變數焦點會換掉「現在在編誰」，清單也就跟著換了。
+        var scope = CurrentEndpoints();
+        if (scope == null) return;
+        int used = AGModel.CountReferences(endpoint, SlotsInCurrentGraph());
+        string name = string.IsNullOrEmpty(endpoint.Name) ? "（未命名）" : endpoint.Name;
+
+        model.BreakUndoMerge();                   // 刪除自成一步，不跟前一個編輯合併成同一次復原
+        if (ReferenceEquals(focus.Endpoint, endpoint)) ExitVariable();
+        model.DeleteEndpoint(endpoint, scope, CurrentCarrierScope());
+        MarkGraphChanged();
+
+        string undoHint = focus.Kind == AGFocusKind.Asset ? "「取消」可整批捨棄" : "Ctrl+Z 可復原";
+        ShowNotification(new GUIContent(used > 0
+            ? $"已移除 '{name}'：{used} 個欄位變成空節點（{undoHint}）"
+            : $"已移除 '{name}'（{undoHint}）"));
+        Repaint();
     }
 
     /// <summary>圖改了：資產焦點記在資產交易上，Owner 焦點記在工作副本上。</summary>
     private void MarkGraphChanged()
     {
-        if (focus.Kind == AGFocusKind.Asset)
-        {
-            assetDirty = true;
-            assetReportStale = true;
-        }
+        if (focus.Kind == AGFocusKind.Asset) MarkAssetContentChanged();
         else reportStale = true;
         Invalidate();
         Repaint();
@@ -216,12 +288,15 @@ public partial class ActionGraphWindow
             Color payload = entry.IsAction ? AGStyles.HeaderAction : AGStyles.HeaderFormula;
             DrawCellBackground(row, AGStyles.HeaderAsset, payload, i % 2 == 1, isFocus);
 
-            GUI.Label(new Rect(row.x + 8f, row.y + 2f, row.width - 64f, 17f), asset.name, AGStyles.RowLabel);
+            bool renaming = DrawInlineName(new Rect(row.x + 8f, row.y + 2f, row.width - 64f, 18f), asset,
+                asset.name, asset.name, AGStyles.RowLabel, "雙擊可改名（改的是 .asset 檔名）",
+                name => RenameAssetFile(asset, name));
             string kind = entry.IsAction ? "ACT" : AGReflect.ResultTypeName(entry.ResultType);
-            var typeRect = new Rect(row.xMax - 54f, row.y + 5f, 46f, 15f);
+            var typeRect = new Rect(row.xMax - 54f, row.y + 6f, 46f, 15f);
             AGStyles.RoundedFill(typeRect, payload, CellCornerRadius);
             GUI.Label(typeRect, AGStyles.Elide(kind, AGStyles.NodeChip, typeRect.width), AGStyles.NodeChip);
-            GUI.Label(new Rect(row.x + 8f, row.y + 18f, row.width - 70f, 13f), entry.TypeName, AGStyles.Tiny);
+
+            if (renaming) continue;               // 正在改名的這一格不吃點擊
 
             var e = Event.current;
             if (e.type == EventType.MouseDown && e.button == 0 && row.Contains(e.mousePosition))
@@ -237,12 +312,43 @@ public partial class ActionGraphWindow
                 pendingAssetFocus = null;
                 dragAsset = null;
                 // 再點一次目前這格＝退出（在它的變數子畫布時先回到資產本體，由 EnterAsset 處理）。
-                if (isFocus && focus.Endpoint == null) CancelAsset();
+                if (isFocus && focus.Endpoint == null) LeaveAsset();
                 else EnterAsset(asset, shown[i].slotType);
                 e.Use();
             }
         }
         GUI.EndScrollView();
+    }
+
+    /// <summary>
+    /// 改資產檔名（.meta 由 AssetDatabase 一起處理）。名稱重複、非法字元由 Unity 回錯誤字串，
+    /// 這時維持編輯狀態讓使用者改，不吞掉錯誤。
+    /// </summary>
+    private bool RenameAssetFile(UnityEngine.Object asset, string name)
+    {
+        if (asset == null || string.IsNullOrWhiteSpace(name)) return false;
+        if (asset.name == name) return true;
+
+        string path = AssetDatabase.GetAssetPath(asset);
+        if (string.IsNullOrEmpty(path))
+        {
+            ShowNotification(new GUIContent("這個資產沒有檔案路徑，無法改名。"));
+            return false;
+        }
+
+        string error = AssetDatabase.RenameAsset(path, name);
+        if (!string.IsNullOrEmpty(error))
+        {
+            ShowNotification(new GUIContent(error));
+            return false;
+        }
+        AssetDatabase.SaveAssets();
+        AGAssetIndex.Refresh();
+        // 檔名已經寫進磁碟、圖的內容沒動，所以只重建圖（節點 Header 與清單要換字），
+        // 不可走 Invalidate()——那會把資產或 Owner 標成未存檔，還會佔一格 Undo。
+        graphDirty = true;
+        Repaint();
+        return true;
     }
 
     /// <summary>找目前 ActionSystem 中能承載此資產內容的 Slot；找不到代表本 Owner 不相容。</summary>
@@ -447,15 +553,28 @@ public partial class ActionGraphWindow
         Repaint();
     }
 
-    /// <summary>刪掉一顆時機節點＝刪掉那個群組與它底下的動作。</summary>
+    /// <summary>
+    /// 刪掉一顆時機節點＝刪掉那個群組與它底下的動作。底下還有動作時先問過；
+    /// 確認框開在那顆節點的 Header 旁邊（`GraphToWindowRect`），不是螢幕中央。
+    /// </summary>
     private void RemoveTimingGroup(AGNode node)
     {
         if (node?.Obj == null) return;
 
         int count = (AGReflect.Get(node.Obj, "Actions") as IList)?.Count ?? 0;
-        if (count > 0 && !EditorUtility.DisplayDialog("刪除時機",
-                $"'{node.Title}' 底下還有 {count} 個動作，會一起刪掉。確定嗎？", "刪除", "取消"))
+        if (count > 0)
+        {
+            RequestConfirm(GraphToWindowRect(new Rect(node.Pos.x, node.Pos.y, node.Width, AGGraph.HeaderHeight)),
+                $"'{node.Title}' 底下還有 {count} 個動作，會一起刪掉。確定嗎？",
+                "刪除", () => ConfirmRemoveTimingGroup(node));
             return;
+        }
+        ConfirmRemoveTimingGroup(node);
+    }
+
+    private void ConfirmRemoveTimingGroup(AGNode node)
+    {
+        if (node?.Obj == null) return;
 
         model.BreakUndoMerge();
         PreserveVisibleNodePositions();
@@ -494,10 +613,10 @@ public partial class ActionGraphWindow
         var asset = focus.AssetObject;
         GUI.Label(new Rect(r.x + 4f, r.y + 2f, r.width - 8f, 18f), "引用此資產的對象", AGStyles.PanelHeader);
 
-        var subscribers = AGReflect.Get(asset, "_subscribers") as IList;
-        int count = subscribers?.Count ?? 0;
+        var users = AGReferenceIndex.Users(asset as ScriptableObject);
+        int count = users.Count;
         GUI.Label(new Rect(r.x + 6f, r.y + 22f, r.width - 12f, 16f),
-            count > 0 ? $"共 {count} 個對象（清單可能不完整，可重建）" : "清單是空的，按下方重建掃描整個專案", AGStyles.Tiny);
+            count > 0 ? $"共 {count} 個對象" : "專案裡沒有已存檔的對象引用它", AGStyles.Tiny);
 
         var listRect = new Rect(r.x + 2f, r.y + 40f, r.width - 4f, r.height - 92f);
         AGStyles.Fill(listRect, AGStyles.PanelList);
@@ -506,7 +625,7 @@ public partial class ActionGraphWindow
         referenceScroll = GUI.BeginScrollView(listRect, referenceScroll, content);
         for (int i = 0; i < count; i++)
         {
-            var so = subscribers[i] as ScriptableObject;
+            var so = users[i];
             var row = new Rect(0f, i * 24f, content.width, 23f);
             if (i % 2 == 1) AGStyles.Fill(row, AGStyles.RowAlt);
 
@@ -534,65 +653,34 @@ public partial class ActionGraphWindow
         }
         GUI.EndScrollView();
 
-        if (GUI.Button(new Rect(r.x + 4f, r.yMax - 50f, r.width - 8f, 20f), "重建引用清單（掃描整個專案）"))
-            RebuildReferences(asset);
+        if (GUI.Button(new Rect(r.x + 4f, r.yMax - 50f, r.width - 8f, 20f), "重新掃描專案"))
+        {
+            AGReferenceIndex.Refresh();
+            ShowNotification(new GUIContent($"找到 {AGReferenceIndex.Users(asset as ScriptableObject).Count} 個引用"));
+        }
         if (GUI.Button(new Rect(r.x + 4f, r.yMax - 26f, r.width - 8f, 20f), "全部重新驗證"))
-            VerifyAllSubscribers(asset);
+            VerifyAllUsers(asset);
     }
 
-    /// <summary>掃描專案裡所有 Owner，重建這個資產的引用清單。只看磁碟上的內容，未存檔的修改不算。</summary>
-    private void RebuildReferences(UnityEngine.Object asset)
+    /// <summary>把引用者全部重驗一次。只有驗證結果真的翻轉的才寫檔，其餘一個都不動。</summary>
+    private void VerifyAllUsers(UnityEngine.Object asset)
     {
-        var found = new List<ScriptableObject>();
-        var guids = AssetDatabase.FindAssets("t:ScriptableObject");
-        try
+        int ok = 0, fail = 0, touched = 0;
+        foreach (var so in AGReferenceIndex.Users(asset as ScriptableObject))
         {
-            for (int i = 0; i < guids.Length; i++)
-            {
-                if (EditorUtility.DisplayCancelableProgressBar("重建引用清單", $"{i + 1}/{guids.Length}", (float)i / guids.Length))
-                    break;
+            if (so == null || so is not IActionSystemOwner owner) continue;
 
-                var path = AssetDatabase.GUIDToAssetPath(guids[i]);
-                var so = AssetDatabase.LoadAssetAtPath<ScriptableObject>(path);
-                if (so is not IActionSystemOwner) continue;
-
-                var field = AGModel.FindSystemField(so);
-                var system = field?.GetValue(so);
-                if (system == null) continue;
-
-                foreach (var referenced in AGModel.ReferencedAssetsOfSystem(system))
-                {
-                    if (referenced != asset) continue;
-                    found.Add(so);
-                    break;
-                }
-            }
-        }
-        finally
-        {
-            EditorUtility.ClearProgressBar();
-        }
-
-        asset.GetType().GetMethod("ClearSubscribers")?.Invoke(asset, null);
-        var register = asset.GetType().GetMethod("RegisterSubscriber");
-        foreach (var so in found) register?.Invoke(asset, new object[] { so });
-
-        EditorUtility.SetDirty(asset);
-        AssetDatabase.SaveAssets();
-        ShowNotification(new GUIContent($"找到 {found.Count} 個引用"));
-    }
-
-    private void VerifyAllSubscribers(UnityEngine.Object asset)
-    {
-        if (AGReflect.Get(asset, "_subscribers") is not IList subscribers) return;
-        int ok = 0, fail = 0;
-        foreach (var s in subscribers)
-        {
-            if (s is not IActionSystemOwner owner) continue;
+            bool was = owner.IsActionSystemValidated();
             owner.VerifyActionSystem();
-            if (owner.IsActionSystemValidated()) ok++; else fail++;
-            if (s is UnityEngine.Object so) EditorUtility.SetDirty(so);
+            bool now = owner.IsActionSystemValidated();
+
+            if (now) ok++; else fail++;
+            if (was == now) continue;
+
+            EditorUtility.SetDirty(so);
+            touched++;
         }
+        if (touched > 0) AssetDatabase.SaveAssets();
         ShowNotification(new GUIContent($"驗證完成：{ok} 通過 / {fail} 失敗"));
     }
 
@@ -622,6 +710,12 @@ public partial class ActionGraphWindow
                 ? $"即時驗證 {Rep.Time:HH:mm:ss}"
                 : "尚未驗證";
         GUI.Label(new Rect(head.xMax - 274f, head.y + 3f, 270f, 16f), verifyStatus, AGStyles.Tiny);
+
+        // Owner 的 Core 驗證狀態。未驗證的圖 runtime 直接擋下不執行，而這件事原本只有資產焦點的
+        // 右欄（別人的清單）看得到，自己這張畫布反而看不出來。
+        if (focus.Kind != AGFocusKind.Asset && model?.Owner is IActionSystemOwner owner && !owner.IsActionSystemValidated())
+            GUI.Label(new Rect(head.xMax - 470f, head.y + 3f, 192f, 16f),
+                "✗ 這份圖未驗證，存檔後才會執行", AGStyles.RowLabelError);
 
         if (consoleCollapsed) return;
 

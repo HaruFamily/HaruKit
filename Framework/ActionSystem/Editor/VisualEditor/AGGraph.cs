@@ -52,6 +52,9 @@ public class AGRow
     /// <summary>清單元素本身：只有它畫序號欄與刪除鈕。</summary>
     public bool IsListElement;
 
+    /// <summary>這一列不會被採用（沒勾覆蓋的資產參數，或整顆節點在鎖定子樹裡）：不可編、不可接線。</summary>
+    public bool Locked;
+
     /// <summary>
     /// 所屬的清單標題列與索引。**元素展開出來的子列也會帶著它**，斑馬紋才涵蓋整段；
     /// 只有元素標題有底、內部欄位沒有的話，看起來會像清單只有一行。
@@ -100,6 +103,11 @@ public class AGNode
     public bool IsActionNode;
     /// <summary>自己或某個祖先被停用：整段不會求值，畫布上要一起壓暗。多路徑共用時只要有一條啟用就是 false。</summary>
     public bool InDisabledSubtree;
+    /// <summary>
+    /// 自己或某個祖先掛在「未勾覆蓋」的資產參數底下：呼叫端根本不會採用這一段（資產用自己內部的預設），
+    /// 所以畫布上除了壓暗還要鎖住，編了也不會生效。與 Disabled 不同：停用是暫時關掉，仍在編輯中。
+    /// </summary>
+    public bool InLockedSubtree;
     /// <summary>
     /// 被 Slot 的分支收合收起來：不畫、不命中、不能當拉線目標。純視覺，資料一點都沒變。
     /// 圖照樣建到底——引用數要走完整張圖才算得準，收起來只是最後一步的標記。
@@ -156,6 +164,8 @@ public class AGLink
 {
     public AGRow ParentRow;
     public AGNode Target;
+    /// <summary>ParentRow 所屬的節點。父節點被收起來時線也要跟著不畫，否則會留一條從空白處拉出的線。</summary>
+    public AGNode Owner;
 }
 
 /// <summary>
@@ -197,7 +207,8 @@ public static class AGGraph
     /// </summary>
     public static AGGraphView Build(AGModel model, IReadOnlyList<object> roots, IList orphans, string focusId,
         string headTitle, IReadOnlyDictionary<string, bool> listCollapse = null,
-        string noteOpenId = null, ICollection<string> noteCollapsed = null, object headCarrier = null)
+        string noteOpenId = null, ICollection<string> noteCollapsed = null, object headCarrier = null,
+        IReadOnlyDictionary<string, Type> orphanHints = null)
     {
         var view = new AGGraphView();
 
@@ -211,7 +222,7 @@ public static class AGGraph
             var rootNode = AGReflect.IsSlotType(root.GetType())
                 ? MakeHeadNode(model, root, focusId, headTitle, headCarrier)
                 : MakeGroupNode(model, root);
-            Collect(model, rootNode, view, 0, listCollapse, false);
+            Collect(model, rootNode, view, 0, listCollapse, false, false);
         }
 
         if (orphans != null)
@@ -220,9 +231,12 @@ public static class AGGraph
             {
                 if (o is not GraphNode carrier) continue;
                 if (view.ByCarrier.ContainsKey(carrier)) continue;
+                // 候選沒有父欄位，型別只能靠建立當下記下的族。沒有族就是純空節點，接上欄位後自然有型別。
+                Type hint = null;
+                orphanHints?.TryGetValue(carrier.EnsureId(), out hint);
                 // 候選不需要額外標記：沒有連入線本身就是訊號。
-                var node = MakeNodeForCarrier(model, carrier, null, null);
-                Collect(model, node, view, 0, listCollapse, false);
+                var node = MakeNodeForCarrier(model, carrier, null, null, hint);
+                Collect(model, node, view, 0, listCollapse, false, false);
             }
         }
 
@@ -263,7 +277,8 @@ public static class AGGraph
     public static string GroupTitle(object group)
         => (AGReflect.Get(group, "Timing") as Enum)?.ToString() ?? "（未指定時機）";
 
-    // headCarrier：HEAD 的座標主人。變數焦點傳 GraphEndpoint，位置才記得住；其他焦點沿用 rootSlot。
+    // headCarrier：HEAD 的座標主人（AGFocus.HeadCarrier）。變數焦點傳 GraphEndpoint、資產本體傳資產 SO，
+    // 位置才記得住——資產的 HEAD 容器槽是每次進來現做的，記在它上面等於不記。其他焦點沿用 rootSlot。
     private static AGNode MakeHeadNode(AGModel model, object rootSlot, string focusId, string headTitle, object headCarrier)
     {
         bool isAction = AGReflect.IsActionSlotType(rootSlot.GetType());
@@ -287,12 +302,14 @@ public static class AGGraph
     public static string HeadId(string focusId) => "head:" + (focusId ?? "?");
 
     /// <summary>一個載體＝一個節點。內容種類決定畫成公式／動作、資產葉或編輯中的空節點。</summary>
-    private static AGNode MakeNodeForCarrier(AGModel model, GraphNode carrier, object parentSlot, AGRow parentRow)
+    private static AGNode MakeNodeForCarrier(AGModel model, GraphNode carrier, object parentSlot, AGRow parentRow,
+        Type hintSlotType = null)
     {
         string id = carrier.EnsureId();
-        Type slotResultType = parentSlot != null && !AGReflect.IsActionSlotType(parentSlot.GetType())
-            ? AGReflect.ResultType(parentSlot.GetType())
-            : null;
+        // 候選節點沒有父欄位，用建立時記下的族當代表；有父欄位時一律以父欄位為準。
+        Type slotType = parentSlot?.GetType() ?? hintSlotType;
+        bool slotIsAction = slotType != null && AGReflect.IsActionSlotType(slotType);
+        Type slotResultType = slotType != null && !slotIsAction ? AGReflect.ResultType(slotType) : null;
 
         AGNode node;
         switch (carrier.Kind)
@@ -342,14 +359,13 @@ public static class AGGraph
 
             default:
             {
-                bool isAction = parentSlot != null && AGReflect.IsActionSlotType(parentSlot.GetType());
                 node = new AGNode
                 {
-                    Title = isAction ? "（選擇 Action）" : "（選擇 Formula）",
-                    Chip = ChipText(slotResultType, isAction),
+                    Title = slotIsAction ? "（選擇 Action）" : "（選擇 Formula）",
+                    Chip = ChipText(slotResultType, slotIsAction),
                     ResultType = slotResultType,
                     IsPlaceholder = true,
-                    IsActionNode = isAction,
+                    IsActionNode = slotIsAction,
                 };
                 break;
             }
@@ -393,16 +409,21 @@ public static class AGGraph
 
     /// <summary>把節點與其子樹加入視圖。已經畫過的載體只補一條連線，不重複建節點。</summary>
     private static void Collect(AGModel model, AGNode node, AGGraphView view, int depth,
-        IReadOnlyDictionary<string, bool> listCollapse, bool disabled)
+        IReadOnlyDictionary<string, bool> listCollapse, bool disabled, bool locked)
     {
         if (depth > 24) return;                       // 資料異常時不讓編輯器堆疊爆掉
         node.InDisabledSubtree = disabled || (node.Carrier != null && node.Carrier.Disabled);
+        node.InLockedSubtree = locked;
         view.Nodes.Add(node);
         if (node.Carrier != null) view.ByCarrier[node.Carrier] = node;
         if (node.ParentSlot != null) view.BySlot[node.ParentSlot] = node;
-        if (node.ParentRow != null) view.Links.Add(new AGLink { ParentRow = node.ParentRow, Target = node });
         // 節點 Id 到這裡才確定，所以列的歸屬也在這裡補；折疊與分支收合都靠它組 key。
-        foreach (var row in AllRows(node.Rows)) row.OwnerNodeId = node.Id;
+        // 鎖定＝這一段不會被採用：整顆節點在鎖定子樹裡，或這一列自己是沒勾覆蓋的資產參數。
+        foreach (var row in AllRows(node.Rows))
+        {
+            row.OwnerNodeId = node.Id;
+            row.Locked = node.InLockedSubtree || (row.AssetBinding != null && !row.AssetBinding.OverrideEnabled);
+        }
 
         // 折疊狀態要在量測之前套用：節點高度直接受它影響。節點 Id 到這裡才確定，所以不能在 BuildRows 做。
         ApplyListCollapse(node, listCollapse);
@@ -421,17 +442,24 @@ public static class AGGraph
             // 共用來源：同一個載體被多個欄位指到時只有一個節點，這裡只補連線。
             if (view.ByCarrier.TryGetValue(carrier, out var existing))
             {
-                view.Links.Add(new AGLink { ParentRow = row, Target = existing });
+                view.Links.Add(new AGLink { ParentRow = row, Target = existing, Owner = node });
                 view.BySlot[row.Slot] = existing;
                 // 這條路徑沒被停用就整顆恢復：共用節點只要還有一條會求值的路徑，它就不是停用的。
-                bool rowDisabled = row.AssetBinding != null && !row.AssetBinding.OverrideEnabled;
-                if (!node.InDisabledSubtree && !rowDisabled) ClearDisabledSubtree(existing, view);
+                bool rowLocked = row.AssetBinding != null && !row.AssetBinding.OverrideEnabled;
+                if (!node.InDisabledSubtree && !rowLocked) ClearDisabledSubtree(existing, view);
+                if (!node.InLockedSubtree && !rowLocked) ClearLockedSubtree(existing, view);
                 continue;
             }
 
             var child = MakeNodeForCarrier(model, carrier, row.Slot, row);
-            bool childDisabled = node.InDisabledSubtree || (row.AssetBinding != null && !row.AssetBinding.OverrideEnabled);
-            Collect(model, child, view, depth + 1, listCollapse, childDisabled);
+            bool bindingOff = row.AssetBinding != null && !row.AssetBinding.OverrideEnabled;
+            Collect(model, child, view, depth + 1, listCollapse,
+                node.InDisabledSubtree || bindingOff, node.InLockedSubtree || bindingOff);
+
+            // 連線在這裡建，父節點才記得住：畫線時要靠它判斷「線的起點還在不在畫面上」。
+            // 超過深度上限被擋掉的子節點沒有進圖，也就不該有線。
+            if (view.ByCarrier.TryGetValue(carrier, out var placed) && ReferenceEquals(placed, child))
+                view.Links.Add(new AGLink { ParentRow = row, Target = child, Owner = node });
         }
     }
 
@@ -449,6 +477,20 @@ public static class AGGraph
         {
             if (row.Slot == null) continue;
             if (view.BySlot.TryGetValue(row.Slot, out var child)) ClearDisabledSubtree(child, view);
+        }
+    }
+
+    /// <summary>共用節點被一條「有勾覆蓋」的路徑指上時撤回鎖定：只要有一條路徑會被採用，它就不是鎖的。</summary>
+    private static void ClearLockedSubtree(AGNode node, AGGraphView view)
+    {
+        if (node == null || !node.InLockedSubtree) return;
+        node.InLockedSubtree = false;
+
+        foreach (var row in AllRows(node.Rows))
+        {
+            row.Locked = row.AssetBinding != null && !row.AssetBinding.OverrideEnabled;
+            if (row.Slot == null) continue;
+            if (view.BySlot.TryGetValue(row.Slot, out var child)) ClearLockedSubtree(child, view);
         }
     }
 
@@ -660,7 +702,8 @@ public static class AGGraph
                 var a = AGReflect.GetAsset(slot);
                 return a != null ? a.name : "（空資產）";
             default:
-                return isAction ? "（未啟用）" : "常數";
+                // 動作列右半已經不畫狀態文字，操作提示併進標籤裡，否則空著的列看不出下一步要做什麼。
+                return isAction ? "（未啟用，從接點拉線指定動作）" : "常數";
         }
     }
 

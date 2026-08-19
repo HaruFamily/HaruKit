@@ -23,6 +23,11 @@ public partial class ActionGraphWindow
                 break;
 
             case EventType.MouseDown:
+                // 走到這裡代表這一下不是按在接點上（按在接點的那一下已經被 DrawSlotRow 吃掉），
+                // 所以先清掉殘留：在畫布外放開滑鼠時 MouseUp 收不到，記錄會留到下一次操作。
+                portClickRow = null;
+                // 這一下多半會被下面 e.Use() 掉，左欄與焦點標題列的改名欄就再也收不到它——先替它們收尾。
+                CommitInlineName();
                 if (e.button == 0 && OutputNodeAt(graphMouse) is AGNode outputNode)
                 {
                     BeginLinkFromNode(outputNode);
@@ -90,6 +95,16 @@ public partial class ActionGraphWindow
                 break;
 
             case EventType.MouseDrag:
+                // 接點按著往外拖＝拉線；沒超過門檻前什麼都不做，放開才知道是不是收合。
+                if (portClickRow != null && !linking
+                    && (graphMouse - portClickStart).sqrMagnitude > PortClickSlop * PortClickSlop)
+                {
+                    var from = portClickRow;
+                    portClickRow = null;
+                    if (!from.Locked) BeginLinkFromRow(from);   // 鎖住的列接上去也不會被採用
+                    e.Use();
+                    break;
+                }
                 if (dragNode != null)
                 {
                     // 多選時整組一起搬：以主拖曳節點的位移量套用到其他被選節點。
@@ -119,6 +134,18 @@ public partial class ActionGraphWindow
                 break;
 
             case EventType.MouseUp:
+                // 接點原地放開＝收合這個欄位底下的子樹（Alt＝solo）。沒接來源的接點沒有子樹，放開就當沒事。
+                if (portClickRow != null)
+                {
+                    var pressed = portClickRow;
+                    portClickRow = null;
+                    if (AGReflect.GetNode(pressed.Slot) != null)
+                    {
+                        ToggleSlotVisibility(AGGraph.CollapseKey(pressed.OwnerNodeId, pressed), e.alt);
+                        e.Use();
+                        break;
+                    }
+                }
                 if (titleClickNode != null)
                 {
                     var clicked = titleClickNode;
@@ -140,6 +167,7 @@ public partial class ActionGraphWindow
                     foreach (var n in graph.Nodes)
                         if (dragStartPositions.ContainsKey(n.Id)) model.SetPosition(n.Id, n.Pos);
                     model.SetPosition(dragNode.Id, dragNode.Pos);
+                    MarkPositionsChanged();
                     dragStartPositions.Clear();
                     dragNode = null;
                     e.Use();
@@ -286,6 +314,7 @@ public partial class ActionGraphWindow
     {
         if (graph == null) return;
         foreach (var node in graph.Nodes) model.ClearPosition(node.Id);
+        MarkPositionsChanged();
         graphDirty = true;
         Repaint();
     }
@@ -333,8 +362,7 @@ public partial class ActionGraphWindow
 
         focus = next;
         if (model != null) model.TrackChanges = next.Kind != AGFocusKind.Asset;
-        editingNameTarget = null;
-        editingNameDraft = "";
+        CancelInlineName();
         selectedIds.Clear();
         graphDirty = true;
         Repaint();

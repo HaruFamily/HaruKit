@@ -179,7 +179,7 @@ public partial class ActionGraphWindow
         if (graph == null) return null;
         foreach (var link in graph.Links)
         {
-            if (link.ParentRow == null || link.Target == null || link.Target.Hidden) continue;
+            if (!IsLinkVisible(link)) continue;       // 沒畫出來的線不該點得到
             Vector2 a = link.ParentRow.PortPos;
             Vector2 b = link.Target.OutputPort;
             if (PointToSegmentSqrDistance(graphPoint, a, b) < 36f) return link;
@@ -220,7 +220,12 @@ public partial class ActionGraphWindow
         if (ReferenceEquals(old, next)) return;
 
         AGReflect.SetNode(slot, next);
-        if (old != null && !IsCarrierUsed(old)) model.AddOrphan(old);
+        if (old != null && !IsCarrierUsed(old))
+        {
+            model.AddOrphan(old);
+            // 切下來就失去父欄位。空節點的型別線索只剩這個欄位，記成族，候選池裡才還畫得出型別。
+            RememberOrphanKind(old, slot.GetType());
+        }
         if (next != null)
         {
             next.EnsureId();
@@ -297,6 +302,7 @@ public partial class ActionGraphWindow
     private static bool CanConnectLink(AGRow row, AGNode target)
     {
         if (row?.Slot == null || target?.Carrier == null) return false;
+        if (row.Locked) return false;             // 沒勾覆蓋的參數不收來源：接上去也不會被採用
         if (target.IsAssetNode)
             return CanAssignAsset(row, target.Asset) && !WouldCreateCycle(row.Slot, target.Carrier);
         // 變數節點沒有內容，型別由端點的取值欄位決定；環偵測要走進端點的子樹。

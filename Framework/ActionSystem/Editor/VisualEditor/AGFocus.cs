@@ -173,6 +173,14 @@ public class AGFocus
         _ => null,
     };
 
+    /// <summary>
+    /// HEAD 的座標主人。變數畫布是端點自己；**資產本體畫布是資產 SO**——它的 HEAD 容器槽是每次進來
+    /// 現做的，記在上面等於不記。其餘焦點回 null，由 AGGraph 退回用 root slot 當載體。
+    /// </summary>
+    public object HeadCarrier => Endpoint != null
+        ? Endpoint
+        : Kind == AGFocusKind.Asset ? AssetObject : null;
+
     public bool SameAs(AGFocus other)
     {
         if (other == null || other.Kind != Kind) return false;

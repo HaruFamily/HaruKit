@@ -44,8 +44,19 @@ public partial class ActionGraphWindow
             GUI.Label(banner, "　共用資產：修改會影響所有引用它的對象。存檔是獨立的一次交易。", AGStyles.RowLabel);
             if (focus.Endpoint != null)
             {
-                DrawVariableName(new Rect(r.x, r.y + 20f, r.width - 100f, 22f), focus.Endpoint);
+                DrawVariableName(new Rect(r.x, r.y + 20f, r.width - 196f, 22f), focus.Endpoint);
+                if (GUI.Button(new Rect(r.xMax - 190f, r.y + 22f, 86f, 18f),
+                    new GUIContent("移除變數", "刪掉之後還在用它的欄位會變成空節點")))
+                    RemoveEndpoint(focus.Endpoint);
                 if (GUI.Button(new Rect(r.xMax - 96f, r.y + 22f, 90f, 18f), "← 回資產本體")) ExitVariable();
+            }
+            else if (focus.AssetObject != null)
+            {
+                // 資產本體的標題就是檔名，和變數標題同一套手勢：雙擊改名、Enter 提交。
+                var asset = focus.AssetObject;
+                DrawInlineName(new Rect(r.x + 6f, r.y + 21f, r.width - 12f, 20f), asset,
+                    asset.name, asset.name, AGStyles.FocusTitle, "雙擊可改名（改的是 .asset 檔名）",
+                    name => RenameAssetFile(asset, name));
             }
             else GUI.Label(new Rect(r.x + 6f, r.y + 22f, r.width - 12f, 18f), focus.Title, EditorStyles.boldLabel);
             return;
@@ -53,8 +64,11 @@ public partial class ActionGraphWindow
 
         if (focus.Kind == AGFocusKind.Variable)
         {
-            DrawVariableName(new Rect(r.x, r.y, r.width - 100f, 22f), focus.Endpoint);
-            GUI.Label(new Rect(r.x + 28f, r.y + 22f, r.width - 130f, 16f),
+            DrawVariableName(new Rect(r.x, r.y, r.width - 196f, 22f), focus.Endpoint);
+            if (GUI.Button(new Rect(r.xMax - 190f, r.y + 3f, 86f, 18f),
+                new GUIContent("移除變數", "刪掉之後還在用它的欄位會變成空節點")))
+                RemoveEndpoint(focus.Endpoint);
+            GUI.Label(new Rect(r.x + 6f, r.y + 22f, r.width - 130f, 16f),
                 focus.Endpoint?.Slot?.Node == null
                     ? "沒接來源＝具名常數，值直接填在 HEAD 的來源欄位。"
                     : "這個變數的值由下面這棵子樹算出來。外部用它的名字查值。", AGStyles.Tiny);
@@ -99,7 +113,6 @@ public partial class ActionGraphWindow
         GUI.Label(new Rect(r.x + 6f, r.y + 24f, r.width - 12f, 16f), desc, AGStyles.Tiny);
     }
 
-    /// <summary>焦點名稱平常只讀；按左側按鈕才進入編輯，再按一次才提交。</summary>
     /// <summary>變數畫布的標題就地改名。名字是外部查詢的 key，改名不影響圖內連線（那是物件參照）。</summary>
     private void DrawVariableName(Rect header, GraphEndpoint endpoint)
     {
@@ -116,34 +129,11 @@ public partial class ActionGraphWindow
         });
     }
 
+    /// <summary>焦點標題：雙擊就地改名，Enter 提交、Esc 取消。和節點上的動作標籤同一套手勢。</summary>
     private void DrawFocusName(Rect header, object target, string displayName, Func<string, bool> submit)
     {
-        bool editing = ReferenceEquals(editingNameTarget, target);
-        var editRect = new Rect(header.x + 4f, header.y + 3f, 20f, 20f);
-        var nameRect = new Rect(editRect.xMax + 4f, header.y + 2f, header.width - 32f, 22f);
-        if (GUI.Button(editRect, new GUIContent(editing ? "✓" : "✎", editing ? "提交名稱" : "編輯名稱"), EditorStyles.miniButton))
-        {
-            if (!editing)
-            {
-                editingNameTarget = target;
-                editingNameDraft = displayName ?? "";
-                GUI.FocusControl(null);
-            }
-            else if (submit(editingNameDraft.Trim()))
-            {
-                editingNameTarget = null;
-                editingNameDraft = "";
-            }
-            Repaint();
-        }
-
-        if (editing)
-        {
-            GUI.SetNextControlName("actionGraphFocusName");
-            editingNameDraft = EditorGUI.TextField(nameRect, editingNameDraft);
-            EditorGUI.FocusTextInControl("actionGraphFocusName");
-        }
-        else GUI.Label(nameRect, displayName, AGStyles.FocusTitle);
+        var nameRect = new Rect(header.x + 6f, header.y + 2f, header.width - 12f, 22f);
+        DrawInlineName(nameRect, target, displayName, displayName, AGStyles.FocusTitle, "雙擊可改名", submit);
     }
 
     // ===== 畫布 =====
@@ -272,10 +262,11 @@ public partial class ActionGraphWindow
             bool tracedPass = pass == 1;
             foreach (var link in graph.Links)
             {
-                if (link.ParentRow == null || link.Target == null || link.Target.Hidden) continue;
+                if (!IsLinkVisible(link)) continue;
                 if (IsTracedLink(link) != tracedPass) continue;
                 // 停用子樹的線一起壓暗，才看得出整段路徑都不會被求值。
-                DrawGraphLine(link.ParentRow.PortPos, link.Target.OutputPort, link.Target.InDisabledSubtree, tracedPass);
+                DrawGraphLine(link.ParentRow.PortPos, link.Target.OutputPort,
+                    link.Target.InDisabledSubtree || link.Target.InLockedSubtree, tracedPass);
             }
         }
         if (linking && (linkRow != null || linkNode != null))
@@ -592,12 +583,16 @@ public partial class ActionGraphWindow
         GUI.Label(titleRect, AGStyles.Elide(node.Title, AGStyles.NodeTitle, textWidth), AGStyles.NodeTitle);
 
         // 資產與變數的本體是一列「選哪一個」的下拉；一般節點畫自己的參數列；空節點兩者都沒有。
-        if (node.IsAssetNode || node.IsVariableNode)
+        // 掛在未勾覆蓋的參數底下＝這一段不會被採用，整顆節點鎖住：控制項灰掉、拉線與清單編輯都擋掉。
+        using (new EditorGUI.DisabledScope(node.InLockedSubtree))
         {
-            DrawReferencePickerRow(node, rect);
-            DrawRows(node, node.Rows, rect);
+            if (node.IsAssetNode || node.IsVariableNode)
+            {
+                DrawReferencePickerRow(node, rect);
+                DrawRows(node, node.Rows, rect);
+            }
+            else if (!node.IsPlaceholder) DrawRows(node, node.Rows, rect);
         }
-        else if (!node.IsPlaceholder) DrawRows(node, node.Rows, rect);
 
         if (node.TipsHeight > 0f)
         {
@@ -627,9 +622,9 @@ public partial class ActionGraphWindow
             Repaint();
         }
 
-        // 停用暗紗蓋在內容之上、問題色條之下：停用的節點要一眼看出來，但它的錯誤與警告仍然要讀得到。
-        // 只是貼圖，不註冊控制項，所以底下的參數列照樣可以編輯——停用不等於鎖定。
-        if (node.InDisabledSubtree)
+        // 暗紗蓋在內容之上、問題色條之下：不會求值的節點要一眼看出來，但它的錯誤與警告仍然要讀得到。
+        // 暗紗只是貼圖：停用（Disabled）仍可編輯，鎖定（未勾覆蓋的參數底下）才由 DisabledScope 擋掉輸入。
+        if (node.InDisabledSubtree || node.InLockedSubtree)
             AGStyles.RoundedFill(rect, AGStyles.DisabledVeil, NodeCornerRadius);
 
         // 問題色條：貼在節點底緣，紅＝錯誤、琥珀＝警告。
@@ -725,12 +720,33 @@ public partial class ActionGraphWindow
                 continue;
             }
             if (!row.IsLinkable) continue;
-            AGStyles.Port(PortRectOf(row, nodeRect), SlotPortColor(row));
+            var portRect = PortRectOf(row, nodeRect);
+            AGStyles.Port(portRect, SlotPortColor(row));
+            DrawPortGlyph(row, portRect);
         }
 
         if (node.IsRoot) return;
         AGStyles.Port(new Rect(nodeRect.x, nodeRect.y + AGGraph.HeaderHeight * 0.5f - AGGraph.PortRadius,
             AGGraph.PortDiameter, AGGraph.PortDiameter), AGStyles.PortLive);
+    }
+
+    /// <summary>
+    /// 接了來源的接點兼收合開關：圓上疊 `+`／`-`，solo 再墊一層底。沒接來源的接點不畫字——
+    /// 那種列沒有子樹可收，圓上乾乾淨淨剛好也說明「這裡只能拉線」。
+    /// 不掛 tooltip：接點在滑鼠移動的必經路徑上，跳說明框只會擋住底下的圖。
+    /// </summary>
+    private void DrawPortGlyph(AGRow row, Rect portRect)
+    {
+        if (AGReflect.GetNode(row.Slot) == null) return;
+
+        string key = AGGraph.CollapseKey(row.OwnerNodeId, row);
+        bool solo = soloSlotKey == key;
+        bool hidden = effectiveHidden.Contains(key);
+
+        // solo 額外墊一層底：它和一般展開都顯示 -，靠底色分辨「只看這一段」。
+        if (solo) AGStyles.RoundedFill(portRect, AGStyles.HeaderOverlay, AGGraph.PortRadius);
+
+        GUI.Label(portRect, hidden && !solo ? "+" : "-", AGStyles.PortGlyph);
     }
 
     /// <summary>

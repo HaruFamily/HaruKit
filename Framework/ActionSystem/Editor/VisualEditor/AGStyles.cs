@@ -84,7 +84,7 @@ public static class AGStyles
     public static readonly Color Error = new(1f, 0.42f, 0.42f);
     public static readonly Color Warning = new(1f, 0.78f, 0.34f);
 
-    private static GUIStyle nodeTitle, nodeDesc, focusTitle, rowLabel, rowLabelError, chip, nodeChip, headerButton, headerButtonDim, overlayTitle, panelHeader, consoleRow, tiny, listIndex, listAdd;
+    private static GUIStyle nodeTitle, nodeDesc, focusTitle, rowLabel, rowLabelError, chip, nodeChip, slotChip, portGlyph, headerButton, headerButtonDim, overlayTitle, panelHeader, consoleRow, tiny, listIndex, listAdd;
 
     public static GUIStyle NodeTitle => nodeTitle ??= new GUIStyle(EditorStyles.boldLabel)
     {
@@ -132,12 +132,38 @@ public static class AGStyles
         normal = { textColor = Color.white },
     };
 
+    /// <summary>
+    /// 參數列最前面的型別 chip 底色。**中性色，不用色相**：洋紅／琥珀／藍／綠已經被「來源種類」用掉，
+    /// 再開一套型別色相會讓整張圖只剩顏色在吵。型別靠字，不靠色。
+    /// </summary>
+    public static readonly Color SlotChipBody = new(1f, 1f, 1f, 0.10f);
+
+    /// <summary>參數列型別 chip 的字：比標籤小一階、置中，讓它讀起來是標記而不是另一段文字。</summary>
+    public static GUIStyle SlotChip => slotChip ??= new GUIStyle(EditorStyles.miniLabel)
+    {
+        fontSize = 10,
+        alignment = TextAnchor.MiddleCenter,
+        padding = new RectOffset(2, 2, 0, 0),
+        normal = { textColor = new Color(0.78f, 0.78f, 0.80f) },
+    };
+
     /// <summary>Header 右側的結果型別標籤。</summary>
     public static GUIStyle NodeChip => nodeChip ??= new GUIStyle(EditorStyles.miniLabel)
     {
         alignment = TextAnchor.MiddleCenter,
         padding = new RectOffset(4, 4, 0, 0),
         normal = { textColor = new Color(HeaderInk.r, HeaderInk.g, HeaderInk.b, 0.80f) },
+    };
+
+    /// <summary>
+    /// 接點上的收合符號 `+`／`-`：字要壓在亮色的圓上，所以用深色而不是沿用 Header 的淺色圖示。
+    /// </summary>
+    public static GUIStyle PortGlyph => portGlyph ??= new GUIStyle(EditorStyles.miniLabel)
+    {
+        fontSize = 11,
+        alignment = TextAnchor.MiddleCenter,
+        padding = new RectOffset(0, 0, 0, 0),
+        normal = { textColor = new Color(0.10f, 0.10f, 0.11f) },
     };
 
     /// <summary>Header 上的小圖示（換來源 ▾、註解 ✎）：無背景。</summary>
