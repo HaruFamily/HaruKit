@@ -1,6 +1,6 @@
 {
     "name": "HaruFamily.Framework.Nexus",
-    "rootNamespace": "PinPlugin.Nexus",
+    "rootNamespace": "HaruFamily.Framework.Nexus",
     "references": [
         "UniTask",
         "UniTask.Addressables",

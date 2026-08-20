@@ -6,7 +6,7 @@ using System.Linq;
 using System.Threading;
 using UnityEngine;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     /// <summary>
     /// 帶作用域的 async service locator + 可選物件池。純 C# 物件（非 MonoBehaviour）、Unity 主執行緒專用、不上鎖。

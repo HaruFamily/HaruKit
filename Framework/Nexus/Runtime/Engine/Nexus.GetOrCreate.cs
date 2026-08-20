@@ -7,7 +7,7 @@ using System.Threading;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     // 取得 / 建立服務的主路徑。負責：async 去重、半成品清理、循環依賴偵測、把 child 掛到 owner。
     public partial class Nexus

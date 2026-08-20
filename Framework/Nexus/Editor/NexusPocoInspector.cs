@@ -1,11 +1,11 @@
 #if UNITY_EDITOR
 using System;
 using System.Reflection;
-using PinPlugin.Nexus;
+using HaruFamily.Framework.Nexus;
 using UnityEditor;
 using UnityEngine;
 
-namespace PinPlugin.Nexus.Editor
+namespace HaruFamily.Framework.Nexus.Editor
 {
     /// <summary>
     /// 把一個 POCO（純 C# Nexus 服務）包成 <see cref="ScriptableObject"/>，讓**原生 Inspector** 能經

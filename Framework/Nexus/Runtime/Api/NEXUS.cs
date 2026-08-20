@@ -1,6 +1,6 @@
 using Cysharp.Threading.Tasks;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     /// <summary>
     /// 靜態捷徑，等同 <c>Nexus.Instance.*</c>。

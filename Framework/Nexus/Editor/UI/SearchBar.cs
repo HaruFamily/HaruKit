@@ -2,7 +2,7 @@
 using UnityEditor;
 using UnityEngine;
 
-namespace PinPlugin.Nexus.Editor
+namespace HaruFamily.Framework.Nexus.Editor
 {
     /// <summary>Editor toolbar search input with case-insensitive matching.</summary>
     internal sealed class SearchBar

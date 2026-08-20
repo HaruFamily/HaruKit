@@ -6,7 +6,7 @@ using System.Linq;
 using System.Threading;
 using UnityEngine;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     // 依賴圖（診斷用，best-effort）：服務依賴邊（只記 OnInitialize 同步段內解析到的）+ owner→child 擁有邊。匯出 Graphviz DOT。
     public partial class Nexus

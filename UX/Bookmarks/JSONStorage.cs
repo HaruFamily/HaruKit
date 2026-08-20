@@ -4,7 +4,7 @@ using UnityEngine;
 using System.Collections.Generic;
 using System.IO;
 
-namespace PinTools.Inspector
+namespace HaruFamily.UX.Bookmarks
 {
     // ====================== InspectorItem ======================================
     [System.Serializable]

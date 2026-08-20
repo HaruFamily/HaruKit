@@ -2,7 +2,7 @@
 using UnityEditor;
 using UnityEngine;
 
-namespace PinTools
+namespace HaruFamily.UX.Bookmarks
 {
     internal class DragSortHandler
     {

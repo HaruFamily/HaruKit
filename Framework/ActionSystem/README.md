@@ -42,7 +42,7 @@ For a reproducible release, append `#actionsystem/v1.0.1` after the path.
 
 ## Package Boundary
 
-`PinPlugin.ActionSystem` deliberately does not know gameplay types. Use
+`HaruFamily.Framework.ActionSystem` deliberately does not know gameplay types. Use
 `ActionSystem<TTiming, TPack, TTokenEntryPack>` with a project-owned enum,
 runtime pack, and token pack. Keep concrete `ActionBase<TPack>`,
 `FormulaBase<TResult, TPack>`, token entries, and ScriptableObject subclasses

@@ -1,4 +1,4 @@
-namespace PinPlugin.ActionSystem.Editor.Tests
+namespace HaruFamily.Framework.ActionSystem.Editor.Tests
 {
 using Cysharp.Threading.Tasks;
 using NUnit.Framework;

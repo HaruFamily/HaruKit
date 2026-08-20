@@ -1,6 +1,6 @@
 {
   "name": "HaruFamily.UX.Bookmarks.Editor",
-  "rootNamespace": "",
+  "rootNamespace": "HaruFamily.UX.Bookmarks",
   "references": [],
   "includePlatforms": [
     "Editor"

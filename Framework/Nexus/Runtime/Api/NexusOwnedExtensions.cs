@@ -1,7 +1,7 @@
 using Cysharp.Threading.Tasks;
 using System;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     /// <summary>
     /// <see cref="INexusOwned{TOwner}"/> 的 owner 反查入口（取代舊 <c>NEXUS.OwnerOf(child)</c>）。

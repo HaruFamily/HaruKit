@@ -2,7 +2,7 @@
 using UnityEditor;
 using UnityEngine;
 
-namespace PinTools.Inspector
+namespace HaruFamily.UX.Bookmarks
 {
     internal static class InspectorSettingsProvider
     {

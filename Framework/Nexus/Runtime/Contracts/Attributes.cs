@@ -1,6 +1,6 @@
 using System;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     /// <summary>
     /// 標註「MonoBehaviour service」的 Addressable 位址。Nexus 建立此型別時，pool miss 會以此位址

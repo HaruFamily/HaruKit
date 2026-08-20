@@ -1,6 +1,6 @@
 #if UNITY_EDITOR
 
-namespace PinTools.Inspector
+namespace HaruFamily.UX.Bookmarks
 {
     // ====================== Constants ======================================
     internal static class InspectorConstants

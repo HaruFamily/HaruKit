@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
-namespace PinTools.Inspector
+namespace HaruFamily.UX.Bookmarks
 {
     // 純繪製狀態 + GUI 邏輯，由 InspectorPopup（PopupWindowContent）與 BookmarksWindow（EditorWindow）共用。
     // 兩 host 唯一行為分歧透過 DrawBody(onItemPicked) callback 注入：
