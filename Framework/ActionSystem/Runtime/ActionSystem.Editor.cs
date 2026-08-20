@@ -27,26 +27,6 @@ where TTiming : Enum
         else Err(msg);
     }
 
-    /// <summary>開啟視覺化編輯器並聚焦到目前選取的 Owner。</summary>
-    // Owner 從 Selection 取：這個按鈕本來就只在 Inspector 上按得到。
-    private void OpenVisualEditor()
-    {
-        if (ActionSystemEditorHooks.OpenGraphWindow == null)
-        {
-            Debug.LogError("[ActionSystem] 視覺化編輯器尚未載入（Editor assembly 未編譯完成？）。");
-            return;
-        }
-
-        var owner = Selection.activeObject as ScriptableObject;
-        if (owner == null)
-        {
-            Debug.LogError("[ActionSystem] 請從 Owner 資產的 Inspector 按此按鈕。");
-            return;
-        }
-
-        ActionSystemEditorHooks.OpenGraphWindow(owner);
-    }
-
     public void Verify()
     {
         // DeepCopy 與 Unity 反序列化不會保留 NonSerialized 驗證緩衝。

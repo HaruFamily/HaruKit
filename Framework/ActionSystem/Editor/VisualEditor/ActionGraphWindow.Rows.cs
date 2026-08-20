@@ -218,7 +218,7 @@ public partial class ActionGraphWindow
         GUI.enabled = wasEnabled;
         if (clickedRemove && !fixedSize)
         {
-            model.BreakUndoMerge();
+            BreakUndoMerge();
             owner.List.RemoveAt(row.ListIndex);
             Invalidate();
             return;
@@ -274,7 +274,7 @@ public partial class ActionGraphWindow
                 ? DefaultOf(owner.ElementType)
                 : AGReflect.CreateInstance(owner.ElementType);
             if (item == null && owner.ElementType != typeof(string)) return;
-            model.BreakUndoMerge();
+            BreakUndoMerge();
             owner.List.Insert(index, item);
             Invalidate();
             Repaint();
@@ -284,7 +284,7 @@ public partial class ActionGraphWindow
         menu.AddSeparator("");
         menu.AddItem(new GUIContent("刪除這一項"), false, () =>
         {
-            model.BreakUndoMerge();
+            BreakUndoMerge();
             owner.List.RemoveAt(index);
             Invalidate();
             Repaint();
@@ -296,7 +296,7 @@ public partial class ActionGraphWindow
     {
         if (owner?.List == null || owner.List.IsFixedSize) return;
         if (to < 0 || to >= owner.List.Count || from == to) return;
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         var item = owner.List[from];
         owner.List.RemoveAt(from);
         owner.List.Insert(to, item);
@@ -496,7 +496,7 @@ public partial class ActionGraphWindow
         DrawInlineName(labelRect, slot, row.Label, AGReflect.GetLabel(slot) ?? "", labelStyle,
             "雙擊可改名；清空改回顯示型別／資產名", name =>
             {
-                model.BreakUndoMerge();
+                BreakUndoMerge();
                 AGReflect.SetLabel(slot, name);
                 Invalidate();
                 return true;
@@ -573,7 +573,7 @@ public partial class ActionGraphWindow
             ? DefaultOf(row.ElementType)
             : AGReflect.CreateInstance(row.ElementType);
         if (item == null && row.ElementType != typeof(string)) return;
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         row.List.Add(item);
         Invalidate();
     }

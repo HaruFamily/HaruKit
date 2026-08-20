@@ -16,9 +16,6 @@ using UnityEditor;
 public partial class ActionSystem<TTiming, TPack>
 where TTiming : Enum
 {
-    [SerializeField]
-    public bool AutoVerifyOnPlay = true;
-
     [SerializeReference]
     public List<ActionTimingGroup<TTiming, TPack>> ActionGroups = new();
 

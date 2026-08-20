@@ -1,4 +1,4 @@
-namespace PinPlugin.ActionSystem.Editor
+﻿namespace PinPlugin.ActionSystem.Editor
 {
 using System;
 using System.Collections;
@@ -7,16 +7,17 @@ using UnityEditor;
 using UnityEngine;
 
 /// <summary>
-/// 左欄變數／資產庫、右欄時機與動作清單、資產引用清單，以及底部 Console。
+/// 左欄變數庫／資產庫／引用清單三區，以及底部 Console。
 /// </summary>
 public partial class ActionGraphWindow
 {
     // ===== 左欄：Token／Asset 庫 =====
 
     /// <summary>
-    /// 變數與資產上下分區，中間可拖。刻意不用分頁：資產焦點下，變數列的是「這個資產對呼叫端的參數介面」，
+    /// 變數／資產／引用上下分區，中間可拖。刻意不用分頁：資產焦點下，變數列的是「這個資產對呼叫端的參數介面」，
     /// 而資產列是「換去編哪一個」，兩件事交替發生，分頁會逼人每次來回切一趟。
-    /// 兩區都各自有 ScrollView，區塊被拖小了就滾動，不會把內容切掉。
+    /// 引用區只在資產焦點出現（`HasReferenceSection`），其餘焦點下另外兩區直接吃掉那段高度。
+    /// 每區都各自有 ScrollView，區塊被拖小了就滾動，不會把內容切掉。
     /// </summary>
     private void DrawLibraryPanel(Rect r)
     {
@@ -27,29 +28,46 @@ public partial class ActionGraphWindow
         GUI.Label(new Rect(r.x + 4f, r.y + 2f, 160f, 18f),
             new GUIContent("變數庫", "對外端點；點一筆進入它自己的畫布，沒接來源時它就是具名常數"), AGStyles.PanelHeader);
 
+        bool showRef = HasReferenceSection;
         float top = r.y + 22f;
-        float avail = r.yMax - top - ResizeHandleWidth;
-        // 視窗太矮時連兩區的最小高度都放不下，這時各分一半；寧可擠也不要出現負高度的 Rect。
-        float minToken = Mathf.Min(MinTokenSection, avail * 0.5f);
-        float minAsset = Mathf.Min(MinAssetSection, avail * 0.5f);
-        float maxToken = Mathf.Max(minToken, avail - minAsset);
+        float avail = r.yMax - top - ResizeHandleWidth * (showRef ? 2f : 1f);
+        // 視窗太矮時連各區的最小高度都放不下，這時平均分；寧可擠也不要出現負高度的 Rect。
+        float share = avail / (showRef ? 3f : 2f);
+        float minToken = Mathf.Min(MinTokenSection, share);
+        float minAsset = Mathf.Min(MinAssetSection, share);
+        float minRef = showRef ? Mathf.Min(MinRefSection, share) : 0f;
+
         // 夾限後寫回欄位：拖曳是累加 delta，記著的值若跟畫面上的高度不同步，下一次拖會整段跳。
+        // 先夾引用區（它是最下面那一段），剩下的才輪到變數區與資產區分。
+        float maxRef = Mathf.Max(minRef, avail - minToken - minAsset);
+        if (showRef) refSectionHeight = Mathf.Clamp(refSectionHeight, minRef, maxRef);
+        float refHeight = showRef ? refSectionHeight : 0f;
+        float maxToken = Mathf.Max(minToken, avail - minAsset - refHeight);
         tokenSectionHeight = Mathf.Clamp(tokenSectionHeight, minToken, maxToken);
 
         var tokenRect = new Rect(r.x, top, r.width, tokenSectionHeight);
         var handle = new Rect(r.x, tokenRect.yMax, r.width, ResizeHandleWidth);
-        var assetRect = new Rect(r.x, handle.yMax, r.width, r.yMax - handle.yMax);
+        var assetRect = new Rect(r.x, handle.yMax, r.width, r.yMax - handle.yMax - refHeight
+            - (showRef ? ResizeHandleWidth : 0f));
 
         HandleLibrarySplitResize(handle, minToken, maxToken);
 
         DrawTokenLibrary(tokenRect, tokenRect.y + 2f);
 
-        // 資產區標題跟面板標題同一種寫法，兩區看起來才是同級的清單，不是主從。
+        // 資產區標題跟面板標題同一種寫法，三區看起來才是同級的清單，不是主從。
         GUI.Label(new Rect(assetRect.x + 4f, assetRect.y + 2f, 160f, 18f),
             new GUIContent("資產庫", "點一筆進去編它；拖到畫布上＝建一顆引用節點"), AGStyles.PanelHeader);
         DrawAssetLibrary(assetRect, assetRect.y + 24f);
 
         DrawResizeGrip(handle, false, resizingLibrarySplit);
+
+        if (!showRef) return;
+
+        var refHandle = new Rect(r.x, assetRect.yMax, r.width, ResizeHandleWidth);
+        var refRect = new Rect(r.x, refHandle.yMax, r.width, r.yMax - refHandle.yMax);
+        HandleRefSplitResize(refHandle, minRef, maxRef);
+        DrawReferenceSection(refRect);
+        DrawResizeGrip(refHandle, false, resizingRefSplit);
     }
 
     /// <summary>左欄上下分隔：拖動只改變數區高度，資產區吃剩下的。夾限與 Console 那條同一套。</summary>
@@ -73,6 +91,31 @@ public partial class ActionGraphWindow
         if (e.type == EventType.MouseUp && resizingLibrarySplit)
         {
             resizingLibrarySplit = false;
+            e.Use();
+        }
+    }
+
+    /// <summary>資產區與引用區之間的分隔：引用區從底部往上長，所以 delta 要反過來加。</summary>
+    private void HandleRefSplitResize(Rect handle, float min, float max)
+    {
+        EditorGUIUtility.AddCursorRect(handle, MouseCursor.ResizeVertical);
+        var e = Event.current;
+        if (e.type == EventType.MouseDown && e.button == 0 && handle.Contains(e.mousePosition))
+        {
+            resizingRefSplit = true;
+            e.Use();
+            return;
+        }
+        if (e.type == EventType.MouseDrag && resizingRefSplit)
+        {
+            refSectionHeight = Mathf.Clamp(refSectionHeight - e.delta.y, min, max);
+            e.Use();
+            Repaint();
+            return;
+        }
+        if (e.type == EventType.MouseUp && resizingRefSplit)
+        {
+            resizingRefSplit = false;
             e.Use();
         }
     }
@@ -254,7 +297,7 @@ public partial class ActionGraphWindow
         var scope = CurrentEndpoints();
         if (scope == null) return;
 
-        model.BreakUndoMerge();                   // 複製自成一步
+        BreakUndoMerge();                   // 複製自成一步
         var copy = model.DuplicateEndpoint(source, scope, out string error);
         if (copy == null) { ShowNotification(new GUIContent(error)); return; }
 
@@ -276,7 +319,7 @@ public partial class ActionGraphWindow
         int used = AGModel.CountReferences(endpoint, SlotsInCurrentGraph());
         string name = string.IsNullOrEmpty(endpoint.Name) ? "（未命名）" : endpoint.Name;
 
-        model.BreakUndoMerge();                   // 刪除自成一步，不跟前一個編輯合併成同一次復原
+        BreakUndoMerge();                   // 刪除自成一步，不跟前一個編輯合併成同一次復原
         if (ReferenceEquals(focus.Endpoint, endpoint)) ExitVariable();
         model.DeleteEndpoint(endpoint, scope, CurrentCarrierScope());
         MarkGraphChanged();
@@ -580,7 +623,7 @@ public partial class ActionGraphWindow
             return;
         }
 
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         var group = model.AddGroup(timing);
         if (group?.Group == null)
         {
@@ -620,7 +663,7 @@ public partial class ActionGraphWindow
     {
         if (node?.Obj == null) return;
 
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         PreserveVisibleNodePositions();
         foreach (var g in model.ReadGroups())
         {
@@ -647,63 +690,77 @@ public partial class ActionGraphWindow
         Repaint();
     }
 
-    // ===== 右欄（資產焦點）：引用清單 =====
+    // ===== 左欄第三區（資產焦點）：引用清單 =====
 
-    private void DrawReferencePanel(Rect r)
+    /// <summary>
+    /// 誰引用了目前這顆資產。左欄只有 160px 起跳，所以一列只放名稱與驗證狀態，
+    /// 整列可點＝切換過去編它（會先問要不要離開資產）；兩顆維護動作縮成標題列右側的小按鈕。
+    /// </summary>
+    private void DrawReferenceSection(Rect r)
     {
-        AGStyles.Fill(r, AGStyles.Panel);
-        AGStyles.Frame(r, AGStyles.NodeBorder);
-
         var asset = focus.AssetObject;
-        GUI.Label(new Rect(r.x + 4f, r.y + 2f, r.width - 8f, 18f), "引用此資產的對象", AGStyles.PanelHeader);
-
         var users = AGReferenceIndex.Users(asset as ScriptableObject);
         int count = users.Count;
-        GUI.Label(new Rect(r.x + 6f, r.y + 22f, r.width - 12f, 16f),
-            count > 0 ? $"共 {count} 個對象" : "專案裡沒有已存檔的對象引用它", AGStyles.Tiny);
 
-        var listRect = new Rect(r.x + 2f, r.y + 40f, r.width - 4f, r.height - 92f);
-        AGStyles.Fill(listRect, AGStyles.PanelList);
+        GUI.Label(new Rect(r.x + 4f, r.y + 2f, r.width - 74f, 18f),
+            new GUIContent($"引用此資產 {count}", "專案裡已存檔、且引用這顆資產的對象；點一列切換過去編它"),
+            AGStyles.PanelHeader);
 
-        var content = new Rect(0f, 0f, listRect.width - 16f, count * 24f + 4f);
-        referenceScroll = GUI.BeginScrollView(listRect, referenceScroll, content);
-        for (int i = 0; i < count; i++)
-        {
-            var so = users[i];
-            var row = new Rect(0f, i * 24f, content.width, 23f);
-            if (i % 2 == 1) AGStyles.Fill(row, AGStyles.RowAlt);
-
-            if (so == null)
-            {
-                GUI.Label(new Rect(row.x + 4f, row.y + 3f, row.width - 8f, 17f), "（已遺失的對象）", AGStyles.RowLabelError);
-                continue;
-            }
-
-            bool validated = so is IActionSystemOwner o && o.IsActionSystemValidated();
-            GUI.Label(new Rect(row.x + 4f, row.y + 3f, row.width - 110f, 17f), so.name, AGStyles.RowLabel);
-            GUI.Label(new Rect(row.xMax - 104f, row.y + 3f, 46f, 17f),
-                validated ? "✓ 已驗證" : "✗ 未驗證", validated ? AGStyles.Tiny : AGStyles.RowLabelError);
-
-            if (GUI.Button(new Rect(row.xMax - 54f, row.y + 3f, 50f, 17f), "切換"))
-            {
-                var target = so;
-                if (ConfirmLeaveAsset())
-                {
-                    ExitAsset();
-                    Bind(target);
-                    EditorGUIUtility.PingObject(target);
-                }
-            }
-        }
-        GUI.EndScrollView();
-
-        if (GUI.Button(new Rect(r.x + 4f, r.yMax - 50f, r.width - 8f, 20f), "重新掃描專案"))
+        // 重掃與重驗都是低頻維護動作，縮在標題列右側，不吃清單高度。
+        if (GUI.Button(new Rect(r.xMax - 68f, r.y + 2f, 40f, 18f),
+            new GUIContent("重驗", "把所有引用者重跑一次 Core 驗證；只有結果翻轉的才寫檔")))
+            VerifyAllUsers(asset);
+        if (GUI.Button(new Rect(r.xMax - 24f, r.y + 2f, 20f, 18f),
+            EditorGUIUtility.IconContent("Refresh", "重新掃描專案的引用")))
         {
             AGReferenceIndex.Refresh();
             ShowNotification(new GUIContent($"找到 {AGReferenceIndex.Users(asset as ScriptableObject).Count} 個引用"));
         }
-        if (GUI.Button(new Rect(r.x + 4f, r.yMax - 26f, r.width - 8f, 20f), "全部重新驗證"))
-            VerifyAllUsers(asset);
+
+        var listRect = new Rect(r.x + 2f, r.y + 22f, r.width - 4f, Mathf.Max(0f, r.yMax - r.y - 24f));
+        AGStyles.Fill(listRect, AGStyles.PanelList);
+
+        if (count == 0)
+        {
+            GUI.Label(new Rect(listRect.x + 6f, listRect.y + 4f, listRect.width - 12f, 30f),
+                "專案裡沒有已存檔的對象引用它", AGStyles.Tiny);
+            return;
+        }
+
+        var content = new Rect(0f, 0f, listRect.width - 16f, count * RefRowHeight + 4f);
+        referenceScroll = GUI.BeginScrollView(listRect, referenceScroll, content);
+        for (int i = 0; i < count; i++)
+        {
+            var so = users[i];
+            var row = new Rect(0f, i * RefRowHeight, content.width, RefRowHeight - 1f);
+            if (i % 2 == 1) AGStyles.Fill(row, AGStyles.RowAlt);
+
+            if (so == null)
+            {
+                GUI.Label(new Rect(row.x + 4f, row.y + 2f, row.width - 8f, 17f), "（已遺失的對象）", AGStyles.RowLabelError);
+                continue;
+            }
+
+            bool validated = so is IActionSystemOwner o && o.IsActionSystemValidated();
+            GUI.Label(new Rect(row.x + 4f, row.y + 2f, row.width - 26f, 17f),
+                AGStyles.Elide(so.name, AGStyles.RowLabel, row.width - 26f), AGStyles.RowLabel);
+            GUI.Label(new Rect(row.xMax - 20f, row.y + 2f, 16f, 17f),
+                new GUIContent(validated ? "✓" : "✗", validated ? "已驗證" : "未驗證（多半是這顆資產改過，存檔它就會重驗）"),
+                validated ? AGStyles.Tiny : AGStyles.RowLabelError);
+
+            var e = Event.current;
+            if (e.type != EventType.MouseDown || e.button != 0 || !row.Contains(e.mousePosition)) continue;
+            e.Use();
+            var target = so;
+            if (!ConfirmLeaveAsset()) continue;
+            ExitAsset();
+            Bind(target);
+            EditorGUIUtility.PingObject(target);
+            // 焦點已經不是資產了，這一區的其餘列不該再畫；ScrollView 要自己收尾才不會破版。
+            GUI.EndScrollView();
+            return;
+        }
+        GUI.EndScrollView();
     }
 
     /// <summary>把引用者全部重驗一次。只有驗證結果真的翻轉的才寫檔，其餘一個都不動。</summary>

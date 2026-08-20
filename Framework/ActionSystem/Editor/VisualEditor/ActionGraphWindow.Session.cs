@@ -1,4 +1,4 @@
-namespace PinPlugin.ActionSystem.Editor
+﻿namespace PinPlugin.ActionSystem.Editor
 {
 using System;
 using System.Collections.Generic;
@@ -11,10 +11,6 @@ using UnityEngine;
 public partial class ActionGraphWindow
 {
     // ===== 開啟 =====
-
-    // Core 的 Inspector 按鈕透過這個掛勾開窗；Runtime 不能引用 Editor assembly，只能反向註冊。
-    [InitializeOnLoadMethod]
-    private static void RegisterOpenHook() => ActionSystemEditorHooks.OpenGraphWindow = so => OpenFor(so);
 
     /// <summary>開窗並聚焦到指定對象。Owner 直接編輯，共用資產則借引用者當上下文下鑽。</summary>
     public static void OpenFor(UnityEngine.Object target)
@@ -290,8 +286,8 @@ public partial class ActionGraphWindow
         consoleHeight = EditorPrefs.GetFloat(PrefConsoleHeight, 150f);
         consoleCollapsed = EditorPrefs.GetBool(PrefConsoleCollapsed, false);
         leftWidth = EditorPrefs.GetFloat(PrefLeftWidth, DefaultLeftWidth);
-        rightWidth = EditorPrefs.GetFloat(PrefRightWidth, DefaultRightWidth);
         tokenSectionHeight = EditorPrefs.GetFloat(PrefTokenSection, DefaultTokenSection);
+        refSectionHeight = EditorPrefs.GetFloat(PrefRefSection, DefaultRefSection);
         UpdateUnsavedState();
     }
 
@@ -300,8 +296,8 @@ public partial class ActionGraphWindow
         EditorPrefs.SetFloat(PrefConsoleHeight, consoleHeight);
         EditorPrefs.SetBool(PrefConsoleCollapsed, consoleCollapsed);
         EditorPrefs.SetFloat(PrefLeftWidth, leftWidth);
-        EditorPrefs.SetFloat(PrefRightWidth, rightWidth);
         EditorPrefs.SetFloat(PrefTokenSection, tokenSectionHeight);
+        EditorPrefs.SetFloat(PrefRefSection, refSectionHeight);
     }
 
     public override void SaveChanges()
@@ -478,6 +474,7 @@ public partial class ActionGraphWindow
         if (focus.Kind == AGFocusKind.Asset && focus.AssetObject == asset)
         {
             if (focus.Endpoint != null) ExitVariable();
+            SelectAssetInProject(asset);
             return;
         }
         AGFocus back = focus.Kind == AGFocusKind.Asset ? returnFocus : focus;
@@ -511,10 +508,22 @@ public partial class ActionGraphWindow
         });
         returnFocus = back ?? new AGFocus();
         ClearAssetDirty();
+        // 每個資產是一次獨立交易，復原歷程跟著交易開始；進來當下的狀態就是第一次修改要退回的地方。
+        assetHistory.Reset(CaptureAssetState());
         assetVerifiedOnce = false;
         assetReportStale = false;
         DoVerify(true);
         UpdateUnsavedState();
+        SelectAssetInProject(asset);
+    }
+
+    /// <summary>把 Project／Inspector 的選取帶到焦點資產上，並在 Project 視窗閃一下定位資料夾。</summary>
+    private void SelectAssetInProject(UnityEngine.Object asset)
+    {
+        if (asset == null || Selection.activeObject == asset) return;
+        // 必須在焦點設定完之後呼叫：OnSelectionChange 會因為「選到的就是目前焦點資產」直接跳過，不會重開交易。
+        Selection.activeObject = asset;
+        EditorGUIUtility.PingObject(asset);
     }
 
     private bool SaveAsset(bool showDialog = true)
@@ -604,6 +613,8 @@ public partial class ActionGraphWindow
         var back = returnFocus;
         returnFocus = null;
         ClearAssetDirty();
+        // 交易結束就丟掉歷程：留著只會佔記憶體，而且下次進來的是另一份工作副本，套用舊快照沒有意義。
+        assetHistory.Reset(null);
         assetVerifiedOnce = false;
         assetReportStale = false;
         assetReport = new AGReport();

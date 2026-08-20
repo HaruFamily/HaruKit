@@ -6,7 +6,6 @@ public interface IActionSystemOwner
     bool IsActionSystemValidated();
 #if UNITY_EDITOR
     void VerifyActionSystem();
-    bool IsAutoVerifyOnPlay();
 #endif
 }
 

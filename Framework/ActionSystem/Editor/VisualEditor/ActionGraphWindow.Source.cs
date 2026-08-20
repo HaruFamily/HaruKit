@@ -42,7 +42,7 @@ public partial class ActionGraphWindow
             ShowNotification(new GUIContent("變數型別不符，無法接到這個欄位"));
             return;
         }
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         AssignEndpoint(row.Slot, endpoint);
     }
 
@@ -56,7 +56,7 @@ public partial class ActionGraphWindow
         }
         if (endpoint == null) return;
 
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         var carrier = new GraphNode();
         carrier.EnsureId();
         carrier.SetEndpoint(endpoint);
@@ -217,7 +217,7 @@ public partial class ActionGraphWindow
         if (node?.Carrier == null || type == null || node.Obj?.GetType() == type) return;
         if (AGReflect.CreateInstance(type) is not ActionSystemNode instance) return;
 
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         PreserveVisibleNodePositions();
         DetachChildSourcesForReplacement(node);
         node.Carrier.SetBody(instance);
@@ -293,7 +293,7 @@ public partial class ActionGraphWindow
     {
         if (node?.Carrier == null || asset == null || node.Asset == asset) return;
 
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         PreserveVisibleNodePositions();
         if (node.Carrier.Kind == NodeKind.Asset) ReconcileAssetBindings(node.Carrier, asset);
         else DetachChildSourcesForReplacement(node);
@@ -390,7 +390,7 @@ public partial class ActionGraphWindow
     private void PlaceNewSource(object slot, Vector2 graphMouse)
     {
         if (slot == null) return;
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         PreserveVisibleNodePositions();
         NewSource(slot).Pos = SnapToGrid(graphMouse);
         Invalidate();
@@ -430,7 +430,7 @@ public partial class ActionGraphWindow
             return;
         }
         if (node.Carrier == null) return;
-        if (pushUndo) model.BreakUndoMerge();
+        if (pushUndo) BreakUndoMerge();
         PreserveVisibleNodePositions();
 
         // 刪節點＝斷開所有指著這個載體的欄位，並把它移出候選池。
@@ -463,7 +463,7 @@ public partial class ActionGraphWindow
         foreach (var kind in model.FormulaKinds())
             if (kind.resultType == node.ResultType) { slotType = kind.slotType; break; }
 
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         var endpoint = model.CreateEndpoint(scope, slotType, out string error);
         if (endpoint == null)
         {
@@ -545,7 +545,7 @@ public partial class ActionGraphWindow
     {
         if (node?.Carrier == null || endpoint == null || ReferenceEquals(node.Endpoint, endpoint)) return;
 
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         PreserveVisibleNodePositions();
         if (node.Carrier.Kind != NodeKind.Token) DetachChildSourcesForReplacement(node);
         node.Carrier.SetEndpoint(endpoint);
@@ -739,7 +739,7 @@ public partial class ActionGraphWindow
     {
         if (node?.Carrier == null) return;
 
-        model.BreakUndoMerge();
+        BreakUndoMerge();
 
         // 變數節點自己沒有內容：轉存的對象是它指向的那個變數的算式，變數本身留著。
         if (node.IsVariableNode) { ExtractVariableContentAsset(node); return; }
@@ -817,7 +817,7 @@ public partial class ActionGraphWindow
         if (hostSlotType != null && AGValidator.AssetHasError(model, hostSlotType, asset))
             Debug.LogError($"[ActionGraph] 轉存出來的資產 '{asset.name}' 內部有錯誤，請雙擊它進入資產畫布查看驗證訊息。", asset);
 
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         // 內容被「搬進資產」，所以是就地把載體換成資產引用，不留成候選。
         carrier?.SetAsset(asset);
         if (isOrphan) model.RemoveOrphan(carrier);
@@ -1065,7 +1065,7 @@ public partial class ActionGraphWindow
     /// <summary>在畫布上放一顆空節點，並記住它屬於哪一族。</summary>
     private void CreateOrphan(Vector2 graphMouse, Type slotType)
     {
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         var carrier = new GraphNode();
         carrier.EnsureId();
         carrier.Pos = SnapToGrid(graphMouse);

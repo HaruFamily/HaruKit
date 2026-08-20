@@ -267,7 +267,7 @@ public partial class ActionGraphWindow
         }
 
         // 真正的空白處放開：先建立空 Node，讓使用者在 Node 上決定具體型別。
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         PreserveVisibleNodePositions();
         NewSource(linkRow.Slot).Pos = SnapToGrid(graphMouse);
         Invalidate();
@@ -292,7 +292,7 @@ public partial class ActionGraphWindow
             return true;
         }
 
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         PreserveVisibleNodePositions();
         AttachSource(row.Slot, target.Carrier);
         Invalidate();
