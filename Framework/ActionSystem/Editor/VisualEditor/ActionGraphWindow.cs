@@ -1,4 +1,4 @@
-namespace PinPlugin.ActionSystem.Editor
+﻿namespace PinPlugin.ActionSystem.Editor
 {
 using System;
 using System.Collections;
@@ -15,9 +15,7 @@ public partial class ActionGraphWindow : EditorWindow
 {
     private const float ToolbarHeight = 22f;
     private const float DefaultLeftWidth = 220f;
-    private const float DefaultRightWidth = 280f;
     private const float MinLeftWidth = 160f;
-    private const float MinRightWidth = 180f;
     private const float MinCenterWidth = 320f;
     private const float ResizeHandleWidth = 6f;
     private const float HeaderHeight = 46f;
@@ -27,15 +25,20 @@ public partial class ActionGraphWindow : EditorWindow
     private const float LinkThickness = 4f;
     private const float TokenCellHeight = 30f;
     private const float AssetCellHeight = 30f;
+    /// <summary>引用列比清單格矮：它只有名稱與驗證狀態，沒有 chip 也沒有第二行。</summary>
+    private const float RefRowHeight = 22f;
     /// <summary>左欄變數區的最小高度：三顆固定控制項 + 一列，再小就有東西被切掉（標題由面板標題兼任）。</summary>
     private const float MinTokenSection = 106f;
     private const float MinAssetSection = 80f;
+    /// <summary>引用區的最小高度：標題列 + 一筆引用。它只在資產焦點出現，另外兩區跟著讓出高度。</summary>
+    private const float MinRefSection = 76f;
     private const float DefaultTokenSection = 240f;
+    private const float DefaultRefSection = 140f;
     private const string PrefConsoleHeight = "ActionGraph.ConsoleHeight";
     private const string PrefConsoleCollapsed = "ActionGraph.ConsoleCollapsed";
     private const string PrefLeftWidth = "ActionGraph.LeftWidth";
-    private const string PrefRightWidth = "ActionGraph.RightWidth";
     private const string PrefTokenSection = "ActionGraph.TokenSectionHeight";
+    private const string PrefRefSection = "ActionGraph.RefSectionHeight";
 
     private AGModel model;
     private AGFocus focus = new();
@@ -60,13 +63,14 @@ public partial class ActionGraphWindow : EditorWindow
     private bool consoleCollapsed;
     private bool resizingConsole;
     private float leftWidth = DefaultLeftWidth;
-    private float rightWidth = DefaultRightWidth;
     private bool resizingLeftPanel;
-    private bool resizingRightPanel;
     private int consoleTab;                  // 0 全部 / 1 錯誤 / 2 警告
     // 左欄變數／資產上下分區：存變數區的高度，資產區吃剩下的。編資產時兩份清單要同時看得到，不能再用分頁互斥。
     private float tokenSectionHeight = DefaultTokenSection;
     private bool resizingLibrarySplit;
+    // 左欄第三區（引用此資產）：只在資產焦點出現，存自己的高度，資產區吃剩下的。
+    private float refSectionHeight = DefaultRefSection;
+    private bool resizingRefSplit;
     private string tokenSearch = "";
     private string assetSearch = "";
     private object editingNameTarget;
@@ -157,13 +161,13 @@ public partial class ActionGraphWindow : EditorWindow
     private AGReport assetReport = new();
     private Vector2 referenceScroll;
 
+    // 資產的復原歷程。資產不在 Owner 的工作副本裡，AGModel 那份 Undo 蓋不到，得自己記一份。
+    private readonly AGAssetHistory assetHistory = new();
+
     private bool HasUnsavedWork => model?.Dirty == true || assetDirty;
 
-    /// <summary>
-    /// 右欄還有沒有內容。時機節點與動作清單都在畫布上，所以右欄只剩下資產焦點的引用清單
-    /// ——那份沒有別的地方可去（資產焦點沒有時機節點）。
-    /// </summary>
-    private bool HasRightPanel => focus.Kind == AGFocusKind.Asset;
+    /// <summary>引用清單只在資產焦點有意義，作為左欄第三區出現（2026-08-20 由整條右欄改成分區）。</summary>
+    private bool HasReferenceSection => focus.Kind == AGFocusKind.Asset;
     private bool IsCurrentReportFresh => focus.Kind == AGFocusKind.Asset
         ? assetVerifiedOnce && !assetReportStale
         : verifiedOnce && !reportStale;
@@ -172,14 +176,14 @@ public partial class ActionGraphWindow : EditorWindow
 
     private void OnGUI()
     {
-        GetLayout(out var toolbar, out var left, out var right, out var center, out var leftHandle, out var rightHandle);
-        HandlePanelResize(leftHandle, rightHandle);
-        GetLayout(out toolbar, out left, out right, out center, out leftHandle, out rightHandle);
+        GetLayout(out var toolbar, out var left, out var center, out var leftHandle);
+        HandlePanelResize(leftHandle);
+        GetLayout(out toolbar, out left, out center, out leftHandle);
 
         if (model == null || model.Owner == null)
         {
-            DrawIdle(toolbar, left, right, center);
-            DrawPanelResizeHandles(leftHandle, rightHandle);
+            DrawIdle(toolbar, left, center);
+            DrawResizeGrip(leftHandle, true, resizingLeftPanel);
             UpdateUnsavedState();
             return;
         }
@@ -198,9 +202,8 @@ public partial class ActionGraphWindow : EditorWindow
         // 縮放畫布先畫；固定面板最後畫，吸收 IMGUI 縮放在邊界可能漏出的次像素。
         DrawCenter(center);
         DrawLibraryPanel(left);
-        if (HasRightPanel) DrawReferencePanel(right);
         DrawToolbar(toolbar);
-        DrawPanelResizeHandles(leftHandle, rightHandle);
+        DrawResizeGrip(leftHandle, true, resizingLeftPanel);
 
         if (dragAssetActive) DrawDragAssetGhost();
         // 放置模式沒有按住按鍵，收不到 MouseDrag；要 MouseMove 殘影才跟得上滑鼠。
@@ -255,70 +258,41 @@ public partial class ActionGraphWindow : EditorWindow
         pendingVariableFocus = null;
     }
 
-    private void GetLayout(out Rect toolbar, out Rect left, out Rect right, out Rect center, out Rect leftHandle, out Rect rightHandle)
+    private void GetLayout(out Rect toolbar, out Rect left, out Rect center, out Rect leftHandle)
     {
-        float maxLeft = Mathf.Max(MinLeftWidth, position.width - rightWidth - MinCenterWidth);
+        float maxLeft = Mathf.Max(MinLeftWidth, position.width - MinCenterWidth);
         leftWidth = Mathf.Clamp(leftWidth, MinLeftWidth, maxLeft);
-        float maxRight = Mathf.Max(MinRightWidth, position.width - leftWidth - MinCenterWidth);
-        rightWidth = Mathf.Clamp(rightWidth, MinRightWidth, maxRight);
-
-        // Timing 焦點的內容全在畫布上，右欄沒有東西可放，整條收掉把寬度讓給畫布。
-        // 記住的 rightWidth 不動，切回別的焦點時原封不動地回來。
-        float shownRight = HasRightPanel ? rightWidth : 0f;
 
         toolbar = new Rect(0f, 0f, position.width, ToolbarHeight);
         left = new Rect(0f, ToolbarHeight, leftWidth, position.height - ToolbarHeight);
-        right = new Rect(position.width - shownRight, ToolbarHeight, shownRight, position.height - ToolbarHeight);
-        center = new Rect(left.xMax, ToolbarHeight, right.xMin - left.xMax, position.height - ToolbarHeight);
+        center = new Rect(left.xMax, ToolbarHeight, position.width - left.xMax, position.height - ToolbarHeight);
         leftHandle = new Rect(left.xMax - ResizeHandleWidth * 0.5f, ToolbarHeight, ResizeHandleWidth, left.height);
-        // 右欄收起時把把手也收成零寬：留著會在畫布右緣壓出一條抓不到東西的縮放區。
-        rightHandle = HasRightPanel
-            ? new Rect(right.xMin - ResizeHandleWidth * 0.5f, ToolbarHeight, ResizeHandleWidth, right.height)
-            : new Rect(position.width, ToolbarHeight, 0f, right.height);
     }
 
     /// <summary>分隔把手先處理事件，畫布不能攔截欄位縮放拖曳。</summary>
-    private void HandlePanelResize(Rect leftHandle, Rect rightHandle)
+    private void HandlePanelResize(Rect leftHandle)
     {
         var e = Event.current;
         EditorGUIUtility.AddCursorRect(leftHandle, MouseCursor.ResizeHorizontal);
-        EditorGUIUtility.AddCursorRect(rightHandle, MouseCursor.ResizeHorizontal);
 
-        if (e.type == EventType.MouseDown && e.button == 0)
+        if (e.type == EventType.MouseDown && e.button == 0 && leftHandle.Contains(e.mousePosition))
         {
-            if (leftHandle.Contains(e.mousePosition)) resizingLeftPanel = true;
-            else if (rightHandle.Contains(e.mousePosition)) resizingRightPanel = true;
-            else return;
+            resizingLeftPanel = true;
             e.Use();
             return;
         }
-
         if (e.type == EventType.MouseDrag && resizingLeftPanel)
         {
-            leftWidth = Mathf.Clamp(leftWidth + e.delta.x, MinLeftWidth, position.width - rightWidth - MinCenterWidth);
+            leftWidth = Mathf.Clamp(leftWidth + e.delta.x, MinLeftWidth, position.width - MinCenterWidth);
             e.Use();
             Repaint();
             return;
         }
-        if (e.type == EventType.MouseDrag && resizingRightPanel)
-        {
-            rightWidth = Mathf.Clamp(rightWidth - e.delta.x, MinRightWidth, position.width - leftWidth - MinCenterWidth);
-            e.Use();
-            Repaint();
-            return;
-        }
-        if (e.type == EventType.MouseUp && (resizingLeftPanel || resizingRightPanel))
+        if (e.type == EventType.MouseUp && resizingLeftPanel)
         {
             resizingLeftPanel = false;
-            resizingRightPanel = false;
             e.Use();
         }
-    }
-
-    private void DrawPanelResizeHandles(Rect leftHandle, Rect rightHandle)
-    {
-        DrawResizeGrip(leftHandle, true, resizingLeftPanel);
-        DrawResizeGrip(rightHandle, true, resizingRightPanel);
     }
 
     /// <summary>所有區塊縮放共用同一種細分隔線與刻度，不用粗色塊搶畫面。</summary>
@@ -344,9 +318,9 @@ public partial class ActionGraphWindow : EditorWindow
     }
 
     /// <summary>
-    /// 還沒選對象時的閒置版型：三欄框架照畫，只有左上角的對象選擇器可用，其餘全部停用。
+    /// 還沒選對象時的閒置版型：兩欄框架照畫，只有左上角的對象選擇器可用，其餘全部停用。
     /// </summary>
-    private void DrawIdle(Rect toolbar, Rect left, Rect right, Rect center)
+    private void DrawIdle(Rect toolbar, Rect left, Rect center)
     {
         AGStyles.Fill(toolbar, AGStyles.Toolbar);
 
@@ -365,7 +339,6 @@ public partial class ActionGraphWindow : EditorWindow
         GUI.enabled = true;
 
         DrawIdlePanel(left, "變數庫");
-        DrawIdlePanel(right, "引用");
 
         AGStyles.Fill(center, AGStyles.Canvas);
         var header = new Rect(center.x, center.y, center.width, HeaderHeight);
@@ -675,6 +648,8 @@ public partial class ActionGraphWindow : EditorWindow
         if (focus.Endpoint == null && focus.AssetObject != null) EditorUtility.SetDirty(focus.AssetObject);
         // 只設 assetDirty：座標不影響執行語意，存檔時不必重驗、也不必通知任何 subscriber。
         assetDirty = true;
+        // 座標也要進歷程：Owner 側的 SetPosition 本來就記 Undo，兩邊行為不一致比沒有還難用。
+        assetHistory.Record(CaptureAssetState());
         UpdateUnsavedState();
     }
 
@@ -684,6 +659,104 @@ public partial class ActionGraphWindow : EditorWindow
         assetDirty = true;
         assetContentDirty = true;
         assetReportStale = true;
+        assetHistory.Record(CaptureAssetState());
+    }
+
+    /// <summary>
+    /// 目前資產工作副本的快照。內容、候選與變數**同一次深複製**：分次抄會把同一顆端點抄成
+    /// 幾份不相干的物件，變數節點指到的就不是清單裡那一顆（進出資產的交易也是同一條規則）。
+    /// </summary>
+    private AGAssetSnapshot CaptureAssetState()
+    {
+        if (focus.Kind != AGFocusKind.Asset || focus.AssetHostSlot == null) return null;
+
+        var pack = new List<object>
+        {
+            AGReflect.GetNode(focus.AssetHostSlot),
+            focus.AssetOrphans ?? new List<GraphNode>(),
+            focus.AssetEndpoints ?? new List<GraphEndpoint>(),
+        };
+        var copy = ActionSystemDeepCopy.Copy(pack);
+        if (copy == null)
+        {
+            Debug.LogError("[ActionGraph] 無法建立資產快照，這一步不會進復原歷程。");
+            return null;
+        }
+        return new AGAssetSnapshot
+        {
+            Root = copy[0] as GraphNode,
+            Orphans = copy[1] as List<GraphNode> ?? new List<GraphNode>(),
+            Endpoints = copy[2] as List<GraphEndpoint> ?? new List<GraphEndpoint>(),
+        };
+    }
+
+    /// <summary>
+    /// 把快照換成活的工作副本。整批端點物件都被換掉，所以正在編的變數子畫布要**靠 Id 重指**；
+    /// 那顆變數在這一步被刪掉的話就退回資產本體，畫面上不會停在一張查不到主人的空白圖。
+    /// </summary>
+    private void ApplyAssetState(AGAssetSnapshot snapshot)
+    {
+        if (snapshot == null || focus.AssetHostSlot == null) return;
+
+        AGReflect.SetNode(focus.AssetHostSlot, snapshot.Root);
+        focus.AssetOrphans = snapshot.Orphans;
+        focus.AssetEndpoints = snapshot.Endpoints;
+
+        string endpointId = focus.Endpoint?.Id;
+        focus.Endpoint = string.IsNullOrEmpty(endpointId)
+            ? null
+            : snapshot.Endpoints.Find(e => e != null && e.Id == endpointId);
+
+        // 套用後的那份快照已經是活資料，歷程不能跟它共用參考，否則下一次修改會連歷程一起改掉。
+        assetHistory.Rebase(CaptureAssetState());
+
+        // 退回去的狀態和磁碟上那份多半仍不同，一律當未存檔；驗證就地重跑，不必先標 stale。
+        assetDirty = true;
+        assetContentDirty = true;
+        selectedIds.Clear();
+        graphDirty = true;
+        DoVerify(true);
+        UpdateUnsavedState();
+        Repaint();
+    }
+
+    /// <summary>復原一步。資產焦點走自己的歷程，其餘走 Owner 工作副本那份。</summary>
+    private bool CanUndoNow => focus.Kind == AGFocusKind.Asset ? assetHistory.CanUndo : model?.CanUndo == true;
+    private bool CanRedoNow => focus.Kind == AGFocusKind.Asset ? assetHistory.CanRedo : model?.CanRedo == true;
+
+    private bool DoUndo()
+    {
+        if (focus.Kind != AGFocusKind.Asset)
+        {
+            if (!model.Undo()) return false;
+            AfterHistorySwap();
+            return true;
+        }
+        var snapshot = assetHistory.Undo(CaptureAssetState());
+        if (snapshot == null) return false;
+        ApplyAssetState(snapshot);
+        return true;
+    }
+
+    private bool DoRedo()
+    {
+        if (focus.Kind != AGFocusKind.Asset)
+        {
+            if (!model.Redo()) return false;
+            AfterHistorySwap();
+            return true;
+        }
+        var snapshot = assetHistory.Redo(CaptureAssetState());
+        if (snapshot == null) return false;
+        ApplyAssetState(snapshot);
+        return true;
+    }
+
+    /// <summary>強制切一個復原記錄點。呼叫點不必知道現在是哪一種焦點，路由在這裡。</summary>
+    private void BreakUndoMerge()
+    {
+        if (focus.Kind == AGFocusKind.Asset) assetHistory.BreakMerge();
+        else model?.BreakUndoMerge();
     }
 
     private void ClearAssetDirty()
@@ -747,21 +820,14 @@ public partial class ActionGraphWindow : EditorWindow
         }
         if (!e.control) return;
 
-        if (focus.Kind == AGFocusKind.Asset && (e.keyCode == KeyCode.Z || e.keyCode == KeyCode.Y))
-        {
-            ShowNotification(new GUIContent("資產編輯中不支援復原；取消可整批捨棄"));
-            e.Use();
-            return;
-        }
-
         if (e.keyCode == KeyCode.Z && !e.shift)
         {
-            if (model.Undo()) AfterHistorySwap(); else ShowNotification(new GUIContent("沒有可復原的步驟"));
+            if (!DoUndo()) ShowNotification(new GUIContent("沒有可復原的步驟"));
             e.Use();
         }
         else if (e.keyCode == KeyCode.Y || (e.keyCode == KeyCode.Z && e.shift))
         {
-            if (model.Redo()) AfterHistorySwap(); else ShowNotification(new GUIContent("沒有可重做的步驟"));
+            if (!DoRedo()) ShowNotification(new GUIContent("沒有可重做的步驟"));
             e.Use();
         }
         else if (e.keyCode == KeyCode.S)
@@ -845,16 +911,15 @@ public partial class ActionGraphWindow : EditorWindow
             if (inAsset) LeaveAsset(); else DoCancel();
         }
 
+        // 資產焦點也有復原：它走自己的歷程（AGAssetHistory），與 Owner 那份互不干擾。
         x -= 48f;
-        GUI.enabled = !inAsset && model.CanRedo;
-        if (GUI.Button(new Rect(x, r.y + 1f, 46f, 19f), new GUIContent("重做", "Ctrl+Y / Ctrl+Shift+Z")))
-            if (model.Redo()) AfterHistorySwap();
+        GUI.enabled = CanRedoNow;
+        if (GUI.Button(new Rect(x, r.y + 1f, 46f, 19f), new GUIContent("重做", "Ctrl+Y / Ctrl+Shift+Z"))) DoRedo();
         GUI.enabled = true;
 
         x -= 48f;
-        GUI.enabled = !inAsset && model.CanUndo;
-        if (GUI.Button(new Rect(x, r.y + 1f, 46f, 19f), new GUIContent("復原", "Ctrl+Z")))
-            if (model.Undo()) AfterHistorySwap();
+        GUI.enabled = CanUndoNow;
+        if (GUI.Button(new Rect(x, r.y + 1f, 46f, 19f), new GUIContent("復原", "Ctrl+Z"))) DoUndo();
         GUI.enabled = true;
 
         x -= 132f;

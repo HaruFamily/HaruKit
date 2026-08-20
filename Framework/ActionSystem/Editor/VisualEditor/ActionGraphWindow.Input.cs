@@ -163,7 +163,7 @@ public partial class ActionGraphWindow
                 }
                 if (dragNode != null)
                 {
-                    model.BreakUndoMerge();
+                    BreakUndoMerge();
                     foreach (var n in graph.Nodes)
                         if (dragStartPositions.ContainsKey(n.Id)) model.SetPosition(n.Id, n.Pos);
                     model.SetPosition(dragNode.Id, dragNode.Pos);
@@ -241,7 +241,7 @@ public partial class ActionGraphWindow
     {
         var targets = new List<AGNode>(SelectedNodes());
         if (targets.Count == 0) return;
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         foreach (var n in targets) DeleteNode(n, false);
         selectedIds.Clear();
         Invalidate();
@@ -265,7 +265,7 @@ public partial class ActionGraphWindow
     private void PasteClipboard(Vector2 graphMouse)
     {
         if (clipboard.Count == 0) { ShowNotification(new GUIContent("剪貼簿是空的")); return; }
-        model.BreakUndoMerge();
+        BreakUndoMerge();
         selectedIds.Clear();
 
         float offset = 0f;

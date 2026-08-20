@@ -44,11 +44,9 @@ public partial class ActionGraphWindow
             GUI.Label(banner, "　共用資產：修改會影響所有引用它的對象。存檔是獨立的一次交易。", AGStyles.RowLabel);
             if (focus.Endpoint != null)
             {
-                DrawVariableName(new Rect(r.x, r.y + 20f, r.width - 196f, 22f), focus.Endpoint);
-                if (GUI.Button(new Rect(r.xMax - 190f, r.y + 22f, 86f, 18f),
-                    new GUIContent("移除變數", "刪掉之後還在用它的欄位會變成空節點")))
-                    RemoveEndpoint(focus.Endpoint);
-                if (GUI.Button(new Rect(r.xMax - 96f, r.y + 22f, 90f, 18f), "← 回資產本體")) ExitVariable();
+                // 移除／返回都在左欄變數庫：資產焦點下那一區列的就是這個資產的變數，
+                // 點同一格退出、拖到「－ 移除變數」刪除，標頭不重複第二個入口（與 Variable 焦點一致）。
+                DrawVariableName(new Rect(r.x, r.y + 20f, r.width - 12f, 22f), focus.Endpoint);
             }
             else if (focus.AssetObject != null)
             {
@@ -508,7 +506,7 @@ public partial class ActionGraphWindow
             var disableToggle = new Rect(headerRight - 14f, rect.y + 3f, 14f, 14f);
             if (DrawDisableToggle(disableToggle, node.Carrier.Disabled, CarrierUsers(node.Carrier)))
             {
-                model.BreakUndoMerge();
+                BreakUndoMerge();
                 model.SetNodeDisabled(node.Id, !node.Carrier.Disabled);
                 Invalidate();       // 停用改的是資料，不是視覺狀態
                 Repaint();
