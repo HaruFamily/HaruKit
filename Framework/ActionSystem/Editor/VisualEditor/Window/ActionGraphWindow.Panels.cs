@@ -58,14 +58,20 @@ public partial class ActionGraphWindow
         GUI.Label(new Rect(assetRect.x + 4f, assetRect.y + 2f, 160f, 18f),
             new GUIContent("資產庫", "點一筆進去編它；拖到畫布上＝建一顆引用節點"), AGStyles.PanelHeader);
 
-        // 資產落點由使用端專案決定，套件不寫死路徑；沒設定時資產庫是空的，這顆是唯一入口。
-        var folderButton = new Rect(assetRect.xMax - 56f, assetRect.y + 2f, 52f, 16f);
-        string folderTip = string.IsNullOrEmpty(AGAssetStore.Folder)
-            ? "尚未指定共用資產資料夾，點此選擇"
-            : $"共用資產資料夾：{AGAssetStore.Folder}（點此更換）";
-        if (GUI.Button(folderButton, new GUIContent("資料夾", folderTip), EditorStyles.miniButton)
-            && AGAssetStore.TryPickFolder(out _))
+        // 資產落點由使用端專案決定，套件不寫死路徑。這顆是**唯一**的決定點：抽出當下不再問，
+        // 沒設定就抽不出來（`AGAssetStore.TryGetUniquePath` 回 false）。所以未設定時標籤要自己喊。
+        string folder = AGAssetStore.Folder;
+        bool unset = string.IsNullOrEmpty(folder);
+        var folderButton = new Rect(assetRect.xMax - 76f, assetRect.y + 2f, 72f, 16f);
+        var folderLabel = new GUIContent(
+            unset ? "選資料夾…" : "資料夾",
+            unset ? "尚未指定共用資產資料夾——指定前無法從節點抽出共用資產" : $"共用資產資料夾：{folder}（點此更換）");
+
+        var prevColor = GUI.color;
+        if (unset) GUI.color = AGStyles.Warning;
+        if (GUI.Button(folderButton, folderLabel, EditorStyles.miniButton) && AGAssetStore.TryPickFolder(out _))
             AGAssetIndex.Refresh();
+        GUI.color = prevColor;
 
         DrawAssetLibrary(assetRect, assetRect.y + 24f);
 

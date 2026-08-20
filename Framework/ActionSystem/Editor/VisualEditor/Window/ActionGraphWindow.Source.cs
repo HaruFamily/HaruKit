@@ -782,7 +782,11 @@ public partial class ActionGraphWindow
     private void CreateExtractedAsset(GraphNode carrier, bool isOrphan, ActionSystemNode source, Type assetType,
         string assetName, Type hostSlotType)
     {
-        if (!AGAssetStore.TryGetUniquePath(assetName, out string path)) return;
+        if (!AGAssetStore.TryGetUniquePath(assetName, out string path))
+        {
+            ShowNotification(new GUIContent("尚未指定共用資產資料夾：左欄「資產庫」標題列的按鈕"));
+            return;
+        }
 
         var asset = ScriptableObject.CreateInstance(assetType);
         if (asset == null)

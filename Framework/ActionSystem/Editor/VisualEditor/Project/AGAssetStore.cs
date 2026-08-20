@@ -26,13 +26,16 @@ public static class AGAssetStore
         set => EditorPrefs.SetString(PrefKey, value ?? string.Empty);
     }
 
-    /// <summary>取得新資產的唯一路徑；資料夾未設定時開資料夾選擇器問一次。使用者取消則回傳 false。</summary>
+    /// <summary>取得新資產的唯一路徑。資料夾未設定時直接失敗，不在這裡問——見 <see cref="TryPickFolder"/>。</summary>
     public static bool TryGetUniquePath(string assetName, out string path)
     {
         path = null;
 
+        // 抽出當下不彈選擇器：使用者那一刻在想的是節點，不是專案的資料夾配置，
+        // 中途插一個 modal 會把操作打斷，而且選錯了還得再抽一次才發現。
+        // 落點是開工前就該決定好的設定，只有資產庫那顆「資料夾」鈕能改。
         string folder = Folder;
-        if (string.IsNullOrEmpty(folder) && !TryPickFolder(out folder)) return false;
+        if (string.IsNullOrEmpty(folder)) return false;
 
         string fileName = SanitizeFileName(assetName);
         path = AssetDatabase.GenerateUniqueAssetPath($"{folder}/{fileName}.asset");
