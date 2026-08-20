@@ -6,7 +6,7 @@ using System.Linq;
 using System.Threading;
 using UnityEngine;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     // 收養既有實例（自己 new 好再交給 Nexus 管）。走與 CreateAsync 相同的硬失敗契約。
     public partial class Nexus

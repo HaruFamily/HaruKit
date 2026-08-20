@@ -1,6 +1,6 @@
 {
   "name": "HaruFamily.Framework.ActionSystem.Editor",
-  "rootNamespace": "PinPlugin.ActionSystem.Editor",
+  "rootNamespace": "HaruFamily.Framework.ActionSystem.Editor",
   "references": [
     "HaruFamily.Framework.ActionSystem"
   ],

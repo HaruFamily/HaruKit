@@ -1,6 +1,6 @@
 {
   "name": "HaruFamily.Framework.Nexus.Editor",
-  "rootNamespace": "PinPlugin.Nexus.Editor",
+  "rootNamespace": "HaruFamily.Framework.Nexus.Editor",
   "references": [
     "HaruFamily.Framework.Nexus"
   ],

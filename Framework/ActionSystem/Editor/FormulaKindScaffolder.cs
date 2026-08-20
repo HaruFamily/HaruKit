@@ -1,7 +1,7 @@
-namespace PinPlugin.ActionSystem.Editor
+namespace HaruFamily.Framework.ActionSystem.Editor
 {
 #if UNITY_EDITOR
-using PinPlugin.ActionSystem;
+using HaruFamily.Framework.ActionSystem;
 using System.IO;
 using System.Text.RegularExpressions;
 using UnityEditor;
@@ -86,7 +86,7 @@ public class FormulaKindScaffolder : EditorWindow
     private string Template() =>
 $@"using System;
 using System.Collections.Generic;
-using PinPlugin.ActionSystem;
+using HaruFamily.Framework.ActionSystem;
 using UnityEngine;
 
 {NamespaceOpen()}

@@ -2,7 +2,7 @@
 using UnityEditor;
 using UnityEngine;
 
-namespace PinTools.Inspector
+namespace HaruFamily.UX.Bookmarks
 {
     // 長駐 / 可 dock 的書籤視窗。與 InspectorPopup 共用 BookmarksGUI，差別僅在點 row 後不關閉（onItemPicked = null）。
     internal class BookmarksWindow : EditorWindow

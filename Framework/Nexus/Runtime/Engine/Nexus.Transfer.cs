@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     // 把既有 Local 服務從一個 owner 轉移到另一個 owner（reparent）。同一實例、同一 id，不重建、不跑生命週期回呼。
     // 兩個入口：TransferLocal（由 owner+型別+key 定位）、TransferOwned（直接給 Owned 實例）。共用 RebindLocal 核心。

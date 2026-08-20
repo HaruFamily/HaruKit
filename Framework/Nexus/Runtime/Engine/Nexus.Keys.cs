@@ -6,7 +6,7 @@ using System.Linq;
 using System.Threading;
 using UnityEngine;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     // Key 鑄造 / id 配發、是否收新請求的閘，以及同步查詢（不觸發建立）。
     public partial class Nexus

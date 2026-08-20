@@ -1,11 +1,11 @@
 #if UNITY_EDITOR
 using System.Collections.Generic;
 using System.Linq;
-using PinPlugin.Nexus;
+using HaruFamily.Framework.Nexus;
 using UnityEditor;
 using UnityEngine;
 
-namespace PinPlugin.Nexus.Editor
+namespace HaruFamily.Framework.Nexus.Editor
 {
     /// <summary>
     /// Nexus 服務樹 Runtime 視覺化視窗：把 <see cref="Nexus.GetNodeSnapshot"/> 依 owner→child（ParentId）組成 foldout 樹，

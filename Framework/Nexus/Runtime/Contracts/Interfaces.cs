@@ -2,7 +2,7 @@ using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
 using System.Threading;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     /// <summary>
     /// <b>拆除契約（全員一致、永遠無參）。</b>Nexus 釋放任何受管實例時呼 <see cref="OnRelease"/>。

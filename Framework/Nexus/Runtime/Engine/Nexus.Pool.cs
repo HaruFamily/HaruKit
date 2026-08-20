@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     // 物件池（opt-in：實作 INexusPoolable 才回池）。prefab-mono service 同時 poolable 時連 GameObject 一起池化
     //（回池=OnDespawn 停用、保留 GO；取回=OnSpawn 重啟用，不再 InstantiateAsync）。

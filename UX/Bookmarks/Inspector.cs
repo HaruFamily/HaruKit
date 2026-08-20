@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
-namespace PinTools.Inspector
+namespace HaruFamily.UX.Bookmarks
 {
 
     // ====================== Main Logic ======================================

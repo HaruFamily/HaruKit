@@ -1,6 +1,6 @@
 {
   "name": "HaruFamily.Framework.ActionSystem.Editor.Tests",
-  "rootNamespace": "PinPlugin.ActionSystem.Editor.Tests",
+  "rootNamespace": "HaruFamily.Framework.ActionSystem.Editor.Tests",
   "references": [
     "HaruFamily.Framework.ActionSystem",
     "HaruFamily.Framework.ActionSystem.Editor"

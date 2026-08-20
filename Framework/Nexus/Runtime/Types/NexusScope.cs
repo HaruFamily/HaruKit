@@ -2,7 +2,7 @@ using Cysharp.Threading.Tasks;
 using System;
 using UnityEngine;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     /// <summary>
     /// <c>await using (Nexus.CreateScope()) { ... }</c> 的 RAII 封裝。離開 using 區塊（含例外中斷）自動 <c>Pop</c>，

@@ -1,6 +1,6 @@
 {
   "name": "HaruFamily.Framework.ActionSystem",
-  "rootNamespace": "PinPlugin.ActionSystem",
+  "rootNamespace": "HaruFamily.Framework.ActionSystem",
   "references": [
     "UniTask"
   ],

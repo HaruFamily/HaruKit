@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Threading;
 using UnityEngine;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     // 使用範例。預設不編譯；要試跑在 Player Settings → Scripting Define Symbols 加 NEXUS_EXAMPLE。
     #region === Example ===

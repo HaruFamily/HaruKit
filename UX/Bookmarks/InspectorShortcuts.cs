@@ -3,7 +3,7 @@ using UnityEditor;
 using UnityEditor.ShortcutManagement;
 using UnityEngine;
 
-namespace PinTools.Inspector
+namespace HaruFamily.UX.Bookmarks
 {
     // ====================== Shortcuts ======================================
     // Inspector 歷史/書籤的快捷鍵入口；可在 Edit > Shortcuts 中重新繫結。

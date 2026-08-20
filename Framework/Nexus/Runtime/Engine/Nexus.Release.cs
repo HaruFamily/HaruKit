@@ -6,7 +6,7 @@ using System.Linq;
 using System.Threading;
 using UnityEngine;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     // 釋放單一服務（連鎖 children、跑 OnRelease、回池 / prefab GO ReleaseInstance）與整包 ClearAll。
     public partial class Nexus

@@ -1,6 +1,6 @@
 using System;
 
-namespace PinPlugin.Nexus
+namespace HaruFamily.Framework.Nexus
 {
     /// <summary>
     /// 偵測到循環依賴（A→B→A 或自我相依），或初始化逾時（疑似環 / 卡住）時丟出。訊息含完整依賴鏈條。
