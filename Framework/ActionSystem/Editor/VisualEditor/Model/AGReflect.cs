@@ -19,6 +19,7 @@ public static class AGReflect
 
     private static readonly Dictionary<Type, List<FieldInfo>> fieldCache = new();
     private static readonly Dictionary<Type, string> nameCache = new();
+    private static readonly HashSet<string> showConditionErrors = new();
 
     // ===== 欄位走訪 =====
 
@@ -451,6 +452,66 @@ public static class AGReflect
     public static bool IsHidden(FieldInfo f)
         => f != null && (f.IsDefined(typeof(ASHideAttribute), false)
                       || f.IsDefined(typeof(UnityEngine.HideInInspector), false));
+
+    /// <summary>取得 [ASShow] 的條件；設定錯誤時保持顯示，避免欄位被靜默隱藏。</summary>
+    public static bool IsShown(object target, FieldInfo field)
+    {
+        var attr = field?.GetCustomAttribute<ASShowAttribute>(false);
+        if (attr == null) return true;
+
+        if (string.IsNullOrWhiteSpace(attr.ConditionName))
+        {
+            LogShowConditionError(target, field, "條件名稱不可為空。");
+            return true;
+        }
+
+        var conditionField = Find(target?.GetType(), attr.ConditionName);
+        if (conditionField?.FieldType == typeof(bool))
+        {
+            try { return (bool)conditionField.GetValue(target); }
+            catch (Exception e)
+            {
+                LogShowConditionError(target, field, $"讀取 bool 欄位失敗：{e.Message}");
+                return true;
+            }
+        }
+
+        var conditionProperty = FindProperty(target?.GetType(), attr.ConditionName);
+        var getter = conditionProperty?.GetGetMethod(true);
+        if (conditionProperty?.PropertyType == typeof(bool)
+            && conditionProperty.GetIndexParameters().Length == 0
+            && getter != null)
+        {
+            try { return (bool)getter.Invoke(target, null); }
+            catch (Exception e)
+            {
+                LogShowConditionError(target, field, $"讀取 bool 屬性失敗：{e.Message}");
+                return true;
+            }
+        }
+
+        LogShowConditionError(target, field, $"找不到 bool 欄位或無參數 bool 屬性「{attr.ConditionName}」。");
+        return true;
+    }
+
+    private static PropertyInfo FindProperty(Type type, string name)
+    {
+        for (var current = type; current != null && current != typeof(object); current = current.BaseType)
+        {
+            var property = current.GetProperty(name, Flags);
+            if (property != null) return property;
+        }
+
+        return null;
+    }
+
+    private static void LogShowConditionError(object target, FieldInfo field, string message)
+    {
+        string typeName = target?.GetType().FullName ?? "（空）";
+        string key = $"{typeName}.{field?.Name}:{message}";
+        if (showConditionErrors.Add(key))
+            UnityEngine.Debug.LogError($"[ActionGraph] [ASShow] {typeName}.{field?.Name}：{message}");
+    }
 
     public static bool IsLabelHidden(FieldInfo f)
         => f?.GetCustomAttribute<ASLabelAttribute>(false)?.Mode == ASLabelMode.Hide;

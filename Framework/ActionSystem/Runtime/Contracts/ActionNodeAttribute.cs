@@ -23,6 +23,18 @@ public sealed class ASNodeAttribute : Attribute
 [AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
 public sealed class ASHideAttribute : Attribute { }
 
+/// <summary>條件為 true 時才建立欄位的 Graph 參數列。</summary>
+[AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
+public sealed class ASShowAttribute : Attribute
+{
+    public string ConditionName { get; }
+
+    public ASShowAttribute(string conditionName)
+    {
+        ConditionName = conditionName;
+    }
+}
+
 /// <summary>覆寫欄位或 enum 成員的顯示名稱。</summary>
 public enum ASLabelMode
 {

@@ -530,6 +530,7 @@ public static class AGGraph
         {
             if (SkipFields.Contains(f.Name)) continue;
             if (AGReflect.IsHidden(f)) continue;
+            if (!AGReflect.IsShown(obj, f)) continue;
             if (f.IsNotSerialized) continue;
             if (f.IsStatic) continue;
 
