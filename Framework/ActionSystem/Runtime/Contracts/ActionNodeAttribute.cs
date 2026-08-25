@@ -72,7 +72,7 @@ public sealed class ASLabelAttribute : Attribute
 
     /// <summary>
     /// 這一列標籤欄的寬度，單位＝格線格數（`AGGraph.GridSize`，20px），與 `ASNode.Width` 同單位。
-    /// 0／未給＝預設（節點寬的 42%，上限 6 格）。
+    /// 0／未給＝預設（節點寬的 30%，進位到整格，不設上限）。
     /// 具名指定：<c>[ASLabel("類型標籤", Width = 5)]</c>。
     /// 與 <see cref="WidthRatio"/> 二選一，兩個都標時 Width 勝出（不吼：標錯畫面當場看得出來）。
     /// </summary>
