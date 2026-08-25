@@ -9,10 +9,32 @@ namespace HaruFamily.Framework.ActionSystem.Editor
 /// </summary>
 public static class AGValueField
 {
-    /// <summary>回傳新值；沒有變更就回原值。</summary>
+    /// <summary>
+    /// 這個型別畫不畫得出輸入框。呼叫端要拿那一格畫別的內容時先問這裡，別畫出誤導的空框。
+    /// 型別清單只有這一份：Draw 由它把關，漏加的型別會直接掉進「沒有輸入介面」，加欄位時馬上看得到。
+    /// </summary>
+    public static bool CanDraw(Type type)
+    {
+        if (type == null) return false;
+        if (type.IsEnum) return true;
+        if (typeof(UnityEngine.Object).IsAssignableFrom(type)) return true;
+
+        return type == typeof(int) || type == typeof(float) || type == typeof(double) || type == typeof(long)
+            || type == typeof(short) || type == typeof(ushort) || type == typeof(byte) || type == typeof(sbyte)
+            || type == typeof(uint) || type == typeof(char) || type == typeof(bool) || type == typeof(string)
+            || type == typeof(Vector2) || type == typeof(Vector3) || type == typeof(Vector4)
+            || type == typeof(Vector2Int) || type == typeof(Vector3Int)
+            || type == typeof(Color) || type == typeof(Color32)
+            || type == typeof(Rect) || type == typeof(RectInt) || type == typeof(Bounds) || type == typeof(BoundsInt)
+            || type == typeof(AnimationCurve) || type == typeof(Gradient)
+            || type == typeof(LayerMask) || type == typeof(Quaternion);
+    }
+
+    /// <summary>回傳新值；沒有變更就回原值。畫不了的型別顯示唯讀說明。</summary>
     public static object Draw(Rect rect, Type type, object value, bool enumButtons = false)
     {
         if (type == null) return value;
+        if (!CanDraw(type)) { DrawUnsupported(rect, type); return value; }
 
         // ===== 數值 =====
         if (type == typeof(int)) return EditorGUI.IntField(rect, value is int i ? i : 0);
@@ -120,14 +142,21 @@ public static class AGValueField
         if (typeof(UnityEngine.Object).IsAssignableFrom(type))
             return EditorGUI.ObjectField(rect, value as UnityEngine.Object, type, false);
 
-        // 畫不了就講清楚，不要假裝可以編。
-        var label = new GUIContent($"（{AGReflect.Prettify(type.Name)}：此型別沒有對應的輸入介面）",
+        // CanDraw 說可以畫卻走到這裡＝兩邊的型別清單對不上，回原值不吃掉資料。
+        DrawUnsupported(rect, type);
+        return value;
+    }
+
+    /// <summary>畫不了就講清楚，不要假裝可以編。</summary>
+    private static void DrawUnsupported(Rect rect, Type type)
+    {
+        // 顯示名走 ResultTypeName：企劃看到的是 [ASKind] 的族名（Entity），不是 CLR 的 List`1。
+        var label = new GUIContent($"（{AGReflect.ResultTypeName(type)}：此型別沒有對應的輸入介面）",
             $"{type.FullName} 不支援在節點圖上編輯。若企劃需要，請改用支援的型別，或在 AGValueField 補一個欄位。");
         var old = GUI.color;
         GUI.color = new Color(1f, 1f, 1f, 0.55f);
         EditorGUI.LabelField(rect, label, AGStyles.Tiny);
         GUI.color = old;
-        return value;
     }
 
     /// <summary>畫成不可編輯的樣子（值仍可改，只是視覺上表示它不是主要來源）。</summary>
