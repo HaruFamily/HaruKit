@@ -20,7 +20,7 @@ public class FormulaKindScaffolder : EditorWindow
     private string outputFolder = "Assets";
     private string outputNamespace = "";
 
-    [MenuItem("Tools/Pin/ActionSystem/Add Formula Type")]
+    [MenuItem("PinTools/ActionSystem/Add Formula Type")]
     private static void Open() => GetWindow<FormulaKindScaffolder>("新增 Formula 型別");
 
     private void OnGUI()
