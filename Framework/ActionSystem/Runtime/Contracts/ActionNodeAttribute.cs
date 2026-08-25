@@ -35,6 +35,23 @@ public sealed class ASShowAttribute : Attribute
     }
 }
 
+/// <summary>
+/// 覆寫一個公式族在 Graph 上顯示的結果型別名（節點 Header 右側與參數列最前面的 chip）。
+/// 標在該族的 Slot 類上，例：<c>[ASKind("Entity")] class EntityIdListSlot : FormulaSlot&lt;List&lt;int&gt;, …&gt;</c>。
+/// 沒標就用型別名；chip 寬約 44px，取兩到四個字。
+/// </summary>
+// 標在 Slot 而不是結果型別：結果型別可能是 BCL 型別（List<int>）根本標不上去，Slot 才是「族」的唯一載體。
+[AttributeUsage(AttributeTargets.Class, Inherited = false, AllowMultiple = false)]
+public sealed class ASKindAttribute : Attribute
+{
+    public string Name { get; }
+
+    public ASKindAttribute(string name)
+    {
+        Name = name;
+    }
+}
+
 /// <summary>覆寫欄位或 enum 成員的顯示名稱。</summary>
 public enum ASLabelMode
 {

@@ -545,15 +545,61 @@ public static class AGReflect
         return sb.ToString().Replace('_', ' ');
     }
 
-    /// <summary>結果型別的短名，給 Token 分頁與型別檢查提示用。</summary>
+    /// <summary>結果型別的短名，給節點 chip、Token 分頁與型別檢查提示用。族的 Slot 標了 [ASKind] 就用它。</summary>
     public static string ResultTypeName(Type t)
     {
         if (t == null) return "動作";
+
+        string kind = KindName(t);
+        if (!string.IsNullOrEmpty(kind)) return kind;
+
         if (t == typeof(int)) return "int";
         if (t == typeof(float)) return "float";
         if (t == typeof(bool)) return "bool";
         if (t == typeof(string)) return "string";
-        return t.Name;
+        if (!t.IsGenericType) return t.Name;
+
+        // 泛型的 Type.Name 是 CLR 內部寫法（List`1），對企劃無意義：拆回 List<int>。
+        int tick = t.Name.IndexOf('`');
+        var sb = new StringBuilder(tick < 0 ? t.Name : t.Name.Substring(0, tick)).Append('<');
+        var args = t.GetGenericArguments();
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (i > 0) sb.Append(", ");
+            sb.Append(ResultTypeName(args[i]));
+        }
+        return sb.Append('>').ToString();
+    }
+
+    // 結果型別 → [ASKind] 顯示名。掃一次全專案的 Slot 建表；domain reload 會自然重建。
+    private static Dictionary<Type, string> kindNames;
+
+    private static string KindName(Type resultType)
+    {
+        kindNames ??= BuildKindNames();
+        return kindNames.TryGetValue(resultType, out var name) ? name : null;
+    }
+
+    private static Dictionary<Type, string> BuildKindNames()
+    {
+        var map = new Dictionary<Type, string>();
+        foreach (var slotType in UnityEditor.TypeCache.GetTypesDerivedFrom<FormulaSlotBase>())
+        {
+            if (slotType.IsAbstract || slotType.ContainsGenericParameters) continue;
+
+            var attr = slotType.GetCustomAttribute<ASKindAttribute>(false);
+            if (attr == null || string.IsNullOrEmpty(attr.Name)) continue;
+
+            var resultType = ResultType(slotType);
+            if (resultType == null) continue;
+
+            // 同一個結果型別被兩個族標了不同名字：後者會蓋掉前者，誰贏取決於掃描順序，先吼再說。
+            if (map.TryGetValue(resultType, out var exists) && exists != attr.Name)
+                UnityEngine.Debug.LogWarning($"[ActionSystem] 結果型別 {resultType.Name} 有兩個不同的 [ASKind]（{exists} / {attr.Name}），chip 顯示不穩定。");
+
+            map[resultType] = attr.Name;
+        }
+        return map;
     }
 }
 
