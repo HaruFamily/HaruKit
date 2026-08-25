@@ -373,6 +373,20 @@ public partial class ActionGraphWindow
             };
             GUI.Label(fieldRect, AGStyles.Elide(text, AGStyles.Tiny, fieldRect.width), AGStyles.Tiny);
         }
+        else if (!AGValueField.CanDraw(row.ResultType))
+        {
+            // 清單這類型別沒有常數保底可編。畫「此型別沒有對應的輸入介面」只會讓企劃以為欄位壞了，
+            // 改成直說這一格現在接了什麼；來源仍然只能從接點拉線指定。
+            string text = useType switch
+            {
+                1 => AGReflect.GetFormula(slot) is object uf ? AGReflect.TypeName(uf.GetType()) : "（空公式）",
+                2 => AGReflect.GetAsset(slot) is UnityEngine.Object ua ? ua.name : "（空資產）",
+                3 => AGReflect.GetEndpoint(slot)?.Name is string un && !string.IsNullOrEmpty(un) ? $"（變數 {un}）" : "（已接變數）",
+                _ => "（未接，用欄位預設）",
+            };
+            string tip = $"{AGReflect.ResultTypeName(row.ResultType)} 沒有常數保底可編，只能從接點拉線指定來源。";
+            GUI.Label(fieldRect, AGStyles.Elide(text, AGStyles.Tiny, fieldRect.width, tip), AGStyles.Tiny);
+        }
         else
         {
             // 常數框永遠在。接了公式／資產／變數時它是解析失敗的保底值，只是視覺上轉灰；鎖住時整列不可編。
