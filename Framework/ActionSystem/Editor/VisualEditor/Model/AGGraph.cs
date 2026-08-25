@@ -865,14 +865,22 @@ public static class AGGraph
     /// <summary>把節點放在 (x, y)，子節點往右排；回傳這棵子樹用掉的底部 Y。</summary>
     private static float Place(AGNode node, float x, float y, Dictionary<AGNode, List<AGNode>> children)
     {
+        // 節點高度含 NodeBottomPad、欄距與列距都不是格線倍數，直接累加會讓整理後的節點跟拖曳出來的節點對不到同一條線。
+        // 一律往上取整到格線：只會把間距撐大，不會讓相鄰節點壓在一起。
+        x = SnapUpToGrid(x);
+        y = SnapUpToGrid(y);
+
         node.Pos = new Vector2(x, y);
-        float childX = x + node.Width + ColumnGap;
+        float childX = SnapUpToGrid(x + node.Width + ColumnGap);
         float childY = y;
         foreach (var c in children[node])
             childY = Place(c, childX, childY, children) + NodeGap;
 
         return Mathf.Max(y + node.Height, childY - NodeGap);
     }
+
+    /// <summary>把座標往上對齊到格線。拖曳用四捨五入，排版用進位，才不會把節點往回推去疊到上一個。</summary>
+    private static float SnapUpToGrid(float value) => Mathf.Ceil(value / GridSize) * GridSize;
 }
 
 }
