@@ -19,6 +19,8 @@ public static class AGReflect
 
     private static readonly Dictionary<Type, List<FieldInfo>> fieldCache = new();
     private static readonly Dictionary<Type, string> nameCache = new();
+    private static readonly Dictionary<Type, int> widthCache = new();
+    private static readonly Dictionary<FieldInfo, (int Units, float Ratio)> labelWidthCache = new();
     private static readonly HashSet<string> showConditionErrors = new();
 
     // ===== 欄位走訪 =====
@@ -250,6 +252,10 @@ public static class AGReflect
 
     public static object GetDefault(object slot) => (slot as FormulaSlotBase)?.DefaultObject;
 
+    /// <summary>常數框該畫哪個型別。欄位沒特別宣告就是結果型別；fallback 給非 FormulaSlot 的呼叫端。</summary>
+    public static Type DefaultEditType(object slot, Type fallback)
+        => (slot as FormulaSlotBase)?.DefaultEditType ?? fallback;
+
     public static void SetDefault(object slot, object value)
     {
         if (slot is FormulaSlotBase fsb) fsb.DefaultObject = value;
@@ -419,6 +425,38 @@ public static class AGReflect
         return string.IsNullOrEmpty(cat) ? "其他" : cat;
     }
 
+    /// <summary>
+    /// 欄位指定的標籤欄寬度：`Units`＝`[ASLabel(Width = n)]` 的格數，`Ratio`＝`[ASLabel(WidthRatio = n)]` 的 0～1 比例。
+    /// 都沒標回 (0, 0)＝走預設比例。換算成 px 在 `AGGraph.LabelWidthOf`。
+    /// </summary>
+    // 每列每次重繪都會問一次，反射結果進快取。FieldInfo 是 Type 快取出來的同一個實例，可以當 key。
+    public static (int Units, float Ratio) LabelWidth(FieldInfo f)
+    {
+        if (f == null) return (0, 0f);
+        if (labelWidthCache.TryGetValue(f, out var cached)) return cached;
+
+        var attr = f.GetCustomAttribute<ASLabelAttribute>(false);
+        var value = (Units: attr?.Width ?? 0, Ratio: attr?.WidthRatio ?? 0f);
+
+        labelWidthCache[f] = value;
+        return value;
+    }
+
+    /// <summary>
+    /// 型別指定的節點寬度，單位＝格線格數（`[ASNode(Width = n)]`）。沒標回 0＝用預設寬。
+    /// 夾範圍與換算成 px 在 `AGGraph.MeasureNode`，這裡只回原始宣告。
+    /// </summary>
+    // MeasureNode 每次重建整張圖都會逐節點問一次，反射結果一律進快取。
+    public static int NodeWidthUnits(Type t)
+    {
+        if (t == null) return 0;
+        if (widthCache.TryGetValue(t, out int cached)) return cached;
+
+        int units = NodeAttr(t)?.Width ?? 0;
+        widthCache[t] = units;
+        return units;
+    }
+
     /// <summary>節點說明；未標說明時不建立描述列。</summary>
     public static string TypeDescription(Type t)
     {
@@ -453,10 +491,10 @@ public static class AGReflect
         => f != null && (f.IsDefined(typeof(ASHideAttribute), false)
                       || f.IsDefined(typeof(UnityEngine.HideInInspector), false));
 
-    /// <summary>取得 [ASShow] 的條件；設定錯誤時保持顯示，避免欄位被靜默隱藏。</summary>
+    /// <summary>取得 [ASShowIf] 的條件；設定錯誤時保持顯示，避免欄位被靜默隱藏。</summary>
     public static bool IsShown(object target, FieldInfo field)
     {
-        var attr = field?.GetCustomAttribute<ASShowAttribute>(false);
+        var attr = field?.GetCustomAttribute<ASShowIfAttribute>(false);
         if (attr == null) return true;
 
         if (string.IsNullOrWhiteSpace(attr.ConditionName))
@@ -510,11 +548,12 @@ public static class AGReflect
         string typeName = target?.GetType().FullName ?? "（空）";
         string key = $"{typeName}.{field?.Name}:{message}";
         if (showConditionErrors.Add(key))
-            UnityEngine.Debug.LogError($"[ActionGraph] [ASShow] {typeName}.{field?.Name}：{message}");
+            UnityEngine.Debug.LogError($"[ActionGraph] [ASShowIf] {typeName}.{field?.Name}：{message}");
     }
 
+    /// <summary>這一列要不要畫左側標籤。清單子項是另一條路：`BuildListChildren` 直接設 `AGRow.HideLabel`，不經過欄位屬性。</summary>
     public static bool IsLabelHidden(FieldInfo f)
-        => f?.GetCustomAttribute<ASLabelAttribute>(false)?.Mode == ASLabelMode.Hide;
+        => f?.IsDefined(typeof(ASHideLabelAttribute), false) ?? false;
 
     public static bool IsEnum(FieldInfo f)
         => f?.IsDefined(typeof(ASEnumAttribute), false) ?? false;

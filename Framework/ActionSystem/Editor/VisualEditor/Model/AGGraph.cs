@@ -183,8 +183,40 @@ public static class AGGraph
     public const float IndentWidth = 12f;
     public const float ColumnGap = 90f;
     public const float NodeGap = 24f;
-    // 所有節點同寬：接點排成一條垂直線、AutoLayout 的欄位不會因父節點文字長度而漂移。
+    // 預設所有節點同寬：接點排成一條垂直線、AutoLayout 的欄位不會因父節點文字長度而漂移。
+    // 只有型別明確標了 [ASNode(Width = n)] 才例外——寬度不一會讓同一欄的右緣（接點）不成直線，
+    // 是拿對齊感換欄位空間，不是預設值。300 = 15 格。
     public const float NodeWidth = 300f;
+
+    /// <summary>
+    /// 型別 chip 的欄寬（格）。chip 排在列右端（`常數框 | ✕ | chip | 接點`），**只有畫得出 chip 的列讓**，
+    /// 純值列不留白。標籤與常數框的左緣因此永遠齊，右緣則是有 chip 的列窄一截。
+    /// 3 格＝60px，扣掉 `SlotChipGap` 後 chip 本體 56px，`Entity`／`String` 這種 6 字母的型別名也不必截字。
+    /// </summary>
+    public const int SlotChipUnits = 3;
+    public const float SlotChipColumn = SlotChipUnits * GridSize;
+    /// <summary>chip 與標籤之間的間距，含在 chip 欄內。</summary>
+    public const float SlotChipGap = 4f;
+
+    /// <summary>沒指定時，標籤欄佔一列的比例。算完往上進位到整格，欄寬才和宣告單位同一套。</summary>
+    // 0.3：預設寬節點（15 格）給標籤 5 格＝100px，約 8 個中文字。再高一階會進位到 6 格，常數框就少一格。
+    public const float LabelRatio = 0.3f;
+
+    /// <summary>
+    /// 一列的標籤欄寬度（px）。`overrideUnits`＝`[ASLabel(Width = n)]` 的格數，`overrideRatio`＝`[ASLabel(WidthRatio = n)]` 的 0～1；
+    /// 兩個都是 0 就走預設比例。格數是絕對值直接乘；比例路徑一律進位到整格，欄寬永遠落在格線上。
+    /// 預設寬的節點（15 格）＝ 300 × 0.3 = 90px → 進位 5 格 = 100px。
+    /// </summary>
+    // 比例不設上限：節點變寬時標籤跟著長，和 Unity Inspector 拉寬時的行為一致。
+    // 指定值不夾範圍：這個數字寫在原始碼裡，標歪了畫面當場看得出來，夾掉只會讓人以為屬性沒生效。
+    // Width 優先於 WidthRatio。兩個都標不報錯：這是編輯器排版，標錯畫面當場看得出來，Log 只會洗版。
+    public static float LabelWidthOf(float rowWidth, int overrideUnits, float overrideRatio)
+    {
+        if (overrideUnits > 0) return overrideUnits * GridSize;
+
+        float ratio = overrideRatio > 0f ? overrideRatio : LabelRatio;
+        return SnapUpToGrid(rowWidth * ratio);
+    }
 
     /// <summary>清單元素左側的控制欄：序號與拖曳把手各佔一半，兩者都常態顯示。</summary>
     public const float ListGutter = 30f;
@@ -733,9 +765,19 @@ public static class AGGraph
 
     // ===== 尺寸與排版 =====
 
+    /// <summary>
+    /// 節點寬度：型別標了 `[ASNode(Width = n)]` 就用 n 格，否則預設 15 格。
+    /// 只有內嵌節點（`node.Obj` 是具體 Action／Formula）能覆寫；資產、變數、時機、空節點都沒有型別可問，一律預設寬。
+    /// </summary>
+    private static float WidthOf(AGNode node)
+    {
+        int units = AGReflect.NodeWidthUnits(node.Obj?.GetType());
+        return units <= 0 ? NodeWidth : units * GridSize;
+    }
+
     public static void MeasureNode(AGNode node)
     {
-        node.Width = NodeWidth;
+        node.Width = WidthOf(node);
         // 節點上不畫型別說明（它是型別常數，重複出現只是噪音），改由畫布左上角的說明面板顯示選取節點的 Desc。
         // 註解則是「這一顆節點」的資訊，任何節點（含變數／資產葉節點）都能加。
         node.TipsHeight = !node.NoteOpen

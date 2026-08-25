@@ -554,7 +554,7 @@ public partial class ActionGraphWindow
     }
 
     /// <summary>
-    /// 節點右鍵。不論哪一種節點都是同四段、同順序：**下鑽 → 編輯這顆 → 刪除 → 畫布**。
+    /// 節點右鍵。不論哪一種節點都是同四段、同順序：**轉存 → 刪除 → 畫布 → 原始碼**。
     /// 分隔線由 <c>Sep()</c> 依實際有沒有項目補，所以某一段缺席不會留下空隙。
     /// </summary>
     // 換來源走 Header 的 ▾、換引用對象走本體那列下拉、中斷連線雙擊連線，三者都不重複放進右鍵。
@@ -599,6 +599,17 @@ public partial class ActionGraphWindow
 
         // === 3. 畫布 ===
         AddCanvasMenuItems(menu, Sep);
+
+        // === 4. 原始碼 ===
+        // 擺最後：改程式是離開這張圖的動作，跟編圖不同層級。
+        // 空 Node、資產節點、變數節點沒有自己的程式本體，跳過去也沒東西可看。
+        var bodyType = node.Obj?.GetType();
+        if (bodyType != null && AGScriptLocator.CanOpen(bodyType))
+        {
+            Sep();
+            menu.AddItem(new GUIContent("編輯程式"), false, () => AGScriptLocator.Open(bodyType));
+        }
+
         menu.ShowAsContext();
     }
 

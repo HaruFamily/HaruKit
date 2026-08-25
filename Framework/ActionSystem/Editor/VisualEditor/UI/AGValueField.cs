@@ -30,6 +30,24 @@ public static class AGValueField
             || type == typeof(LayerMask) || type == typeof(Quaternion);
     }
 
+    /// <summary>按鈕排裡第 index 顆的位置：等寬、相鄰兩顆貼合，接縫交給分段樣式處理。</summary>
+    private static Rect EnumButtonRect(Rect rect, int index, int count)
+    {
+        if (count <= 0) return rect;
+        float width = rect.width / count;
+        return new Rect(rect.x + width * index, rect.y, width, rect.height);
+    }
+
+    /// <summary>按鈕排的分段樣式：頭尾各圓一邊、中間方角，整排是一條被切開的框。</summary>
+    // 全部用 miniButton 的話每顆都是完整圓角框，相鄰兩顆的邊框疊成一條又粗又斷的中線，很醜。
+    private static GUIStyle EnumButtonStyle(int index, int count)
+    {
+        if (count <= 1) return EditorStyles.miniButton;
+        if (index == 0) return EditorStyles.miniButtonLeft;
+        if (index == count - 1) return EditorStyles.miniButtonRight;
+        return EditorStyles.miniButtonMid;
+    }
+
     /// <summary>回傳新值；沒有變更就回原值。畫不了的型別顯示唯讀說明。</summary>
     public static object Draw(Rect rect, Type type, object value, bool enumButtons = false)
     {
@@ -91,23 +109,31 @@ public static class AGValueField
                     if (flag > 0 && (flag & (flag - 1)) == 0) buttonCount++;
                 }
                 if (buttonCount <= 0) return current;
-                float width = rect.width / buttonCount;
                 int buttonIndex = 0;
                 for (int i = 0; i < names.Length; i++)
                 {
                     long flag = Convert.ToInt64(values.GetValue(i));
                     if (flag <= 0 || (flag & (flag - 1)) != 0) continue;
-                    var buttonRect = new Rect(rect.x + width * buttonIndex++, rect.y, width, rect.height);
+                    var buttonRect = EnumButtonRect(rect, buttonIndex, buttonCount);
+                    var buttonStyle = EnumButtonStyle(buttonIndex++, buttonCount);
                     bool enabled = (selectedFlags & flag) == flag;
-                    if (GUI.Toggle(buttonRect, enabled, labels[i], EditorStyles.miniButton) == enabled) continue;
+                    if (GUI.Toggle(buttonRect, enabled, labels[i], buttonStyle) == enabled) continue;
                     selectedFlags = enabled ? selectedFlags & ~flag : selectedFlags | flag;
                 }
                 return Enum.ToObject(type, selectedFlags);
             }
 
+            // 單選也走同一組 Rect，不用 GUI.Toolbar：Toolbar 畫的是連在一起的分段條，跟旁邊的 [Flags] 按鈕排長得不一樣。
             int selected = Array.IndexOf(values, current);
-            int next = GUI.Toolbar(rect, selected, labels, EditorStyles.miniButton);
-            return next >= 0 && next < values.Length ? values.GetValue(next) : current;
+            object picked = current;
+            for (int i = 0; i < names.Length; i++)
+            {
+                var buttonRect = EnumButtonRect(rect, i, names.Length);
+                // 只認「關 → 開」：重複點已選中的那顆不該把值清掉，單選一定要有一個是選中的。
+                if (GUI.Toggle(buttonRect, i == selected, labels[i], EnumButtonStyle(i, names.Length)) && i != selected)
+                    picked = values.GetValue(i);
+            }
+            return picked;
         }
 
         // ===== Unity 內建型別 =====

@@ -111,7 +111,7 @@ public partial class ActionGraphWindow
     }
 
     /// <summary>
-    /// 列右端由右往左的固定順序：**接點 → ✕**。接點永遠貼齊節點右緣（所有接點要排成
+    /// 列右端由右往左的固定順序：**接點 → chip → ✕**。接點永遠貼齊節點右緣（所有接點要排成
     /// 一條垂直線），✕ 往左推。位置固定不隨「有沒有接來源」滑動，欄位寬度才不會跳。
     /// 這裡回傳 ✕ 佔掉的橫向空間，清單元素才有。
     /// </summary>
@@ -122,39 +122,51 @@ public partial class ActionGraphWindow
     private const float PortReserve = AGGraph.PortDiameter;
 
     /// <summary>
-    /// 型別 chip 的固定欄寬，與它右邊的間距。**寬度固定不隨文字長短浮動**：這樣同一顆節點的 chip
-    /// 與標籤各自排成一直排，掃視時兩欄都對得齊；寬度跟著文字走的話每一列的標籤起點都不一樣。
-    /// 裝不下的型別名在 chip 內截字，完整名進 tooltip，與節點內其他文字同一套規則。
+    /// 把一列切成「標籤欄｜欄位欄」。欄寬規則只有這一份（`AGGraph.LabelWidthOf`），
+    /// 欄位欄一律吃掉剩下的寬度——節點加寬（`[ASNode(Width)]`）多出來的空間全進欄位，不進標籤。
+    /// `rightInset` 由呼叫端算：接點、chip、✕ 都住在那裡，欄位只吃剩下的。
     /// </summary>
-    private const float SlotChipWidth = 44f;
-    private const float SlotChipGap = 4f;
+    private static void SplitRow(Rect rowRect, AGRow row, float rightInset, out Rect labelRect, out Rect fieldRect)
+    {
+        var (units, ratio) = AGReflect.LabelWidth(row.Field);
+        float labelWidth = AGGraph.LabelWidthOf(rowRect.width, units, ratio);
 
-    /// <summary>畫了 chip 後標籤至少要留下這麼寬；深層縮排到剩這麼點寬度時 chip 就不畫，標籤優先。</summary>
-    private const float SlotChipMinLabelWidth = 34f;
+        labelRect = Indent(new Rect(rowRect.x, rowRect.y, labelWidth, rowRect.height), row, false);
+        fieldRect = new Rect(rowRect.x + labelWidth, rowRect.y + 1f,
+            Mathf.Max(20f, rowRect.width - labelWidth - rightInset), rowRect.height - 3f);
+    }
 
     /// <summary>
-    /// 標籤最前面的型別 chip，內容與 Header 右側那顆一致（`AGReflect.ResultTypeName`）；
-    /// 回傳標籤剩下可用的矩形，不畫 chip 時原樣回傳。
+    /// 這一列右端要讓給型別 chip 的寬度。**只有畫得出 chip 的列讓**：純值列與動作欄位不留白，
+    /// 常數框直接吃到底。左緣對齊由 `SplitRow` 保證，所以這裡只影響右緣。
     /// </summary>
-    private static Rect DrawSlotChip(AGRow row, Rect labelRect)
+    private static float ChipInset(AGRow row)
+        => row.Kind == AGRowKind.Slot && !row.IsActionSlot && row.ResultType != null && !row.HideLabel
+            ? AGGraph.SlotChipColumn
+            : 0f;
+
+    /// <summary>
+    /// 型別 chip，畫在列右端（由右往左：接點 → chip → ✕ → 常數框）。內容與 Header 右側那顆一致
+    /// （`AGReflect.ResultTypeName`）。**寬度固定不隨文字長短浮動**：所有 chip 貼著接點排成一條垂直線。
+    /// 裝不下的型別名在 chip 內截字，完整名進 tooltip。
+    /// </summary>
+    private static void DrawSlotChip(AGRow row, Rect rowRect)
     {
-        // 動作欄位不畫：ActionSlot 沒有結果型別，整段動作清單標滿同一個「動作」只是噪音。
-        if (row.IsActionSlot || row.ResultType == null) return labelRect;
-        if (labelRect.width - SlotChipWidth - SlotChipGap < SlotChipMinLabelWidth) return labelRect;
+        float inset = ChipInset(row);
+        if (inset <= 0f) return;
 
         string text = AGReflect.ResultTypeName(row.ResultType);
-        float height = Mathf.Min(14f, labelRect.height);
-        var chipRect = new Rect(labelRect.x, labelRect.y + (labelRect.height - height) * 0.5f, SlotChipWidth, height);
+        float width = inset - AGGraph.SlotChipGap;   // 間距留在 chip 與接點之間
+        float height = Mathf.Min(14f, rowRect.height);
+        var chipRect = new Rect(rowRect.xMax - PortReserve - inset,
+            rowRect.y + (rowRect.height - height) * 0.5f, width, height);
         AGStyles.RoundedFill(chipRect, AGStyles.SlotChipBody, 2f);
-        GUI.Label(chipRect, AGStyles.Elide(text, AGStyles.SlotChip, SlotChipWidth - 4f, text), AGStyles.SlotChip);
-
-        labelRect.xMin += SlotChipWidth + SlotChipGap;
-        return labelRect;
+        GUI.Label(chipRect, AGStyles.Elide(text, AGStyles.SlotChip, width - 4f, text), AGStyles.SlotChip);
     }
 
     /// <summary>清單元素的刪除鈕：排在接點左邊，不搶右緣那條接點垂直線。</summary>
-    private static Rect DeleteRectOf(Rect rowRect)
-        => new Rect(rowRect.xMax - PortReserve - AGGraph.ListDeleteWidth,
+    private static Rect DeleteRectOf(Rect rowRect, AGRow row)
+        => new Rect(rowRect.xMax - PortReserve - ChipInset(row) - AGGraph.ListDeleteWidth,
             rowRect.y + 3f, 14f, rowRect.height - 6f);
 
     /// <summary>
@@ -208,7 +220,7 @@ public partial class ActionGraphWindow
             new GUIContent("≡", fixedSize ? "陣列長度固定，不能重排" : "拖曳可調整順序；右鍵有插入與刪除"),
             dragging ? AGStyles.RowLabel : AGStyles.Tiny);
 
-        var remove = DeleteRectOf(rowRect);
+        var remove = DeleteRectOf(rowRect, row);
         // 存回原本的 GUI.enabled，不能寫死 true——外層可能正把整顆鎖定節點畫成不可編輯。
         bool wasEnabled = GUI.enabled;
         GUI.enabled = wasEnabled && !fixedSize;
@@ -310,7 +322,10 @@ public partial class ActionGraphWindow
         int useType = AGReflect.UseType(slot);
         bool hasIssue = Rep.HasIssue(slot, out bool isError);
 
-        var labelRect = Indent(new Rect(rowRect.x, rowRect.y, rowRect.width * 0.42f, rowRect.height), row, false);
+        // 由右往左：接點 → chip → ✕ → 常數框。收合鈕已經併進接點自己（見 DrawPortGlyph），不另外佔寬。
+        float portInset = PortReserve + ChipInset(row) + ListRightInset(row) + 10f;
+        SplitRow(rowRect, row, portInset, out var labelRect, out var fieldRect);
+
         if (row.AssetBinding != null)
         {
             var toggleRect = new Rect(labelRect.x + 2f, labelRect.y + 2f, 16f, labelRect.height - 4f);
@@ -329,9 +344,6 @@ public partial class ActionGraphWindow
 
         var labelStyle = hasIssue && isError ? AGStyles.RowLabelError : AGStyles.RowLabel;
 
-        // 收合鈕已經併進接點自己（見 DrawPortGlyph），列上不再另外保留它的寬度。
-        float portInset = PortReserve + ListRightInset(row) + 10f;
-
         // 動作清單的元素：標籤本身就是「現在接了什麼」（見 SlotShortName），右半再寫一次型別名只是重複，
         // 接了什麼順著線看子節點的 Header 更完整。所以這種列讓標籤吃滿整列，右半不畫。
         // 具名的動作欄位（「True 分支」之類）不同：標籤是欄位名，右半仍要寫內容。
@@ -344,20 +356,20 @@ public partial class ActionGraphWindow
             if (labelIsContent) DrawActionLabel(row, labelRect, labelStyle);
             else
             {
-                // 標籤最前面放一顆型別 chip，寫法與 Header 右側那顆一致：常數框只有 int／bool／enum
-                // 這種有專屬 widget 的型別才隱含說得出型別，接了來源整格轉灰、或型別畫不出輸入框時
-                // 就完全沒有線索。放在最前面而不是標籤尾端：欄寬固定，chip 與標籤各自排成一直排；
-                // 尾端跟著文字走，長短不一還會和標籤擠在一起。
-                var nameRect = DrawSlotChip(row, labelRect);
-                GUI.Label(nameRect,
-                    AGStyles.Elide(row.Label, labelStyle, nameRect.width, AGReflect.FieldDescription(row.Field)), labelStyle);
+                GUI.Label(labelRect,
+                    AGStyles.Elide(row.Label, labelStyle, labelRect.width, AGReflect.FieldDescription(row.Field)), labelStyle);
             }
         }
 
-        var fieldRect = row.HideLabel
-            ? new Rect(labelRect.x, rowRect.y + 1f, Mathf.Max(20f, rowRect.xMax - labelRect.x - portInset), rowRect.height - 3f)
-            : new Rect(rowRect.x + rowRect.width * 0.42f, rowRect.y + 1f,
-                Mathf.Max(20f, rowRect.width * 0.58f - portInset), rowRect.height - 3f);
+        // 型別 chip 排在右端、和標籤無關：常數框只有 int／bool／enum 這種有專屬 widget 的型別才隱含說得出
+        // 型別，接了來源整格轉灰、或型別畫不出輸入框時就完全沒有線索。它的寬度已經從 portInset 扣掉，
+        // 和常數框不重疊。
+        DrawSlotChip(row, rowRect);
+
+        // 沒有標籤的列讓欄位從縮排起點一路吃到右緣：那一列沒有標籤欄可分。
+        if (row.HideLabel)
+            fieldRect = new Rect(labelRect.x, rowRect.y + 1f,
+                Mathf.Max(20f, rowRect.xMax - labelRect.x - portInset), rowRect.height - 3f);
 
         if (labelIsContent)
         {
@@ -373,9 +385,11 @@ public partial class ActionGraphWindow
             };
             GUI.Label(fieldRect, AGStyles.Elide(text, AGStyles.Tiny, fieldRect.width), AGStyles.Tiny);
         }
-        else if (!AGValueField.CanDraw(row.ResultType))
+        // 常數框畫的型別可以不等於結果型別（見 FormulaSlotBase.DefaultEditType）：清單這種畫不出輸入框的
+        // 結果型別，可以改用一格 enum 表示「沒接線時取什麼」。拉線相容性仍然只看 row.ResultType。
+        else if (!AGValueField.CanDraw(AGReflect.DefaultEditType(slot, row.ResultType)))
         {
-            // 清單這類型別沒有常數保底可編。畫「此型別沒有對應的輸入介面」只會讓企劃以為欄位壞了，
+            // 這個型別連替代的常數框都沒有。畫「此型別沒有對應的輸入介面」只會讓企劃以為欄位壞了，
             // 改成直說這一格現在接了什麼；來源仍然只能從接點拉線指定。
             string text = useType switch
             {
@@ -389,9 +403,19 @@ public partial class ActionGraphWindow
         }
         else
         {
+            var editType = AGReflect.DefaultEditType(slot, row.ResultType);
+
             // 常數框永遠在。接了公式／資產／變數時它是解析失敗的保底值，只是視覺上轉灰；鎖住時整列不可編。
+            // 替代型別的常數框（editType != ResultType）語意不同：它只在沒接線時採用，不是失敗保底。
+            bool isSubstitute = editType != row.ResultType;
+
+            // 替代型別的 enum 一律畫成按鈕排：欄位上的 [ASEnum] 是為結果型別下的，替代型別借不到；
+            // 按鈕排才吃得到成員的 [ASLabel]，下拉選單只會顯示 CLR 成員名。
+            bool enumButtons = row.IsEnum || (isSubstitute && editType.IsEnum);
             string tooltip = useType switch
             {
+                0 => null,
+                _ when isSubstitute => "已接來源：以接的來源為準，這一格不會被採用",
                 1 => "已接公式：公式解析失敗時回到這個值",
                 2 => "已接資產：資產缺內容時回到這個值",
                 3 => "已接變數：變數不存在或循環時回到這個值",
@@ -399,8 +423,8 @@ public partial class ActionGraphWindow
             };
             EditorGUI.BeginChangeCheck();
             var value = useType == 0
-                ? AGValueField.Draw(fieldRect, row.ResultType, AGReflect.GetDefault(slot), row.IsEnum)
-                : AGValueField.DrawMuted(fieldRect, row.ResultType, AGReflect.GetDefault(slot), tooltip, row.IsEnum);
+                ? AGValueField.Draw(fieldRect, editType, AGReflect.GetDefault(slot), enumButtons)
+                : AGValueField.DrawMuted(fieldRect, editType, AGReflect.GetDefault(slot), tooltip, enumButtons);
             if (EditorGUI.EndChangeCheck()) { AGReflect.SetDefault(slot, value); Invalidate(); }
         }
 
@@ -519,15 +543,14 @@ public partial class ActionGraphWindow
 
     private void DrawValueRow(AGRow row, Rect rowRect)
     {
-        var labelRect = Indent(new Rect(rowRect.x, rowRect.y, rowRect.width * 0.42f, rowRect.height), row, false);
+        float rightInset = 20f + ListRightInset(row);
+        SplitRow(rowRect, row, rightInset, out var labelRect, out var fieldRect);
+
         if (!row.HideLabel)
             GUI.Label(labelRect, AGStyles.Elide(row.Label, AGStyles.RowLabel, labelRect.width, AGReflect.FieldDescription(row.Field)), AGStyles.RowLabel);
-
-        float rightInset = 20f + ListRightInset(row);
-        var fieldRect = row.HideLabel
-            ? new Rect(labelRect.x, rowRect.y + 1f, Mathf.Max(20f, rowRect.xMax - labelRect.x - rightInset), rowRect.height - 3f)
-            : new Rect(rowRect.x + rowRect.width * 0.42f, rowRect.y + 1f,
-                Mathf.Max(20f, rowRect.width * 0.58f - rightInset), rowRect.height - 3f);
+        else
+            fieldRect = new Rect(labelRect.x, rowRect.y + 1f,
+                Mathf.Max(20f, rowRect.xMax - labelRect.x - rightInset), rowRect.height - 3f);
 
         if (row.Field != null && row.Target != null)
         {

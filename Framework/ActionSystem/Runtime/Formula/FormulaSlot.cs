@@ -22,6 +22,13 @@ public abstract class FormulaSlotBase
     /// <summary>不分型別存取預設值，供編輯器輸入框讀寫。</summary>
     public abstract object DefaultObject { get; set; }
 
+    /// <summary>
+    /// 常數框要畫成哪個型別。預設＝結果型別；子類可回別的型別，讓畫不出輸入框的結果型別
+    /// （清單這種）仍有一格可編的「沒接線時取什麼」。只影響常數框，不影響拉線相容性——
+    /// chip、候選過濾、Verify 一律看 <see cref="ResultType"/>。
+    /// </summary>
+    public virtual Type DefaultEditType => ResultType;
+
     /// <summary>這個欄位能不能接這個內嵌內容。</summary>
     public abstract bool AcceptsBody(ActionSystemNode body);
 
