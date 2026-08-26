@@ -83,6 +83,10 @@ public partial class ActionGraphWindow : EditorWindow
     private Vector2 dragOffset;
     private readonly Dictionary<string, Vector2> dragStartPositions = new();
 
+    // 這一次按下之後有沒有真的拖動過。沒動過就不落盤座標——還沒有座標記憶的節點會因此
+    // 被寫進 AutoLayout 的結果，讓「只是點一下節點」變成未存檔。
+    private bool dragMoved;
+
     // Header 的 ▾ 落在拖曳抓取區裡，所以仍要分辨拖曳：按下時先記著，放開時沒移動超過門檻才算點擊。
     private AGNode titleClickNode;
     private Vector2 titleClickStart;
@@ -376,22 +380,13 @@ public partial class ActionGraphWindow : EditorWindow
         carrierUsers.Clear();
         model.ClearAssetParameterCache();
 
+        // 補參數列不標髒：它是冪等的重建產物（新列預設不覆蓋，不改執行結果），
+        // 沒存到就下次重建再補。標髒會讓「只是切焦點看一眼」變成要求存檔。
         bool bindingsChanged = false;
         foreach (var carrier in CurrentCarrierScope())
             if (model.EnsureAssetBindings(carrier)) bindingsChanged = true;
-        if (bindingsChanged)
-        {
-            if (focus.Kind == AGFocusKind.Asset)
-            {
-                MarkAssetContentChanged();
-            }
-            else
-            {
-                model.MarkDirty();
-                reportStale = true;
-            }
-            UpdateUnsavedState();
-        }
+        if (bindingsChanged && focus.Kind != AGFocusKind.Asset)
+            reportStale = true;   // 參數列變了，驗證報告要重跑
 
         // 候選池掛在焦點的頭端上，不必再依 FocusId 過濾。
         model.OrphanHead = focus.Head;

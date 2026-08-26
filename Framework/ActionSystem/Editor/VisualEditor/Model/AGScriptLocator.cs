@@ -17,14 +17,14 @@ public static class AGScriptLocator
     // 型別 → 宣告位置。查一次就記著，domain reload 會清空重算。
     private static readonly Dictionary<Type, Located> cache = new();
 
+    // 組件名 → 該組件 asmdef 所在資料夾。全專案只有數十個 .asmdef，掃一次就夠。
+    private static Dictionary<string, string> asmFolders;
+
     private struct Located
     {
         public MonoScript Script;
         public int Line;
     }
-
-    /// <summary>找得到宣告該型別的 .cs 才在右鍵放「編輯程式」；找不到（例如只存在於 DLL）就不放。</summary>
-    public static bool CanOpen(Type type) => Locate(type).Script != null;
 
     /// <summary>用預設腳本編輯器打開宣告該型別的那一行。</summary>
     public static void Open(Type type)
@@ -38,7 +38,7 @@ public static class AGScriptLocator
         AssetDatabase.OpenAsset(found.Script, found.Line);
     }
 
-    /// <summary>先照檔名猜（絕大多數節點所在的檔名就是族名），沒中再掃全部腳本。</summary>
+    /// <summary>先照檔名猜（絕大多數節點所在的檔名就是族名），沒中再掃該型別所屬組件的資料夾。</summary>
     private static Located Locate(Type type)
     {
         if (type == null) return default;
@@ -52,11 +52,48 @@ public static class AGScriptLocator
         var declaration = new Regex($@"\b(?:class|struct|record|interface|enum)\s+{Regex.Escape(name)}\b");
 
         var found = Search(AssetDatabase.FindAssets($"{name} t:MonoScript"), name, declaration);
+        // 沒中就退回逐檔比對，但只掃這個型別所屬組件的資料夾——全專案有近萬個 .cs，
+        // 每個都要 LoadAssetAtPath + 讀全文，掃完是秒級停頓。
         if (found.Script == null)
-            found = Search(AssetDatabase.FindAssets("t:MonoScript"), name, declaration);
+            found = Search(AssetDatabase.FindAssets("t:MonoScript", SearchFolders(type)), name, declaration);
 
         cache[type] = found;
         return found;
+    }
+
+    /// <summary>型別所屬組件的資料夾；沒有 asmdef（Assembly-CSharp 之類）就退回整個 Assets。</summary>
+    private static string[] SearchFolders(Type type)
+    {
+        asmFolders ??= BuildAsmFolders();
+        string assembly = type.Assembly.GetName().Name;
+        if (asmFolders.TryGetValue(assembly, out string folder)) return new[] { folder };
+        return new[] { "Assets" };
+    }
+
+    /// <summary>掃全專案的 .asmdef，建立組件名 → 資料夾對照。</summary>
+    private static Dictionary<string, string> BuildAsmFolders()
+    {
+        var map = new Dictionary<string, string>();
+        // asmdef 是 JSON，第一個 "name" 就是組件名；為了不依賴 UnityEditorInternal，直接當文字讀。
+        var nameField = new Regex("\"name\"\\s*:\\s*\"([^\"]+)\"");
+
+        foreach (string guid in AssetDatabase.FindAssets("t:AssemblyDefinitionAsset"))
+        {
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrEmpty(path)) continue;
+
+            var asset = AssetDatabase.LoadAssetAtPath<TextAsset>(path);
+            if (asset == null || string.IsNullOrEmpty(asset.text)) continue;
+
+            var match = nameField.Match(asset.text);
+            if (!match.Success) continue;
+
+            int slash = path.LastIndexOf('/');
+            if (slash <= 0) continue;
+
+            map[match.Groups[1].Value] = path.Substring(0, slash);
+        }
+        return map;
     }
 
     /// <summary>在一批腳本裡找宣告；先用 Contains 篩掉大多數檔案，正則只跑在真的提到這個名字的檔上。</summary>

@@ -610,35 +610,63 @@ public static class AGReflect
         return sb.Append('>').ToString();
     }
 
-    // 結果型別 → [ASKind] 顯示名。掃一次全專案的 Slot 建表；domain reload 會自然重建。
-    private static Dictionary<Type, string> kindNames;
+    /// <summary>
+    /// 這個 Slot 所屬族的 [ASKind] 顯示名。手上有 Slot 就用這支，才分得出同一結果型別的不同族
+    /// （例：string 同時有 String 與 Key）。沒標 [ASKind] 時退回結果型別的短名。
+    /// </summary>
+    public static string SlotKindName(object slot) => SlotKindName(slot?.GetType());
+
+    /// <inheritdoc cref="SlotKindName(object)"/>
+    public static string SlotKindName(Type slotType)
+    {
+        if (slotType == null) return "動作";
+        BuildKindNames();
+        if (kindNamesBySlot.TryGetValue(slotType, out var name)) return name;
+        return ResultTypeName(ResultType(slotType));
+    }
+
+    // [ASKind] 顯示名兩張表。掃一次全專案的 Slot 建表；domain reload 會自然重建。
+    // bySlot 是權威：族的身份是 Slot 型別。byResult 只是給「手上只有結果型別」的呼叫端用的近似，
+    // 所以同一結果型別有多個族時該項會留空，寧可退回 "string" 也不要顯示錯的族名。
+    private static Dictionary<Type, string> kindNamesBySlot;
+    private static Dictionary<Type, string> kindNamesByResult;
 
     private static string KindName(Type resultType)
     {
-        kindNames ??= BuildKindNames();
-        return kindNames.TryGetValue(resultType, out var name) ? name : null;
+        BuildKindNames();
+        return kindNamesByResult.TryGetValue(resultType, out var name) ? name : null;
     }
 
-    private static Dictionary<Type, string> BuildKindNames()
+    private static void BuildKindNames()
     {
-        var map = new Dictionary<Type, string>();
+        if (kindNamesBySlot != null) return;
+
+        kindNamesBySlot = new Dictionary<Type, string>();
+        kindNamesByResult = new Dictionary<Type, string>();
+        var familyCount = new Dictionary<Type, int>();
+
+        // 先數每個結果型別有幾個族。判歧義要數族，不能數 [ASKind]：只有一個族標了名字的情況
+        // （string 有 String 與 Key，但只有 Key 標了 ASKind）若不數族，String 的 chip 會被叫成 Key。
         foreach (var slotType in UnityEditor.TypeCache.GetTypesDerivedFrom<FormulaSlotBase>())
         {
             if (slotType.IsAbstract || slotType.ContainsGenericParameters) continue;
-
-            var attr = slotType.GetCustomAttribute<ASKindAttribute>(false);
-            if (attr == null || string.IsNullOrEmpty(attr.Name)) continue;
-
             var resultType = ResultType(slotType);
             if (resultType == null) continue;
 
-            // 同一個結果型別被兩個族標了不同名字：後者會蓋掉前者，誰贏取決於掃描順序，先吼再說。
-            if (map.TryGetValue(resultType, out var exists) && exists != attr.Name)
-                UnityEngine.Debug.LogWarning($"[ActionSystem] 結果型別 {resultType.Name} 有兩個不同的 [ASKind]（{exists} / {attr.Name}），chip 顯示不穩定。");
+            familyCount.TryGetValue(resultType, out int n);
+            familyCount[resultType] = n + 1;
 
-            map[resultType] = attr.Name;
+            var attr = slotType.GetCustomAttribute<ASKindAttribute>(false);
+            if (attr != null && !string.IsNullOrEmpty(attr.Name)) kindNamesBySlot[slotType] = attr.Name;
         }
-        return map;
+
+        // byResult 只代表獨佔該結果型別的族；多族共用時留空，讓呼叫端退回結果型別短名。
+        foreach (var pair in kindNamesBySlot)
+        {
+            var resultType = ResultType(pair.Key);
+            if (resultType == null || familyCount[resultType] != 1) continue;
+            kindNamesByResult[resultType] = pair.Value;
+        }
     }
 }
 

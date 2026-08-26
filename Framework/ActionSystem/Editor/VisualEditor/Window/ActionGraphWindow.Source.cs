@@ -459,9 +459,12 @@ public partial class ActionGraphWindow
         var scope = CurrentEndpoints();
         if (scope == null) return;
 
-        Type slotType = null;
-        foreach (var kind in model.FormulaKinds())
-            if (kind.resultType == node.ResultType) { slotType = kind.slotType; break; }
+        // 優先沿用這顆節點所屬欄位的 Slot 型別：同一個結果型別可能有多個族（例：string 同時有
+        // String 與 Key），只比結果型別會抽出錯的族，變數之後就接不回原本那格。
+        Type slotType = node.ParentSlot?.GetType();
+        if (slotType == null)
+            foreach (var kind in model.FormulaKinds())
+                if (kind.resultType == node.ResultType) { slotType = kind.slotType; break; }
 
         BreakUndoMerge();
         var endpoint = model.CreateEndpoint(scope, slotType, out string error);
@@ -603,8 +606,10 @@ public partial class ActionGraphWindow
         // === 4. 原始碼 ===
         // 擺最後：改程式是離開這張圖的動作，跟編圖不同層級。
         // 空 Node、資產節點、變數節點沒有自己的程式本體，跳過去也沒東西可看。
+        // 這裡不先查「找不找得到原始碼」：查一次要讀整批 .cs，右鍵當場會卡住。
+        // 一律放這個項目，真的沒有原始碼（只在 DLL 裡）由 Open 印警告。
         var bodyType = node.Obj?.GetType();
-        if (bodyType != null && AGScriptLocator.CanOpen(bodyType))
+        if (bodyType != null)
         {
             Sep();
             menu.AddItem(new GUIContent("編輯程式"), false, () => AGScriptLocator.Open(bodyType));
@@ -686,8 +691,13 @@ public partial class ActionGraphWindow
         // 型別留到 Header 的 ▾ 再挑。族要先決定，否則空節點沒有型別關係，▾ 也列不出東西。
         foreach (var (rt, slotType) in model.FormulaKinds())
         {
+            // 沒有任何具體公式的族（例：Key 刻意不開放 inline 公式，鍵必須恆定）不列：
+            // 列了也只長得出空節點，Header 的 ▾ 一個選項都挑不到，看起來像壞掉。
+            var formulaBase = AGReflect.FormulaBaseType(slotType);
+            if (formulaBase == null || AGTypeCatalog.Concrete(formulaBase).Count == 0) continue;
+
             var captured = slotType;
-            var content = new GUIContent($"建立公式/{AGReflect.ResultTypeName(rt)}");
+            var content = new GUIContent($"建立公式/{AGReflect.SlotKindName(slotType)}");
             if (canEditFocus) menu.AddItem(content, false, () => CreateOrphan(graphMouse, captured));
             else menu.AddDisabledItem(content);
         }

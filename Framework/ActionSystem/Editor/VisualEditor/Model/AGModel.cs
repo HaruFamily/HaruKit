@@ -15,7 +15,10 @@ public class AGToken
 
     public string Key => Endpoint?.Name;
     public Type ResultType => Endpoint?.ResultType;
-    public string TypeName => AGReflect.ResultTypeName(ResultType);
+
+    // 走端點自己的 Slot：同結果型別的不同族（String / Key）在清單裡才分得出來，
+    // 而它們又不准同名（TokenTable 以結果型別＋名稱為鍵），分不出來就只剩一個名字可看。
+    public string TypeName => AGReflect.SlotKindName(Endpoint?.Slot);
 }
 
 /// <summary>一個時機群組：Timing 值與其動作清單。</summary>
@@ -290,13 +293,14 @@ public class AGModel
         var kinds = new List<(Type, Type)>();
         if (PackType == null) return kinds;
 
-        var seen = new HashSet<Type>();
+        // 不以結果型別去重：同一個結果型別可以有多個族（例：string 同時有 String 與 Key），
+        // 族的身份是 Slot 型別本身。需要「唯一挑一個」的呼叫端必須自己帶 Slot 型別來，不能用結果型別反查。
         foreach (var t in UnityEditor.TypeCache.GetTypesDerivedFrom<FormulaSlotBase>())
         {
             if (t.IsAbstract || t.ContainsGenericParameters) continue;
             if (AGReflect.FormulaSlotPack(t) != PackType) continue;
             var rt = AGReflect.ResultType(t);
-            if (rt == null || !seen.Add(rt)) continue;
+            if (rt == null) continue;
             kinds.Add((rt, t));
         }
         return kinds;
@@ -330,13 +334,9 @@ public class AGModel
                 if (current?.Name == parameter.Name) { binding = current; break; }
             if (binding != null) continue;
 
-            Type slotType = null;
-            foreach (var kind in FormulaKinds())
-            {
-                if (kind.resultType != parameter.ResultType || AGReflect.FormulaSlotPack(kind.slotType) != parameter.PackType) continue;
-                slotType = kind.slotType;
-                break;
-            }
+            // 直接用參數自己那格的 Slot 型別，不要拿結果型別去反查族：同一個結果型別可能有多個族
+            // （例：string 同時有 String 與 Key），反查會挑到錯的那個，參數列型別就跟資產對不上。
+            Type slotType = parameter.Slot?.GetType();
             if (AGReflect.CreateInstance(slotType) is FormulaSlotBase slot)
             {
                 carrier.Bindings.Add(new NamedFormulaSlot(parameter.Name, slot));
@@ -494,7 +494,9 @@ public class AGModel
         {
             if (other == null || ReferenceEquals(other, endpoint)) continue;
             if (other.Name != name || other.ResultType != endpoint.ResultType) continue;
-            error = $"已存在名為 '{name}' 的 {AGReflect.ResultTypeName(endpoint.ResultType)} 變數。";
+            // 重名比對仍以結果型別為準：TokenTable 的登記鍵就是（結果型別, 名稱），
+            // 所以同結果型別的不同族（String / Key）也不能同名，否則 runtime 會查到別人那格。
+            error = $"已存在名為 '{name}' 的 {AGReflect.SlotKindName(other.Slot)} 變數。";
             return false;
         }
 

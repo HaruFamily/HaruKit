@@ -155,7 +155,9 @@ public partial class ActionGraphWindow
         float inset = ChipInset(row);
         if (inset <= 0f) return;
 
-        string text = AGReflect.ResultTypeName(row.ResultType);
+        // 走 Slot 而非結果型別：同一結果型別可能有多個族（string 有 String 與 Key），
+        // 只看結果型別的話兩者的 chip 會長得一樣，企劃分不出這格收的是哪一族。
+        string text = AGReflect.SlotKindName(row.Slot);
         float width = inset - AGGraph.SlotChipGap;   // 間距留在 chip 與接點之間
         float height = Mathf.Min(14f, rowRect.height);
         var chipRect = new Rect(rowRect.xMax - PortReserve - inset,
@@ -291,6 +293,7 @@ public partial class ActionGraphWindow
             Invalidate();
             Repaint();
         });
+        menu.AddItem(new GUIContent("複製這一項"), false, () => DuplicateListItem(owner, index));
         menu.AddItem(new GUIContent("往上移"), false, () => MoveListItem(owner, index, index - 1));
         menu.AddItem(new GUIContent("往下移"), false, () => MoveListItem(owner, index, index + 1));
         menu.AddSeparator("");
@@ -302,6 +305,43 @@ public partial class ActionGraphWindow
             Repaint();
         });
         menu.ShowAsContext();
+    }
+
+    /// <summary>
+    /// 複製清單的一項並插在它下面：內容整棵深拷貝（含接上去的節點子樹），複本與原項各自獨立。
+    /// 這張圖的具名變數一律共用——子樹裡指向變數的 Token 節點還是指向同一個端點，
+    /// 跟著抄一份會變成不在清單裡的孤兒端點。理由與 <see cref="AGModel.DuplicateEndpoint"/> 同一條。
+    /// </summary>
+    private void DuplicateListItem(AGRow owner, int index)
+    {
+        if (owner?.List == null || owner.List.IsFixedSize) return;
+        if (index < 0 || index >= owner.List.Count) return;
+
+        var source = owner.List[index];
+        if (source == null)
+        {
+            BreakUndoMerge();
+            owner.List.Insert(index + 1, null);
+            Invalidate();
+            Repaint();
+            return;
+        }
+
+        var shared = CurrentEndpoints();
+        var copy = ActionSystemDeepCopy.Copy(source, shared);
+        if (copy == null)
+        {
+            ShowNotification(new GUIContent("複製這一項失敗，詳見 Console。"));
+            return;
+        }
+
+        // 識別碼一定要換：載體的 Id 決定節點座標與選取，沿用原本的會讓兩份黏在同一個位置。
+        AGModel.ResetNodeIds(copy, shared);
+
+        BreakUndoMerge();
+        owner.List.Insert(index + 1, copy);
+        Invalidate();
+        Repaint();
     }
 
     private void MoveListItem(AGRow owner, int from, int to)

@@ -232,7 +232,8 @@ public partial class ActionGraphWindow
         foreach (var (resultType, slotType) in model.FormulaKinds())
         {
             var captured = slotType;
-            menu.AddItem(new GUIContent(AGReflect.ResultTypeName(resultType)), false, () =>
+            // 用族名而非結果型別名：同結果型別的多個族（String / Key）否則會列出兩個一模一樣的項目。
+            menu.AddItem(new GUIContent(AGReflect.SlotKindName(slotType)), false, () =>
             {
                 var endpoint = model.CreateEndpoint(scope, captured, out string error);
                 if (endpoint == null)

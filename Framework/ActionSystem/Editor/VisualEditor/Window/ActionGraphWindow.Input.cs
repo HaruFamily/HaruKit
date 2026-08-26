@@ -83,6 +83,7 @@ public partial class ActionGraphWindow
                     {
                         dragNode = hit;
                         dragOffset = graphMouse - hit.Pos;
+                        dragMoved = false;
                         dragStartPositions.Clear();
                         foreach (var n in graph.Nodes)
                             if (selectedIds.Contains(n.Id)) dragStartPositions[n.Id] = n.Pos;
@@ -107,6 +108,7 @@ public partial class ActionGraphWindow
                 }
                 if (dragNode != null)
                 {
+                    dragMoved = true;
                     // 多選時整組一起搬：以主拖曳節點的位移量套用到其他被選節點。
                     Vector2 target = SnapToGrid(graphMouse - dragOffset);
                     Vector2 delta = target - (dragStartPositions.TryGetValue(dragNode.Id, out var start) ? start : dragNode.Pos);
@@ -153,6 +155,7 @@ public partial class ActionGraphWindow
                     if ((graphMouse - titleClickStart).sqrMagnitude <= TitleClickSlop * TitleClickSlop)
                     {
                         dragNode = null;
+                        dragMoved = false;
                         dragStartPositions.Clear();
                         // 選單在 clip 外開，錨點 rect 必須換回 window space。用整條名稱區當錨點，
                         // 選單才對齊 Header 而不是縮在那顆 18px 的 ▾ 底下。
@@ -163,11 +166,17 @@ public partial class ActionGraphWindow
                 }
                 if (dragNode != null)
                 {
-                    BreakUndoMerge();
-                    foreach (var n in graph.Nodes)
-                        if (dragStartPositions.ContainsKey(n.Id)) model.SetPosition(n.Id, n.Pos);
-                    model.SetPosition(dragNode.Id, dragNode.Pos);
-                    MarkPositionsChanged();
+                    // 只有真的拖動過才落盤。單純點一下也寫的話，還沒有座標記憶的節點會被寫入
+                    // AutoLayout 算出來的位置（SetPosition 的「值沒變就跳過」對它不成立），畫面沒變卻要求存檔。
+                    if (dragMoved)
+                    {
+                        BreakUndoMerge();
+                        foreach (var n in graph.Nodes)
+                            if (dragStartPositions.ContainsKey(n.Id)) model.SetPosition(n.Id, n.Pos);
+                        model.SetPosition(dragNode.Id, dragNode.Pos);
+                        MarkPositionsChanged();
+                    }
+                    dragMoved = false;
                     dragStartPositions.Clear();
                     dragNode = null;
                     e.Use();
@@ -369,6 +378,8 @@ public partial class ActionGraphWindow
     }
 
     /// <summary>頭端第一次被聚焦時補一個穩定識別碼；焦點與座標都靠它。</summary>
+    // 補完不標髒：id 只是編輯期識別碼，沒落盤下次重生即可。真正需要它落盤的是記座標，
+    // 而 SetPosition 自己就會 MarkDirty，會把這個 id 一起帶走——純瀏覽因此不再要求存檔。
     private void EnsureHeadIds(AGFocus next)
     {
         object head = next.Head;
@@ -376,7 +387,6 @@ public partial class ActionGraphWindow
             && string.IsNullOrEmpty(AGReflect.SlotEditorId(head)))
         {
             AGReflect.EnsureSlotEditorId(head);
-            model.MarkDirty();
         }
     }
 
