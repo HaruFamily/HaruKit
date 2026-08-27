@@ -49,7 +49,7 @@ public static class AssetGraphSchema
     private static void ResetCacheOnPlay() => Cache.Clear();
 #endif
 
-    /// <summary>讀出參數清單。duplicates 收「型別＋名稱」撞號的名字，由呼叫端報錯。</summary>
+    /// <summary>讀出參數清單。duplicates 收「族＋名稱」撞號的名字，由呼叫端報錯。</summary>
     public static List<AssetParameterDefinition> Read(ScriptableObject asset, out List<string> duplicates)
     {
         duplicates = new List<string>();
@@ -64,7 +64,8 @@ public static class AssetGraphSchema
             var resultType = endpoint.ResultType;
             // 名字或 Slot 沒填完的端點對外不成立參數；Verify 會另外報，這裡直接略過。
             if (string.IsNullOrEmpty(name) || resultType == null) continue;
-            if (!seen.Add((resultType, name))) { duplicates.Add(name); continue; }
+            // 撞號看族不看結果型別：同一個結果型別的不同族（String / Key）是兩個參數，不算重複。
+            if (!seen.Add((endpoint.Slot.Kind, name))) { duplicates.Add(name); continue; }
 
             result.Add(new AssetParameterDefinition
             {

@@ -104,7 +104,7 @@ where TTiming : Enum
         else    Debug.LogError(body);
     }
 
-    /// <summary>變數唯一性是「結果型別＋名稱」：撞號時外部只查得到其中一個，另一個等於默默失效。</summary>
+    /// <summary>變數唯一性是「族＋名稱」：撞號時外部只查得到其中一個，另一個等於默默失效。</summary>
     private void ReportDuplicateEndpointNames()
     {
         var seen = new HashSet<(Type, string)>();
@@ -115,8 +115,8 @@ where TTiming : Enum
             if (endpoint.Slot == null) { Err($"變數 '{endpoint.Name ?? "(未命名)"}' 沒有指定結果型別"); continue; }
             if (string.IsNullOrEmpty(endpoint.Name)) { Err($"有一個 {endpoint.ResultType?.Name} 變數沒有名稱"); continue; }
 
-            if (!seen.Add((endpoint.ResultType, endpoint.Name)) && reported.Add(endpoint.Name))
-                Err($"變數名稱重複：'{endpoint.Name}'（同型別內必須唯一）");
+            if (!seen.Add((endpoint.Slot.Kind, endpoint.Name)) && reported.Add(endpoint.Name))
+                Err($"變數名稱重複：'{endpoint.Name}'（同族內必須唯一）");
         }
     }
 
@@ -474,27 +474,30 @@ where TTiming : Enum
         foreach (var duplicate in duplicates)
             Err($"資產 '{carrier.AssetObject.name}' 的參數標註名稱重複：'{duplicate}'");
 
-        var byName = new Dictionary<string, AssetParameterDefinition>();
+        // 綁定與參數的配對鍵是（族, 名稱），和 TokenTable 的覆蓋表一致：同名不同族的參數是兩個參數。
+        var byKey = new HashSet<(Type, string)>();
+        var parameterNames = new HashSet<string>();
         foreach (var parameter in parameters)
-            if (!byName.ContainsKey(parameter.Name)) byName.Add(parameter.Name, parameter);
+        {
+            byKey.Add((parameter.Slot.Kind, parameter.Name));
+            parameterNames.Add(parameter.Name);
+        }
 
-        var bindingNames = new HashSet<string>();
+        var bindingKeys = new HashSet<(Type, string)>();
         foreach (var binding in carrier.Bindings)
         {
             if (binding == null) { Err($"資產 '{carrier.AssetObject.name}' 有空的參數綁定"); continue; }
-            if (!bindingNames.Add(binding.Name)) Err($"資產 '{carrier.AssetObject.name}' 的參數綁定重複：'{binding.Name}'");
-            if (!byName.TryGetValue(binding.Name, out var parameter))
-            {
-                Err($"資產 '{carrier.AssetObject.name}' 已沒有參數 '{binding.Name}'，請移除舊綁定");
-                continue;
-            }
             if (binding.Slot == null)
             {
                 Err($"資產 '{carrier.AssetObject.name}' 的參數 '{binding.Name}' 沒有 Slot");
                 continue;
             }
-            if (binding.Slot.ResultType != parameter.ResultType || binding.Slot.PackType != parameter.PackType)
-                Err($"資產 '{carrier.AssetObject.name}' 的參數 '{binding.Name}' 型別不相容");
+            var bindingKey = (binding.Slot.Kind, binding.Name);
+            if (!bindingKeys.Add(bindingKey)) Err($"資產 '{carrier.AssetObject.name}' 的參數綁定重複：'{binding.Name}'");
+            if (byKey.Contains(bindingKey)) continue;
+            Err(parameterNames.Contains(binding.Name)
+                ? $"資產 '{carrier.AssetObject.name}' 的參數 '{binding.Name}' 型別不相容"
+                : $"資產 '{carrier.AssetObject.name}' 已沒有參數 '{binding.Name}'，請移除舊綁定");
         }
     }
 

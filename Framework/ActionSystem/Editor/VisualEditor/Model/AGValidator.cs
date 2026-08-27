@@ -76,15 +76,15 @@ public static class AGValidator
         var tokens = AGModel.ReadTokens(model.OwnerEndpoints);
         var checkedAssets = new HashSet<UnityEngine.Object>();
 
-        // 1. 變數本身：名稱空白、名稱重複（同型別內唯一）
+        // 1. 變數本身：名稱空白、名稱重複（同族內唯一）
         //    「宣告後沒有欄位引用」不是問題：變數的用途就是被圖外面用，沒有連入線是正常狀態。
         var seen = new HashSet<(Type, string)>();
         foreach (var t in tokens)
         {
             var focus = VariableFocus(t);
-            if (!seen.Add((t.ResultType, t.Key)))
+            if (!seen.Add((t.Kind, t.Key)))
                 Err(report, focus, $"變數 {t.Key}", "名稱重複",
-                    "改成同型別內唯一的名稱；撞號時外部只查得到其中一個。", null, t.Endpoint);
+                    "改成同族內唯一的名稱；撞號時外部只查得到其中一個。", null, t.Endpoint);
 
             ValidateToken(report, model, focus, t);
         }
@@ -170,9 +170,9 @@ public static class AGValidator
         foreach (var token in tokens)
         {
             var tokenFocus = AssetVariableFocus(focus, token);
-            if (!seen.Add((token.ResultType, token.Key)))
+            if (!seen.Add((token.Kind, token.Key)))
                 Err(report, tokenFocus, $"變數 {token.Key}", "名稱重複",
-                    "改成這個資產內同型別唯一的名稱。", null, token.Endpoint);
+                    "改成這個資產內同族唯一的名稱。", null, token.Endpoint);
             ValidateToken(report, model, tokenFocus, token);
             WalkTokenCarrier(report, model, tokenFocus, token, new HashSet<UnityEngine.Object>(), focus?.AssetObject);
         }
@@ -346,22 +346,31 @@ public static class AGValidator
         foreach (var duplicate in duplicates)
             Err(report, focus, where, $"資產參數標註名稱重複：'{duplicate}'", "進入資產並改成唯一名稱。", null, carrier);
 
-        var byName = new Dictionary<string, AssetParameterDefinition>();
+        // 綁定與參數的配對鍵是（族, 名稱），和 TokenTable 的覆蓋表一致：同名不同族的參數是兩個參數。
+        var byKey = new HashSet<(Type, string)>();
+        var parameterNames = new HashSet<string>();
         foreach (var parameter in parameters)
-            if (!byName.ContainsKey(parameter.Name)) byName.Add(parameter.Name, parameter);
-        var seen = new HashSet<string>();
+        {
+            byKey.Add((parameter.Slot.Kind, parameter.Name));
+            parameterNames.Add(parameter.Name);
+        }
+        var seen = new HashSet<(Type, string)>();
         foreach (var binding in carrier.Bindings)
         {
             if (binding == null) { Err(report, focus, where, "有空的資產參數綁定", "移除空綁定。", null, carrier); continue; }
-            if (!seen.Add(binding.Name))
-                Err(report, focus, where, $"資產參數綁定重複：'{binding.Name}'", "移除重複綁定。", binding.Slot, carrier);
-            if (!byName.TryGetValue(binding.Name, out var parameter))
+            if (binding.Slot == null)
             {
-                Err(report, focus, where, $"資產已沒有參數 '{binding.Name}'", "切換資產或移除這筆舊綁定。", binding.Slot, carrier);
+                Err(report, focus, where, $"資產參數 '{binding.Name}' 沒有取值欄位", "重新建立這筆綁定。", null, carrier);
                 continue;
             }
-            if (binding.Slot == null || binding.Slot.ResultType != parameter.ResultType || binding.Slot.PackType != parameter.PackType)
+            var key = (binding.Slot.Kind, binding.Name);
+            if (!seen.Add(key))
+                Err(report, focus, where, $"資產參數綁定重複：'{binding.Name}'", "移除重複綁定。", binding.Slot, carrier);
+            if (byKey.Contains(key)) continue;
+            if (parameterNames.Contains(binding.Name))
                 Err(report, focus, where, $"資產參數 '{binding.Name}' 型別不相容", "重新建立這筆綁定。", binding.Slot, carrier);
+            else
+                Err(report, focus, where, $"資產已沒有參數 '{binding.Name}'", "切換資產或移除這筆舊綁定。", binding.Slot, carrier);
         }
     }
 

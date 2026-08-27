@@ -137,8 +137,8 @@ public partial class ActionGraphWindow
         var options = new List<AGSourceOption>();
         object slot = SourceSlot(node);
 
-        // 同一個結果型別的 Formula／Asset／Token 一律可以互換，包含候選池裡沒有父欄位的節點：
-        // 型別關係靠「代表性的 Slot 型別」推導，推不出來才退回用目前內容的基底型別。
+        // 同一族的 Formula／Asset／Token 一律可以互換，包含候選池裡沒有父欄位的節點：
+        // 族靠「代表性的 Slot 型別」推導，推不出來才退回用目前內容的基底型別。
         Type slotType = slot?.GetType() ?? RepresentativeSlotType(node);
         bool isAction = slotType != null
             ? AGReflect.IsActionSlotType(slotType)
@@ -162,9 +162,13 @@ public partial class ActionGraphWindow
             }
         }
 
-        Type resultType = !isAction
-            ? (slotType != null ? AGReflect.ResultType(slotType) : node.ResultType)
-            : null;
+        // 族＝Slot 型別。同一個結果型別可以有多個族（例：string 同時有 String 與 Key），
+        // 拿結果型別當判準會把別族的變數一起列進來。
+        Type slotKind = isAction ? null : slotType;
+
+        // 完全推不出族的候選節點（沒有父欄位、沒有連入線、不是資產、也沒有建立當下的族提示）只剩結果型別
+        // 可比。這是近似：真的接到欄位時 AcceptsEndpoint 仍會擋掉別族。
+        Type resultType = isAction || slotKind != null ? null : node.ResultType;
         {
             foreach (var entry in AGAssetIndex.Entries)
             {
@@ -180,13 +184,13 @@ public partial class ActionGraphWindow
             }
         }
 
-        // 變數與 Formula／Asset 同一層：三者都能填同一個結果型別的欄位，所以換來源選單一律列在一起。
-        // 判準用上面推出來的 resultType，和 Formula／Asset 兩組同源；動作欄位沒有結果型別，天然排除。
-        if (resultType != null)
+        // 變數與 Formula／Asset 同一層：三者都能填同一族的欄位，所以換來源選單一律列在一起。
+        // 判準用上面推出來的 slotKind，和 Formula／Asset 兩組同源；動作欄位沒有族，天然排除。
+        if (slotKind != null || resultType != null)
         {
             foreach (var token in AGModel.ReadTokens(CurrentEndpoints()))
             {
-                if (token.ResultType != resultType) continue;
+                if (slotKind != null ? token.Kind != slotKind : token.ResultType != resultType) continue;
                 var endpoint = token.Endpoint;
                 options.Add(new AGSourceOption
                 {
@@ -304,7 +308,7 @@ public partial class ActionGraphWindow
         Repaint();
     }
 
-    /// <summary>切換資產只沿用同名、同結果型別、同 Pack 的綁定；其餘來源保留成候選。</summary>
+    /// <summary>切換資產只沿用同名、同族的綁定；其餘來源保留成候選。</summary>
     private void ReconcileAssetBindings(GraphNode carrier, ScriptableObject nextAsset)
     {
         if (carrier == null) return;
@@ -312,13 +316,12 @@ public partial class ActionGraphWindow
         for (int i = carrier.Bindings.Count - 1; i >= 0; i--)
         {
             var binding = carrier.Bindings[i];
+            // 配對鍵是（族, 名稱）：同結果型別的不同族（String / Key）是兩個參數，只比名字會沿用到錯的那筆。
             AssetParameterDefinition match = null;
             foreach (var parameter in parameters)
-                if (parameter.Name == binding?.Name) { match = parameter; break; }
+                if (parameter.Name == binding?.Name && parameter.Slot?.Kind == binding.Slot?.Kind) { match = parameter; break; }
 
-            bool compatible = binding?.Slot != null && match != null
-                && binding.Slot.ResultType == match.ResultType
-                && binding.Slot.PackType == match.PackType;
+            bool compatible = binding?.Slot != null && match != null;
             if (compatible) continue;
 
             var child = binding?.Slot?.Node;
@@ -450,6 +453,7 @@ public partial class ActionGraphWindow
     /// <summary>
     /// 轉存為變數：新建一個端點，把這顆節點搬進它自己的畫布，**所有**指著它的欄位都改接變數節點。
     /// 和「轉存為資產」同一個手勢，差別是變數留在這張圖裡，不另外開檔。
+    /// 空 Node 也收：它只有族、沒有內容，轉出來就是一個具名常數。
     /// </summary>
     // 共用載體在畫布上只畫一顆節點（AGNode.ParentSlot 只記走訪先到的那條邊），只改那一條的話，
     // 其餘欄位會繼續直接指著同一顆載體——那顆載體同時是變數的內容，變成一份資料兩種身分的別名。
@@ -459,9 +463,9 @@ public partial class ActionGraphWindow
         var scope = CurrentEndpoints();
         if (scope == null) return;
 
-        // 優先沿用這顆節點所屬欄位的 Slot 型別：同一個結果型別可能有多個族（例：string 同時有
-        // String 與 Key），只比結果型別會抽出錯的族，變數之後就接不回原本那格。
-        Type slotType = node.ParentSlot?.GetType();
+        // 族＝Slot 型別：同一個結果型別可能有多個族（例：string 同時有 String 與 Key），
+        // 只比結果型別會抽出錯的族，變數之後就接不回原本那格。連入邊、資產、建立當下的族提示都算。
+        Type slotType = RepresentativeSlotType(node);
         if (slotType == null)
             foreach (var kind in model.FormulaKinds())
                 if (kind.resultType == node.ResultType) { slotType = kind.slotType; break; }
@@ -480,7 +484,9 @@ public partial class ActionGraphWindow
             if (slot != null && ReferenceEquals(AGReflect.GetNode(slot), node.Carrier)) users.Add(slot);
 
         // 端點的取值欄位接下這顆載體；它的子樹整棵跟著搬進變數畫布。
-        AGReflect.SetNode(endpoint.Slot, node.Carrier);
+        // 空 Node 沒有內容可搬，而且搬進去會讓端點變成「來源接了一顆空節點」——那是存檔驗證會擋的狀態。
+        // 留空＝具名常數，和左欄「＋ 新增變數」建出來的完全一樣。
+        if (!node.IsPlaceholder) AGReflect.SetNode(endpoint.Slot, node.Carrier);
 
         // 每個欄位各給一顆變數節點：載體是座標與選取的單位，共用一顆會讓多個引用處黏在同一個位置。
         foreach (var slot in users)
@@ -538,10 +544,10 @@ public partial class ActionGraphWindow
         }
         if (hasLink) return true;
 
-        // 候選池裡沒有連入線的節點：拿代表性 Slot 的結果型別比對。
+        // 候選池裡沒有連入線的節點：拿代表性 Slot 的族比對；推不出族才退回結果型別（近似，接上去時仍會被擋）。
         Type slotType = RepresentativeSlotType(node);
-        Type resultType = slotType != null ? AGReflect.ResultType(slotType) : node?.ResultType;
-        return resultType == null || resultType == endpoint.ResultType;
+        if (slotType != null) return slotType == endpoint.Kind;
+        return node?.ResultType == null || node.ResultType == endpoint.ResultType;
     }
 
     private void ChangeNodeToVariable(AGNode node, GraphEndpoint endpoint)
@@ -586,12 +592,14 @@ public partial class ActionGraphWindow
         // 資產根載體不會被資產格式保存；變數畫布的根載體同理，轉存後那張畫布就空了。
         bool assetRoot = focus.Kind == AGFocusKind.Asset && ReferenceEquals(node.ParentSlot, focus.AssetHostSlot);
         bool variableRoot = focus.Endpoint != null && ReferenceEquals(node.ParentSlot, focus.Endpoint.Slot);
-        bool canExtract = !node.IsPlaceholder && !assetRoot && !variableRoot;
+        bool canExtract = !assetRoot && !variableRoot;
 
         // 變數節點自己就是變數，沒有「再轉存成變數」這回事。
+        // 空 Node 收：族已知、沒有內容，轉出來就是具名常數（動作格沒有結果型別，自然被擋掉）。
         if (canExtract && !node.IsVariableNode && node.Carrier != null && node.ResultType != null)
             menu.AddItem(new GUIContent("轉存為變數"), false, () => ExtractVariable(node));
 
+        // 資產要有本體才存得進 SetTarget，所以空 Node 只能轉變數：Obj 為 null 這裡就過不了。
         if (canExtract && (node.Obj != null || node.IsVariableNode))
             menu.AddItem(new GUIContent("轉存為資產"), false, () => ExtractAsset(node));
         Sep();
@@ -687,15 +695,12 @@ public partial class ActionGraphWindow
             menu.AddSeparator("");
         }
 
-        // 只選族（結果型別），不選具體 class：長出來的是「（選擇 Formula）」那種空節點，
-        // 型別留到 Header 的 ▾ 再挑。族要先決定，否則空節點沒有型別關係，▾ 也列不出東西。
-        foreach (var (rt, slotType) in model.FormulaKinds())
+        // 只選族（＝Slot 型別），不選具體 class：長出來的是「（選擇來源）」那種空節點，
+        // 內容留到 Header 的 ▾ 再挑。族要先決定，否則空節點沒有型別關係，▾ 也列不出東西。
+        // 沒有具體 inline 公式的族（例：Key 刻意不開放 inline 公式，鍵必須恆定）照列：
+        // ▾ 仍然挑得到該族的資產與變數，那正是這種族唯一的來源。
+        foreach (var (_, slotType) in model.FormulaKinds())
         {
-            // 沒有任何具體公式的族（例：Key 刻意不開放 inline 公式，鍵必須恆定）不列：
-            // 列了也只長得出空節點，Header 的 ▾ 一個選項都挑不到，看起來像壞掉。
-            var formulaBase = AGReflect.FormulaBaseType(slotType);
-            if (formulaBase == null || AGTypeCatalog.Concrete(formulaBase).Count == 0) continue;
-
             var captured = slotType;
             var content = new GUIContent($"建立公式/{AGReflect.SlotKindName(slotType)}");
             if (canEditFocus) menu.AddItem(content, false, () => CreateOrphan(graphMouse, captured));
@@ -867,9 +872,9 @@ public partial class ActionGraphWindow
     /// </summary>
     // 不抬的話：資產求值走的是自己的作用域（TokenTable.CreateAssetScope 只登記資產自己的參數），
     // Owner 的變數名查不到，FormulaSlot 直接回預設值，畫布上與驗證上都看不出來。
-    private List<(string Name, GraphEndpoint Source)> LiftTokensToParameters(ScriptableObject asset)
+    private List<(GraphEndpoint Parameter, GraphEndpoint Source)> LiftTokensToParameters(ScriptableObject asset)
     {
-        var lifted = new List<(string, GraphEndpoint)>();
+        var lifted = new List<(GraphEndpoint, GraphEndpoint)>();
         var parameters = AGReflect.Endpoints(asset);
         if (parameters == null) return lifted;
 
@@ -888,11 +893,11 @@ public partial class ActionGraphWindow
                         + "轉存後資產內這一格會取預設值，請手動改成常數或補上對應的 FormulaSlot 型別。");
                     continue;
                 }
-                parameter = new GraphEndpoint(UniqueParameterName(parameters, source.Name, source.ResultType), slot);
+                parameter = new GraphEndpoint(UniqueParameterName(parameters, source.Name, slot.Kind), slot);
                 parameter.EnsureId();
                 parameters.Add(parameter);
                 map[source] = parameter;
-                lifted.Add((parameter.Name, source));
+                lifted.Add((parameter, source));
             }
             carrier.SetEndpoint(parameter);
         }
@@ -919,12 +924,12 @@ public partial class ActionGraphWindow
         return result;
     }
 
-    /// <summary>資產參數名：沿用原變數名，同結果型別撞名才加號碼。名稱是呼叫點綁定用的 key。</summary>
-    private static string UniqueParameterName(List<GraphEndpoint> scope, string preferred, Type resultType)
+    /// <summary>資產參數名：沿用原變數名，同族撞名才加號碼。名稱是呼叫點綁定用的 key。</summary>
+    private static string UniqueParameterName(List<GraphEndpoint> scope, string preferred, Type kind)
     {
         var used = new HashSet<string>();
         foreach (var other in scope)
-            if (other != null && other.ResultType == resultType && !string.IsNullOrEmpty(other.Name))
+            if (other != null && other.Kind == kind && !string.IsNullOrEmpty(other.Name))
                 used.Add(other.Name);
 
         string root = string.IsNullOrEmpty(preferred) ? "Param" : preferred;
@@ -936,14 +941,16 @@ public partial class ActionGraphWindow
     /// <summary>呼叫點的參數列接回原本那個變數。</summary>
     // 一定要打開覆蓋：抬上去的參數在資產內部沒有內容（等於具名常數），不覆蓋就是取那個空欄位的預設值，
     // 值會從「Owner 的變數」默默變成 0。
-    private void BindLiftedParameters(GraphNode carrier, List<(string Name, GraphEndpoint Source)> lifted)
+    private void BindLiftedParameters(GraphNode carrier, List<(GraphEndpoint Parameter, GraphEndpoint Source)> lifted)
     {
         if (carrier == null || lifted == null) return;
-        foreach (var (name, source) in lifted)
+        foreach (var (parameter, source) in lifted)
         {
+            // 配對鍵是（族, 名稱）：資產參數同名不同族時，只比名字會把線接到別族那一列。
+            string name = parameter.Name;
             NamedFormulaSlot binding = null;
             foreach (var current in carrier.Bindings)
-                if (current?.Name == name) { binding = current; break; }
+                if (current?.Name == name && current.Slot?.Kind == parameter.Kind) { binding = current; break; }
 
             if (binding?.Slot == null)
             {

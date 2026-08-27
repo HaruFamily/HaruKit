@@ -16,8 +16,10 @@ public class AGToken
     public string Key => Endpoint?.Name;
     public Type ResultType => Endpoint?.ResultType;
 
-    // 走端點自己的 Slot：同結果型別的不同族（String / Key）在清單裡才分得出來，
-    // 而它們又不准同名（TokenTable 以結果型別＋名稱為鍵），分不出來就只剩一個名字可看。
+    /// <summary>族身份（＝Slot 型別）。撞名判定與候選過濾都用它。</summary>
+    public Type Kind => Endpoint?.Kind;
+
+    // 走端點自己的 Slot：同結果型別的不同族（String / Key）在清單裡才分得出來。
     public string TypeName => AGReflect.SlotKindName(Endpoint?.Slot);
 }
 
@@ -329,9 +331,10 @@ public class AGModel
         bool changed = false;
         foreach (var parameter in AssetParameters(carrier.AssetObject))
         {
+            // 配對鍵是（族, 名稱）：同名不同族是兩個參數，只比名字會少長一列。
             NamedFormulaSlot binding = null;
             foreach (var current in carrier.Bindings)
-                if (current?.Name == parameter.Name) { binding = current; break; }
+                if (current?.Name == parameter.Name && current.Slot?.Kind == parameter.Slot?.Kind) { binding = current; break; }
             if (binding != null) continue;
 
             // 直接用參數自己那格的 Slot 型別，不要拿結果型別去反查族：同一個結果型別可能有多個族
@@ -418,8 +421,8 @@ public class AGModel
     }
 
     /// <summary>
-    /// 建一個新變數並加進清單。名稱唯一性是「結果型別＋名稱」，所以同名不同型可以並存。
-    /// slotType 決定結果型別，建立後不再更動——要換型別就刪掉重建。
+    /// 建一個新變數並加進清單。名稱唯一性是「族＋名稱」，所以同名不同族可以並存。
+    /// slotType 就是族，建立後不再更動——要換族就刪掉重建。
     /// </summary>
     public GraphEndpoint CreateEndpoint(List<GraphEndpoint> scope, Type slotType, out string error)
     {
@@ -427,11 +430,11 @@ public class AGModel
         if (scope == null) { error = "這張圖沒有變數清單。"; return null; }
         if (AGReflect.CreateInstance(slotType) is not FormulaSlotBase slot)
         {
-            error = "建不出這個結果型別的取值欄位。";
+            error = "建不出這一族的取值欄位。";
             return null;
         }
 
-        var endpoint = new GraphEndpoint(NextTokenName(scope, slot.ResultType), slot);
+        var endpoint = new GraphEndpoint(NextTokenName(scope, slot.Kind), slot);
         endpoint.EnsureId();
         scope.Add(endpoint);
         MarkDirty();
@@ -460,19 +463,19 @@ public class AGModel
         copy.ResetId();
         copy.EnsureId();
         ResetNodeIds(copy, shared);
-        copy.Name = CopyName(scope, source.Name, copy.ResultType);
+        copy.Name = CopyName(scope, source.Name, copy.Kind);
 
         scope.Add(copy);
         MarkDirty();
         return copy;
     }
 
-    /// <summary>複本的名字：「原名 複本」，撞名就往後加號碼。唯一性和別處一樣是「結果型別＋名稱」。</summary>
-    private static string CopyName(IEnumerable<GraphEndpoint> scope, string sourceName, Type resultType)
+    /// <summary>複本的名字：「原名 複本」，撞名就往後加號碼。唯一性和別處一樣是「族＋名稱」。</summary>
+    private static string CopyName(IEnumerable<GraphEndpoint> scope, string sourceName, Type kind)
     {
         var used = new HashSet<string>();
         foreach (var other in scope ?? new List<GraphEndpoint>())
-            if (other != null && other.ResultType == resultType && !string.IsNullOrEmpty(other.Name))
+            if (other != null && other.Kind == kind && !string.IsNullOrEmpty(other.Name))
                 used.Add(other.Name);
 
         string root = string.IsNullOrEmpty(sourceName) ? "Token" : sourceName;
@@ -481,7 +484,7 @@ public class AGModel
         return candidate;
     }
 
-    /// <summary>替變數改名。同型別內不可重複；空名稱不允許（外部是用名字查的）。</summary>
+    /// <summary>替變數改名。同族內不可重複；空名稱不允許（外部是用名字查的）。</summary>
     public bool RenameEndpoint(GraphEndpoint endpoint, string name, List<GraphEndpoint> scope, out string error)
     {
         error = null;
@@ -493,9 +496,9 @@ public class AGModel
         foreach (var other in scope ?? new List<GraphEndpoint>())
         {
             if (other == null || ReferenceEquals(other, endpoint)) continue;
-            if (other.Name != name || other.ResultType != endpoint.ResultType) continue;
-            // 重名比對仍以結果型別為準：TokenTable 的登記鍵就是（結果型別, 名稱），
-            // 所以同結果型別的不同族（String / Key）也不能同名，否則 runtime 會查到別人那格。
+            // 重名比對以族為準：TokenTable 的登記鍵就是（族, 名稱），
+            // 所以同結果型別的不同族（String / Key）可以同名，各自查各自那格。
+            if (other.Name != name || other.Kind != endpoint.Kind) continue;
             error = $"已存在名為 '{name}' 的 {AGReflect.SlotKindName(other.Slot)} 變數。";
             return false;
         }
@@ -505,12 +508,12 @@ public class AGModel
         return true;
     }
 
-    /// <summary>取一個在 scope 內同型別不重複的預設名（Token1、Token2…）。</summary>
-    public string NextTokenName(IEnumerable<GraphEndpoint> scope, Type resultType)
+    /// <summary>取一個在 scope 內同族不重複的預設名（Token1、Token2…）。</summary>
+    public string NextTokenName(IEnumerable<GraphEndpoint> scope, Type kind)
     {
         var used = new HashSet<string>();
         foreach (var other in scope ?? new List<GraphEndpoint>())
-            if (other != null && other.ResultType == resultType && !string.IsNullOrEmpty(other.Name))
+            if (other != null && other.Kind == kind && !string.IsNullOrEmpty(other.Name))
                 used.Add(other.Name);
 
         for (int i = 1; ; i++)

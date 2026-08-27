@@ -257,10 +257,25 @@ public static class AGStyles
         EditorGUI.DrawRect(new Rect(r.x, r.yMax - radius, r.width, radius), c);
     }
 
-    public static void RoundedBottomFill(Rect r, Color c, float radius)
+    /// <summary>
+    /// 貼在節點頂緣的狀態色條。厚度通常比圓角還薄，<see cref="RoundedTopFill"/> 的補方角會反過來
+    /// 畫到節點外面，所以這裡逐列依圓的方程式內縮，左右上角剛好貼合節點輪廓。
+    /// </summary>
+    // 不開 GUI.BeginClip：畫布本身帶縮放矩陣，巢狀 clip 會被矩陣一起變換；色條只有幾列，直接算還比較便宜。
+    public static void TopStripeFill(Rect r, Color c, float radius)
     {
-        RoundedFill(r, c, radius);
-        EditorGUI.DrawRect(new Rect(r.x, r.y, r.width, radius), c);
+        if (r.height <= 0f || r.width <= 0f) return;
+        if (radius <= 0f) { Fill(r, c); return; }
+
+        for (float y = 0f; y < r.height; y += 1f)
+        {
+            float rowHeight = Mathf.Min(1f, r.height - y);
+            float dy = radius - (y + rowHeight * 0.5f);      // 這一列的中線離圓心多遠
+            float inset = dy <= 0f ? 0f : radius - Mathf.Sqrt(Mathf.Max(0f, radius * radius - dy * dy));
+            float width = r.width - inset * 2f;
+            if (width <= 0f) continue;
+            Fill(new Rect(r.x + inset, r.y + y, width, rowHeight), c);
+        }
     }
 
     // IMGUI 沒有漸層繪製，只能貼圖：一組顏色做一張 64x1 的水平漸層，之後重複使用。

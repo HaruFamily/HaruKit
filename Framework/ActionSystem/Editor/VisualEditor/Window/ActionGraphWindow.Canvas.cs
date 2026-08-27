@@ -52,7 +52,7 @@ public partial class ActionGraphWindow
             {
                 // 資產本體的標題就是檔名，和變數標題同一套手勢：雙擊改名、Enter 提交。
                 var asset = focus.AssetObject;
-                DrawInlineName(new Rect(r.x + 6f, r.y + 21f, r.width - 12f, 20f), asset,
+                DrawInlineName(new Rect(r.x + 6f, r.y + 21f, r.width - 12f, 20f), asset, InlineSiteFocus,
                     asset.name, asset.name, AGStyles.FocusTitle, "雙擊可改名（改的是 .asset 檔名）",
                     name => RenameAssetFile(asset, name));
             }
@@ -128,7 +128,7 @@ public partial class ActionGraphWindow
     private void DrawFocusName(Rect header, object target, string displayName, Func<string, bool> submit)
     {
         var nameRect = new Rect(header.x + 6f, header.y + 2f, header.width - 12f, 22f);
-        DrawInlineName(nameRect, target, displayName, displayName, AGStyles.FocusTitle, "雙擊可改名", submit);
+        DrawInlineName(nameRect, target, InlineSiteFocus, displayName, displayName, AGStyles.FocusTitle, "雙擊可改名", submit);
     }
 
     // ===== 畫布 =====
@@ -492,7 +492,7 @@ public partial class ActionGraphWindow
         AGStyles.HeaderFill(header, headerFrom, headerTo, NodeCornerRadius);
 
         // Header 由右往左排：停用 → 註解 ✎ → 結果型別 chip，剩下的寬度全給名稱區（＝換來源的按鈕）。
-        // 節點層級的問題畫在節點底部的色條（不佔 Header，也不和身分色搶）；參數列層級的問題直接把該列標紅。
+        // 節點層級的問題鋪成 Header 底圖的一部份；參數列層級的問題直接把該列標紅。
         // 資產／空節點自己沒有物件，問題掛在父欄位上，改查父欄位才看得到。
         object issueTarget = node.Obj
             ?? (node.IsAssetNode || node.IsVariableNode || node.IsPlaceholder ? node.ParentSlot : null);
@@ -575,7 +575,10 @@ public partial class ActionGraphWindow
             node.SourceMenuRect = new Rect(hot.position - pan, hot.size);
             textWidth = titleWidth - SourceArrowWidth - 2f;
         }
-        GUI.Label(titleRect, AGStyles.Elide(node.Title, AGStyles.NodeTitle, textWidth), AGStyles.NodeTitle);
+        // 色塊帶是底圖、沒有自己的熱區，問題提示併進名稱區：整條名稱都是可滑到的地方。
+        string titleTip = !hasNodeIssue ? null
+            : nodeError ? "此節點有錯誤，詳見 Console" : "此節點有警告，詳見 Console";
+        GUI.Label(titleRect, AGStyles.Elide(node.Title, AGStyles.NodeTitle, textWidth, titleTip), AGStyles.NodeTitle);
 
         // 資產與變數的本體是一列「選哪一個」的下拉；一般節點畫自己的參數列；空節點兩者都沒有。
         // 掛在未勾覆蓋的參數底下＝這一段不會被採用，整顆節點鎖住：控制項灰掉、拉線與清單編輯都擋掉。
@@ -622,12 +625,13 @@ public partial class ActionGraphWindow
         if (node.InDisabledSubtree || node.InLockedSubtree)
             AGStyles.RoundedFill(rect, AGStyles.DisabledVeil, NodeCornerRadius);
 
-        // 問題色條：貼在節點底緣，紅＝錯誤、琥珀＝警告。
-        // 不做成 Header 徽章——Header 已經被身分色佔用，狀態和身分混在同一塊會互相干擾。
+        // 問題色條：貼在節點頂緣、壓在 Header 上，紅＝錯誤、琥珀＝警告。
+        // 放頂端不放底緣：單行 Formula 與空 Node 的 body 只有 3～11px，底緣那條在它們身上等於整個下半截。
+        // Header 高度固定，色條在任何節點上都是同一條。
         if (hasNodeIssue)
         {
-            var issueBar = new Rect(rect.x, rect.yMax - IssueBarHeight, rect.width, IssueBarHeight);
-            AGStyles.RoundedBottomFill(issueBar, nodeError ? AGStyles.Error : AGStyles.Warning, NodeCornerRadius);
+            var issueBar = new Rect(rect.x, rect.y, rect.width, IssueBarHeight);
+            AGStyles.TopStripeFill(issueBar, nodeError ? AGStyles.Error : AGStyles.Warning, NodeCornerRadius);
             GUI.Label(issueBar, new GUIContent("", nodeError ? "此節點有錯誤，詳見 Console" : "此節點有警告，詳見 Console"));
         }
 

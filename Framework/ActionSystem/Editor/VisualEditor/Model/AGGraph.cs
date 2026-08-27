@@ -320,7 +320,7 @@ public static class AGGraph
             Id = HeadId(focusId),
             // 名字由焦點提供；真的沒有名字時給預設值，不留空白 Header。
             Title = string.IsNullOrWhiteSpace(headTitle) ? (isAction ? "（動作）" : "（頭端）") : headTitle,
-            Chip = ChipText(resultType, isAction),
+            Chip = ChipText(isAction ? null : rootSlot?.GetType(), resultType, isAction),
             ParentSlot = rootSlot,
             IsRoot = true,
             IsActionNode = isAction,
@@ -360,14 +360,15 @@ public static class AGGraph
                     ResultType = assetResult,
                     // Header 只表明身分；選哪一個資產是本體的參數列在做。
                     Title = "Asset",
-                    Chip = ChipText(assetResult, assetResult == null),
+                    Chip = ChipText(slotIsAction ? null : slotType, assetResult, assetResult == null),
                 };
                 foreach (var binding in carrier.Bindings)
                 {
                     if (binding?.Slot == null) continue;
                     var row = SlotRow(binding.Slot, binding.Name, 0);
                     row.AssetBinding = binding;
-                    row.Path = "/binding/" + binding.Name;
+                    // Path 帶族：同名不同族是兩列，只用名字會讓兩列共用折疊狀態與焦點。
+                    row.Path = "/binding/" + (binding.Slot.Kind?.Name ?? "?") + "/" + binding.Name;
                     node.Rows.Add(row);
                 }
                 break;
@@ -384,7 +385,7 @@ public static class AGGraph
                     ResultType = variableResult,
                     // 與資產節點同一種版型：Header 只表明身分，選哪一個變數是本體那一列在做。
                     Title = "Token",
-                    Chip = ChipText(variableResult, false),
+                    Chip = ChipText(endpoint?.Kind ?? (slotIsAction ? null : slotType), variableResult, false),
                 };
                 break;
             }
@@ -394,7 +395,7 @@ public static class AGGraph
                 node = new AGNode
                 {
                     Title = slotIsAction ? "（選擇 Action）" : "（選擇 Formula）",
-                    Chip = ChipText(slotResultType, slotIsAction),
+                    Chip = ChipText(slotIsAction ? null : slotType, slotResultType, slotIsAction),
                     ResultType = slotResultType,
                     IsPlaceholder = true,
                     IsActionNode = slotIsAction,
@@ -411,9 +412,13 @@ public static class AGGraph
         return node;
     }
 
-    /// <summary>Header 右側的契約標籤：公式看結果型別，動作沒有結果型別就標 Action。</summary>
-    private static string ChipText(Type resultType, bool isAction)
+    /// <summary>
+    /// Header 右側的契約標籤：知道是哪一族就標族名（String 與 Key 才分得開），
+    /// 推不出族才退回結果型別短名；動作沒有結果型別，一律標 Action。
+    /// </summary>
+    private static string ChipText(Type slotType, Type resultType, bool isAction)
     {
+        if (!isAction && slotType != null) return AGReflect.SlotKindName(slotType);
         if (resultType != null) return AGReflect.ResultTypeName(resultType);
         return isAction ? "Action" : null;
     }
@@ -430,7 +435,7 @@ public static class AGGraph
             ParentSlot = parentSlot,
             ParentRow = parentRow,
             Title = AGReflect.TypeName(obj.GetType()),
-            Chip = ChipText(resultType, isAction),
+            Chip = ChipText(isAction ? null : parentSlot?.GetType(), resultType, isAction),
             Desc = AGReflect.TypeDescription(obj.GetType()),
             IsActionNode = isAction,
             ResultType = resultType,

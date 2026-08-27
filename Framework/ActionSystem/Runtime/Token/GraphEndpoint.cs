@@ -43,7 +43,7 @@ public class GraphEndpoint
         _slot = slot;
     }
 
-    /// <summary>變數名稱。唯一性是「結果型別＋名稱」，所以同名不同型可以並存。</summary>
+    /// <summary>變數名稱。唯一性是「族＋名稱」（族＝Slot 型別），所以同名不同族可以並存。</summary>
     public string Name
     {
         get => string.IsNullOrEmpty(_name) ? null : _name;
@@ -58,6 +58,9 @@ public class GraphEndpoint
 
     /// <summary>求值結果型別。Slot 未指定時為 null。</summary>
     public Type ResultType => _slot?.ResultType;
+
+    /// <summary>族身份（＝Slot 型別）。同名唯一性與拉線相容都看它，不看結果型別。</summary>
+    public Type Kind => _slot?.Kind;
 
     /// <summary>求值封包型別。Slot 未指定時為 null。</summary>
     public Type PackType => _slot?.PackType;

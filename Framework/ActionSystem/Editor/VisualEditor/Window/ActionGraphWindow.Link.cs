@@ -299,7 +299,8 @@ public partial class ActionGraphWindow
         return true;
     }
 
-    private static bool CanConnectLink(AGRow row, AGNode target)
+    // 不是 static：空節點的族要靠 RepresentativeSlotType 推（連入邊、資產、建立當下的族提示都在視窗狀態裡）。
+    private bool CanConnectLink(AGRow row, AGNode target)
     {
         if (row?.Slot == null || target?.Carrier == null) return false;
         if (row.Locked) return false;             // 沒勾覆蓋的參數不收來源：接上去也不會被採用
@@ -310,8 +311,15 @@ public partial class ActionGraphWindow
             return AGReflect.AcceptsEndpoint(row.Slot, target.Endpoint)
                 && !WouldCreateCycle(row.Slot, target.Endpoint?.Slot);
 
-        // 空節點還沒有身分，接上去才由父欄位決定它能變成哪一族；沒有內容就沒有型別可牴觸。
-        if (target.IsPlaceholder) return !WouldCreateCycle(row.Slot, target.Carrier);
+        // 空節點沒有內容，但**可能已經有族**：右鍵「建立公式/X」選的、或從欄位切下來時記的。
+        // 有族就必須同族——不擋的話 String 空節點接得進 Key 欄位，接上去當場被改寫成 Key 節點，族形同虛設。
+        // 完全推不出族（舊資料留下的空載體）才照舊放行，由接上的父欄位決定它是哪一族。
+        if (target.IsPlaceholder)
+        {
+            Type targetKind = RepresentativeSlotType(target);
+            if (targetKind != null && targetKind != row.Slot.GetType()) return false;
+            return !WouldCreateCycle(row.Slot, target.Carrier);
+        }
 
         if (target.Obj == null) return false;
 

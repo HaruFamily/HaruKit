@@ -19,13 +19,20 @@ public abstract class FormulaSlotBase
     /// <summary>公式求值封包型別（TPack）。資產綁定驗證用。</summary>
     public abstract Type PackType { get; }
 
+    /// <summary>
+    /// 族身份：具體 Slot 型別本身。同一個結果型別可以有多個族（例：string 同時有 String 與 Key），
+    /// 所以「這一格收不收得下那個來源」「變數同不同名」「TokenTable 登記在哪一格」一律看這個，不看結果型別。
+    /// </summary>
+    // 用 GetType() 而不是另外宣告一個 enum／字串：族本來就是「哪一種 Slot」，多一層宣告就多一處會對不上。
+    public Type Kind => GetType();
+
     /// <summary>不分型別存取預設值，供編輯器輸入框讀寫。</summary>
     public abstract object DefaultObject { get; set; }
 
     /// <summary>
     /// 常數框要畫成哪個型別。預設＝結果型別；子類可回別的型別，讓畫不出輸入框的結果型別
     /// （清單這種）仍有一格可編的「沒接線時取什麼」。只影響常數框，不影響拉線相容性——
-    /// chip、候選過濾、Verify 一律看 <see cref="ResultType"/>。
+    /// chip、候選過濾、Verify 一律看 <see cref="Kind"/>。
     /// </summary>
     public virtual Type DefaultEditType => ResultType;
 
@@ -35,7 +42,7 @@ public abstract class FormulaSlotBase
     /// <summary>這個欄位能不能接這個資產。</summary>
     public abstract bool AcceptsAsset(ScriptableObject asset);
 
-    /// <summary>這個欄位能不能接這個具名變數。結果型別與封包型別都要一致。</summary>
+    /// <summary>這個欄位能不能接這個具名變數。必須是同一族（<see cref="Kind"/>）。</summary>
     public abstract bool AcceptsEndpoint(GraphEndpoint endpoint);
 }
 
@@ -84,7 +91,8 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
 
     public override bool AcceptsAsset(ScriptableObject asset) => asset is TAsset;
 
-    public override bool AcceptsEndpoint(GraphEndpoint endpoint) => endpoint?.Slot is IFormulaSlot<TResult, TPack>;
+    // 只認同族，不認同結果型別：string 同時有 String 與 Key 兩族，收下別族的變數等於從側門繞過那一族的規則。
+    public override bool AcceptsEndpoint(GraphEndpoint endpoint) => endpoint?.Slot?.Kind == Kind;
 
     /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
     public TResult Default { get => _default; set => _default = value; }
@@ -117,8 +125,8 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
                 // 直接呼叫端點的 Slot 會繞過兩者。
                 var endpoint = _node.Endpoint;
                 if (endpoint == null || string.IsNullOrEmpty(endpoint.Name)) return _default;
-                if (tokens == null || !tokens.Has<TResult>(endpoint.Name)) return _default;
-                return await tokens.Resolve<TResult>(endpoint.Name, pack);
+                if (tokens == null || !tokens.Has(Kind, endpoint.Name)) return _default;
+                return await tokens.Resolve<TResult>(Kind, endpoint.Name, pack);
             }
             default:
                 return _default;   // Empty：編輯中的空節點，存檔驗證會擋，runtime 走保底值續跑。

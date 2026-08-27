@@ -171,7 +171,8 @@ public partial class ActionGraphWindow
             DrawCellBackground(row, AGStyles.HeaderToken, AGStyles.HeaderFormula, i % 2 == 1, isFocus);
 
             var endpoint = token.Endpoint;
-            bool renaming = DrawInlineName(new Rect(row.x + 8f, row.y + 2f, row.width - 70f, 18f), endpoint,
+            var nameRect = new Rect(row.x + 8f, row.y + 2f, row.width - 70f, 18f);
+            bool renaming = DrawInlineName(nameRect, endpoint, InlineSiteTokenLib,
                 string.IsNullOrEmpty(token.Key) ? "（未命名）" : token.Key, token.Key ?? "",
                 AGStyles.RowLabel, "雙擊可改名；外部（Inspector）用這個名字查它的值", name =>
                 {
@@ -205,8 +206,10 @@ public partial class ActionGraphWindow
                 e.Use();
             }
             if (e.type == EventType.MouseDrag && ReferenceEquals(dragEndpoint, token.Endpoint)) dragEndpointActive = true;
+            // 名字那一格不切焦點：雙擊改名的第一下否則會先跳進（或跳出）這個變數的畫布。
+            // MouseDown 仍照收，拖曳複製／移除要能從名字上起拖。
             if (e.type == EventType.MouseUp && ReferenceEquals(pendingVariableFocus, token.Endpoint)
-                && !dragEndpointActive && row.Contains(e.mousePosition))
+                && !dragEndpointActive && row.Contains(e.mousePosition) && !nameRect.Contains(e.mousePosition))
             {
                 pendingVariableFocus = null;
                 dragEndpoint = null;
@@ -395,7 +398,8 @@ public partial class ActionGraphWindow
             Color payload = entry.IsAction ? AGStyles.HeaderAction : AGStyles.HeaderFormula;
             DrawCellBackground(row, AGStyles.HeaderAsset, payload, i % 2 == 1, isFocus);
 
-            bool renaming = DrawInlineName(new Rect(row.x + 8f, row.y + 2f, row.width - 64f, 18f), asset,
+            var nameRect = new Rect(row.x + 8f, row.y + 2f, row.width - 64f, 18f);
+            bool renaming = DrawInlineName(nameRect, asset, InlineSiteAssetLib,
                 asset.name, asset.name, AGStyles.RowLabel, "雙擊可改名（改的是 .asset 檔名）",
                 name => RenameAssetFile(asset, name));
             string kind = entry.IsAction ? "ACT" : AGReflect.ResultTypeName(entry.ResultType);
@@ -413,8 +417,9 @@ public partial class ActionGraphWindow
                 e.Use();
             }
             if (e.type == EventType.MouseDrag && dragAsset == asset) dragAssetActive = true;
+            // 名字那一格不切焦點（同變數庫）：雙擊改名不該順手進出這個資產的畫布。
             if (e.type == EventType.MouseUp && pendingAssetFocus == asset
-                && !dragAssetActive && row.Contains(e.mousePosition))
+                && !dragAssetActive && row.Contains(e.mousePosition) && !nameRect.Contains(e.mousePosition))
             {
                 pendingAssetFocus = null;
                 dragAsset = null;
@@ -500,8 +505,9 @@ public partial class ActionGraphWindow
     }
 
     private const float CellCornerRadius = 3f;
-    // 問題色條正好填滿節點底部留白，才不會蓋掉最後一列。
-    private const float IssueBarHeight = AGGraph.NodeBottomPad;
+    // 問題色條壓在 Header 上緣。厚度不跟 NodeBottomPad 綁：那是排版留白，這是狀態標記，
+    // 要在縮小後還看得見就得比留白厚。上限是圓角半徑，再厚左右上角就開始出現直邊。
+    private const float IssueBarHeight = 5f;
 
     /// <summary>
     /// 清單格底：和節點 Header 同一套語彙——身分色 + 「容器→內容」漸層，只是沖淡。

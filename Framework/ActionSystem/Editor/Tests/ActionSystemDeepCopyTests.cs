@@ -148,8 +148,8 @@ public class ActionSystemDeepCopyTests
         var table = new TokenTable<TestPack>();
         table.Register(new GraphEndpoint("value", slot));
 
-        int first = await table.Resolve<int>("value", default).AsTask();
-        int second = await table.Resolve<int>("value", default).AsTask();
+        int first = await table.Resolve<int>(typeof(TestSlot), "value", default).AsTask();
+        int second = await table.Resolve<int>(typeof(TestSlot), "value", default).AsTask();
 
         Assert.That(first, Is.EqualTo(1));
         Assert.That(second, Is.EqualTo(2));
@@ -260,7 +260,7 @@ public class ActionSystemDeepCopyTests
     private sealed class ResolveFormula : FormulaBase<int, TestPack>
     {
         protected override async UniTask<int> OnEvaluate(TestPack pack, TokenTable<TestPack> tokens)
-            => await tokens.Resolve<int>("owner", pack);
+            => await tokens.Resolve<int>(typeof(TestSlot), "owner", pack);
     }
 
     [Serializable]

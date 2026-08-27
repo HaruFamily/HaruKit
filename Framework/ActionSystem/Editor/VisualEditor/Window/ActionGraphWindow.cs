@@ -74,6 +74,8 @@ public partial class ActionGraphWindow : EditorWindow
     private string tokenSearch = "";
     private string assetSearch = "";
     private object editingNameTarget;
+    // 哪一個區塊在編輯這個 target：同一個端點／資產在焦點標題與左欄各有一格，不分開就會兩格一起進編輯。
+    private string editingNameSite;
     private string editingNameDraft = "";
     // 就地改名的提交入口，由 DrawInlineName 每幀存進來：畫布吃掉點擊時，改名那一欄已經沒機會自己收尾。
     private Func<string, bool> editingNameSubmit;
