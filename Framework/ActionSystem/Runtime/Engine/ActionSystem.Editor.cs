@@ -27,7 +27,8 @@ where TTiming : Enum
         else Err(msg);
     }
 
-    public void Verify()
+    /// <summary>external：Owner 自己，宣告它會從圖外用字串 key 求值哪些變數（見 IExternalTokenKeys）。null＝沒有圖外引用。</summary>
+    public void Verify(IExternalTokenKeys external = null)
     {
         // DeepCopy 與 Unity 反序列化不會保留 NonSerialized 驗證緩衝。
         _errors ??= new List<string>();
@@ -37,6 +38,7 @@ where TTiming : Enum
         _warnings.Clear();
 
         ReportDuplicateEndpointNames();
+        ReportExternalTokenKeys(external);
         ReportDuplicateTimings();
         ReportEmptyRootActions();
         ReportCarrierCycles();
@@ -117,6 +119,29 @@ where TTiming : Enum
 
             if (!seen.Add((endpoint.Slot.Kind, endpoint.Name)) && reported.Add(endpoint.Name))
                 Err($"變數名稱重複：'{endpoint.Name}'（同族內必須唯一）");
+        }
+    }
+
+    /// <summary>
+    /// Owner 指名了不存在的變數。這種引用在圖上沒有任何連線，runtime 只是 Has 回 false 然後靜默跳過，
+    /// 所以打錯一個字的結果是「功能整個不會發生」，什麼訊息都沒有。
+    /// 比名稱不比族：圖外引用只給得出名字，族由呼叫端自己探。
+    /// </summary>
+    private void ReportExternalTokenKeys(IExternalTokenKeys external)
+    {
+        var declared = external?.ExternalTokenKeys;
+        if (declared == null) return;
+
+        var names = new HashSet<string>();
+        foreach (var endpoint in Endpoints)
+            if (!string.IsNullOrEmpty(endpoint?.Name)) names.Add(endpoint.Name);
+
+        var reported = new HashSet<string>();
+        foreach (var key in declared)
+        {
+            if (string.IsNullOrWhiteSpace(key) || names.Contains(key)) continue;
+            if (reported.Add(key))
+                Err($"圖外引用了不存在的變數 '{key}'（建一個同名變數，或修正引用端的名稱；查不到的名字會被靜默跳過）");
         }
     }
 

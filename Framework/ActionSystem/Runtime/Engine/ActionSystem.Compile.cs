@@ -18,6 +18,8 @@ where TTiming : Enum
         var ctx = new CompileContext<TPack> { Text = template ?? "", Pack = pack };
         if (string.IsNullOrEmpty(template) || passes == null || passes.Count == 0) return ctx;
 
+        // 未驗證的圖由 CreateTokenTable 擋（LogError + 空表），pass 一律查不到值、保留原文，不必在這裡再擋一次。
+
         ctx.Tokens = CreateTokenTable();
         foreach (var pass in passes)
             if (pass != null) await pass.Run(ctx);
