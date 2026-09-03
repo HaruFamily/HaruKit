@@ -577,7 +577,7 @@ public partial class ActionGraphWindow
         var menu = new GenericMenu();
         var groups = model.ReadGroups();
 
-        foreach (Enum timing in Enum.GetValues(model.TimingType))
+        foreach (Enum timing in model.TimingValues)
         {
             AGTimingGroup group = null;
             foreach (var candidate in groups)
@@ -620,7 +620,7 @@ public partial class ActionGraphWindow
     /// <summary>時機節點的新增入口。已經存在的時機一律停用——一個時機只能有一顆節點。</summary>
     private void AddTimingMenuItems(GenericMenu menu, string prefix, Vector2 createPos)
     {
-        foreach (Enum timing in Enum.GetValues(model.TimingType))
+        foreach (Enum timing in model.TimingValues)
         {
             var content = new GUIContent(prefix + timing);
             if (model.HasGroup(timing)) { menu.AddDisabledItem(content); continue; }

@@ -42,6 +42,10 @@ public class AGModel
     public object Data { get; private set; }        // ActionSystem<TTiming, TPack> 工作副本
     public Type TimingType { get; private set; }
     public Type PackType { get; private set; }
+
+    /// <summary>時機選單要列的值：Owner 宣告的允許集合，沒宣告就是 TTiming 的全部成員。</summary>
+    // 過濾在這一層而不是選單那一層：ShowTimingMenu 與 AddTimingMenuItems 兩個入口共用同一份，不會有一邊漏過濾。
+    public IReadOnlyList<Enum> TimingValues { get; private set; }
     public bool Dirty { get; private set; }
     public bool TrackChanges { get; set; } = true;
 
@@ -85,9 +89,18 @@ public class AGModel
         var args = systemField.FieldType.GetGenericArguments();
         TimingType = args[0];
         PackType = args[1];
+        TimingValues = (owner as IActionSystemOwner)?.AllowedTimings ?? AllTimingsOf(TimingType);
 
         Reload();
         return Data != null;
+    }
+
+    private static IReadOnlyList<Enum> AllTimingsOf(Type timingType)
+    {
+        var values = Enum.GetValues(timingType);
+        var list = new List<Enum>(values.Length);
+        foreach (Enum v in values) list.Add(v);
+        return list;
     }
 
     /// <summary>從 Owner 重新抓一份工作副本（開啟與「取消」共用）。</summary>
