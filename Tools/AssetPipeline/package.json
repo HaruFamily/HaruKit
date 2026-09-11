@@ -1,0 +1,20 @@
+{
+  "name": "com.harufamily.tools.assetpipeline",
+  "version": "1.0.0",
+  "displayName": "HaruKit Tools AssetPipeline",
+  "description": "Editor-only linear asset pipeline tools.",
+  "unity": "2021.3",
+  "dependencies": {
+    "com.unity.addressables": "1.19.19"
+  },
+  "author": {
+    "name": "HaruFamily"
+  },
+  "keywords": [
+    "editor",
+    "assetpipeline",
+    "tools",
+    "harukit",
+    "tool"
+  ]
+}
