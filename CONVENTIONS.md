@@ -53,6 +53,10 @@ HaruKit/                       ← repo root
 ```
 - `name` 反向網域全小寫，命名空間 `com.harufamily.<category>.<tool>`（category 進 namespace）。
 - `unity` 填實際支援最低版本。
+- **依賴分兩種，處理方式不同（見 §1.1）**：
+  - **registry 依賴**（Unity registry 上的，例 `com.unity.addressables`）→ 寫進 `dependencies`，UPM 會自動解析，使用端不必管。
+  - **git-only 依賴**（只有 git URL 的，例 UniTask）→ **不可寫進 `dependencies`**（UPM 解析不到，整包會裝不起來）。改為三件一起做：①該工具 README 開 `## Requirements` 段列出名稱與完整 git URL；②README 的 `## Install` 段給**含所有依賴的可整段複製 `dependencies` JSON 片段**；③在本檔 §6 與 repo `README.md` 的清單表「需先手動安裝」欄標註。
+- **缺 git-only 依賴時讓編譯直接失敗，不要用 `defineConstraints` 靜默停用套件再印提示**：靜默停用會讓使用端看到「裝了但什麼都沒發生」，比紅字難查。此為既定決定，見 `Framework/LogicGraph/README.md`。
 
 ### 2.3 asmdef
 - 命名 `HaruFamily.<Category>.<Tool>.Editor`（Editor 工具）或 `HaruFamily.<Category>.<Tool>`（runtime）。
@@ -116,9 +120,9 @@ https://github.com/HaruFamily/HaruKit.git?path=/<Category>/<Tool>
 
 ## 6. 現有套件清單
 
-| 類別 | 套件 | package name | 安裝 path |
-|------|------|--------------|-----------|
-| UX | Bookmarks | `com.harufamily.ux.bookmarks` | `?path=/UX/Bookmarks` |
-| Framework | Nexus | `com.harufamily.framework.nexus` | `?path=/Framework/Nexus` |
-| Framework | LogicGraph | `com.harufamily.framework.logicgraph` | `?path=/Framework/LogicGraph` |
-| Tools | AssetPipeline | `com.harufamily.tools.assetpipeline` | `?path=/Tools/AssetPipeline` |
+| 類別 | 套件 | package name | 安裝 path | 需先手動安裝 |
+|------|------|--------------|-----------|--------------|
+| UX | Bookmarks | `com.harufamily.ux.bookmarks` | `?path=/UX/Bookmarks` | — |
+| Framework | Nexus | `com.harufamily.framework.nexus` | `?path=/Framework/Nexus` | — |
+| Framework | LogicGraph | `com.harufamily.framework.logicgraph` | `?path=/Framework/LogicGraph` | UniTask |
+| Tools | AssetPipeline | `com.harufamily.tools.assetpipeline` | `?path=/Tools/AssetPipeline` | — |
