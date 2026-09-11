@@ -1,0 +1,19 @@
+namespace HaruFamily.Framework.LogicGraph
+{
+using Cysharp.Threading.Tasks;
+
+public interface IFormulaSlot<T, TPack>
+{
+    UniTask<T> Evaluate(TPack pack, TokenTable<TPack> tokens);
+}
+
+public abstract class FormulaBase<T, TPack> : LogicGraphNode
+{
+    public virtual async UniTask<T> Evaluate(TPack pack, TokenTable<TPack> tokens)
+    {
+        return await OnEvaluate(pack, tokens);
+    }
+    protected abstract UniTask<T> OnEvaluate(TPack pack, TokenTable<TPack> tokens);
+}
+
+}

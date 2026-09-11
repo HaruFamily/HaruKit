@@ -1,0 +1,14 @@
+{
+  "name": "HaruFamily.Framework.LogicGraph.Editor.Tests",
+  "rootNamespace": "HaruFamily.Framework.LogicGraph.Editor.Tests",
+  "references": [
+    "HaruFamily.Framework.LogicGraph",
+    "HaruFamily.Framework.LogicGraph.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

@@ -120,5 +120,5 @@ https://github.com/HaruFamily/HaruKit.git?path=/<Category>/<Tool>
 |------|------|--------------|-----------|
 | UX | Bookmarks | `com.harufamily.ux.bookmarks` | `?path=/UX/Bookmarks` |
 | Framework | Nexus | `com.harufamily.framework.nexus` | `?path=/Framework/Nexus` |
-| Framework | ActionSystem | `com.harufamily.framework.actionsystem` | `?path=/Framework/ActionSystem` |
+| Framework | LogicGraph | `com.harufamily.framework.logicgraph` | `?path=/Framework/LogicGraph` |
 | Tools | AssetPipeline | `com.harufamily.tools.assetpipeline` | `?path=/Tools/AssetPipeline` |

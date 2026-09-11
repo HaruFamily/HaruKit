@@ -1,0 +1,16 @@
+{
+  "name": "HaruFamily.Framework.LogicGraph",
+  "rootNamespace": "HaruFamily.Framework.LogicGraph",
+  "references": [
+    "UniTask"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
