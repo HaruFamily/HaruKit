@@ -71,103 +71,66 @@ public static class LGReflect
 
     public static bool IsFormulaSlotType(Type t) => t != null && typeof(FormulaSlotBase).IsAssignableFrom(t);
 
-    /// <summary>是否為 ActionSlot&lt;TPack&gt;（不知道 TPack，只能比泛型定義）。</summary>
-    public static bool IsActionSlotType(Type t)
-    {
-        for (var cur = t; cur != null && cur != typeof(object); cur = cur.BaseType)
-            if (cur.IsGenericType && cur.GetGenericTypeDefinition() == typeof(ActionSlot<>))
-                return true;
-        return false;
-    }
+    public static bool IsActionSlotType(Type t) => t != null && typeof(ActionSlotBase).IsAssignableFrom(t);
 
     public static bool IsSlotType(Type t) => IsFormulaSlotType(t) || IsActionSlotType(t);
 
-    /// <summary>取 FormulaSlot&lt;TResult, TAsset, TFormula, TPack&gt; 的泛型參數；找不到回 null。</summary>
-    private static Type[] FormulaSlotArgs(Type slotType)
+    // Slot 的型別關係（結果／公式／資產／pack）住在 Slot 自己身上，但呼叫端手上多半只有 Type。
+    // 所以建一顆該型別的實例去問：答案對同一個型別是常數，建完就快取。Slot 都是無參數的純資料類別，
+    // 建立沒有副作用。走這條而不是反射泛型參數，編輯器才不必認得 FormulaSlot<,,,> / ActionSlot<>。
+    private static readonly Dictionary<Type, object> slotProbes = new();
+
+    private static object SlotProbe(Type slotType)
     {
-        for (var cur = slotType; cur != null && cur != typeof(object); cur = cur.BaseType)
-            if (cur.IsGenericType && cur.GetGenericTypeDefinition() == typeof(FormulaSlot<,,,>))
-                return cur.GetGenericArguments();
-        return null;
+        if (slotType == null || slotType.IsAbstract) return null;
+        if (slotProbes.TryGetValue(slotType, out var cached)) return cached;
+
+        var probe = CreateInstance(slotType);
+        slotProbes[slotType] = probe;
+        return probe;
     }
+
+    private static FormulaSlotBase FormulaProbe(Type slotType) => SlotProbe(slotType) as FormulaSlotBase;
+
+    private static ActionSlotBase ActionProbe(Type slotType) => SlotProbe(slotType) as ActionSlotBase;
 
     /// <summary>Slot 的結果型別（int / float / bool / string / EntityView…）。Action Slot 回 null。</summary>
-    public static Type ResultType(Type slotType)
-    {
-        var args = FormulaSlotArgs(slotType);
-        return args != null && args.Length == 4 ? args[0] : null;
-    }
+    public static Type ResultType(Type slotType) => FormulaProbe(slotType)?.ResultType;
 
     /// <summary>Slot 可接的 Formula base 型別（例如 IntFormula）。</summary>
-    public static Type FormulaBaseType(Type slotType)
-    {
-        var args = FormulaSlotArgs(slotType);
-        return args != null && args.Length == 4 ? args[2] : null;
-    }
+    public static Type FormulaBaseType(Type slotType) => FormulaProbe(slotType)?.BodyBaseType;
 
     /// <summary>FormulaSlot 的 TPack；不是 FormulaSlot 回 null。列舉公式族時用它排除別的 pack。</summary>
-    public static Type FormulaSlotPack(Type slotType)
-    {
-        var args = FormulaSlotArgs(slotType);
-        return args != null && args.Length == 4 ? args[3] : null;
-    }
+    public static Type FormulaSlotPack(Type slotType) => FormulaProbe(slotType)?.PackType;
 
     /// <summary>Slot 可接的 Formula Asset 型別（例如 IntAsset）。</summary>
-    public static Type AssetType(Type slotType)
-    {
-        var args = FormulaSlotArgs(slotType);
-        return args != null && args.Length == 4 ? args[1] : null;
-    }
+    public static Type AssetType(Type slotType) => FormulaProbe(slotType)?.AssetBaseType;
 
-    /// <summary>ActionSlot&lt;TPack&gt; 的 TPack；不是 ActionSlot 回 null。</summary>
-    private static Type ActionSlotPack(Type actionSlotType)
-    {
-        for (var cur = actionSlotType; cur != null && cur != typeof(object); cur = cur.BaseType)
-            if (cur.IsGenericType && cur.GetGenericTypeDefinition() == typeof(ActionSlot<>))
-                return cur.GetGenericArguments()[0];
-        return null;
-    }
+    /// <summary>動作欄位可接的 Action base 型別。</summary>
+    public static Type ActionBaseType(Type actionSlotType) => ActionProbe(actionSlotType)?.BodyBaseType;
 
-    /// <summary>ActionSlot&lt;TPack&gt; 可接的 Action base 型別 ActionBase&lt;TPack&gt;。</summary>
-    public static Type ActionBaseType(Type actionSlotType)
-    {
-        var pack = ActionSlotPack(actionSlotType);
-        return pack == null ? null : typeof(ActionBase<>).MakeGenericType(pack);
-    }
-
-    /// <summary>ActionSlot&lt;TPack&gt; 的 Asset 型別 ActionAssetBase&lt;TPack&gt;。</summary>
-    public static Type ActionAssetType(Type actionSlotType)
-    {
-        var pack = ActionSlotPack(actionSlotType);
-        return pack == null ? null : typeof(ActionAssetBase<>).MakeGenericType(pack);
-    }
+    /// <summary>動作欄位可接的 Action Asset 型別。</summary>
+    public static Type ActionAssetType(Type actionSlotType) => ActionProbe(actionSlotType)?.AssetBaseType;
 
     /// <summary>公式資產的結果型別；動作資產沒有結果型別，回 null。</summary>
-    public static Type AssetResultType(UnityEngine.Object asset)
-    {
-        if (asset == null) return null;
-        for (var t = asset.GetType(); t != null && t != typeof(object); t = t.BaseType)
-            if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(FormulaAsset<,>))
-                return t.GetGenericArguments()[0];
-        return null;
-    }
+    public static Type AssetResultType(UnityEngine.Object asset) => (asset as ILogicGraphAsset)?.ResultType;
 
     // ===== Slot 的節點存取 =====
     // Slot 只有「有沒有接節點」一種狀態；來源種類、內容與座標全在 GraphNode 上。
-    // FormulaSlotBase 是非泛型，可直接呼叫；ActionSlot<TPack> 在 Editor 端拿不到 TPack，只能走成員反射。
+    // 兩種 Slot 各有非泛型基底（FormulaSlotBase / ActionSlotBase），所以這裡一律走型別，不走成員名。
 
     /// <summary>Slot 目前接的節點；null 代表常數（公式）或空槽（動作）。</summary>
     public static GraphNode GetNode(object slot)
     {
         if (slot is FormulaSlotBase fsb) return fsb.Node;
-        return GetMember(slot, "Node") as GraphNode;
+        if (slot is ActionSlotBase asb) return asb.Node;
+        return null;
     }
 
     public static void SetNode(object slot, GraphNode node)
     {
-        if (slot == null) return;
         if (slot is FormulaSlotBase fsb) { fsb.SetNode(node); return; }
-        CallMethod(slot, "SetNode", node);
+        if (slot is ActionSlotBase asb) asb.SetNode(node);
     }
 
     /// <summary>沒接節點時就地建立一個空節點（＝使用者從接點拉線出來的編輯中狀態）。</summary>
@@ -232,14 +195,14 @@ public static class LGReflect
     {
         if (body is not LogicGraphNode node) return false;
         if (slot is FormulaSlotBase fsb) return fsb.AcceptsBody(node);
-        return CallMethod(slot, "AcceptsBody", node) as bool? ?? false;
+        return slot is ActionSlotBase asb && asb.AcceptsBody(node);
     }
 
     public static bool AcceptsAsset(object slot, UnityEngine.Object asset)
     {
         var so = asset as UnityEngine.ScriptableObject;
         if (slot is FormulaSlotBase fsb) return fsb.AcceptsAsset(so);
-        return CallMethod(slot, "AcceptsAsset", so) as bool? ?? false;
+        return slot is ActionSlotBase asb && asb.AcceptsAsset(so);
     }
 
     /// <summary>這個欄位能不能接這個具名變數。動作欄位一律不能。</summary>
@@ -247,7 +210,7 @@ public static class LGReflect
     {
         if (endpoint == null) return false;
         if (slot is FormulaSlotBase fsb) return fsb.AcceptsEndpoint(endpoint);
-        return CallMethod(slot, "AcceptsEndpoint", endpoint) as bool? ?? false;
+        return slot is ActionSlotBase asb && asb.AcceptsEndpoint(endpoint);
     }
 
     public static object GetDefault(object slot) => (slot as FormulaSlotBase)?.DefaultObject;
@@ -266,62 +229,48 @@ public static class LGReflect
     /// 但編輯器不再提供入口——要關掉一段行為改成停用它接的節點（`GraphNode.Disabled`），
     /// 那是共用單位，語意也更一致。因此這裡只有 Get。
     /// </summary>
-    public static bool GetDisabled(object actionSlot) => GetMember(actionSlot, "Disabled") as bool? ?? false;
+    public static bool GetDisabled(object actionSlot) => actionSlot is ActionSlotBase asb && asb.Disabled;
 
-    public static string GetLabel(object actionSlot) => GetMember(actionSlot, "Label") as string;
+    public static string GetLabel(object actionSlot) => (actionSlot as ActionSlotBase)?.Label;
 
-    public static void SetLabel(object actionSlot, string value) => SetMember(actionSlot, "Label", value);
-
-    /// <summary>頭端目前的識別碼；還沒指派時為空字串。</summary>
-    public static string SlotEditorId(object head) => GetMember(head, "Id") as string;
-
-    /// <summary>動作頭端的穩定識別碼（焦點 act:{id} 與 HEAD 節點座標都用它）。</summary>
-    public static string EnsureSlotEditorId(object slot)
+    public static void SetLabel(object actionSlot, string value)
     {
-        if (slot == null) return "?";
-        return CallMethod(slot, "EnsureId") as string ?? "?";
+        if (actionSlot is ActionSlotBase asb) asb.Label = value;
     }
 
-    /// <summary>複製頭端後換新識別碼，否則兩個頭端共用同一筆座標與焦點。</summary>
-    public static void ResetSlotEditorId(object slot) => CallMethod(slot, "ResetId");
+    /// <summary>頭端目前的識別碼；還沒指派時為空字串。</summary>
+    public static string SlotEditorId(object head) => (head as ActionSlotBase)?.Id;
 
-    /// <summary>頭端座標。動作頭端與時機群組都有。</summary>
+    /// <summary>動作頭端的穩定識別碼（焦點 act:{id} 與 HEAD 節點座標都用它）。</summary>
+    public static string EnsureSlotEditorId(object slot) => (slot as ActionSlotBase)?.EnsureId() ?? "?";
+
+    /// <summary>複製頭端後換新識別碼，否則兩個頭端共用同一筆座標與焦點。</summary>
+    public static void ResetSlotEditorId(object slot) => (slot as ActionSlotBase)?.ResetId();
+
+    /// <summary>頭端座標。動作頭端、時機群組、變數端點與兩種資產都是頭端。</summary>
     public static bool GetHeadPos(object head, out UnityEngine.Vector2 pos)
     {
         pos = default;
-        if (head == null) return false;
-        if ((GetMember(head, "HasPos") as bool? ?? false) == false) return false;
-        pos = GetMember(head, "Pos") as UnityEngine.Vector2? ?? default;
+        if (head is not IGraphHead h || !h.HasPos) return false;
+        pos = h.Pos;
         return true;
     }
 
-    public static void SetHeadPos(object head, UnityEngine.Vector2 pos) => SetMember(head, "Pos", pos);
+    public static void SetHeadPos(object head, UnityEngine.Vector2 pos)
+    {
+        if (head is IGraphHead h) h.Pos = pos;
+    }
 
-    public static void ClearHeadPos(object head) => CallMethod(head, "ClearPos");
+    public static void ClearHeadPos(object head) => (head as IGraphHead)?.ClearPos();
 
     /// <summary>畫布主人的候選節點池（LogicGraph、資產各一份；動作頭端上的那份只為讀回舊資料）。</summary>
-    public static List<GraphNode> Orphans(object head) => GetMember(head, "Orphans") as List<GraphNode>;
+    public static List<GraphNode> Orphans(object head) => (head as IOrphanPool)?.Orphans;
 
     /// <summary>資產根內容的載體。舊格式（只存裸內容）由資產自己就地補上載體，這裡一律拿得到 GraphNode。</summary>
-    // 走 GetMember：Root 是屬性，而且 ActionAssetBase&lt;TPack&gt; 的 TPack 在 Editor 端是未知的。
-    public static GraphNode AssetRoot(object asset) => GetMember(asset, "Root") as GraphNode;
+    public static GraphNode AssetRoot(object asset) => (asset as ILogicGraphAsset)?.Root;
 
     /// <summary>圖主人的具名變數清單（LogicGraph、公式／動作資產各一份）。</summary>
-    // 走 GetMember 而不是 Get：Endpoints 是屬性，Get 只找欄位，拿到的會是 null。
-    public static List<GraphEndpoint> Endpoints(object owner) => GetMember(owner, "Endpoints") as List<GraphEndpoint>;
-
-    // 泛型成員只能靠名稱呼叫：ActionSlot<TPack> 的 TPack 在 Editor 端是未知的。
-    private static object GetMember(object target, string name)
-        => target?.GetType().GetProperty(name, BindingFlags.Instance | BindingFlags.Public)?.GetValue(target);
-
-    private static void SetMember(object target, string name, object value)
-        => target?.GetType().GetProperty(name, BindingFlags.Instance | BindingFlags.Public)?.SetValue(target, value);
-
-    private static object CallMethod(object target, string name, params object[] args)
-    {
-        var m = target?.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.Public);
-        return m?.Invoke(target, args);
-    }
+    public static List<GraphEndpoint> Endpoints(object owner) => (owner as IEndpointOwner)?.Endpoints;
 
     // ===== 清單欄位 =====
 
@@ -369,33 +318,22 @@ public static class LGReflect
         }
     }
 
-    /// <summary>判斷具體節點是否繼承 ActionBase&lt;&gt;；避免 Graph 引用專案端型別。</summary>
-    public static bool IsActionNodeType(Type type)
-    {
-        for (var current = type; current != null && current != typeof(object); current = current.BaseType)
-            if (current.IsGenericType && current.GetGenericTypeDefinition() == typeof(ActionBase<>)) return true;
-        return false;
-    }
+    /// <summary>判斷具體節點是不是動作。</summary>
+    public static bool IsActionNodeType(Type type) => Closed(type, typeof(ActionNodeBase<>)) != null;
 
     /// <summary>從具體 Action／Formula 型別回推可供型別選單使用的封閉泛型 base。</summary>
     public static Type NodeBaseType(Type type)
+        => Closed(type, typeof(ActionNodeBase<>)) ?? Closed(type, typeof(FormulaNodeBase<,>));
+
+    /// <summary>從具體 Formula 型別取得結果型別；Action 回 null。</summary>
+    public static Type FormulaResultType(Type type) => Closed(type, typeof(FormulaNodeBase<,>))?.GetGenericArguments()[0];
+
+    // 沿繼承鏈找出指定泛型定義的封閉型別；找不到回 null。
+    private static Type Closed(Type type, Type definition)
     {
         for (var current = type; current != null && current != typeof(object); current = current.BaseType)
-        {
-            if (!current.IsGenericType) continue;
-            Type definition = current.GetGenericTypeDefinition();
-            if (definition == typeof(ActionBase<>) || definition == typeof(FormulaBase<,>)) return current;
-        }
+            if (current.IsGenericType && current.GetGenericTypeDefinition() == definition) return current;
         return null;
-    }
-
-    /// <summary>從具體 Formula 型別取得 TResult；Action 回 null。</summary>
-    public static Type FormulaResultType(Type type)
-    {
-        Type nodeBase = NodeBaseType(type);
-        return nodeBase != null && nodeBase.GetGenericTypeDefinition() == typeof(FormulaBase<,>)
-            ? nodeBase.GetGenericArguments()[0]
-            : null;
     }
 
     // ===== 顯示名稱 =====

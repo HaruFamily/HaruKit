@@ -5,13 +5,22 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>公式與動作資產共同提供的內部圖。資產的參數就是它自己的具名端點清單。</summary>
-public interface ILogicGraphAsset
+public interface ILogicGraphAsset : IOrphanPool, IEndpointOwner, IGraphHead
 {
     object ContentObject { get; }
-    List<GraphNode> Orphans { get; }
 
-    /// <summary>本資產的具名變數。對呼叫端而言就是這個資產的參數介面。</summary>
-    List<GraphEndpoint> Endpoints { get; }
+    /// <summary>根內容的載體。根節點的 Id／座標／備註都住在它身上，和圖上其他節點同一套。</summary>
+    GraphNode Root { get; }
+
+    /// <summary>公式資產的結果型別；動作資產沒有結果型別，回 null。「是不是動作資產」一律問這個。</summary>
+    Type ResultType { get; }
+}
+
+/// <summary>動作資產的標記。</summary>
+// 非泛型才能在「型別層」分辨動作資產：資產索引刻意先看型別再決定要不要載入，
+// 全專案每個 SO 都載一次太慢，所以這個判斷不能依賴實例。
+public interface IActionGraphAsset : ILogicGraphAsset
+{
 }
 
 public sealed class AssetParameterDefinition

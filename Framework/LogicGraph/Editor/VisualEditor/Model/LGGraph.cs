@@ -287,27 +287,24 @@ public static class LGGraph
     private static LGNodeView MakeGroupNode(LGModel model, object group)
     {
         var node = MakeNodeForObject(group, null, null, null);
-        node.Id = GroupHeadId(group);
+        node.Id = GroupHeadId(model, group);
         node.IsRoot = true;
         node.IsTimingGroup = true;
         // ActionTimingGroup 不是 ActionBase，但它的本體是 ActionSlot 清單，Header 應導向 Action 流程色。
         node.IsActionNode = true;
-        node.Title = GroupTitle(group);
+        node.Title = GroupTitle(model, group);
         node.Chip = "時機";      // 群組不回傳值，chip 改寫身分：一眼分得出時機節點與動作節點
         node.Desc = null;
-
-        // 時機值不可就地改：改下去會跟別的群組撞同一個時機。要換時機就刪掉這顆、重新建一顆。
-        node.Rows.RemoveAll(r => r.Field != null && r.Field.Name == "Timing");
 
         model.RegisterCarrier(node.Id, group);
         return node;
     }
 
-    /// <summary>時機群組節點的識別碼。時機值本身就是身分，enum 不可重複，所以不必再配流水號。</summary>
-    public static string GroupHeadId(object group) => "head:tim:" + GroupTitle(group);
+    /// <summary>時機群組節點的識別碼。識別值本身就是身分，不可重複，所以不必再配流水號。</summary>
+    public static string GroupHeadId(LGModel model, object group) => "head:tim:" + GroupTitle(model, group);
 
-    public static string GroupTitle(object group)
-        => (LGReflect.Get(group, "Timing") as Enum)?.ToString() ?? "（未指定時機）";
+    public static string GroupTitle(LGModel model, object group)
+        => model?.Doc?.TitleOf(group) ?? "（未指定時機）";
 
     // headCarrier：HEAD 的座標主人（LGFocus.HeadCarrier）。變數焦點傳 GraphEndpoint、資產本體傳資產 SO，
     // 位置才記得住——資產的 HEAD 容器槽是每次進來現做的，記在它上面等於不記。其他焦點沿用 rootSlot。

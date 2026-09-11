@@ -36,6 +36,12 @@ public abstract class FormulaSlotBase
     /// </summary>
     public virtual Type DefaultEditType => ResultType;
 
+    /// <summary>這個欄位收得下的內嵌公式基底型別（TFormula）。型別選單用它過濾。</summary>
+    public abstract Type BodyBaseType { get; }
+
+    /// <summary>這個欄位收得下的公式資產型別（TAsset）。</summary>
+    public abstract Type AssetBaseType { get; }
+
     /// <summary>這個欄位能不能接這個內嵌內容。</summary>
     public abstract bool AcceptsBody(LogicGraphNode body);
 
@@ -75,6 +81,8 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
 
     public override Type ResultType => typeof(TResult);
     public override Type PackType => typeof(TPack);
+    public override Type BodyBaseType => typeof(TFormula);
+    public override Type AssetBaseType => typeof(TAsset);
 
     public override object DefaultObject
     {

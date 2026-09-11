@@ -46,7 +46,7 @@ public static class LGAssetIndex
                 string path = AssetDatabase.GUIDToAssetPath(guids[i]);
                 Type type = AssetDatabase.GetMainAssetTypeAtPath(path);
                 bool isFormula = type != null && typeof(FormulaAssetBase).IsAssignableFrom(type);
-                bool isAction = IsActionAssetType(type);
+                bool isAction = type != null && typeof(IActionGraphAsset).IsAssignableFrom(type);
                 if (!isFormula && !isAction) continue;
 
                 var asset = AssetDatabase.LoadAssetAtPath<ScriptableObject>(path);
@@ -77,11 +77,5 @@ public static class LGAssetIndex
         return result;
     }
 
-    private static bool IsActionAssetType(Type type)
-    {
-        for (var current = type; current != null && current != typeof(object); current = current.BaseType)
-            if (current.IsGenericType && current.GetGenericTypeDefinition() == typeof(ActionAssetBase<>)) return true;
-        return false;
-    }
 }
 }

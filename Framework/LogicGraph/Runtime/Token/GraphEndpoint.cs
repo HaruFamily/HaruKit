@@ -13,7 +13,7 @@ using UnityEngine;
 // 不再 per result kind 各繼承一次：Slot 用 [SerializeReference] 存既有的 IntSlot / FloatSlot…，
 // 型別資訊由 Slot.ResultType / PackType 提供，Core 不必知道專案有哪幾種 kind。
 [Serializable]
-public class GraphEndpoint
+public class GraphEndpoint : IGraphHead, IOrphanPool
 {
     [SerializeField]
     private string _name;

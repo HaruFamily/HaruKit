@@ -577,7 +577,7 @@ public partial class LogicGraphWindow
         var menu = new GenericMenu();
         var groups = model.ReadGroups();
 
-        foreach (Enum timing in model.TimingValues)
+        foreach (var timing in model.TimingValues)
         {
             LGTimingGroup group = null;
             foreach (var candidate in groups)
@@ -620,7 +620,7 @@ public partial class LogicGraphWindow
     /// <summary>時機節點的新增入口。已經存在的時機一律停用——一個時機只能有一顆節點。</summary>
     private void AddTimingMenuItems(GenericMenu menu, string prefix, Vector2 createPos)
     {
-        foreach (Enum timing in model.TimingValues)
+        foreach (var timing in model.TimingValues)
         {
             var content = new GUIContent(prefix + timing);
             if (model.HasGroup(timing)) { menu.AddDisabledItem(content); continue; }
@@ -637,7 +637,7 @@ public partial class LogicGraphWindow
     }
 
     /// <summary>在指定位置建立一顆時機節點。空的時機節點是合法狀態，動作由它本體的清單「＋」新增。</summary>
-    private void AddTimingGroup(Enum timing, Vector2 pos)
+    private void AddTimingGroup(object timing, Vector2 pos)
     {
         if (timing == null) return;
         if (model.HasGroup(timing))
@@ -650,7 +650,7 @@ public partial class LogicGraphWindow
         var group = model.AddGroup(timing);
         if (group?.Group == null)
         {
-            Debug.LogWarning($"[LogicGraph] 建立時機群組 '{timing}' 失敗，可能是 ActionGroups 型別不符。");
+            Debug.LogWarning($"[LogicGraph] 建立時機群組 '{timing}' 失敗：識別值型別與這張圖不符。");
             return;
         }
 
@@ -658,7 +658,7 @@ public partial class LogicGraphWindow
         LGReflect.SetHeadPos(group.Group, SnapToGrid(pos));
         if (focus.Kind != LGFocusKind.Timing) SetFocus(AllTimingsFocus());
         selectedIds.Clear();
-        selectedIds.Add(LGGraph.GroupHeadId(group.Group));
+        selectedIds.Add(LGGraph.GroupHeadId(model, group.Group));
         Invalidate();
         Repaint();
     }
@@ -671,7 +671,7 @@ public partial class LogicGraphWindow
     {
         if (node?.Obj == null) return;
 
-        int count = (LGReflect.Get(node.Obj, "Actions") as IList)?.Count ?? 0;
+        int count = model.Doc?.ItemsOf(node.Obj)?.Count ?? 0;
         if (count > 0)
         {
             RequestConfirm(GraphToWindowRect(new Rect(node.Pos.x, node.Pos.y, node.Width, LGGraph.HeaderHeight)),
@@ -700,7 +700,7 @@ public partial class LogicGraphWindow
     }
 
     /// <summary>跳到某顆時機節點。同一張畫布，所以只是把視野移過去，不換焦點。</summary>
-    private void JumpToTiming(Enum timing)
+    private void JumpToTiming(object timing)
     {
         if (focus.Kind != LGFocusKind.Timing) SetFocus(AllTimingsFocus());
         foreach (var g in model.ReadGroups())

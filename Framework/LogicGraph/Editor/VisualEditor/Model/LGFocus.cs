@@ -32,7 +32,8 @@ public class LGFocus
     public LGFocusKind Kind = LGFocusKind.None;
 
     // Action 焦點。畫布不再切到單一動作，但 LGValidator 仍用它當「這則問題屬於哪個動作」的標籤。
-    public Enum Timing;
+    // 型別是 object：識別值是什麼由 IGraphDocument 的實作決定，這裡只做相等比較與顯示。
+    public object Timing;
     public IList ActionList;
     public int ActionIndex = -1;
     public object ActionSlot;
@@ -70,7 +71,7 @@ public class LGFocus
             var roots = new List<object>();
             if (Kind == LGFocusKind.Timing)
             {
-                if (LGReflect.Get(Data, "ActionGroups") is IList groups)
+                if ((Data as IGraphDocument)?.Roots is IList groups)
                     foreach (var g in groups)
                         if (g != null) roots.Add(g);
                 return roots;

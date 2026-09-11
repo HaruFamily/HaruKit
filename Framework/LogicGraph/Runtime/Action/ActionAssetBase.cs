@@ -5,7 +5,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-public abstract class ActionAssetBase<TPack> : ScriptableObject, ILogicGraphAsset
+public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAsset
 {
     // 根內容的載體。存 GraphNode 而不是裸 Action，根節點才有地方放 Id／座標／備註／停用旗標，
     // 跟圖上其他節點同一套規則；只存裸內容時每次開畫布都要現包一顆，位置永遠留不住。
@@ -31,6 +31,9 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, ILogicGraphAsse
 
     [SerializeField, HideInInspector]
     private bool _hasHeadPos;
+
+    /// <summary>動作資產沒有結果型別。</summary>
+    public Type ResultType => null;
 
     public async UniTask Execute(TPack pack, TokenTable<TPack> caller, IReadOnlyList<NamedFormulaSlot> bindings = null)
     {

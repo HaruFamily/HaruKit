@@ -2,6 +2,7 @@ namespace HaruFamily.Framework.LogicGraph
 {
 using Cysharp.Threading.Tasks;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Scripting.APIUpdating;
@@ -12,11 +13,62 @@ using UnityEditor;
 
 
 [Serializable]
-public partial class LogicGraph<TTiming, TPack>
+public partial class LogicGraph<TTiming, TPack> : IGraphDocument
 where TTiming : Enum
 {
     [SerializeReference]
     public List<ActionTimingGroup<TTiming, TPack>> ActionGroups = new();
+
+    /// <summary>畫布上的 HEAD 們＝全部時機群組。編輯器透過 IGraphDocument 讀它，不認識 TTiming。</summary>
+    IList IGraphDocument.Roots => ActionGroups;
+
+    void IGraphDocument.Verify() => Verify();
+
+    object IGraphDocument.DeepCopy() => DeepCopy();
+
+    Type IGraphDocument.PackType => typeof(TPack);
+
+    Type IGraphDocument.ItemSlotType => typeof(ActionSlot<TPack>);
+
+    // 時機的一切都關在這裡：可選值、允許清單過濾、識別值與顯示名。
+    // 編輯器只拿得到 object，因此換成別種圖時不必動編輯器。
+    IReadOnlyList<object> IGraphDocument.RootKeys(UnityEngine.Object owner)
+    {
+        var allowed = (owner as ILogicGraphOwner)?.AllowedTimings;
+        if (allowed != null)
+        {
+            var filtered = new List<object>(allowed.Count);
+            foreach (var v in allowed) filtered.Add(v);
+            return filtered;
+        }
+
+        var values = Enum.GetValues(typeof(TTiming));
+        var all = new List<object>(values.Length);
+        foreach (var v in values) all.Add(v);
+        return all;
+    }
+
+    object IGraphDocument.KeyOf(object root)
+        => root is ActionTimingGroup<TTiming, TPack> g ? g.Timing : null;
+
+    // 不寫 g.Timing?.ToString()：TTiming 只約束為 Enum，編譯器不當它是可為 null 的型別。
+    string IGraphDocument.TitleOf(object root)
+        => root is ActionTimingGroup<TTiming, TPack> g ? g.Timing.ToString() : "（未指定時機）";
+
+    IList IGraphDocument.ItemsOf(object root)
+        => root is ActionTimingGroup<TTiming, TPack> g ? g.Actions : null;
+
+    object IGraphDocument.AddRoot(object key)
+    {
+        if (key is not TTiming timing) return null;
+
+        foreach (var existing in ActionGroups)
+            if (existing != null && EqualityComparer<TTiming>.Default.Equals(existing.Timing, timing)) return existing;
+
+        var group = new ActionTimingGroup<TTiming, TPack> { Timing = timing };
+        ActionGroups.Add(group);
+        return group;
+    }
 
     [SerializeField, HideInInspector]
     private bool _validated;
@@ -137,8 +189,10 @@ where TTiming : Enum
 
 [Serializable]
 [MovedFrom(true, sourceNamespace: "", sourceAssembly: "Assembly-CSharp", sourceClassName: "ActionTimingGroup")]
-public class ActionTimingGroup<TTiming, TPack> where TTiming : Enum
+public class ActionTimingGroup<TTiming, TPack> : IGraphHead where TTiming : Enum
 {
+    // 節點圖上不顯示：改下去會跟別的群組撞同一個時機。要換時機就刪掉這顆、重新建一顆。
+    [LGHide]
     public TTiming Timing;
 
     [SerializeReference]

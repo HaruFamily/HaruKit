@@ -23,12 +23,14 @@ public class LGToken
     public string TypeName => LGReflect.SlotKindName(Endpoint?.Slot);
 }
 
-/// <summary>一個時機群組：Timing 值與其動作清單。</summary>
+/// <summary>畫布上的一個 root：識別值與它底下的項目清單。</summary>
+// Timing 宣告成 object 而不是 Enum：編輯器只做相等比較與 ToString()，
+// 「識別值是什麼型別」由 IGraphDocument 的實作決定（LogicGraph 給的是時機 enum）。
 public class LGTimingGroup
 {
-    public object Group;        // ActionTimingGroup<TTiming, TPack>
-    public Enum Timing;
-    public IList Actions;       // List<ActionSlot<TPack>>
+    public object Group;
+    public object Timing;
+    public IList Actions;
 }
 
 /// <summary>
@@ -39,13 +41,15 @@ public class LGModel
 {
     // Owner 不限 ScriptableObject：Hierarchy 上掛 LogicGraph 的 MonoBehaviour 也能編。
     public UnityEngine.Object Owner { get; private set; }
-    public object Data { get; private set; }        // LogicGraph<TTiming, TPack> 工作副本
-    public Type TimingType { get; private set; }
+    public object Data { get; private set; }        // 圖的工作副本（IGraphDocument）
     public Type PackType { get; private set; }
 
-    /// <summary>時機選單要列的值：Owner 宣告的允許集合，沒宣告就是 TTiming 的全部成員。</summary>
-    // 過濾在這一層而不是選單那一層：ShowTimingMenu 與 AddTimingMenuItems 兩個入口共用同一份，不會有一邊漏過濾。
-    public IReadOnlyList<Enum> TimingValues { get; private set; }
+    /// <summary>工作副本的圖契約。所有 root／時機操作都經過它，編輯器不認識具體圖型別。</summary>
+    public IGraphDocument Doc => Data as IGraphDocument;
+
+    /// <summary>時機選單要列的值。過濾由 <see cref="IGraphDocument.RootKeys"/> 決定（含 Owner 的允許集合）。</summary>
+    // 快取在這一層而不是選單那一層：兩個選單入口共用同一份，不會有一邊漏過濾。
+    public IReadOnlyList<object> TimingValues { get; private set; }
     public bool Dirty { get; private set; }
     public bool TrackChanges { get; set; } = true;
 
@@ -57,7 +61,7 @@ public class LGModel
 
     // ===== 綁定 =====
 
-    /// <summary>在任意 SO 上找出 LogicGraph 欄位；找不到回 null。</summary>
+    /// <summary>在任意 SO 上找出可編輯的圖欄位（<see cref="IGraphDocument"/>）；找不到回 null。</summary>
     public static FieldInfo FindSystemField(UnityEngine.Object owner)
         => owner == null ? null : FindSystemField(owner.GetType());
 
@@ -66,10 +70,7 @@ public class LGModel
     {
         if (ownerType == null) return null;
         foreach (var f in LGReflect.Fields(ownerType))
-        {
-            var t = f.FieldType;
-            if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(LogicGraph<,>)) return f;
-        }
+            if (typeof(IGraphDocument).IsAssignableFrom(f.FieldType)) return f;
         return null;
     }
 
@@ -82,26 +83,22 @@ public class LGModel
         systemField = FindSystemField(owner);
         if (systemField == null)
         {
-            Debug.LogError($"[LogicGraph] '{(owner != null ? owner.name : "null")}' 沒有 LogicGraph 欄位，無法編輯。");
+            Debug.LogError($"[LogicGraph] '{(owner != null ? owner.name : "null")}' 沒有可編輯的圖欄位，無法編輯。");
             return false;
         }
 
-        var args = systemField.FieldType.GetGenericArguments();
-        TimingType = args[0];
-        PackType = args[1];
-        TimingValues = (owner as ILogicGraphOwner)?.AllowedTimings ?? AllTimingsOf(TimingType);
-
         Reload();
-        return Data != null;
+        if (Data is not IGraphDocument doc)
+        {
+            Debug.LogError($"[LogicGraph] '{(owner != null ? owner.name : "null")}' 的圖欄位取不到內容，無法編輯。");
+            return false;
+        }
+
+        PackType = doc.PackType;
+        TimingValues = doc.RootKeys(owner);
+        return true;
     }
 
-    private static IReadOnlyList<Enum> AllTimingsOf(Type timingType)
-    {
-        var values = Enum.GetValues(timingType);
-        var list = new List<Enum>(values.Length);
-        foreach (Enum v in values) list.Add(v);
-        return list;
-    }
 
     /// <summary>從 Owner 重新抓一份工作副本（開啟與「取消」共用）。</summary>
     public void Reload()
@@ -121,9 +118,8 @@ public class LGModel
             Debug.LogError("[LogicGraph] 無法建立 LogicGraph 工作副本，來源為 null。");
             return null;
         }
-        var m = system.GetType().GetMethod("DeepCopy");
-        var copy = m?.Invoke(system, null);
-        if (copy == null) Debug.LogError("[LogicGraph] LogicGraph.DeepCopy 失敗，已停止編輯以避免直接修改 Owner。");
+        var copy = (system as IGraphDocument)?.DeepCopy();
+        if (copy == null) Debug.LogError("[LogicGraph] 圖的 DeepCopy 失敗，已停止編輯以避免直接修改 Owner。");
         return copy;
     }
 
@@ -204,13 +200,15 @@ public class LGModel
     {
         var toStore = DeepCopy(Data);
         if (toStore == null) return false;
+        if (toStore is not IGraphDocument doc)
+        {
+            Debug.LogError("[LogicGraph] 圖的工作副本不是可編輯的圖，Owner 未寫入。");
+            return false;
+        }
 
-        var markDirty = toStore.GetType().GetMethod("MarkDirty");
-        markDirty?.Invoke(toStore, null);
-        var verify = toStore.GetType().GetMethod("Verify");
-        verify?.Invoke(toStore, null);
-        var isValidated = toStore.GetType().GetProperty("IsValidated");
-        if (isValidated?.GetValue(toStore) is not true)
+        doc.MarkDirty();
+        doc.Verify();
+        if (!doc.IsValidated)
         {
             Debug.LogError("[LogicGraph] Core Verify 未通過，Owner 未寫入。請查看 Console 的 Core 驗證訊息。");
             return false;
@@ -227,64 +225,40 @@ public class LGModel
 
     // ===== 時機群組 =====
 
-    public IList Groups => LGReflect.Get(Data, "ActionGroups") as IList;
+    public IList Groups => Doc?.Roots;
 
-    /// <summary>從 ActionGroups 的泛型型別取得動作 Slot 型別，空群組時也能新增空動作。</summary>
-    public Type ActionSlotType
-    {
-        get
-        {
-            var groups = Groups;
-            if (groups == null || !groups.GetType().IsGenericType) return null;
-            var groupType = groups.GetType().GetGenericArguments()[0];
-            var actions = LGReflect.Find(groupType, "Actions");
-            return actions != null && LGReflect.IsList(actions.FieldType, out var slotType) ? slotType : null;
-        }
-    }
+    /// <summary>項目欄位的型別。空群組時也要建得出新項目，所以問契約而不是從現有內容推。</summary>
+    public Type ActionSlotType => Doc?.ItemSlotType;
 
     public List<LGTimingGroup> ReadGroups()
     {
         var result = new List<LGTimingGroup>();
-        var list = Groups;
-        if (list == null) return result;
-        foreach (var g in list)
+        var doc = Doc;
+        if (doc?.Roots == null) return result;
+        foreach (var g in doc.Roots)
         {
             if (g == null) continue;
-            result.Add(new LGTimingGroup
-            {
-                Group = g,
-                Timing = LGReflect.Get(g, "Timing") as Enum,
-                Actions = LGReflect.Get(g, "Actions") as IList,
-            });
+            result.Add(new LGTimingGroup { Group = g, Timing = doc.KeyOf(g), Actions = doc.ItemsOf(g) });
         }
         return result;
     }
 
-    /// <summary>時機是否已經有群組（enum 不可重複，新增選單靠它決定哪些還能選）。</summary>
-    public bool HasGroup(Enum timing)
+    /// <summary>這個識別值是否已經有群組（識別值不可重複，新增選單靠它決定哪些還能選）。</summary>
+    public bool HasGroup(object timing)
     {
         foreach (var g in ReadGroups())
             if (Equals(g.Timing, timing)) return true;
         return false;
     }
 
-    /// <summary>新增一個時機群組；已存在同一個時機則回傳既有的。</summary>
-    public LGTimingGroup AddGroup(Enum timing)
+    /// <summary>新增一個時機群組；已存在同一個識別值則回傳既有的。</summary>
+    public LGTimingGroup AddGroup(object timing)
     {
-        foreach (var g in ReadGroups())
-            if (Equals(g.Timing, timing)) return g;
-
-        var list = Groups;
-        if (list == null) return null;
-        var groupType = list.GetType().GetGenericArguments()[0];
-        var group = LGReflect.CreateInstance(groupType);
+        var doc = Doc;
+        var group = doc?.AddRoot(timing);
         if (group == null) return null;
 
-        LGReflect.Set(group, "Timing", timing);
-        var actionsField = LGReflect.Find(groupType, "Actions");
-        var actions = LGReflect.EnsureList(group, actionsField);
-        list.Add(group);
-        return new LGTimingGroup { Group = group, Timing = timing, Actions = actions };
+        return new LGTimingGroup { Group = group, Timing = doc.KeyOf(group), Actions = doc.ItemsOf(group) };
     }
 
     public void RemoveGroup(LGTimingGroup group)
@@ -292,12 +266,8 @@ public class LGModel
         Groups?.Remove(group.Group);
     }
 
-    /// <summary>建立空 ActionSlot；可先加入清單，稍後再由空 Node 選擇動作型別。</summary>
-    public object NewActionSlot(IList actionList)
-    {
-        var slotType = actionList.GetType().GetGenericArguments()[0];
-        return LGReflect.CreateInstance(slotType);
-    }
+    /// <summary>建立空的動作欄位；可先加入清單，稍後再由空 Node 選擇動作型別。</summary>
+    public object NewActionSlot(IList actionList) => LGReflect.CreateInstance(ActionSlotType);
 
     /// <summary>
     /// 本 pack 的所有公式族：(結果型別, 具體 Slot 型別)。掃專案裡所有具體 FormulaSlot 子類，
@@ -736,12 +706,13 @@ public class LGModel
         if (system == null) yield break;
         var visited = new HashSet<object>(LGRefComparer.Instance);
 
-        if (LGReflect.Get(system, "ActionGroups") is IList groups)
+        var walkDoc = system as IGraphDocument;
+        if (walkDoc?.Roots is IList groups)
         {
             foreach (var g in groups)
             {
                 if (g == null) continue;
-                if (LGReflect.Get(g, "Actions") is not IList actions) continue;
+                if (walkDoc.ItemsOf(g) is not IList actions) continue;
                 foreach (var a in actions)
                 {
                     if (a == null) continue;
@@ -846,11 +817,12 @@ public class LGModel
         if (system == null) return result;
 
         var visited = new HashSet<object>(LGRefComparer.Instance);
-        if (LGReflect.Get(system, "ActionGroups") is IList groups)
+        var assetDoc = system as IGraphDocument;
+        if (assetDoc?.Roots is IList groups)
         {
             foreach (var group in groups)
             {
-                if (group == null || LGReflect.Get(group, "Actions") is not IList actions) continue;
+                if (group == null || assetDoc.ItemsOf(group) is not IList actions) continue;
                 foreach (var action in actions) CollectFormalAssets(action, visited, result);
             }
         }

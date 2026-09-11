@@ -2,7 +2,7 @@ namespace HaruFamily.Framework.LogicGraph
 {
 using Cysharp.Threading.Tasks;
 
-public abstract class ActionBase<TPack> : LogicGraphNode
+public abstract class ActionBase<TPack> : ActionNodeBase<TPack>
 {
     public async UniTask Execute(TPack pack, TokenTable<TPack> tokens)
     {

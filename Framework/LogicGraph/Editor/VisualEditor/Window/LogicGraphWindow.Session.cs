@@ -43,13 +43,7 @@ public partial class LogicGraphWindow
         => Selection.activeObject is ScriptableObject so && (LGModel.CanEdit(so) || IsSharedAsset(so));
 
     /// <summary>是否為公式／動作資產（可下鑽編輯的共用資產）。</summary>
-    private static bool IsSharedAsset(ScriptableObject so)
-    {
-        if (so is FormulaAssetBase) return true;
-        for (var t = so.GetType(); t != null && t != typeof(object); t = t.BaseType)
-            if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(ActionAssetBase<>)) return true;
-        return false;
-    }
+    private static bool IsSharedAsset(ScriptableObject so) => so is ILogicGraphAsset;
 
     /// <summary>從引用者裡挑一個可以當上下文的 Owner。索引是現算的，只有專案裡真的沒人引用時才是空的。</summary>
     private static ScriptableObject FindContextOwner(ScriptableObject asset)

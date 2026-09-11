@@ -1,6 +1,7 @@
 namespace HaruFamily.Framework.LogicGraph
 {
 using Cysharp.Threading.Tasks;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -14,6 +15,9 @@ public abstract class FormulaAssetBase : ScriptableObject, ILogicGraphAsset
 
     /// <summary>根內容的載體。根節點的 Id／座標／備註都住在它身上，和圖上其他節點同一套。</summary>
     public abstract GraphNode Root { get; }
+
+    /// <summary>公式資產的結果型別。</summary>
+    public abstract Type ResultType { get; }
 
     // 資產畫布 HEAD 的座標。HEAD 那個容器槽是編輯期現做的，沒有地方落腳，所以記在資產本體上，
     // 形狀與 ActionSlot／GraphEndpoint／ActionTimingGroup 一致（Pos／HasPos／ClearPos）。
@@ -42,6 +46,8 @@ public abstract class FormulaAssetBase : ScriptableObject, ILogicGraphAsset
 
 public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
 {
+    public override Type ResultType => typeof(T);
+
     // 根內容的載體。存 GraphNode 而不是裸公式，根節點才有地方放 Id／座標／備註／停用旗標，
     // 跟圖上其他節點同一套規則；只存裸內容時每次開畫布都要現包一顆，位置永遠留不住。
     [SerializeReference]
