@@ -1,3 +1,4 @@
+using HaruFamily.Framework.LogicGraph.Editor;
 using UnityEditor;
 using UnityEngine;
 
@@ -12,8 +13,10 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
             var pipeline = (AssetPipeline)target;
 
             EditorGUILayout.LabelField("Asset Pipeline", EditorStyles.boldLabel);
+            // 節點圖視窗來自 GraphKit：它靠「欄位型別實作 IGraphDocument」認出 pipeline.graph，
+            // 不必知道 AssetPipeline 是什麼。
             if (GUILayout.Button("Open Graph", GUILayout.Height(28f)))
-                AssetPipelineGraphWindow.Open(pipeline);
+                LogicGraphWindow.OpenFor(pipeline);
 
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("Validate"))

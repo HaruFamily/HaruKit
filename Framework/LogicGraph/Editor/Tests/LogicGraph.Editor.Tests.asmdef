@@ -3,7 +3,9 @@
   "rootNamespace": "HaruFamily.Framework.LogicGraph.Editor.Tests",
   "references": [
     "HaruFamily.Framework.LogicGraph",
-    "HaruFamily.Framework.LogicGraph.Editor"
+    "HaruFamily.Framework.LogicGraph.Editor",
+    "HaruFamily.DependencyCore.GraphKit",
+    "HaruFamily.DependencyCore.GraphKit.Editor"
   ],
   "includePlatforms": [
     "Editor"

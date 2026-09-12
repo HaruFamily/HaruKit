@@ -15,7 +15,9 @@ namespace HaruFamily.Tools.AssetPipeline
     {
         private const string DefaultAssetPath = "Assets/Editor/HaruFamily/AssetPipeline/AssetPipeline.asset";
         internal static Action<string> formulaWarningHandler;
-        internal static AssetPipeline current;
+        /// <summary>目前正在執行的管線。步驟與公式靠它讀資產群組、登記 dynamic 資產。</summary>
+        // 步驟的具體實作住在使用端專案，所以這幾個給步驟用的成員必須是 public，不是 internal。
+        public static AssetPipeline current;
 
         [MenuItem("HaruFamily/Asset Pipeline/Open")]
         private static void OpenTool()
@@ -40,8 +42,10 @@ namespace HaruFamily.Tools.AssetPipeline
 
         public string clearKey = "Default";
 
-        [SerializeReference]
-        public List<IPipelineAsset> pipelineAssets = new List<IPipelineAsset>();
+        /// <summary>
+        /// 管線的節點圖。編輯器靠「欄位型別實作 IGraphDocument」找到它，不必認識 AssetPipeline。
+        /// </summary>
+        public APGraph graph = new APGraph();
 
         [NonSerialized]
         private string pipelineLog = string.Empty;
@@ -62,7 +66,8 @@ namespace HaruFamily.Tools.AssetPipeline
             EditorUtility.SetDirty(this);
         }
 
-        internal static void ReportFormulaWarning(string message)
+        /// <summary>公式回報一則警告：寫進本次執行的公式警告區並輸出 Console。</summary>
+        public static void ReportFormulaWarning(string message)
         {
             Debug.LogWarning($"[AssetPipeline] {message}");
             formulaWarningHandler?.Invoke(message);

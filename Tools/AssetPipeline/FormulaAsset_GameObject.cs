@@ -10,13 +10,13 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public class FormulaAsset_GameObject : FormulaAsset_Asset<GameObject, Formula_GameObject>
+    public class FormulaAsset_GameObject : APFormulaSlot<GameObject, Formula_GameObject>
     {
         public FormulaAsset_GameObject()
         {
         }
 
-        public FormulaAsset_GameObject(GameObject @default) : base(@default)
+        public FormulaAsset_GameObject(GameObject defaultValue) : base(defaultValue)
         {
         }
     }
@@ -27,26 +27,14 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public class Formula_GameObjectList_AssetPipeline : Formula_GameObjectList
-    {
-        public AssetPipelineSource source = new AssetPipelineSource();
-
-        public override List<GameObject> CaculateTyped()
-        {
-            if (source == null) return new List<GameObject>();
-            return source.GetAssets<GameObject>();
-        }
-    }
-
-    [Serializable]
-    public class FormulaAsset_GameObjectList : FormulaAsset_AssetList<GameObject, Formula_GameObjectList>
+    public class FormulaAsset_GameObjectList : APFormulaSlot<List<GameObject>, Formula_GameObjectList>
     {
         public FormulaAsset_GameObjectList()
         {
-            @default = new List<GameObject>();
+            _default = new List<GameObject>();
         }
 
-        public FormulaAsset_GameObjectList(List<GameObject> @default) : base(@default)
+        public FormulaAsset_GameObjectList(List<GameObject> defaultValue) : base(defaultValue)
         {
         }
     }

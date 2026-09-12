@@ -3,6 +3,7 @@ namespace HaruFamily.Framework.LogicGraph
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Scripting.APIUpdating;
 
 /// <summary>節點的內容種類。一個節點同時只會是其中一種，切換即清掉其他來源。</summary>
 public enum NodeKind
@@ -29,6 +30,8 @@ public enum NodeKind
 // 非泛型才能讓候選池、複製貼上、座標與編輯器走訪全部走同一條路徑；
 // 型別安全收斂在 Slot 的 GetBody<T>() / GetAsset<T>() 一處，不合型別由 Verify() 於編輯期擋下。
 [Serializable]
+// 載體層搬進 GraphKit 組件時，既有資產的 SerializeReference 記錄仍戳著舊組件名，沒有這行會整批變成 missing managed reference。
+[MovedFrom(true, sourceAssembly: "HaruFamily.Framework.LogicGraph")]
 public class GraphNode
 {
     [SerializeField, HideInInspector]

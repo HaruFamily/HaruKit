@@ -2,7 +2,8 @@
   "name": "HaruFamily.Tools.AssetPipeline.Editor",
   "rootNamespace": "HaruFamily.Tools.AssetPipeline",
   "references": [
-    "Unity.Addressables.Editor"
+    "HaruFamily.DependencyCore.GraphKit",
+    "HaruFamily.DependencyCore.GraphKit.Editor"
   ],
   "includePlatforms": [
     "Editor"

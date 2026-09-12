@@ -30,8 +30,9 @@ Unity → `Window > Package Manager` → `+` → `Add package from git URL...`�
 |------|------|--------------|-----------|--------------|
 | UX | Bookmarks | `com.harufamily.ux.bookmarks` | `?path=/UX/Bookmarks` | — |
 | Framework | Nexus | `com.harufamily.framework.nexus` | `?path=/Framework/Nexus` | — |
-| Framework | LogicGraph | `com.harufamily.framework.logicgraph` | `?path=/Framework/LogicGraph` | UniTask |
-| Tools | AssetPipeline | `com.harufamily.tools.assetpipeline` | `?path=/Tools/AssetPipeline` | — |
+| DependencyCore | GraphKit | `com.harufamily.dependencycore.graphkit` | `?path=/DependencyCore/GraphKit` | — |
+| Framework | LogicGraph | `com.harufamily.framework.logicgraph` | `?path=/Framework/LogicGraph` | GraphKit、UniTask |
+| Tools | AssetPipeline | `com.harufamily.tools.assetpipeline` | `?path=/Tools/AssetPipeline` | GraphKit |
 
 > **「需先手動安裝」欄的意思**：registry 上的依賴（例 Addressables）UPM 會自動解析，不必理會；**git-only 的依賴 UPM 解析不到**（見 [`CONVENTIONS.md`](./CONVENTIONS.md) §1.1），必須自己先列進 `manifest.json`。完整 URL 與可整段複製的 `dependencies` 片段在該工具自己的 README 的 Requirements / Install 段。
 

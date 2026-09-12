@@ -1,10 +1,7 @@
 {
-  "name": "HaruFamily.Framework.LogicGraph",
+  "name": "HaruFamily.DependencyCore.GraphKit",
   "rootNamespace": "HaruFamily.Framework.LogicGraph",
-  "references": [
-    "UniTask",
-    "HaruFamily.DependencyCore.GraphKit"
-  ],
+  "references": [],
   "includePlatforms": [],
   "excludePlatforms": [],
   "allowUnsafeCode": false,

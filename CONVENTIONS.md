@@ -124,5 +124,10 @@ https://github.com/HaruFamily/HaruKit.git?path=/<Category>/<Tool>
 |------|------|--------------|-----------|--------------|
 | UX | Bookmarks | `com.harufamily.ux.bookmarks` | `?path=/UX/Bookmarks` | — |
 | Framework | Nexus | `com.harufamily.framework.nexus` | `?path=/Framework/Nexus` | — |
-| Framework | LogicGraph | `com.harufamily.framework.logicgraph` | `?path=/Framework/LogicGraph` | UniTask |
-| Tools | AssetPipeline | `com.harufamily.tools.assetpipeline` | `?path=/Tools/AssetPipeline` | — |
+| DependencyCore | GraphKit | `com.harufamily.dependencycore.graphkit` | `?path=/DependencyCore/GraphKit` | — |
+| Framework | LogicGraph | `com.harufamily.framework.logicgraph` | `?path=/Framework/LogicGraph` | GraphKit、UniTask |
+| Tools | AssetPipeline | `com.harufamily.tools.assetpipeline` | `?path=/Tools/AssetPipeline` | GraphKit |
+
+> **同 repo 的套件之間也是 git-only 依賴**（§1.1）：LogicGraph 依賴 GraphKit，但 `dependencies` 寫不進去，
+> 使用端得自己在 `manifest.json` 兩條都列。搬型別跨套件時，序列化資產靠 `[MovedFrom]` 的
+> `sourceAssembly` 遷移，所以 **asmdef name 是契約，改它等於改資料格式**。

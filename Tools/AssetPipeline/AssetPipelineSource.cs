@@ -26,6 +26,22 @@ namespace HaruFamily.Tools.AssetPipeline
             return GetAssets<T>(AssetPipeline.current);
         }
 
+        /// <summary>
+        /// 這個來源在指定模式下實際會讀到的 key（已去掉空白與前後空格）。
+        /// 模式沒開就回空，驗證器據此檢查 key 存不存在與 dynamic 的產出時序。
+        /// </summary>
+        public IEnumerable<string> ReadKeys(AssetPipelineSourceFlags mode)
+        {
+            if ((sourceFlags & mode) == 0) yield break;
+            if (keys == null) yield break;
+
+            foreach (string key in keys)
+            {
+                if (string.IsNullOrWhiteSpace(key)) continue;
+                yield return key.Trim();
+            }
+        }
+
         public List<T> GetAssets<T>(AssetPipeline targetPipeline) where T : Object
         {
             var results = new List<T>();

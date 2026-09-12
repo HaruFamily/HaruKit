@@ -1,12 +1,9 @@
 {
   "name": "com.harufamily.tools.assetpipeline",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "displayName": "HaruKit Tools AssetPipeline",
-  "description": "Editor-only linear asset pipeline tools.",
+  "description": "Editor-only ordered asset pipeline framework built on the GraphKit node editor. Concrete steps and formulas live in the consuming project.",
   "unity": "2021.3",
-  "dependencies": {
-    "com.unity.addressables": "1.19.19"
-  },
   "author": {
     "name": "HaruFamily"
   },

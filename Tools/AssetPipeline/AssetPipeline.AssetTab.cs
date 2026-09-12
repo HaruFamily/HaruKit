@@ -148,9 +148,10 @@ namespace HaruFamily.Tools.AssetPipeline
 
         internal bool ValidatePipelinePrototypeSources()
         {
-            PipelineGraphAnalysis analysis = PipelineGraphAnalyzer.Analyze(this);
-            var keyUsages = analysis.PrototypeKeyUsages;
-            var sourceIssues = analysis.SourceIssues;
+            // 節點圖層面的錯誤（空節點、型別不符、dynamic key 時序、變數重名與循環）由圖自己驗；
+            // 這裡只管資產群組層面的事：key 有沒有對應群組、群組是不是空的、有沒有重複。
+            List<string> graphErrors = APGraphVerifier.Collect(graph);
+            Dictionary<string, List<string>> keyUsages = APGraphVerifier.CollectPrototypeKeyUsages(graph);
 
             var groupsByKey = new Dictionary<string, List<AssetPipelineAssetGroup>>();
             int invalidGroupCount = 0;
@@ -209,30 +210,31 @@ namespace HaruFamily.Tools.AssetPipeline
                     sb.AppendLine($"[重複原型 Key] {pair.Key}：{pair.Value.Count} 個群組。");
                 }
 
-            foreach (string sourceIssue in sourceIssues)
-                sb.AppendLine($"[來源設定錯誤] {sourceIssue}");
-
-            int graphWarningCount = 0;
-            foreach (string warning in analysis.Warnings)
-            {
-                if (warning.Contains("缺少 prototype key")) continue;
-                graphWarningCount++;
-                sb.AppendLine($"[管線順序錯誤] {warning}");
-            }
+            int graphErrorCount = graphErrors.Count;
+            foreach (string error in graphErrors)
+                sb.AppendLine($"[節點圖錯誤] {error}");
 
             if (invalidGroupCount > 0)
                 sb.AppendLine($"[原型資產設定錯誤] 空群組或空 Key：{invalidGroupCount} 個。");
 
-            int issueCount = missingKeyCount + emptyAssetCount + sourceIssues.Count + invalidGroupCount + graphWarningCount;
+            int issueCount = missingKeyCount + emptyAssetCount + invalidGroupCount + graphErrorCount;
             assetLog = issueCount == 0
-                ? $"管線原型資產來源驗證通過：{keyUsages.Count} 個使用中的 Key 均已設置資產。"
-                : $"管線驗證失敗：缺少 Key {missingKeyCount}，空資產 {emptyAssetCount}，來源設定錯誤 {sourceIssues.Count}，原型設定錯誤 {invalidGroupCount}，順序錯誤 {graphWarningCount}。\n{sb}";
+                ? $"管線驗證通過：{keyUsages.Count} 個使用中的 Key 均已設置資產。"
+                : $"管線驗證失敗：缺少 Key {missingKeyCount}，空資產 {emptyAssetCount}，原型設定錯誤 {invalidGroupCount}，節點圖錯誤 {graphErrorCount}。\n{sb}";
 
             if (issueCount == 0 && duplicateKeyCount > 0)
                 assetLog += $"\n警告：發現 {duplicateKeyCount} 個重複原型 Key。\n{sb}";
 
-            if (issueCount == 0) MarkPrototypeSourceValidationPassed();
-            else ClearPrototypeSourceValidation();
+            if (issueCount == 0)
+            {
+                graph.MarkValidated();
+                MarkPrototypeSourceValidationPassed();
+            }
+            else
+            {
+                graph.MarkDirty();
+                ClearPrototypeSourceValidation();
+            }
 
             pipelineLog = assetLog;
             Debug.Log($"[AssetPipeline] {assetLog}");
@@ -292,7 +294,8 @@ namespace HaruFamily.Tools.AssetPipeline
         }
 
         /// <summary>將資產註冊進動態資產指定 Key（去重、刷新資訊）。供管線資產（如 PipelineAsset_CreatePrefabCopies）呼叫。</summary>
-        internal void RegisterDynamicAssets(string key, IEnumerable<Object> assets)
+        /// <summary>步驟把產出的資產登記成 dynamic 群組，供後面的步驟讀取。</summary>
+        public void RegisterDynamicAssets(string key, IEnumerable<Object> assets)
         {
             if (assets == null) return;
 

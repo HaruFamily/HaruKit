@@ -45,9 +45,10 @@ public static class LGAssetIndex
 
                 string path = AssetDatabase.GUIDToAssetPath(guids[i]);
                 Type type = AssetDatabase.GetMainAssetTypeAtPath(path);
-                bool isFormula = type != null && typeof(FormulaAssetBase).IsAssignableFrom(type);
-                bool isAction = type != null && typeof(IActionGraphAsset).IsAssignableFrom(type);
-                if (!isFormula && !isAction) continue;
+                // 判定只走 Contracts 的兩個介面，不認任何具體資產基底：編輯器不知道使用端有哪幾種圖資產。
+                bool isGraphAsset = type != null && typeof(ILogicGraphAsset).IsAssignableFrom(type);
+                bool isAction = isGraphAsset && typeof(IActionGraphAsset).IsAssignableFrom(type);
+                if (!isGraphAsset) continue;
 
                 var asset = AssetDatabase.LoadAssetAtPath<ScriptableObject>(path);
                 if (asset == null) continue;

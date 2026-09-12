@@ -3,6 +3,7 @@
   "rootNamespace": "HaruFamily.Tools.AssetPipeline.Tests",
   "references": [
     "HaruFamily.Tools.AssetPipeline.Editor",
+    "HaruFamily.DependencyCore.GraphKit",
     "UnityEditor.TestRunner",
     "UnityEngine.TestRunner"
   ],

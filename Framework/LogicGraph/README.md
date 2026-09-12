@@ -22,18 +22,25 @@ or action behavior.
   names, incompatible bindings, and graph or asset cycles before execution.
 - `DeepCopy()` preserves polymorphic `SerializeReference` graphs, shared
   references, cycles, and Unity object references.
-- The included graph editor uses LogicGraph attributes and has no Odin
-  dependency.
+- The node editor comes from GraphKit and has no Odin dependency; LogicGraph
+  contributes only the Inspector drawer that opens it.
 
 ## Requirements
 
 - Unity 2021.3 or later
+- [GraphKit](../../DependencyCore/GraphKit):
+  `https://github.com/HaruFamily/HaruKit.git?path=/DependencyCore/GraphKit`
 - [UniTask](https://github.com/Cysharp/UniTask):
   `https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask`
 
-Unity Package Manager cannot resolve the UniTask Git dependency from this
-package manifest. Install it before LogicGraph; otherwise Unity compilation
-fails by design rather than silently disabling LogicGraph features.
+Unity Package Manager cannot resolve either Git dependency from this package
+manifest. Install both before LogicGraph; otherwise Unity compilation fails by
+design rather than silently disabling LogicGraph features.
+
+GraphKit holds the graph carrier, the editor contracts, and the node editor
+window. LogicGraph adds timing dispatch, asynchronous execution, and the
+generic slot and asset bodies on top of them. Both packages share the
+`HaruFamily.Framework.LogicGraph` namespace, so a consumer needs one `using`.
 
 Odin Inspector and Serializer are not required.
 
@@ -51,6 +58,7 @@ Or add it to `Packages/manifest.json`:
 {
   "dependencies": {
     "com.cysharp.unitask": "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask",
+    "com.harufamily.dependencycore.graphkit": "https://github.com/HaruFamily/HaruKit.git?path=/DependencyCore/GraphKit",
     "com.harufamily.framework.logicgraph": "https://github.com/HaruFamily/HaruKit.git?path=/Framework/LogicGraph"
   }
 }
@@ -172,11 +180,12 @@ as action execution.
 
 ## Package Contents
 
-- `Runtime/Action`: action bases, slots, and reusable action assets
-- `Runtime/Formula`: formula bases, slots, and reusable formula assets
-- `Runtime/Graph`: graph nodes and shared-reference support
-- `Runtime/Token`: named endpoints and token resolution
-- `Runtime/Engine`: dispatch, validation, deep copy, and compilation
-- `Runtime/Contracts`: editor metadata and owner or asset contracts
-- `Editor`: graph editor, Inspector drawer, validation sweep, and formula
-  family scaffolding
+- `Runtime/Action`: action bases, generic action slot, reusable action assets
+- `Runtime/Formula`: formula bases, generic formula slot, reusable formula
+  assets
+- `Runtime/Token`: token resolution
+- `Runtime/Engine`: dispatch, validation, and compilation
+- `Editor`: Inspector drawer, validation sweep, and formula family scaffolding
+
+The graph carrier, the editor contracts, the `[LG*]` attributes, deep copy, and
+the node editor window all live in GraphKit.

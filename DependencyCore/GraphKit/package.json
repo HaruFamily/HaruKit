@@ -1,0 +1,17 @@
+{
+  "name": "com.harufamily.dependencycore.graphkit",
+  "version": "1.0.0",
+  "displayName": "GraphKit",
+  "description": "Domain-agnostic serialized node-graph carrier, contracts, and IMGUI node editor. No external dependencies.",
+  "unity": "2021.3",
+  "author": {
+    "name": "HaruFamily"
+  },
+  "keywords": [
+    "framework",
+    "graph",
+    "node-editor",
+    "harukit",
+    "tool"
+  ]
+}

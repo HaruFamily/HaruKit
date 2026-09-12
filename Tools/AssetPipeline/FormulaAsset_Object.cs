@@ -5,70 +5,53 @@ using Object = UnityEngine.Object;
 namespace HaruFamily.Tools.AssetPipeline
 {
     [Serializable]
-    public abstract class Formula_Object : IFormula<Object>
+    public abstract class Formula_Object : APFormulaBase<Object>
     {
-        public abstract Object Caculate();
     }
 
     /// <summary>
-    /// Object 公式的型別化中間層：CaculateTyped 回傳具體 T，繼承來的 Caculate 只做 T→Object 上轉（編譯期安全，無 is/as 下轉）。
-    /// 讓 Formula_&lt;具體型別&gt; 直接 is-a Formula_Object，可被 Formula_Object 欄位的 picker 直接選取。
+    /// Object 公式的型別化中間層：<see cref="EvaluateTyped"/> 回具體 T，繼承來的 Evaluate 只做 T→Object 上轉。
     /// </summary>
+    // 讓 Formula_<具體型別> 同時 is-a Formula_Object（可放進 Object 欄位）又能接上自己那一族的欄位。
+    // 靠介面而不是第二個基底：類別只能繼承一個，IAPFormula<T> 可以再宣告一個結果型別。
     [Serializable]
-    public abstract class Formula_Object<T> : Formula_Object, IFormula<T> where T : Object
+    public abstract class Formula_Object<T> : Formula_Object, IAPFormula<T> where T : Object
     {
-        public abstract T CaculateTyped();
+        public abstract T EvaluateTyped();
 
-        T IFormula<T>.Caculate()
+        T IAPFormula<T>.Evaluate()
         {
-            return CaculateTyped();
+            return EvaluateTyped();
         }
 
-        public sealed override Object Caculate()
+        public sealed override Object Evaluate()
         {
-            return CaculateTyped();
-        }
-    }
-
-    [Serializable]
-    public class Formula_Object_AssetPipeline : Formula_Object
-    {
-        public AssetPipelineSource source = new AssetPipelineSource();
-
-        public override Object Caculate()
-        {
-            if (source == null) return null;
-
-            List<Object> assets = source.GetAssets<Object>();
-            if (assets == null || assets.Count == 0) return null;
-
-            return assets[0];
+            return EvaluateTyped();
         }
     }
 
     [Serializable]
-    public abstract class Formula_ObjectList : IFormula<List<Object>>
+    public abstract class Formula_ObjectList : APFormulaBase<List<Object>>
     {
-        public abstract List<Object> Caculate();
     }
 
     /// <summary>
-    /// Object 清單公式的型別化中間層：CaculateTyped 回傳 List&lt;T&gt;，繼承來的 Caculate 逐項 T→Object 上轉（編譯期安全）。
+    /// Object 清單公式的型別化中間層：<see cref="EvaluateTyped"/> 回 List&lt;T&gt;，繼承來的 Evaluate 逐項上轉。
     /// </summary>
     [Serializable]
-    public abstract class Formula_ObjectList<T> : Formula_ObjectList, IFormula<List<T>> where T : Object
+    public abstract class Formula_ObjectList<T> : Formula_ObjectList, IAPFormula<List<T>> where T : Object
     {
-        public abstract List<T> CaculateTyped();
+        public abstract List<T> EvaluateTyped();
 
-        List<T> IFormula<List<T>>.Caculate()
+        List<T> IAPFormula<List<T>>.Evaluate()
         {
-            return CaculateTyped();
+            return EvaluateTyped();
         }
 
-        public sealed override List<Object> Caculate()
+        public sealed override List<Object> Evaluate()
         {
             var result = new List<Object>();
-            List<T> typed = CaculateTyped();
+            List<T> typed = EvaluateTyped();
             if (typed == null) return result;
 
             foreach (T item in typed)
@@ -79,38 +62,26 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public class Formula_ObjectList_AssetPipeline : Formula_ObjectList
-    {
-        public AssetPipelineSource source = new AssetPipelineSource();
-
-        public override List<Object> Caculate()
-        {
-            if (source == null) return new List<Object>();
-            return source.GetAssets<Object>();
-        }
-    }
-
-    [Serializable]
-    public class FormulaAsset_Object : FormulaAsset_Asset<Object, Formula_Object>
+    public class FormulaAsset_Object : APFormulaSlot<Object, Formula_Object>
     {
         public FormulaAsset_Object()
         {
         }
 
-        public FormulaAsset_Object(Object @default) : base(@default)
+        public FormulaAsset_Object(Object defaultValue) : base(defaultValue)
         {
         }
     }
 
     [Serializable]
-    public class FormulaAsset_ObjectList : FormulaAsset_AssetList<Object, Formula_ObjectList>
+    public class FormulaAsset_ObjectList : APFormulaSlot<List<Object>, Formula_ObjectList>
     {
         public FormulaAsset_ObjectList()
         {
-            @default = new List<Object>();
+            _default = new List<Object>();
         }
 
-        public FormulaAsset_ObjectList(List<Object> @default) : base(@default)
+        public FormulaAsset_ObjectList(List<Object> defaultValue) : base(defaultValue)
         {
         }
     }
