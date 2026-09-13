@@ -15,7 +15,7 @@ public abstract class LogicGraphNode
     public LogicGraphNode EditorClone()
     {
         var copy = LogicGraphDeepCopy.Copy(this);
-        if (copy == null) Debug.LogError($"[LogicGraph] 複製節點 {GetType().Name} 失敗。");
+        if (copy == null) Debug.LogError($"[GraphKit] 複製節點 {GetType().Name} 失敗。");
         return copy;
     }
 #endif

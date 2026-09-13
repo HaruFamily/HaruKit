@@ -577,10 +577,10 @@ public partial class LogicGraphWindow
             section = menu.GetItemCount();
         }
 
-        // 時機節點沒有內容也沒有引用，只有「刪掉這個時機」與畫布操作。
+        // root 節點沒有內容也沒有引用，只有「刪掉它」與畫布操作。
         if (node.IsTimingGroup)
         {
-            menu.AddItem(new GUIContent("刪除這個時機"), false, () => RemoveTimingGroup(node));
+            menu.AddItem(new GUIContent($"刪除這個{RootNoun}"), false, () => RemoveTimingGroup(node));
             AddCanvasMenuItems(menu, Sep);
             menu.ShowAsContext();
             return;
@@ -688,10 +688,10 @@ public partial class LogicGraphWindow
         // 有頭端就有候選池可放，判準與拖曳放節點那條一致；變數與資產畫布也算。
         bool canEditFocus = CanCreateReferenceNode();
 
-        // 時機節點由使用者自己建，位置就是按下右鍵的地方。
+        // root 節點由使用者自己建，位置就是按下右鍵的地方。
         if (focus.Kind == LGFocusKind.Timing)
         {
-            AddTimingMenuItems(menu, "新增時機節點/", graphMouse);
+            AddTimingMenuItems(menu, $"新增{RootNoun}節點/", graphMouse);
             menu.AddSeparator("");
         }
 
@@ -817,14 +817,14 @@ public partial class LogicGraphWindow
         var asset = ScriptableObject.CreateInstance(assetType);
         if (asset == null)
         {
-            Debug.LogError($"[LogicGraph] 建立 {assetType.Name} 失敗。");
+            Debug.LogError($"[GraphKit] 建立 {assetType.Name} 失敗。");
             return;
         }
 
         var setTarget = assetType.GetMethod("SetTarget");
         if (setTarget == null)
         {
-            Debug.LogError($"[LogicGraph] {assetType.Name} 沒有 SetTarget。");
+            Debug.LogError($"[GraphKit] {assetType.Name} 沒有 SetTarget。");
             return;
         }
         setTarget.Invoke(asset, new object[] { source });
@@ -845,7 +845,7 @@ public partial class LogicGraphWindow
         // 轉存的內容來自已驗證的圖，這一關正常一定過；沒過代表轉存本身把內容抄壞了，
         // 當場報出來，而不是等別人存檔時被 Core 擋在「Owner 未寫入」那個沒有細節的對話框。
         if (hostSlotType != null && LGValidator.AssetHasError(model, hostSlotType, asset))
-            Debug.LogError($"[LogicGraph] 轉存出來的資產 '{asset.name}' 內部有錯誤，請雙擊它進入資產畫布查看驗證訊息。", asset);
+            Debug.LogError($"[GraphKit] 轉存出來的資產 '{asset.name}' 內部有錯誤，請雙擊它進入資產畫布查看驗證訊息。", asset);
 
         BreakUndoMerge();
         // 內容被「搬進資產」，所以是就地把載體換成資產引用，不留成候選。
@@ -889,7 +889,7 @@ public partial class LogicGraphWindow
             {
                 if (LGReflect.CreateInstance(source.Slot?.GetType()) is not FormulaSlotBase slot)
                 {
-                    Debug.LogWarning($"[LogicGraph] 變數 '{source.Name}' 建不出資產參數欄位，"
+                    Debug.LogWarning($"[GraphKit] 變數 '{source.Name}' 建不出資產參數欄位，"
                         + "轉存後資產內這一格會取預設值，請手動改成常數或補上對應的 FormulaSlot 型別。");
                     continue;
                 }
@@ -954,7 +954,7 @@ public partial class LogicGraphWindow
 
             if (binding?.Slot == null)
             {
-                Debug.LogWarning($"[LogicGraph] 資產參數 '{name}' 沒有參數列，"
+                Debug.LogWarning($"[GraphKit] 資產參數 '{name}' 沒有參數列，"
                     + $"請在這顆資產節點上手動把它接回變數 '{source?.Name}'。");
                 continue;
             }
@@ -1014,7 +1014,7 @@ public partial class LogicGraphWindow
             var copy = LogicGraphDeepCopy.Copy(pair.Key, shared);
             if (copy == null)
             {
-                Debug.LogError("[LogicGraph] 複製共用節點失敗，該欄位會跟著資產一起失去內容，詳見上一則訊息。");
+                Debug.LogError("[GraphKit] 複製共用節點失敗，該欄位會跟著資產一起失去內容，詳見上一則訊息。");
                 continue;
             }
             // 新舊載體不可共用識別碼：座標與選取狀態都掛在它身上。

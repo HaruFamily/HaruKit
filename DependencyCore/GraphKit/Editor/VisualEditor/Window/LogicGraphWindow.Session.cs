@@ -548,7 +548,7 @@ public partial class LogicGraphWindow
         var setRoot = asset.GetType().GetMethod("SetRoot");
         if (setRoot == null)
         {
-            Debug.LogError($"[LogicGraph] {asset.GetType().Name} 沒有 SetRoot，無法寫回。");
+            Debug.LogError($"[GraphKit] {asset.GetType().Name} 沒有 SetRoot，無法寫回。");
             return false;
         }
 
@@ -649,7 +649,7 @@ public partial class LogicGraphWindow
         if (touched > 0) AssetDatabase.SaveAssets();
         if (failed.Count == 0) return;
 
-        Debug.LogError($"[LogicGraph] 資產 '{asset.name}' 存檔後，這些引用它的對象驗證不通過（多半是參數被改名／刪除／換型別）：" +
+        Debug.LogError($"[GraphKit] 資產 '{asset.name}' 存檔後，這些引用它的對象驗證不通過（多半是參數被改名／刪除／換型別）：" +
             string.Join("、", failed), asset);
     }
 }

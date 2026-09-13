@@ -27,7 +27,7 @@ public static class LogicGraphDeepCopy
         try { return CopyObject(source, copied) as T; }
         catch (Exception e)
         {
-            Debug.LogError($"[LogicGraph] 深複製失敗：{e.Message}");
+            Debug.LogError($"[GraphKit] 深複製失敗：{e.Message}");
             return null;
         }
     }
@@ -84,7 +84,7 @@ public static class LogicGraphDeepCopy
             try { return FormatterServices.GetUninitializedObject(type); }
             catch (Exception e)
             {
-                Debug.LogError($"[LogicGraph] 無法複製 {type.Name}：{e.Message}");
+                Debug.LogError($"[GraphKit] 無法複製 {type.Name}：{e.Message}");
                 return null;
             }
         }

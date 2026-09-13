@@ -99,7 +99,7 @@ public class LGFocus
                 case LGFocusKind.Action:
                     return ActionHeadTitle(ActionSlot);
                 case LGFocusKind.Timing:
-                    return "全部時機";
+                    return $"全部{LGGraph.RootNoun(Data as IGraphDocument)}";
                 case LGFocusKind.Asset:
                     if (Endpoint != null) return $"資產 {AssetObject?.name} ／ 變數 {Endpoint.Name ?? "（未命名）"}";
                     return AssetObject != null ? $"資產 {AssetObject.name}" : "資產";

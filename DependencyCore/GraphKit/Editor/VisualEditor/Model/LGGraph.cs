@@ -293,7 +293,8 @@ public static class LGGraph
         // ActionTimingGroup 不是 ActionBase，但它的本體是 ActionSlot 清單，Header 應導向 Action 流程色。
         node.IsActionNode = true;
         node.Title = GroupTitle(model, group);
-        node.Chip = "時機";      // 群組不回傳值，chip 改寫身分：一眼分得出時機節點與動作節點
+        // 群組不回傳值，chip 改寫身分：一眼分得出 root 與一般節點。文字由圖的契約提供，編輯器不寫死領域用詞。
+        node.Chip = model?.Doc?.RootChip;
         node.Desc = null;
 
         model.RegisterCarrier(node.Id, group);
@@ -304,7 +305,11 @@ public static class LGGraph
     public static string GroupHeadId(LGModel model, object group) => "head:tim:" + GroupTitle(model, group);
 
     public static string GroupTitle(LGModel model, object group)
-        => model?.Doc?.TitleOf(group) ?? "（未指定時機）";
+        => model?.Doc?.TitleOf(group) ?? $"（未指定{RootNoun(model?.Doc)}）";
+
+    /// <summary>root 在句子裡的稱呼。圖沒提供時退回中性詞，UI 不會出現空字。</summary>
+    public static string RootNoun(IGraphDocument doc)
+        => string.IsNullOrWhiteSpace(doc?.RootNoun) ? "群組" : doc.RootNoun;
 
     // headCarrier：HEAD 的座標主人（LGFocus.HeadCarrier）。變數焦點傳 GraphEndpoint、資產本體傳資產 SO，
     // 位置才記得住——資產的 HEAD 容器槽是每次進來現做的，記在它上面等於不記。其他焦點沿用 rootSlot。

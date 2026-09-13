@@ -17,6 +17,9 @@ editor for free. `LogicGraph` is one such consumer; it is not required here.
   Referencing nodes store the object, never a name string.
 - `IGraphHead` / `IOrphanPool` / `IEndpointOwner` / `IGraphDocument` are the
   contracts the editor walks. No member-name reflection anywhere.
+- Root wording comes from the document, not the editor: `RootChip` is the badge
+  on the root node, `RootNoun` is the word the editor drops into menus, hints,
+  and logs. No domain term is hard-coded in the window.
 - `FormulaSlotBase` and `ActionSlotBase` are zero-field non-generic bases, so a
   consumer can add generic execution subclasses without changing the serialized
   format.

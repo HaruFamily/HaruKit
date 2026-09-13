@@ -83,6 +83,16 @@ public interface IGraphDocument : IOrphanPool, IEndpointOwner
     /// <summary>這個 root 在節點 Header 上的顯示名。</summary>
     string TitleOf(object root);
 
+    /// <summary>root 節點的身分標籤。root 不回傳值，標籤是它與一般節點的唯一區別；空字串代表不顯示。</summary>
+    // 由圖自己提供而不是寫死在編輯器裡：領域不同，root 的身分也不同（時機／管線／…）。
+    string RootChip { get; }
+
+    /// <summary>
+    /// 句子裡稱呼 root 的名詞，例如「時機」「管線」。編輯器用它組選單、提示與 log。
+    /// </summary>
+    // 只給名詞，不要帶「節點」「群組」：那兩個字由編輯器自己按句子接上，接法各處不同。
+    string RootNoun { get; }
+
     /// <summary>這個 root 底下的項目清單。</summary>
     IList ItemsOf(object root);
 

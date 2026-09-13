@@ -112,6 +112,10 @@ namespace HaruFamily.Tools.AssetPipeline
 
         string IGraphDocument.TitleOf(object root) => "管線";
 
+        string IGraphDocument.RootChip => "步驟清單";
+
+        string IGraphDocument.RootNoun => "管線";
+
         IList IGraphDocument.ItemsOf(object root) => (root as APStepGroup)?.Steps;
 
         object IGraphDocument.AddRoot(object key)

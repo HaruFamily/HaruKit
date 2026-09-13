@@ -83,14 +83,14 @@ public class LGModel
         systemField = FindSystemField(owner);
         if (systemField == null)
         {
-            Debug.LogError($"[LogicGraph] '{(owner != null ? owner.name : "null")}' 沒有可編輯的圖欄位，無法編輯。");
+            Debug.LogError($"[GraphKit] '{(owner != null ? owner.name : "null")}' 沒有可編輯的圖欄位，無法編輯。");
             return false;
         }
 
         Reload();
         if (Data is not IGraphDocument doc)
         {
-            Debug.LogError($"[LogicGraph] '{(owner != null ? owner.name : "null")}' 的圖欄位取不到內容，無法編輯。");
+            Debug.LogError($"[GraphKit] '{(owner != null ? owner.name : "null")}' 的圖欄位取不到內容，無法編輯。");
             return false;
         }
 
@@ -115,11 +115,11 @@ public class LGModel
     {
         if (system == null)
         {
-            Debug.LogError("[LogicGraph] 無法建立 LogicGraph 工作副本，來源為 null。");
+            Debug.LogError("[GraphKit] 無法建立圖的工作副本，來源為 null。");
             return null;
         }
         var copy = (system as IGraphDocument)?.DeepCopy();
-        if (copy == null) Debug.LogError("[LogicGraph] 圖的 DeepCopy 失敗，已停止編輯以避免直接修改 Owner。");
+        if (copy == null) Debug.LogError("[GraphKit] 圖的 DeepCopy 失敗，已停止編輯以避免直接修改 Owner。");
         return copy;
     }
 
@@ -202,7 +202,7 @@ public class LGModel
         if (toStore == null) return false;
         if (toStore is not IGraphDocument doc)
         {
-            Debug.LogError("[LogicGraph] 圖的工作副本不是可編輯的圖，Owner 未寫入。");
+            Debug.LogError("[GraphKit] 圖的工作副本不是可編輯的圖，Owner 未寫入。");
             return false;
         }
 
@@ -210,7 +210,7 @@ public class LGModel
         doc.Verify();
         if (!doc.IsValidated)
         {
-            Debug.LogError("[LogicGraph] Core Verify 未通過，Owner 未寫入。請查看 Console 的 Core 驗證訊息。");
+            Debug.LogError("[GraphKit] Core Verify 未通過，Owner 未寫入。請查看 Console 的 Core 驗證訊息。");
             return false;
         }
 
@@ -333,7 +333,7 @@ public class LGModel
             // 沒有對應的 FormulaSlot 型別就生不出參數列，企劃只會看到「這個參數不見了」。
             string key = $"{carrier.AssetObject.name}/{parameter.Name}";
             if (loggedUnbindableParameters.Add(key))
-                Debug.LogWarning($"[LogicGraph] 資產 '{carrier.AssetObject.name}' 的參數 '{parameter.Name}' " +
+                Debug.LogWarning($"[GraphKit] 資產 '{carrier.AssetObject.name}' 的參數 '{parameter.Name}' " +
                     $"找不到對應的 FormulaSlot 型別（結果 {LGReflect.ResultTypeName(parameter.ResultType)}），無法建立參數列。" +
                     "請補上這個結果型別的 Formula / Asset / Slot 三件組。");
         }

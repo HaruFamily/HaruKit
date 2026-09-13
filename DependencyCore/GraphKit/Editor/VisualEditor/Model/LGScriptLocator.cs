@@ -32,7 +32,7 @@ public static class LGScriptLocator
         var found = Locate(type);
         if (found.Script == null)
         {
-            Debug.LogWarning($"[LogicGraph] 找不到 {type?.FullName ?? "null"} 的原始碼，可能只存在於編譯好的 DLL。");
+            Debug.LogWarning($"[GraphKit] 找不到 {type?.FullName ?? "null"} 的原始碼，可能只存在於編譯好的 DLL。");
             return;
         }
         AssetDatabase.OpenAsset(found.Script, found.Line);

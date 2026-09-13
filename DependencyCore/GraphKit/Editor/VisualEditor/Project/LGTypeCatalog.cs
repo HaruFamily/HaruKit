@@ -60,7 +60,7 @@ public static class LGTypeCatalog
         var types = Concrete(baseType);
         if (types.Count == 0)
         {
-            Debug.LogWarning($"[LogicGraph] 找不到 {baseType?.Name} 的可用型別。");
+            Debug.LogWarning($"[GraphKit] 找不到 {baseType?.Name} 的可用型別。");
             return;
         }
         var dropdown = new LGTypeDropdown(new AdvancedDropdownState(), types, title, onPick);
@@ -71,7 +71,7 @@ public static class LGTypeCatalog
     {
         if (options == null || options.Count == 0)
         {
-            Debug.LogWarning("[LogicGraph] 找不到可用的 Node 來源。");
+            Debug.LogWarning("[GraphKit] 找不到可用的 Node 來源。");
             return;
         }
         new LGSourceDropdown(new AdvancedDropdownState(), options, title).Show(rect);

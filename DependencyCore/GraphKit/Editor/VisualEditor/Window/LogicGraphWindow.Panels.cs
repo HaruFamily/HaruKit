@@ -650,7 +650,7 @@ public partial class LogicGraphWindow
         var group = model.AddGroup(timing);
         if (group?.Group == null)
         {
-            Debug.LogWarning($"[LogicGraph] 建立時機群組 '{timing}' 失敗：識別值型別與這張圖不符。");
+            Debug.LogWarning($"[GraphKit] 建立{RootNoun}群組 '{timing}' 失敗：識別值型別與這張圖不符。");
             return;
         }
 

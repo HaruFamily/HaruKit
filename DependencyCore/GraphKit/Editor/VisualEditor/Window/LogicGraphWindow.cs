@@ -42,6 +42,10 @@ public partial class LogicGraphWindow : EditorWindow
 
     private LGModel model;
     private LGFocus focus = new();
+
+    /// <summary>目前這張圖怎麼稱呼它的 root。選單、提示與 log 都用它組字，編輯器不寫死領域用詞。</summary>
+    private string RootNoun => LGGraph.RootNoun(model?.Doc);
+
     private LGGraphView graph;
     private bool graphDirty = true;
     private LGReport report = new();
@@ -676,7 +680,7 @@ public partial class LogicGraphWindow : EditorWindow
         var copy = LogicGraphDeepCopy.Copy(pack);
         if (copy == null)
         {
-            Debug.LogError("[LogicGraph] 無法建立資產快照，這一步不會進復原歷程。");
+            Debug.LogError("[GraphKit] 無法建立資產快照，這一步不會進復原歷程。");
             return null;
         }
         return new LGAssetSnapshot

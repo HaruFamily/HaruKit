@@ -55,6 +55,10 @@ where TTiming : Enum
     string IGraphDocument.TitleOf(object root)
         => root is ActionTimingGroup<TTiming, TPack> g ? g.Timing.ToString() : "（未指定時機）";
 
+    string IGraphDocument.RootChip => "時機";
+
+    string IGraphDocument.RootNoun => "時機";
+
     IList IGraphDocument.ItemsOf(object root)
         => root is ActionTimingGroup<TTiming, TPack> g ? g.Actions : null;
 

@@ -313,7 +313,7 @@ public static class LGReflect
         try { return Activator.CreateInstance(t); }
         catch (Exception e)
         {
-            UnityEngine.Debug.LogError($"[LogicGraph] 建立 {t.Name} 失敗：{e.Message}");
+            UnityEngine.Debug.LogError($"[GraphKit] 建立 {t.Name} 失敗：{e.Message}");
             return null;
         }
     }
@@ -486,7 +486,7 @@ public static class LGReflect
         string typeName = target?.GetType().FullName ?? "（空）";
         string key = $"{typeName}.{field?.Name}:{message}";
         if (showConditionErrors.Add(key))
-            UnityEngine.Debug.LogError($"[LogicGraph] [LGShowIf] {typeName}.{field?.Name}：{message}");
+            UnityEngine.Debug.LogError($"[GraphKit] [LGShowIf] {typeName}.{field?.Name}：{message}");
     }
 
     /// <summary>這一列要不要畫左側標籤。清單子項是另一條路：`BuildListChildren` 直接設 `LGRow.HideLabel`，不經過欄位屬性。</summary>

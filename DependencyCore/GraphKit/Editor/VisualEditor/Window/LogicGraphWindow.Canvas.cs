@@ -98,12 +98,12 @@ public partial class LogicGraphWindow
                 actions += g.Actions?.Count ?? 0;
             }
             desc = groups > 0
-                ? $"{groups} 個時機、{actions} 個動作。時機節點可自由擺位；跨時機共用來源直接拉線即可。"
-                : "還沒有任何時機節點。在畫布空白處按右鍵新增一個。";
+                ? $"{groups} 個{RootNoun}、{actions} 個動作。{RootNoun}節點可自由擺位；跨{RootNoun}共用來源直接拉線即可。"
+                : $"還沒有任何{RootNoun}節點。在畫布空白處按右鍵新增一個。";
         }
         else if (focus.Kind == LGFocusKind.None)
         {
-            desc = "從右上角的時機下拉跳到某個時機，或從左欄選一個變數開始編輯。";
+            desc = $"從右上角的{RootNoun}下拉跳到某個{RootNoun}，或從左欄選一個變數開始編輯。";
         }
         GUI.Label(new Rect(r.x + 6f, r.y + 24f, r.width - 12f, 16f), desc, LGStyles.Tiny);
     }
@@ -290,22 +290,22 @@ public partial class LogicGraphWindow
         var rect = new Rect(new Vector2(40f, 40f) + pan, new Vector2(LGGraph.NodeWidth, LGGraph.HeaderHeight + 4f));
         LGStyles.RoundedFill(rect, LGStyles.NodeBody, NodeCornerRadius);
         LGStyles.RoundedFrame(rect, LGStyles.NodeBorder, NodeCornerRadius, 1f);
-        if (GUI.Button(rect, "＋ 新增第一個時機節點", LGStyles.ListAdd))
+        if (GUI.Button(rect, $"＋ 新增第一個{RootNoun}節點", LGStyles.ListAdd))
             ShowAddTimingMenu(new Vector2(40f, 40f));
     }
 
     private const float TimingOverlayWidth = 190f;
 
     /// <summary>
-    /// 畫布右上角的時機下拉：所有時機都在同一張畫布上，所以它是「跳到哪一顆」而不是「切換畫布」。
-    /// 選到還沒建立的時機就在畫面中央建一顆。和說明面板一樣畫在 zoom clip 外，縮到 0.45 也讀得到。
+    /// 畫布右上角的 root 下拉：所有 root 都在同一張畫布上，所以它是「跳到哪一顆」而不是「切換畫布」。
+    /// 選到還沒建立的就在畫面中央建一顆。和說明面板一樣畫在 zoom clip 外，縮到 0.45 也讀得到。
     /// </summary>
     private void DrawTimingOverlay(Rect canvas)
     {
         if (model == null) return;
 
         var r = new Rect(canvas.xMax - TimingOverlayWidth - 8f, canvas.y + 8f, TimingOverlayWidth, 22f);
-        if (EditorGUI.DropdownButton(r, new GUIContent("時機", "跳到某個時機節點，或新增一個"), FocusType.Keyboard))
+        if (EditorGUI.DropdownButton(r, new GUIContent(RootNoun, $"跳到某個{RootNoun}節點，或新增一個"), FocusType.Keyboard))
             ShowTimingMenu(CanvasCenterInGraph());
     }
 

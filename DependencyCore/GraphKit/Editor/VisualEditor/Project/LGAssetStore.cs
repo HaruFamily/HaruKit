@@ -55,14 +55,14 @@ public static class LGAssetStore
         picked = picked.Replace('\\', '/');
         if (!picked.StartsWith($"{projectRoot}/Assets", System.StringComparison.OrdinalIgnoreCase))
         {
-            Debug.LogError($"[LogicGraph] 共用資產資料夾必須在 Assets 底下：{picked}");
+            Debug.LogError($"[GraphKit] 共用資產資料夾必須在 Assets 底下：{picked}");
             return false;
         }
 
         string relative = picked.Substring(projectRoot.Length + 1);
         if (!AssetDatabase.IsValidFolder(relative))
         {
-            Debug.LogError($"[LogicGraph] 不是有效的專案資料夾：{relative}");
+            Debug.LogError($"[GraphKit] 不是有效的專案資料夾：{relative}");
             return false;
         }
 
