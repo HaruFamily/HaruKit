@@ -55,8 +55,8 @@ public abstract class ActionSlotBase : IGraphHead, IOrphanPool
     /// <summary>這個欄位能不能接這個資產。</summary>
     public abstract bool AcceptsAsset(ScriptableObject asset);
 
-    /// <summary>這個欄位能不能接這個具名變數。</summary>
-    public abstract bool AcceptsEndpoint(GraphEndpoint endpoint);
+    /// <summary>這個欄位能不能接這個具名Token。</summary>
+    public abstract bool AcceptsToken(GraphToken endpoint);
 }
 
 }

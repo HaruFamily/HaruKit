@@ -62,7 +62,7 @@ public partial class HaruGraphWindow
         return null;
     }
 
-    /// <summary>資產本身沒有變數清單與欄位型別，必須借一個引用它的 Owner 當上下文。</summary>
+    /// <summary>資產本身沒有Token清單與欄位型別，必須借一個引用它的 Owner 當上下文。</summary>
     private void OpenSharedAsset(ScriptableObject asset)
     {
         if (focus.Kind == HGFocusKind.Asset)
@@ -164,6 +164,10 @@ public partial class HaruGraphWindow
     /// <summary>從 Project／Hierarchy 選到支援的對象就自動聚焦。有未儲存變更時不硬切，改成在工具列問。</summary>
     private void OnSelectionChange()
     {
+        // 鎖定時整個不動作：不換對象、不下鑽資產、也不記待切換。
+        // 擋在最前面而不是逐條判斷——這個視窗跟外部選取有關的入口只有這一個，擋這裡就全涵蓋。
+        if (locked) return;
+
         if (Selection.activeObject is ScriptableObject asset && IsSharedAsset(asset))
         {
             if (focus.Kind == HGFocusKind.Asset && focus.AssetObject == asset) return;
@@ -262,6 +266,7 @@ public partial class HaruGraphWindow
         assetReportStale = false;
         tokenLibrary.Reset();
         assetLibrary.Reset();
+        catalogLibrary.Reset();
         pendingTarget = null;
         returnFocus = null;
         ClearAssetDirty();
@@ -292,6 +297,7 @@ public partial class HaruGraphWindow
         leftWidth = EditorPrefs.GetFloat(PrefLeftWidth, DefaultLeftWidth);
         tokenSectionHeight = EditorPrefs.GetFloat(PrefTokenSection, DefaultTokenSection);
         refSectionHeight = EditorPrefs.GetFloat(PrefRefSection, DefaultRefSection);
+        locked = EditorPrefs.GetBool(PrefLocked, false);
         UpdateUnsavedState();
     }
 
@@ -418,13 +424,13 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>
-    /// 下鑽進一個變數的畫布。端點是頭端，它的取值欄位是唯一的來源接點，候選池也掛在它身上。
-    /// 資產的變數留在 Asset 焦點裡（只換頭端），資產的存檔交易因此不受影響。
+    /// 下鑽進一個Token的畫布。端點是頭端，它的取值欄位是唯一的來源接點，候選池也掛在它身上。
+    /// 資產的Token留在 Asset 焦點裡（只換頭端），資產的存檔交易因此不受影響。
     /// </summary>
-    private void EnterVariable(GraphEndpoint endpoint)
+    private void EnterToken(GraphToken endpoint)
     {
         if (endpoint == null) return;
-        if (ReferenceEquals(focus.Endpoint, endpoint)) return;
+        if (ReferenceEquals(focus.Token, endpoint)) return;
 
         if (focus.Kind == HGFocusKind.Asset)
         {
@@ -434,23 +440,23 @@ public partial class HaruGraphWindow
                 AssetObject = focus.AssetObject,
                 AssetHostSlot = focus.AssetHostSlot,
                 AssetOrphans = focus.AssetOrphans,
-                AssetEndpoints = focus.AssetEndpoints,
-                Endpoint = endpoint,
+                AssetTokens = focus.AssetTokens,
+                Token = endpoint,
             });
         }
         else
         {
-            SetFocus(new HGFocus { Kind = HGFocusKind.Variable, Endpoint = endpoint });
+            SetFocus(new HGFocus { Kind = HGFocusKind.Token, Token = endpoint });
         }
         selectedIds.Clear();
         graphDirty = true;
         Repaint();
     }
 
-    /// <summary>離開變數畫布：資產的變數回資產本體，Owner 的變數回時機畫布。</summary>
-    private void ExitVariable()
+    /// <summary>離開Token畫布：資產的Token回資產本體，Owner 的Token回時機畫布。</summary>
+    private void ExitToken()
     {
-        if (focus.Endpoint == null) return;
+        if (focus.Token == null) return;
         if (focus.Kind == HGFocusKind.Asset)
         {
             SetFocus(new HGFocus
@@ -459,7 +465,7 @@ public partial class HaruGraphWindow
                 AssetObject = focus.AssetObject,
                 AssetHostSlot = focus.AssetHostSlot,
                 AssetOrphans = focus.AssetOrphans,
-                AssetEndpoints = focus.AssetEndpoints,
+                AssetTokens = focus.AssetTokens,
             });
         }
         else SetFocus(AllTimingsFocus());
@@ -472,10 +478,10 @@ public partial class HaruGraphWindow
     private void EnterAsset(UnityEngine.Object asset, Type slotType)
     {
         if (asset == null) return;
-        // 已經在這個資產裡：從變數子畫布回到資產本體，不重開交易。
+        // 已經在這個資產裡：從Token子畫布回到資產本體，不重開交易。
         if (focus.Kind == HGFocusKind.Asset && focus.AssetObject == asset)
         {
-            if (focus.Endpoint != null) ExitVariable();
+            if (focus.Token != null) ExitToken();
             SelectAssetInProject(asset);
             return;
         }
@@ -489,12 +495,12 @@ public partial class HaruGraphWindow
             return;
         }
 
-        // 內容、候選與變數必須同一次複製：變數節點指著端點物件，分幾次抄就會抄成幾份不相干的端點。
+        // 內容、候選與Token必須同一次複製：Token節點指著端點物件，分幾次抄就會抄成幾份不相干的端點。
         var pack = new List<object>
         {
             HGReflect.AssetRoot(asset),
             HGReflect.Orphans(asset) ?? new List<GraphNode>(),
-            HGReflect.Endpoints(asset) ?? new List<GraphEndpoint>(),
+            HGReflect.Tokens(asset) ?? new List<GraphToken>(),
         };
         var packCopy = GraphDeepCopy.Copy(pack);
         // 根節點連載體一起抄進容器槽：座標、備註、Id 都在載體上，容器槽本身是拋棄式的。
@@ -506,7 +512,7 @@ public partial class HaruGraphWindow
             AssetObject = asset,
             AssetHostSlot = host,
             AssetOrphans = packCopy?[1] as List<GraphNode> ?? new List<GraphNode>(),
-            AssetEndpoints = packCopy?[2] as List<GraphEndpoint> ?? new List<GraphEndpoint>(),
+            AssetTokens = packCopy?[2] as List<GraphToken> ?? new List<GraphToken>(),
         });
         returnFocus = back ?? new HGFocus();
         ClearAssetDirty();
@@ -548,7 +554,7 @@ public partial class HaruGraphWindow
         if (useType == 2 || useType == 3)
         {
             if (showDialog)
-                ShowNotification(new GUIContent("無法存檔：資產的內容只能是公式或動作，不能再指向另一個資產或變數"));
+                ShowNotification(new GUIContent("無法存檔：資產的內容只能是公式或動作，不能再指向另一個資產或 Token"));
             return false;
         }
 
@@ -559,12 +565,12 @@ public partial class HaruGraphWindow
             return false;
         }
 
-        // 寫回也是一次抄三份：內容裡的變數節點與變數清單必須指到同一批端點物件。
+        // 寫回也是一次抄三份：內容裡的Token節點與Token清單必須指到同一批端點物件。
         var pack = new List<object>
         {
             useType == 1 ? HGReflect.GetNode(host) : null,
             focus.AssetOrphans ?? new List<GraphNode>(),
-            focus.AssetEndpoints ?? new List<GraphEndpoint>(),
+            focus.AssetTokens ?? new List<GraphToken>(),
         };
         var packCopy = GraphDeepCopy.Copy(pack);
         setRoot.Invoke(asset, new object[] { packCopy?[0] as GraphNode });
@@ -575,10 +581,10 @@ public partial class HaruGraphWindow
             storedOrphans.Clear();
             if (packCopy?[1] is List<GraphNode> orphanCopy) storedOrphans.AddRange(orphanCopy);
         }
-        if (HGReflect.Endpoints(asset) is List<GraphEndpoint> storedEndpoints)
+        if (HGReflect.Tokens(asset) is List<GraphToken> storedTokens)
         {
-            storedEndpoints.Clear();
-            if (packCopy?[2] is List<GraphEndpoint> endpointCopy) storedEndpoints.AddRange(endpointCopy);
+            storedTokens.Clear();
+            if (packCopy?[2] is List<GraphToken> endpointCopy) storedTokens.AddRange(endpointCopy);
         }
         EditorUtility.SetDirty(asset);
         AssetDatabase.SaveAssets();

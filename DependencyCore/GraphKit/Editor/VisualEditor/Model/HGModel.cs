@@ -8,19 +8,19 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 
-/// <summary>左欄清單用的一筆變數視圖。資料住在 <see cref="GraphEndpoint"/>，這裡只是查詢結果。</summary>
+/// <summary>左欄清單用的一筆Token視圖。資料住在 <see cref="GraphToken"/>，這裡只是查詢結果。</summary>
 public class HGToken
 {
-    public GraphEndpoint Endpoint;
+    public GraphToken Token;
 
-    public string Key => Endpoint?.Name;
-    public Type ResultType => Endpoint?.ResultType;
+    public string Key => Token?.Name;
+    public Type ResultType => Token?.ResultType;
 
     /// <summary>族身份（＝Slot 型別）。撞名判定與候選過濾都用它。</summary>
-    public Type Kind => Endpoint?.Kind;
+    public Type Kind => Token?.Kind;
 
     // 走端點自己的 Slot：同結果型別的不同族（String / Key）在清單裡才分得出來。
-    public string TypeName => HGReflect.SlotKindName(Endpoint?.Slot);
+    public string TypeName => HGReflect.SlotKindName(Token?.Slot);
 }
 
 /// <summary>畫布上的一個 root：識別值與它底下的項目清單。</summary>
@@ -340,8 +340,8 @@ public class HGModel
         return changed;
     }
 
-    // ===== 具名變數（端點）=====
-    // 一個變數＝一顆 GraphEndpoint：自己的名字、自己的取值欄位、自己的畫布與候選池。
+    // ===== 具名Token（端點）=====
+    // 一個Token＝一顆 GraphToken：自己的名字、自己的取值欄位、自己的畫布與候選池。
     // 圖裡引用它的是 NodeKind.Token 節點，存的是物件參照，不是名字字串。
 
     /// <summary>走訪整張圖的所有載體：動作樹上的、候選池裡的，以及它們的子樹。</summary>
@@ -376,22 +376,22 @@ public class HGModel
         }
     }
 
-    /// <summary>Owner 工作副本的變數清單。資產焦點請改用焦點自己那份工作副本。</summary>
-    public List<GraphEndpoint> OwnerEndpoints
-        => HGReflect.Endpoints(Data) ?? new List<GraphEndpoint>();
+    /// <summary>Owner 工作副本的Token清單。資產焦點請改用焦點自己那份工作副本。</summary>
+    public List<GraphToken> OwnerTokens
+        => HGReflect.Tokens(Data) ?? new List<GraphToken>();
 
     /// <summary>把一份端點清單讀成顯示用的視圖，依名稱排序。</summary>
-    public static List<HGToken> ReadTokens(IEnumerable<GraphEndpoint> endpoints)
+    public static List<HGToken> ReadTokens(IEnumerable<GraphToken> endpoints)
     {
         var result = new List<HGToken>();
         if (endpoints == null) return result;
         foreach (var endpoint in endpoints)
-            if (endpoint != null) result.Add(new HGToken { Endpoint = endpoint });
+            if (endpoint != null) result.Add(new HGToken { Token = endpoint });
         result.Sort((a, b) => string.CompareOrdinal(a.Key, b.Key));
         return result;
     }
 
-    /// <summary>載體算得出什麼型別：內嵌看公式型別，資產看資產型別，變數看端點，空節點無從得知。</summary>
+    /// <summary>載體算得出什麼型別：內嵌看公式型別，資產看資產型別，Token看端點，空節點無從得知。</summary>
     public static Type CarrierResultType(GraphNode node)
     {
         if (node == null) return null;
@@ -399,25 +399,25 @@ public class HGModel
             return HGReflect.FormulaResultType(node.BodyObject.GetType());
         if (node.Kind == NodeKind.Asset && node.AssetObject != null)
             return HGReflect.AssetResultType(node.AssetObject);
-        if (node.Kind == NodeKind.Token) return node.Endpoint?.ResultType;
+        if (node.Kind == NodeKind.Token) return node.Token?.ResultType;
         return null;
     }
 
     /// <summary>
-    /// 建一個新變數並加進清單。名稱唯一性是「族＋名稱」，所以同名不同族可以並存。
+    /// 建一個新Token並加進清單。名稱唯一性是「族＋名稱」，所以同名不同族可以並存。
     /// slotType 就是族，建立後不再更動——要換族就刪掉重建。
     /// </summary>
-    public GraphEndpoint CreateEndpoint(List<GraphEndpoint> scope, Type slotType, out string error)
+    public GraphToken CreateToken(List<GraphToken> scope, Type slotType, out string error)
     {
         error = null;
-        if (scope == null) { error = "這張圖沒有變數清單。"; return null; }
+        if (scope == null) { error = "這張圖沒有 Token 清單。"; return null; }
         if (HGReflect.CreateInstance(slotType) is not FormulaSlotBase slot)
         {
             error = "建不出這一族的取值欄位。";
             return null;
         }
 
-        var endpoint = new GraphEndpoint(NextTokenName(scope, slot.Kind), slot);
+        var endpoint = new GraphToken(NextTokenName(scope, slot.Kind), slot);
         endpoint.EnsureId();
         scope.Add(endpoint);
         MarkDirty();
@@ -425,22 +425,22 @@ public class HGModel
     }
 
     /// <summary>
-    /// 複製一個變數：新的頭端、新名字、內容整棵深拷貝（含候選池）。
-    /// 清單上的**其他變數一律共用**——子樹裡的 Token 節點還是指向原本那一個，不會抄出孤兒端點。
+    /// 複製一個Token：新的頭端、新名字、內容整棵深拷貝（含候選池）。
+    /// 清單上的**其他Token一律共用**——子樹裡的 Token 節點還是指向原本那一個，不會抄出孤兒端點。
     /// 資產是 UnityEngine.Object，深複製本來就只抄參考，共用資產不會被複製成第二份。
     /// </summary>
-    public GraphEndpoint DuplicateEndpoint(GraphEndpoint source, List<GraphEndpoint> scope, out string error)
+    public GraphToken DuplicateToken(GraphToken source, List<GraphToken> scope, out string error)
     {
         error = null;
-        if (source == null) { error = "沒有可複製的變數。"; return null; }
-        if (scope == null) { error = "這張圖沒有變數清單。"; return null; }
+        if (source == null) { error = "沒有可複製的 Token。"; return null; }
+        if (scope == null) { error = "這張圖沒有 Token 清單。"; return null; }
 
         var shared = new List<object>();
         foreach (var other in scope)
             if (other != null && !ReferenceEquals(other, source)) shared.Add(other);
 
         var copy = GraphDeepCopy.Copy(source, shared);
-        if (copy == null) { error = "複製這個變數失敗，詳見 Console。"; return null; }
+        if (copy == null) { error = "複製這個 Token 失敗，詳見 Console。"; return null; }
 
         // 識別碼一定要換：頭端的 Id 決定焦點與座標，載體的 Id 決定節點座標與選取。
         copy.ResetId();
@@ -454,10 +454,10 @@ public class HGModel
     }
 
     /// <summary>複本的名字：「原名 複本」，撞名就往後加號碼。唯一性和別處一樣是「族＋名稱」。</summary>
-    private static string CopyName(IEnumerable<GraphEndpoint> scope, string sourceName, Type kind)
+    private static string CopyName(IEnumerable<GraphToken> scope, string sourceName, Type kind)
     {
         var used = new HashSet<string>();
-        foreach (var other in scope ?? new List<GraphEndpoint>())
+        foreach (var other in scope ?? new List<GraphToken>())
             if (other != null && other.Kind == kind && !string.IsNullOrEmpty(other.Name))
                 used.Add(other.Name);
 
@@ -467,22 +467,22 @@ public class HGModel
         return candidate;
     }
 
-    /// <summary>替變數改名。同族內不可重複；空名稱不允許（外部是用名字查的）。</summary>
-    public bool RenameEndpoint(GraphEndpoint endpoint, string name, List<GraphEndpoint> scope, out string error)
+    /// <summary>替Token改名。同族內不可重複；空名稱不允許（外部是用名字查的）。</summary>
+    public bool RenameToken(GraphToken endpoint, string name, List<GraphToken> scope, out string error)
     {
         error = null;
-        if (endpoint == null) { error = "沒有可改名的變數。"; return false; }
+        if (endpoint == null) { error = "沒有可改名的 Token。"; return false; }
         if (string.IsNullOrWhiteSpace(name)) { error = "名稱不可為空。"; return false; }
         name = name.Trim();
         if (name == endpoint.Name) return true;
 
-        foreach (var other in scope ?? new List<GraphEndpoint>())
+        foreach (var other in scope ?? new List<GraphToken>())
         {
             if (other == null || ReferenceEquals(other, endpoint)) continue;
             // 重名比對以族為準：TokenTable 的登記鍵就是（族, 名稱），
             // 所以同結果型別的不同族（String / Key）可以同名，各自查各自那格。
             if (other.Name != name || other.Kind != endpoint.Kind) continue;
-            error = $"已存在名為 '{name}' 的 {HGReflect.SlotKindName(other.Slot)} 變數。";
+            error = $"已存在名為 '{name}' 的 {HGReflect.SlotKindName(other.Slot)} Token。";
             return false;
         }
 
@@ -492,10 +492,10 @@ public class HGModel
     }
 
     /// <summary>取一個在 scope 內同族不重複的預設名（Token1、Token2…）。</summary>
-    public string NextTokenName(IEnumerable<GraphEndpoint> scope, Type kind)
+    public string NextTokenName(IEnumerable<GraphToken> scope, Type kind)
     {
         var used = new HashSet<string>();
-        foreach (var other in scope ?? new List<GraphEndpoint>())
+        foreach (var other in scope ?? new List<GraphToken>())
             if (other != null && other.Kind == kind && !string.IsNullOrEmpty(other.Name))
                 used.Add(other.Name);
 
@@ -507,25 +507,25 @@ public class HGModel
     }
 
     /// <summary>
-    /// 刪掉一個變數。指著它的節點會一起清空——留著會變成「參照得到但查不到值」的靜默失效，
+    /// 刪掉一個Token。指著它的節點會一起清空——留著會變成「參照得到但查不到值」的靜默失效，
     /// 清空後那些節點是空節點，存檔驗證擋得住。
     /// </summary>
-    public void DeleteEndpoint(GraphEndpoint endpoint, List<GraphEndpoint> scope, IEnumerable<GraphNode> carriers)
+    public void DeleteToken(GraphToken endpoint, List<GraphToken> scope, IEnumerable<GraphNode> carriers)
     {
         if (endpoint == null) return;
         scope?.Remove(endpoint);
         foreach (var node in carriers ?? AllCarriers())
-            if (node != null && ReferenceEquals(node.Endpoint, endpoint)) node.Clear();
+            if (node != null && ReferenceEquals(node.Token, endpoint)) node.Clear();
         MarkDirty();
     }
 
-    /// <summary>這個變數在圖內被幾個欄位接著。0＝純對外端點，不是錯誤。</summary>
-    public static int CountReferences(GraphEndpoint endpoint, IEnumerable<object> slots)
+    /// <summary>這個Token在圖內被幾個欄位接著。0＝純對外端點，不是錯誤。</summary>
+    public static int CountReferences(GraphToken endpoint, IEnumerable<object> slots)
     {
         if (endpoint == null || slots == null) return 0;
         int n = 0;
         foreach (var slot in slots)
-            if (ReferenceEquals(HGReflect.GetNode(slot)?.Endpoint, endpoint)) n++;
+            if (ReferenceEquals(HGReflect.GetNode(slot)?.Token, endpoint)) n++;
         return n;
     }
 
@@ -664,21 +664,21 @@ public class HGModel
             foreach (var a in g.Actions)
                 if (a != null) yield return a;
         }
-        // 變數的取值欄位也是根：它的子樹是正式資料，走訪、驗證與資產引用都要算進來。
-        foreach (var endpoint in OwnerEndpoints)
+        // Token的取值欄位也是根：它的子樹是正式資料，走訪、驗證與資產引用都要算進來。
+        foreach (var endpoint in OwnerTokens)
             if (endpoint?.Slot != null) yield return endpoint.Slot;
         foreach (var node in AllOrphanNodes())
             yield return node;
     }
 
     /// <summary>
-    /// 所有候選池掛點：時機畫布本身（LogicGraph）、每個變數端點，與時機群組裡的動作欄位。
+    /// 所有候選池掛點：時機畫布本身（LogicGraph）、每個Token端點，與時機群組裡的動作欄位。
     /// 動作頭端上那份只為了讀回合併畫布之前存下來的候選。
     /// </summary>
     public IEnumerable<object> Heads()
     {
         if (Data != null) yield return Data;
-        foreach (var endpoint in OwnerEndpoints)
+        foreach (var endpoint in OwnerTokens)
             if (endpoint != null) yield return endpoint;
         foreach (var g in ReadGroups())
         {
@@ -721,12 +721,12 @@ public class HGModel
             }
         }
 
-        // 變數的子樹是正式資料（對外端點），資產引用要算它一份；候選池不算。
-        var endpoints = HGReflect.Endpoints(system);
+        // Token的子樹是正式資料（對外端點），資產引用要算它一份；候選池不算。
+        var endpoints = HGReflect.Tokens(system);
         if (endpoints == null) yield break;
         foreach (var e in endpoints)
         {
-            if (e is not GraphEndpoint endpoint || endpoint.Slot == null) continue;
+            if (e is not GraphToken endpoint || endpoint.Slot == null) continue;
             foreach (var s in WalkSlots(endpoint.Slot, visited)) yield return s;
         }
     }
@@ -736,7 +736,7 @@ public class HGModel
 
     /// <summary>
     /// 同上，但 <paramref name="skip"/> 裡的物件當作走過了——走訪會在那裡停住。
-    /// 複製單一變數時要把清單上**其他變數**丟進來：子樹裡指向它們的 Token 節點是共用引用，
+    /// 複製單一Token時要把清單上**其他Token**丟進來：子樹裡指向它們的 Token 節點是共用引用，
     /// 一路走進去會把別人的載體識別碼一起清掉，那些圖的座標當場全部重來。
     /// </summary>
     public static void ResetNodeIds(object root, IEnumerable<object> skip)
@@ -808,7 +808,7 @@ public class HGModel
     }
 
     /// <summary>
-    /// 正式資料引用的資產：動作執行樹，以及每個變數端點的子樹。
+    /// 正式資料引用的資產：動作執行樹，以及每個Token端點的子樹。
     /// 候選池只是編輯暫存，不得污染 subscriber。
     /// </summary>
     public static HashSet<ScriptableObject> ReferencedAssetsOfSystem(object system)
@@ -827,10 +827,10 @@ public class HGModel
             }
         }
 
-        if (HGReflect.Endpoints(system) is List<GraphEndpoint> endpoints)
+        if (HGReflect.Tokens(system) is List<GraphToken> endpoints)
         {
             foreach (var e in endpoints)
-                if (e is GraphEndpoint endpoint && endpoint.Slot != null)
+                if (e is GraphToken endpoint && endpoint.Slot != null)
                     CollectFormalAssets(endpoint.Slot, visited, result);
         }
         return result;

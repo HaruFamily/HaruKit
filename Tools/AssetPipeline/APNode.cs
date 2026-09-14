@@ -46,7 +46,7 @@ namespace HaruFamily.Tools.AssetPipeline
     /// <summary>
     /// 會產出 dynamic key 的步驟。
     /// </summary>
-    // dynamic key 是「這個步驟跑完才存在」的東西，不是具名變數：變數是公式來源，步驟沒有回傳值寫不進端點。
+    // dynamic key 是「這個步驟跑完才存在」的東西，不是具名Token：Token是公式來源，步驟沒有回傳值寫不進端點。
     // 所以時序（產出者必須排在讀取者之前）由 APGraph.Verify 依步驟順序檢查，GraphKit 不認識這個概念。
     public interface IDynamicKeyProducer
     {

@@ -91,7 +91,7 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
         {
             if (multi) return "多個對象：內容摘要不顯示";
             if (steps == 0 && tokens == 0) return "尚未建立任何步驟——開啟編輯器新增第一個";
-            string text = $"{steps} 個步驟 · {tokens} 個變數";
+            string text = $"{steps} 個步驟 · {tokens} 個Token";
             return disabled > 0 ? $"{text} · {disabled} 個停用" : text;
         }
 

@@ -148,7 +148,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
         internal bool ValidatePipelinePrototypeSources()
         {
-            // 節點圖層面的錯誤（空節點、型別不符、dynamic key 時序、變數重名與循環）由圖自己驗；
+            // 節點圖層面的錯誤（空節點、型別不符、dynamic key 時序、Token重名與循環）由圖自己驗；
             // 這裡只管資產群組層面的事：key 有沒有對應群組、群組是不是空的、有沒有重複。
             List<string> graphErrors = APGraphVerifier.Collect(graph);
             Dictionary<string, List<string>> keyUsages = APGraphVerifier.CollectPrototypeKeyUsages(graph);

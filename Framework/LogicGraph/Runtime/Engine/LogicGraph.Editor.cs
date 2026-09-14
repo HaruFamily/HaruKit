@@ -28,7 +28,7 @@ where TTiming : Enum
         else Err(msg);
     }
 
-    /// <summary>external：Owner 自己，宣告它會從圖外用字串 key 求值哪些變數（見 IExternalTokenKeys）。null＝沒有圖外引用。</summary>
+    /// <summary>external：Owner 自己，宣告它會從圖外用字串 key 求值哪些Token（見 IExternalTokenKeys）。null＝沒有圖外引用。</summary>
     public void Verify(IExternalTokenKeys external = null)
     {
         // DeepCopy 與 Unity 反序列化不會保留 NonSerialized 驗證緩衝。
@@ -38,7 +38,7 @@ where TTiming : Enum
         _errors.Clear();
         _warnings.Clear();
 
-        ReportDuplicateEndpointNames();
+        ReportDuplicateTokenNames();
         ReportExternalTokenKeys(external);
         ReportDuplicateTimings();
         ReportEmptyRootActions();
@@ -52,11 +52,11 @@ where TTiming : Enum
         _checkedNodes.Clear();
 
         _walkDisabled = false;
-        ValidateEndpoints();
+        ValidateTokens();
         ValidateActionSlotSources();
 
         _walkDisabled = true;
-        ValidateEndpoints();
+        ValidateTokens();
         ValidateActionSlotSources();
         _walkDisabled = false;
 
@@ -107,24 +107,24 @@ where TTiming : Enum
         else    Debug.LogError(body);
     }
 
-    /// <summary>變數唯一性是「族＋名稱」：撞號時外部只查得到其中一個，另一個等於默默失效。</summary>
-    private void ReportDuplicateEndpointNames()
+    /// <summary>Token唯一性是「族＋名稱」：撞號時外部只查得到其中一個，另一個等於默默失效。</summary>
+    private void ReportDuplicateTokenNames()
     {
         var seen = new HashSet<(Type, string)>();
         var reported = new HashSet<string>();
-        foreach (var endpoint in Endpoints)
+        foreach (var endpoint in Tokens)
         {
-            if (endpoint == null) { Err("變數清單裡有空項目"); continue; }
-            if (endpoint.Slot == null) { Err($"變數 '{endpoint.Name ?? "(未命名)"}' 沒有指定結果型別"); continue; }
-            if (string.IsNullOrEmpty(endpoint.Name)) { Err($"有一個 {endpoint.ResultType?.Name} 變數沒有名稱"); continue; }
+            if (endpoint == null) { Err("Token 清單裡有空項目"); continue; }
+            if (endpoint.Slot == null) { Err($"Token '{endpoint.Name ?? "(未命名)"}' 沒有指定結果型別"); continue; }
+            if (string.IsNullOrEmpty(endpoint.Name)) { Err($"有一個 {endpoint.ResultType?.Name} Token 沒有名稱"); continue; }
 
             if (!seen.Add((endpoint.Slot.Kind, endpoint.Name)) && reported.Add(endpoint.Name))
-                Err($"變數名稱重複：'{endpoint.Name}'（同族內必須唯一）");
+                Err($"Token 名稱重複：'{endpoint.Name}'（同族內必須唯一）");
         }
     }
 
     /// <summary>
-    /// Owner 指名了不存在的變數。這種引用在圖上沒有任何連線，runtime 只是 Has 回 false 然後靜默跳過，
+    /// Owner 指名了不存在的Token。這種引用在圖上沒有任何連線，runtime 只是 Has 回 false 然後靜默跳過，
     /// 所以打錯一個字的結果是「功能整個不會發生」，什麼訊息都沒有。
     /// 比名稱不比族：圖外引用只給得出名字，族由呼叫端自己探。
     /// </summary>
@@ -134,7 +134,7 @@ where TTiming : Enum
         if (declared == null) return;
 
         var names = new HashSet<string>();
-        foreach (var endpoint in Endpoints)
+        foreach (var endpoint in Tokens)
             if (!string.IsNullOrEmpty(endpoint?.Name)) names.Add(endpoint.Name);
 
         var reported = new HashSet<string>();
@@ -142,7 +142,7 @@ where TTiming : Enum
         {
             if (string.IsNullOrWhiteSpace(key) || names.Contains(key)) continue;
             if (reported.Add(key))
-                Err($"圖外引用了不存在的變數 '{key}'（建一個同名變數，或修正引用端的名稱；查不到的名字會被靜默跳過）");
+                Err($"圖外引用了不存在的 Token '{key}'（建一個同名 Token，或修正引用端的名稱；查不到的名字會被靜默跳過）");
         }
     }
 
@@ -193,8 +193,8 @@ where TTiming : Enum
                     ValidateAssetCycles(group.Actions[i], $"{group.Timing} 第 {i + 1} 個動作", completed);
             }
         }
-        foreach (var endpoint in Endpoints)
-            if (endpoint?.Slot != null) ValidateAssetCycles(endpoint.Slot, $"變數 '{endpoint.Name}'", completed);
+        foreach (var endpoint in Tokens)
+            if (endpoint?.Slot != null) ValidateAssetCycles(endpoint.Slot, $"Token '{endpoint.Name}'", completed);
     }
 
     private void ValidateAssetCycles(object root, string where, HashSet<UnityEngine.Object> completed)
@@ -314,12 +314,12 @@ where TTiming : Enum
     /// 端點是這張圖的對外介面，從它的取值欄位開始整棵子樹都是正式資料，跟動作樹一樣驗。
     /// 沒接來源的端點是具名常數，合法，不必檢查內容。
     /// </summary>
-    private void ValidateEndpoints()
+    private void ValidateTokens()
     {
         var visited = new HashSet<object>(ReferenceComparer.Instance);
-        foreach (var endpoint in Endpoints)
+        foreach (var endpoint in Tokens)
         {
-            if (endpoint?.Slot == null) continue;   // 空項目與缺 Slot 由 ReportDuplicateEndpointNames 報
+            if (endpoint?.Slot == null) continue;   // 空項目與缺 Slot 由 ReportDuplicateTokenNames 報
             ValidateSlotSources(endpoint.Slot, visited);
         }
     }
@@ -344,8 +344,8 @@ where TTiming : Enum
         {
             ValidateSlotSources(assetGraph.ContentObject, visited);
             // 資產的端點就是它的參數介面，跟內容一樣是正式資料；候選池不驗。
-            if (assetGraph.Endpoints != null)
-                foreach (var endpoint in assetGraph.Endpoints)
+            if (assetGraph.Tokens != null)
+                foreach (var endpoint in assetGraph.Tokens)
                     if (endpoint?.Slot != null) ValidateSlotSources(endpoint.Slot, visited);
             return;
         }
@@ -355,13 +355,13 @@ where TTiming : Enum
         {
             // 停用的動作欄位不執行，整棵子樹留到第二趟走，殘缺降成警告。
             if (a.Disabled && !_walkDisabled) return;
-            CheckNode(a.Node, "動作欄位", a.AcceptsBody, a.AcceptsAsset, a.AcceptsEndpoint);
+            CheckNode(a.Node, "動作欄位", a.AcceptsBody, a.AcceptsAsset, a.AcceptsToken);
             ValidateSlotSources(a.Node, visited);
             return;
         }
         if (node is FormulaSlotBase fsb)
         {
-            CheckNode(fsb.Node, fsb.GetType().Name, fsb.AcceptsBody, fsb.AcceptsAsset, fsb.AcceptsEndpoint);
+            CheckNode(fsb.Node, fsb.GetType().Name, fsb.AcceptsBody, fsb.AcceptsAsset, fsb.AcceptsToken);
             ValidateSlotSources(fsb.Node, visited);
             return;
         }
@@ -437,12 +437,12 @@ where TTiming : Enum
                 }
             }
         }
-        foreach (var endpoint in Endpoints)
+        foreach (var endpoint in Tokens)
         {
             if (endpoint?.Slot == null) continue;
             if (!HasCarrierCycle(endpoint.Slot, new HashSet<GraphNode>(), completed,
                 new HashSet<object>(ReferenceComparer.Instance))) continue;
-            Err($"變數 '{endpoint.Name}' 的節點圖有連線循環");
+            Err($"Token '{endpoint.Name}' 的節點圖有連線循環");
             return;
         }
     }
@@ -458,11 +458,11 @@ where TTiming : Enum
             if (stack.Contains(carrier)) return true;
             if (completed.Contains(carrier)) return false;
             stack.Add(carrier);
-            // 變數節點要下沉到端點的取值欄位，否則「A 變數引用 B、B 又引用 A」這種跨端點的環抓不到。
+            // Token節點要下沉到端點的取值欄位，否則「A Token引用 B、B 又引用 A」這種跨端點的環抓不到。
             bool cycle = carrier.Kind switch
             {
                 NodeKind.Inline => HasCarrierCycle(carrier.BodyObject, stack, completed, visitedObjects),
-                NodeKind.Token => HasCarrierCycle(carrier.Endpoint?.Slot, stack, completed, visitedObjects),
+                NodeKind.Token => HasCarrierCycle(carrier.Token?.Slot, stack, completed, visitedObjects),
                 _ => false,
             };
             if (!cycle)
@@ -530,7 +530,7 @@ where TTiming : Enum
     // 節點是唯一來源，所以只需檢查「這個節點的內容有沒有、對不對型別」一件事。
     private void CheckNode(GraphNode node, string where,
         Func<GraphNodeContent, bool> acceptsBody, Func<ScriptableObject, bool> acceptsAsset,
-        Func<GraphEndpoint, bool> acceptsEndpoint)
+        Func<GraphToken, bool> acceptsToken)
     {
         if (node == null) return;   // 動作＝空槽、公式＝常數，都是合法狀態
 
@@ -560,10 +560,10 @@ where TTiming : Enum
 
             case NodeKind.Token:
                 // 端點被刪掉時參照直接變 null，看得見；不會像字串 key 一樣留著一個查不到的名字。
-                if (node.Endpoint == null) { if (first) Issue($"{where} 的節點設為變數，但沒有指定變數"); return; }
-                if (string.IsNullOrEmpty(node.Endpoint.Name)) { if (first) Issue($"{where} 接的變數沒有名稱"); return; }
-                if (!acceptsEndpoint(node.Endpoint))
-                    Issue($"{where} 接的變數 '{node.Endpoint.Name}' 型別不相容：{node.Endpoint.ResultType?.Name ?? "未指定"}");
+                if (node.Token == null) { if (first) Issue($"{where} 的節點設為 Token，但沒有指定 Token"); return; }
+                if (string.IsNullOrEmpty(node.Token.Name)) { if (first) Issue($"{where} 接的 Token 沒有名稱"); return; }
+                if (!acceptsToken(node.Token))
+                    Issue($"{where} 接的 Token '{node.Token.Name}' 型別不相容：{node.Token.ResultType?.Name ?? "未指定"}");
                 return;
         }
     }

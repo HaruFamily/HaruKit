@@ -21,12 +21,12 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAss
     [SerializeReference, HideInInspector]
     private List<GraphNode> _orphans = new();
 
-    // 本資產的具名變數，同時就是它對呼叫端的參數介面。
+    // 本資產的具名Token，同時就是它對呼叫端的參數介面。
     [SerializeReference, HideInInspector]
-    private List<GraphEndpoint> _endpoints = new();
+    private List<GraphToken> _endpoints = new();
 
     // 資產畫布 HEAD 的座標。HEAD 那個容器槽是編輯期現做的，沒有地方落腳，所以記在資產本體上，
-    // 形狀與 ActionSlot／GraphEndpoint／ActionTimingGroup 一致（Pos／HasPos／ClearPos）。
+    // 形狀與 ActionSlot／GraphToken／ActionTimingGroup 一致（Pos／HasPos／ClearPos）。
     [SerializeField, HideInInspector]
     private Vector2 _headPos;
 
@@ -54,9 +54,9 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAss
         get { _orphans ??= new List<GraphNode>(); return _orphans; }
     }
 
-    public List<GraphEndpoint> Endpoints
+    public List<GraphToken> Tokens
     {
-        get { _endpoints ??= new List<GraphEndpoint>(); return _endpoints; }
+        get { _endpoints ??= new List<GraphToken>(); return _endpoints; }
     }
 
     /// <summary>根內容的載體。舊格式（裸 Action）在這裡就地補上載體，呼叫端只需要認 GraphNode。</summary>

@@ -95,7 +95,7 @@ public sealed class HGAssetLibraryPanel
                 e.Use();
             }
             if (e.type == EventType.MouseDrag && drag.IsSource(asset)) drag.PromoteOnDrag();
-            // 名字那一格不切焦點（同變數庫）：雙擊改名不該順手進出這個資產的畫布。
+            // 名字那一格不切焦點（同Token庫）：雙擊改名不該順手進出這個資產的畫布。
             if (e.type == EventType.MouseUp && drag.IsPendingClick(asset)
                 && row.Contains(e.mousePosition) && !nameRect.Contains(e.mousePosition))
             {

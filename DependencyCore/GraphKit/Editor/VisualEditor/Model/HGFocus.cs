@@ -22,8 +22,8 @@ public enum HGFocusKind
     // 排在最後而不是接在 Action 後面：其他 Kind 的數值不動，既有比較與紀錄不受影響。
     Timing,
 
-    /// <summary>下鑽進一個具名變數的內部。端點是頭端，它的取值欄位就是這張畫布唯一的來源接點。</summary>
-    Variable,
+    /// <summary>下鑽進一個具名Token的內部。端點是頭端，它的取值欄位就是這張畫布唯一的來源接點。</summary>
+    Token,
 }
 
 /// <summary>中欄目前在編輯什麼。切焦點就是換一份節點圖。</summary>
@@ -47,17 +47,17 @@ public class HGFocus
     public object AssetHostSlot;
     public List<GraphNode> AssetOrphans;
 
-    // 資產的變數工作副本。與 AssetOrphans 同一次 DeepCopy 出來，兩邊指向同一批端點物件。
-    public List<GraphEndpoint> AssetEndpoints;
+    // 資產的Token工作副本。與 AssetOrphans 同一次 DeepCopy 出來，兩邊指向同一批端點物件。
+    public List<GraphToken> AssetTokens;
 
     /// <summary>
-    /// 目前在編輯的變數端點。Owner 的變數走 <see cref="HGFocusKind.Variable"/>；
-    /// 資產的變數仍留在 Asset 焦點裡（只是換一顆頭端），資產的存檔交易因此完全不受影響。
+    /// 目前在編輯的Token端點。Owner 的Token走 <see cref="HGFocusKind.Token"/>；
+    /// 資產的Token仍留在 Asset 焦點裡（只是換一顆頭端），資產的存檔交易因此完全不受影響。
     /// </summary>
-    public GraphEndpoint Endpoint;
+    public GraphToken Token;
 
-    /// <summary>資產焦點的候選工作副本。存檔才覆寫資產，取消直接丟棄。變數子焦點的候選在端點自己身上。</summary>
-    public List<GraphNode> Orphans => Kind == HGFocusKind.Asset && Endpoint == null ? AssetOrphans : null;
+    /// <summary>資產焦點的候選工作副本。存檔才覆寫資產，取消直接丟棄。Token子焦點的候選在端點自己身上。</summary>
+    public List<GraphNode> Orphans => Kind == HGFocusKind.Asset && Token == null ? AssetOrphans : null;
 
     /// <summary>
     /// 這個焦點畫成 HEAD 的東西。多數焦點只有一個 Slot 頭端；Timing 焦點則是**每個
@@ -81,8 +81,8 @@ public class HGFocus
             object single = Kind switch
             {
                 HGFocusKind.Action => ActionSlot,
-                HGFocusKind.Asset => Endpoint != null ? Endpoint.Slot : AssetHostSlot,
-                HGFocusKind.Variable => Endpoint?.Slot,
+                HGFocusKind.Asset => Token != null ? Token.Slot : AssetHostSlot,
+                HGFocusKind.Token => Token?.Slot,
                 _ => null,
             };
             if (single != null) roots.Add(single);
@@ -101,10 +101,10 @@ public class HGFocus
                 case HGFocusKind.Timing:
                     return $"全部{HGGraph.RootNoun(Data as IGraphDocument)}";
                 case HGFocusKind.Asset:
-                    if (Endpoint != null) return $"資產 {AssetObject?.name} ／ 變數 {Endpoint.Name ?? "（未命名）"}";
+                    if (Token != null) return $"資產 {AssetObject?.name} ／ Token {Token.Name ?? "（未命名）"}";
                     return AssetObject != null ? $"資產 {AssetObject.name}" : "資產";
-                case HGFocusKind.Variable:
-                    return Endpoint != null ? $"變數 {Endpoint.Name ?? "（未命名）"}" : "變數";
+                case HGFocusKind.Token:
+                    return Token != null ? $"Token {Token.Name ?? "（未命名）"}" : "Token";
                 default:
                     return "尚未選擇編輯對象";
             }
@@ -124,10 +124,10 @@ public class HGFocus
                 case HGFocusKind.Timing:
                     return "";
                 case HGFocusKind.Asset:
-                    if (Endpoint != null) return Endpoint.Name ?? "（未命名變數）";
+                    if (Token != null) return Token.Name ?? "（未命名 Token）";
                     return AssetObject != null ? AssetObject.name : "（未指定資產）";
-                case HGFocusKind.Variable:
-                    return Endpoint?.Name ?? "（未命名變數）";
+                case HGFocusKind.Token:
+                    return Token?.Name ?? "（未命名 Token）";
                 default:
                     return "";
             }
@@ -150,10 +150,10 @@ public class HGFocus
                     string asset = AssetObject != null
                         ? "ast:" + UnityEditor.AssetDatabase.AssetPathToGUID(UnityEditor.AssetDatabase.GetAssetPath(AssetObject))
                         : "ast:?";
-                    return Endpoint != null ? asset + "/var:" + Endpoint.EnsureId() : asset;
+                    return Token != null ? asset + "/var:" + Token.EnsureId() : asset;
                 // 用端點的 Guid 而不是名字：改名不會換掉焦點 id，座標與 EditorPrefs 記憶都留著。
-                case HGFocusKind.Variable:
-                    return Endpoint != null ? "var:" + Endpoint.EnsureId() : "var:?";
+                case HGFocusKind.Token:
+                    return Token != null ? "var:" + Token.EnsureId() : "var:?";
                 default:
                     return "";
             }
@@ -169,17 +169,17 @@ public class HGFocus
         HGFocusKind.Action => ActionSlot,
         HGFocusKind.Timing => Data,
         // 端點自己就是頭端：Id、座標與候選池都在它身上，跟 ActionSlot 同一套。
-        HGFocusKind.Asset => Endpoint != null ? Endpoint : (object)this,
-        HGFocusKind.Variable => Endpoint,
+        HGFocusKind.Asset => Token != null ? Token : (object)this,
+        HGFocusKind.Token => Token,
         _ => null,
     };
 
     /// <summary>
-    /// HEAD 的座標主人。變數畫布是端點自己；**資產本體畫布是資產 SO**——它的 HEAD 容器槽是每次進來
+    /// HEAD 的座標主人。Token畫布是端點自己；**資產本體畫布是資產 SO**——它的 HEAD 容器槽是每次進來
     /// 現做的，記在上面等於不記。其餘焦點回 null，由 HGGraph 退回用 root slot 當載體。
     /// </summary>
-    public object HeadCarrier => Endpoint != null
-        ? Endpoint
+    public object HeadCarrier => Token != null
+        ? Token
         : Kind == HGFocusKind.Asset ? AssetObject : null;
 
     public bool SameAs(HGFocus other)
@@ -191,8 +191,8 @@ public class HGFocus
             // 時機畫布只有一張，同 Kind 就是同一個焦點。
             case HGFocusKind.Timing: return true;
             case HGFocusKind.Asset:
-                return AssetObject == other.AssetObject && ReferenceEquals(Endpoint, other.Endpoint);
-            case HGFocusKind.Variable: return ReferenceEquals(Endpoint, other.Endpoint);
+                return AssetObject == other.AssetObject && ReferenceEquals(Token, other.Token);
+            case HGFocusKind.Token: return ReferenceEquals(Token, other.Token);
             default: return true;
         }
     }

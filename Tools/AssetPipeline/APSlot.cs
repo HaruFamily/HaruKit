@@ -6,21 +6,21 @@ using HaruFamily.DependencyCore.GraphKit;
 namespace HaruFamily.Tools.AssetPipeline
 {
     /// <summary>
-    /// 具名變數求值的遞迴防線。
+    /// 具名Token求值的遞迴防線。
     /// </summary>
     // 必須是非泛型的：泛型類別的 static 欄位是「每個封閉型別各一份」，
     // 放進 APFormulaSlot<,> 的話 int 那份跟 float 那份互看不見，跨型別的環就抓不到。
-    internal static class APEndpointGuard
+    internal static class APTokenGuard
     {
-        private static readonly HashSet<GraphEndpoint> InFlight = new HashSet<GraphEndpoint>();
+        private static readonly HashSet<GraphToken> InFlight = new HashSet<GraphToken>();
 
-        public static bool TryEnter(GraphEndpoint endpoint) => InFlight.Add(endpoint);
+        public static bool TryEnter(GraphToken endpoint) => InFlight.Add(endpoint);
 
-        public static void Exit(GraphEndpoint endpoint) => InFlight.Remove(endpoint);
+        public static void Exit(GraphToken endpoint) => InFlight.Remove(endpoint);
     }
 
     /// <summary>
-    /// 管線的公式欄位：常數、內嵌公式或具名變數三選一，由載體節點決定。
+    /// 管線的公式欄位：常數、內嵌公式或具名Token三選一，由載體節點決定。
     /// </summary>
     // 對應舊的 FormulaAssetBase：@default → _default，data / assetData 三態 → GraphNode.Kind，
     // formula 欄位 → 載體節點。舊的 AssetSource 模式改成「接一個讀 AssetPipelineSource 的葉節點公式」。
@@ -73,7 +73,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
         public override bool AcceptsAsset(ScriptableObject asset) => false;
 
-        public override bool AcceptsEndpoint(GraphEndpoint endpoint) => endpoint?.Slot?.Kind == Kind;
+        public override bool AcceptsToken(GraphToken endpoint) => endpoint?.Slot?.Kind == Kind;
 
         /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
         public TResult Default { get => _default; set => _default = value; }
@@ -109,13 +109,13 @@ namespace HaruFamily.Tools.AssetPipeline
                 }
                 case NodeKind.Token:
                 {
-                    var endpoint = _node.Endpoint;
+                    var endpoint = _node.Token;
                     if (endpoint?.Slot is not APFormulaSlot<TResult, TFormula> slot) return Fallback();
 
                     // 編輯期 Verify 會擋掉環，這條是執行期最後一道防線：遞迴當場回保底值而不是炸堆疊。
-                    if (!APEndpointGuard.TryEnter(endpoint))
+                    if (!APTokenGuard.TryEnter(endpoint))
                     {
-                        AssetPipeline.ReportFormulaWarning($"變數 [{endpoint.Name}] 遞迴求值，改用預設值。");
+                        AssetPipeline.ReportFormulaWarning($"Token [{endpoint.Name}] 遞迴求值，改用預設值。");
                         return Fallback();
                     }
 
@@ -125,8 +125,19 @@ namespace HaruFamily.Tools.AssetPipeline
                     }
                     finally
                     {
-                        APEndpointGuard.Exit(endpoint);
+                        APTokenGuard.Exit(endpoint);
                     }
+                }
+                case NodeKind.Catalog:
+                {
+                    // 目錄不像公式會遞迴：它的內容是一份靜態資產清單，所以沒有 TokenGuard 那一層。
+                    var items = AssetPipeline.ResolveCatalog(_node.CatalogId);
+                    if (items == null) return Mismatch("目錄");
+                    if (AssetPipeline.TryBuildCatalogResult(items, _node.CatalogType, out TResult typed))
+                        return typed;
+
+                    // 走到這裡代表欄位的結果型別不是 List<>，接目錄本來就不合理。
+                    return Mismatch("目錄");
                 }
                 default:
                     return Fallback();   // Empty：編輯中的空節點，Verify 會擋，求值走保底值續跑。
@@ -224,8 +235,8 @@ namespace HaruFamily.Tools.AssetPipeline
 
         public override bool AcceptsAsset(ScriptableObject asset) => false;
 
-        /// <summary>步驟欄位不能接具名變數：變數是公式端點，求值不執行副作用。</summary>
-        public override bool AcceptsEndpoint(GraphEndpoint endpoint) => false;
+        /// <summary>步驟欄位不能接具名Token：Token是公式端點，求值不執行副作用。</summary>
+        public override bool AcceptsToken(GraphToken endpoint) => false;
 
         /// <summary>
         /// 執行這個步驟。停用、空槽、型別不符一律跳過。

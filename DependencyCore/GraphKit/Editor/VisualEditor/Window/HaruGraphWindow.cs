@@ -7,7 +7,7 @@ using UnityEditor;
 using UnityEngine;
 
 /// <summary>
-/// LogicGraph 視覺化編輯器：左欄變數庫、中欄節點圖 + Console；所有時機畫在同一張畫布，右欄只在資產焦點出現。
+/// LogicGraph 視覺化編輯器：左欄Token庫、中欄節點圖 + Console；所有時機畫在同一張畫布，右欄只在資產焦點出現。
 /// 所有編輯都改工作副本，按「存檔」才寫回 Owner 資產。
 /// 狀態欄位與主繪製流程在本檔，其餘責任見 HaruGraphWindow.*.cs。
 /// </summary>
@@ -23,9 +23,11 @@ public partial class HaruGraphWindow : EditorWindow
     private const float LinkSnapDistance = 24f;
     private const float LinkThickness = 4f;
     /// <summary>引用列比清單格矮：它只有名稱與驗證狀態，沒有 chip 也沒有第二行。</summary>
-    /// <summary>左欄變數區的最小高度：三顆固定控制項 + 一列，再小就有東西被切掉（標題由面板標題兼任）。</summary>
+    /// <summary>左欄Token區的最小高度：三顆固定控制項 + 一列，再小就有東西被切掉（標題由面板標題兼任）。</summary>
     private const float MinTokenSection = 106f;
     private const float MinAssetSection = 80f;
+    /// <summary>目錄庫與其他區並存時的固定高度：新增鈕 + 搜尋列 + 三列，再小就只剩控制項沒有內容。</summary>
+    private const float MinCatalogSection = 120f;
     /// <summary>引用區的最小高度：標題列 + 一筆引用。它只在資產焦點出現，另外兩區跟著讓出高度。</summary>
     private const float MinRefSection = 76f;
     private const float DefaultTokenSection = 240f;
@@ -61,19 +63,28 @@ public partial class HaruGraphWindow : EditorWindow
     // 面板狀態
     private float leftWidth = DefaultLeftWidth;
     private bool resizingLeftPanel;
-    // 左欄變數／資產上下分區：存變數區的高度，資產區吃剩下的。編資產時兩份清單要同時看得到，不能再用分頁互斥。
+    // 左欄Token／資產上下分區：存Token區的高度，資產區吃剩下的。編資產時兩份清單要同時看得到，不能再用分頁互斥。
     private float tokenSectionHeight = DefaultTokenSection;
     private bool resizingLibrarySplit;
     // 左欄第三區（引用此資產）：只在資產焦點出現，存自己的高度，資產區吃剩下的。
     private float refSectionHeight = DefaultRefSection;
     private bool resizingRefSplit;
+    private const string PrefLocked = "HaruGraph.Locked";
+
+    /// <summary>
+    /// 鎖定中：`OnSelectionChange` 整個不動作，在 Project／Hierarchy 點別的東西不會把視窗切走。
+    /// </summary>
+    // 跨編譯與重開視窗都留著（EditorPrefs），與 Inspector 的鎖同一種期待。
+    // 狀態寫在工具列的鈕上，所以「為什麼不跟著選取了」看得見，不會變成找不到原因的怪現象。
+    private bool locked;
+
     /// <summary>就地改名。焦點列、左欄兩庫與參數列共用同一份編輯狀態，所以它住在框架不住在面板。</summary>
     private HGInlineRename inlineName;
 
     /// <summary>清單面板拖到畫布的跨區拖曳。來源可能是左框也可能是右框，所以狀態住在框架。</summary>
     private readonly HGLibraryDrag drag = new();
 
-    /// <summary>左欄變數庫。搜尋字與捲動在面板裡，拖曳與改名向框架借。</summary>
+    /// <summary>左欄Token庫。搜尋字與捲動在面板裡，拖曳與改名向框架借。</summary>
     private readonly HGTokenLibraryPanel tokenLibrary = new();
 
     /// <summary>左欄第三區：誰引用了目前這顆資產。只在資產焦點出現。</summary>
@@ -81,6 +92,9 @@ public partial class HaruGraphWindow : EditorWindow
 
     /// <summary>左欄資產庫。搜尋字與捲動在面板裡，拖曳與改名向框架借。</summary>
     private readonly HGAssetLibraryPanel assetLibrary = new();
+
+    /// <summary>左欄目錄庫。內容住 Owner，每個命令都是立即寫檔，不跟著存檔交易走。</summary>
+    private readonly HGCatalogLibraryPanel catalogLibrary = new();
 
     // 互動
     private HGNodeView dragNode;
@@ -116,7 +130,7 @@ public partial class HaruGraphWindow : EditorWindow
     // 拉線期間的相容性：起手時對全圖判定一次，之後高亮與吸附都讀這份，不必每幀重算。
     private readonly HashSet<string> linkCompatibleNodeIds = new();
     private readonly HashSet<HGRow> linkCompatibleRows = new();
-    // 變數的拖曳與下鑽和資產同一套：按下先記著，拖出去是建節點，原地放開是進它的畫布。
+    // Token的拖曳與下鑽和資產同一套：按下先記著，拖出去是建節點，原地放開是進它的畫布。
     // 「建立節點」的放置模式：新節點跟著滑鼠，點一下才落在畫布上。Esc 或右鍵取消。
     private object placingSlot;
     // 候選池裡的空節點屬於哪一族（值＝代表性的 Slot 型別）。key 是載體 Id，所以撐得過 Undo 與重建圖。
@@ -169,7 +183,19 @@ public partial class HaruGraphWindow : EditorWindow
 
     /// <summary>引用清單只在資產焦點有意義，作為左欄第三區出現（2026-08-20 由整條右欄改成分區）。</summary>
     /// <summary>資產庫與引用區要不要存在。由圖宣告，不從「現在有幾筆資產」推。</summary>
-    private bool HasAssetSection => HGGraph.SupportsSharedAssets(model?.Doc);
+    private bool HasAssetSection => HGGraph.Has(model?.Doc, HGCapabilities.SharedAssets);
+
+    /// <summary>Token 庫與 Token 相關的選單項要不要存在。同樣由圖宣告。</summary>
+    private bool HasTokenSection => HGGraph.Has(model?.Doc, HGCapabilities.Tokens);
+
+    /// <summary>目錄庫要不要存在。能力由圖宣告，內容由 Owner 提供，兩件事分開。</summary>
+    // 圖宣告了但 Owner 沒實作 ICatalogOwner 時區塊照出現，面板畫一句說明——
+    // 這是使用端接線漏了，靜默收掉區塊只會讓人找不到原因。
+    private bool HasCatalogSection => HGGraph.Has(model?.Doc, HGCapabilities.Catalogs);
+
+    /// <summary>左欄還有沒有東西可放。沒綁定時維持原版型，閒置畫面不因此改變。</summary>
+    // 一區都沒有就整框不畫：空框會讓人一直找「內容為什麼沒出現」，而那個框永遠不會有東西。
+    private bool HasLeftColumn => model?.Doc == null || HasTokenSection || HasAssetSection || HasCatalogSection;
 
     private bool HasReferenceSection => HasAssetSection && focus.Kind == HGFocusKind.Asset;
     private bool IsCurrentReportFresh => focus.Kind == HGFocusKind.Asset
@@ -204,14 +230,15 @@ public partial class HaruGraphWindow : EditorWindow
 
         // 縮放畫布先畫；固定面板最後畫，吸收 IMGUI 縮放在邊界可能漏出的次像素。
         DrawCenter(center);
-        DrawLibraryPanel(left);
+        if (HasLeftColumn) DrawLibraryPanel(left);
         HGToolbarPanel.Draw(toolbar, ToolbarView(), ToolbarCommands());
-        DrawResizeGrip(leftHandle, true, resizingLeftPanel);
+        if (HasLeftColumn) DrawResizeGrip(leftHandle, true, resizingLeftPanel);
 
         drag.DrawAssetGhost();
         // 放置模式沒有按住按鍵，收不到 MouseDrag；要 MouseMove 殘影才跟得上滑鼠。
         wantsMouseMove = placingSlot != null;
-        drag.DrawVariableGhost();
+        drag.DrawTokenGhost();
+        drag.DrawCatalogGhost();
         if (placingSlot != null) DrawPlacingGhost();
         if (Event.current.rawType == EventType.MouseUp)
         {
@@ -255,10 +282,17 @@ public partial class HaruGraphWindow : EditorWindow
         float maxLeft = Mathf.Max(MinLeftWidth, position.width - MinCenterWidth);
         leftWidth = Mathf.Clamp(leftWidth, MinLeftWidth, maxLeft);
 
+        // 左欄一區都沒有時寬度歸零，中欄從 0 開始吃滿。記著的 leftWidth 不清掉——
+        // 之後換到有左欄的圖，使用者拉過的寬度還在。
+        float width = HasLeftColumn ? leftWidth : 0f;
+
         toolbar = new Rect(0f, 0f, position.width, ToolbarHeight);
-        left = new Rect(0f, ToolbarHeight, leftWidth, position.height - ToolbarHeight);
+        left = new Rect(0f, ToolbarHeight, width, position.height - ToolbarHeight);
         center = new Rect(left.xMax, ToolbarHeight, position.width - left.xMax, position.height - ToolbarHeight);
-        leftHandle = new Rect(left.xMax - ResizeHandleWidth * 0.5f, ToolbarHeight, ResizeHandleWidth, left.height);
+        // 沒有左欄就沒有把手：留一條寬 6px 的縮放帶貼在視窗左緣，拖了也沒有東西會變寬。
+        leftHandle = width > 0f
+            ? new Rect(left.xMax - ResizeHandleWidth * 0.5f, ToolbarHeight, ResizeHandleWidth, left.height)
+            : Rect.zero;
     }
 
     /// <summary>分隔把手先處理事件，畫布不能攔截欄位縮放拖曳。</summary>
@@ -330,7 +364,7 @@ public partial class HaruGraphWindow : EditorWindow
         x -= 62f; GUI.Button(new Rect(x, toolbar.y + 1f, 60f, 19f), "取消");
         GUI.enabled = true;
 
-        DrawIdlePanel(left, "變數庫");
+        DrawIdlePanel(left, "Token 庫");
 
         HGStyles.Fill(center, HGStyles.Canvas);
         var header = new Rect(center.x, center.y, center.width, HeaderHeight);
@@ -628,7 +662,7 @@ public partial class HaruGraphWindow : EditorWindow
     {
         if (focus.Kind != HGFocusKind.Asset) return;
         // 資產本體畫布的 HEAD 座標直接寫在資產 SO 上（不在工作副本裡），Unity 要 SetDirty 才會落檔。
-        if (focus.Endpoint == null && focus.AssetObject != null) EditorUtility.SetDirty(focus.AssetObject);
+        if (focus.Token == null && focus.AssetObject != null) EditorUtility.SetDirty(focus.AssetObject);
         // 只設 assetDirty：座標不影響執行語意，存檔時不必重驗、也不必通知任何 subscriber。
         assetDirty = true;
         // 座標也要進歷程：Owner 側的 SetPosition 本來就記 Undo，兩邊行為不一致比沒有還難用。
@@ -646,8 +680,8 @@ public partial class HaruGraphWindow : EditorWindow
     }
 
     /// <summary>
-    /// 目前資產工作副本的快照。內容、候選與變數**同一次深複製**：分次抄會把同一顆端點抄成
-    /// 幾份不相干的物件，變數節點指到的就不是清單裡那一顆（進出資產的交易也是同一條規則）。
+    /// 目前資產工作副本的快照。內容、候選與Token**同一次深複製**：分次抄會把同一顆端點抄成
+    /// 幾份不相干的物件，Token節點指到的就不是清單裡那一顆（進出資產的交易也是同一條規則）。
     /// </summary>
     private HGAssetSnapshot CaptureAssetState()
     {
@@ -657,7 +691,7 @@ public partial class HaruGraphWindow : EditorWindow
         {
             HGReflect.GetNode(focus.AssetHostSlot),
             focus.AssetOrphans ?? new List<GraphNode>(),
-            focus.AssetEndpoints ?? new List<GraphEndpoint>(),
+            focus.AssetTokens ?? new List<GraphToken>(),
         };
         var copy = GraphDeepCopy.Copy(pack);
         if (copy == null)
@@ -669,13 +703,13 @@ public partial class HaruGraphWindow : EditorWindow
         {
             Root = copy[0] as GraphNode,
             Orphans = copy[1] as List<GraphNode> ?? new List<GraphNode>(),
-            Endpoints = copy[2] as List<GraphEndpoint> ?? new List<GraphEndpoint>(),
+            Tokens = copy[2] as List<GraphToken> ?? new List<GraphToken>(),
         };
     }
 
     /// <summary>
-    /// 把快照換成活的工作副本。整批端點物件都被換掉，所以正在編的變數子畫布要**靠 Id 重指**；
-    /// 那顆變數在這一步被刪掉的話就退回資產本體，畫面上不會停在一張查不到主人的空白圖。
+    /// 把快照換成活的工作副本。整批端點物件都被換掉，所以正在編的Token子畫布要**靠 Id 重指**；
+    /// 那顆Token在這一步被刪掉的話就退回資產本體，畫面上不會停在一張查不到主人的空白圖。
     /// </summary>
     private void ApplyAssetState(HGAssetSnapshot snapshot)
     {
@@ -683,12 +717,12 @@ public partial class HaruGraphWindow : EditorWindow
 
         HGReflect.SetNode(focus.AssetHostSlot, snapshot.Root);
         focus.AssetOrphans = snapshot.Orphans;
-        focus.AssetEndpoints = snapshot.Endpoints;
+        focus.AssetTokens = snapshot.Tokens;
 
-        string endpointId = focus.Endpoint?.Id;
-        focus.Endpoint = string.IsNullOrEmpty(endpointId)
+        string endpointId = focus.Token?.Id;
+        focus.Token = string.IsNullOrEmpty(endpointId)
             ? null
-            : snapshot.Endpoints.Find(e => e != null && e.Id == endpointId);
+            : snapshot.Tokens.Find(e => e != null && e.Id == endpointId);
 
         // 套用後的那份快照已經是活資料，歷程不能跟它共用參考，否則下一次修改會連歷程一起改掉。
         assetHistory.Rebase(CaptureAssetState());
@@ -859,6 +893,7 @@ public partial class HaruGraphWindow : EditorWindow
         {
             Crumb = $"{model.Owner.name} ({model.Owner.GetType().Name})({ownerPath})",
             OwnerPickerEnabled = !inAsset,
+            Locked = locked,
             SaveEnabled = canSave,
             SaveHighlight = canSave,
             SaveLabel = blocked ? "存檔（有錯誤）" : revalidateOnly ? "存檔（未驗證）" : "存檔",
@@ -884,7 +919,18 @@ public partial class HaruGraphWindow : EditorWindow
         Undo = () => DoUndo(),
         Redo = () => DoRedo(),
         SwitchTarget = SwitchToPendingTarget,
+        ToggleLock = ToggleLock,
     };
+
+    /// <summary>切換鎖定。解鎖當下不補切換——使用者要的是「從現在起跟著選取走」，不是追認剛才點過的東西。</summary>
+    private void ToggleLock()
+    {
+        locked = !locked;
+        EditorPrefs.SetBool(PrefLocked, locked);
+        // 鎖住時清掉待切換提示：那顆鈕的意思是「剛才選了別的，要不要過去」，鎖住之後這句話不成立。
+        if (locked) pendingTarget = null;
+        Repaint();
+    }
 
     /// <summary>切到剛才在 Project／Hierarchy 選的那個對象。資產焦點要先確認離開。</summary>
     private void SwitchToPendingTarget()

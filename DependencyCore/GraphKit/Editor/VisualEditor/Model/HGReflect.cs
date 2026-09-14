@@ -155,7 +155,7 @@ public static class HGReflect
         return node;
     }
 
-    /// <summary>相容既有呼叫端的模式碼：0 常數／空槽、1 公式或動作（含編輯中空節點）、2 資產、3 具名變數。</summary>
+    /// <summary>相容既有呼叫端的模式碼：0 常數／空槽、1 公式或動作（含編輯中空節點）、2 資產、3 具名Token。</summary>
     public static int UseType(object slot)
     {
         var node = GetNode(slot);
@@ -164,6 +164,7 @@ public static class HGReflect
         {
             NodeKind.Asset => 2,
             NodeKind.Token => 3,
+            NodeKind.Catalog => 4,
             _ => 1,   // Inline 與 Empty 都畫成來源節點，Empty 由驗證擋存檔
         };
     }
@@ -183,18 +184,18 @@ public static class HGReflect
     public static void SetAsset(object slot, UnityEngine.Object asset)
         => EnsureNode(slot).SetAsset(asset as UnityEngine.ScriptableObject);
 
-    /// <summary>這個欄位接的具名變數（沒接或不是變數節點回 null）。</summary>
-    public static GraphEndpoint GetEndpoint(object slot) => GetNode(slot)?.Endpoint;
+    /// <summary>這個欄位接的具名Token（沒接或不是Token節點回 null）。</summary>
+    public static GraphToken GetToken(object slot) => GetNode(slot)?.Token;
 
-    /// <summary>換成具名變數引用：節點 Id、座標、備註與連入邊全部保留，只換內容。</summary>
-    public static void SetEndpoint(object slot, GraphEndpoint endpoint)
+    /// <summary>換成具名Token引用：節點 Id、座標、備註與連入邊全部保留，只換內容。</summary>
+    public static void SetToken(object slot, GraphToken endpoint)
     {
         if (endpoint == null)
         {
             GetNode(slot)?.Clear();
             return;
         }
-        EnsureNode(slot).SetEndpoint(endpoint);
+        EnsureNode(slot).SetToken(endpoint);
     }
 
     /// <summary>斷開來源：公式欄位回常數、動作欄位回空槽。</summary>
@@ -215,12 +216,12 @@ public static class HGReflect
         return slot is ActionSlotBase asb && asb.AcceptsAsset(so);
     }
 
-    /// <summary>這個欄位能不能接這個具名變數。動作欄位一律不能。</summary>
-    public static bool AcceptsEndpoint(object slot, GraphEndpoint endpoint)
+    /// <summary>這個欄位能不能接這個具名Token。動作欄位一律不能。</summary>
+    public static bool AcceptsToken(object slot, GraphToken endpoint)
     {
         if (endpoint == null) return false;
-        if (slot is FormulaSlotBase fsb) return fsb.AcceptsEndpoint(endpoint);
-        return slot is ActionSlotBase asb && asb.AcceptsEndpoint(endpoint);
+        if (slot is FormulaSlotBase fsb) return fsb.AcceptsToken(endpoint);
+        return slot is ActionSlotBase asb && asb.AcceptsToken(endpoint);
     }
 
     public static object GetDefault(object slot) => (slot as FormulaSlotBase)?.DefaultObject;
@@ -257,7 +258,7 @@ public static class HGReflect
     /// <summary>複製頭端後換新識別碼，否則兩個頭端共用同一筆座標與焦點。</summary>
     public static void ResetSlotEditorId(object slot) => (slot as ActionSlotBase)?.ResetId();
 
-    /// <summary>頭端座標。動作頭端、時機群組、變數端點與兩種資產都是頭端。</summary>
+    /// <summary>頭端座標。動作頭端、時機群組、Token端點與兩種資產都是頭端。</summary>
     public static bool GetHeadPos(object head, out UnityEngine.Vector2 pos)
     {
         pos = default;
@@ -279,8 +280,8 @@ public static class HGReflect
     /// <summary>資產根內容的載體。舊格式（只存裸內容）由資產自己就地補上載體，這裡一律拿得到 GraphNode。</summary>
     public static GraphNode AssetRoot(object asset) => (asset as IGraphAsset)?.Root;
 
-    /// <summary>圖主人的具名變數清單（LogicGraph、公式／動作資產各一份）。</summary>
-    public static List<GraphEndpoint> Endpoints(object owner) => (owner as IEndpointOwner)?.Endpoints;
+    /// <summary>圖主人的具名Token清單（LogicGraph、公式／動作資產各一份）。</summary>
+    public static List<GraphToken> Tokens(object owner) => (owner as ITokenOwner)?.Tokens;
 
     // ===== 清單欄位 =====
 
@@ -533,6 +534,54 @@ public static class HGReflect
     }
 
     /// <summary>結果型別的短名，給節點 chip、Token 分頁與型別檢查提示用。族的 Slot 標了 [HGKind] 就用它。</summary>
+    /// <summary>目錄節點的型別過濾：AssemblyQualifiedName → Type。解不出來回 null＝不過濾。</summary>
+    // 解不出來多半是那個型別所在的組件被移掉或改名了。回 null 讓節點退回「整個目錄」，
+    // 比當場拋例外好：圖還是編得動，錯誤由驗證器報。
+    public static Type CatalogFilterType(string assemblyQualifiedName)
+        => string.IsNullOrEmpty(assemblyQualifiedName) ? null : Type.GetType(assemblyQualifiedName);
+
+    /// <summary>
+    /// 目錄節點的結果型別：`List&lt;選定型別&gt;`，沒選（或解不出來）就是 `List&lt;Object&gt;`。
+    /// </summary>
+    // 這是編輯器裡唯一一種「結果型別要看節點自己的欄位才知道」的節點。Token 與 Asset 都是靜態的，
+    // 相容判定仍沿用 IsAssignableFrom，不為它另立一條規則。
+    public static Type CatalogResultType(string assemblyQualifiedName)
+        => typeof(List<>).MakeGenericType(CatalogFilterType(assemblyQualifiedName) ?? typeof(UnityEngine.Object));
+
+    /// <summary>依 Id 找目錄。找不到回 null——目錄住在 Owner，隨時可能被刪掉，節點只留著 id。</summary>
+    public static IGraphCatalog FindCatalog(IReadOnlyList<IGraphCatalog> catalogs, string id)
+    {
+        if (catalogs == null || string.IsNullOrEmpty(id)) return null;
+        foreach (var catalog in catalogs)
+            if (catalog != null && catalog.Id == id) return catalog;
+        return null;
+    }
+
+    /// <summary>目錄裡還有沒有這種型別的資產。型別過濾失效與否靠它判。</summary>
+    public static bool CatalogHasType(IGraphCatalog catalog, Type type)
+    {
+        if (catalog?.Items == null || type == null) return false;
+        foreach (var item in catalog.Items)
+            if (item != null && type.IsInstanceOfType(item)) return true;
+        return false;
+    }
+
+    /// <summary>目錄裡現有的相異型別，依名稱排序。型別下拉的候選就是它。</summary>
+    // 現算不快取：目錄內容可能從左欄或資產分頁被改，任何預先整理好的清單都會過期。
+    public static List<Type> CatalogTypes(IGraphCatalog catalog)
+    {
+        var result = new List<Type>();
+        if (catalog?.Items == null) return result;
+        foreach (var item in catalog.Items)
+        {
+            if (item == null) continue;
+            Type t = item.GetType();
+            if (!result.Contains(t)) result.Add(t);
+        }
+        result.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
+        return result;
+    }
+
     public static string ResultTypeName(Type t)
     {
         if (t == null) return "動作";

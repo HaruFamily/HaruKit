@@ -13,11 +13,11 @@ public enum HGFocusHeaderKind
     /// <summary>共用資產本體：橫幅 + 可改名的檔名。</summary>
     Asset,
 
-    /// <summary>共用資產底下的某個變數：橫幅 + 可改名的變數名。</summary>
-    AssetVariable,
+    /// <summary>共用資產底下的某個Token：橫幅 + 可改名的Token名。</summary>
+    AssetToken,
 
-    /// <summary>變數畫布：可改名的變數名 + 說明。</summary>
-    Variable,
+    /// <summary>Token畫布：可改名的Token名 + 說明。</summary>
+    Token,
 
     /// <summary>動作畫布：可改名的動作標籤 + 說明。</summary>
     Action,
@@ -60,10 +60,10 @@ public static class HGFocusHeaderPanel
 
         switch (view.Kind)
         {
-            case HGFocusHeaderKind.AssetVariable:
+            case HGFocusHeaderKind.AssetToken:
                 DrawBanner(r);
-                // 移除／返回都在左欄變數庫：資產焦點下那一區列的就是這個資產的變數，
-                // 點同一格退出、拖到「－ 移除變數」刪除，標頭不重複第二個入口（與 Variable 焦點一致）。
+                // 移除／返回都在左欄Token庫：資產焦點下那一區列的就是這個資產的Token，
+                // 點同一格退出、拖到「－ 移除Token」刪除，標頭不重複第二個入口（與 Token 焦點一致）。
                 if (view.NameTarget != null)
                     DrawName(new Rect(r.x, r.y + 20f, r.width - 12f, 22f), view, inlineName);
                 else
@@ -73,7 +73,7 @@ public static class HGFocusHeaderPanel
             case HGFocusHeaderKind.Asset:
                 DrawBanner(r);
                 if (view.NameTarget != null)
-                    // 資產本體的標題就是檔名，和變數標題同一套手勢：雙擊改名、Enter 提交。
+                    // 資產本體的標題就是檔名，和Token標題同一套手勢：雙擊改名、Enter 提交。
                     inlineName.Draw(new Rect(r.x + 6f, r.y + 21f, r.width - 12f, 20f), view.NameTarget,
                         HGInlineRename.SiteFocus, view.NameDisplay, view.NameDisplay,
                         HGStyles.FocusTitle, view.NameTooltip, view.NameSubmit);
@@ -81,7 +81,7 @@ public static class HGFocusHeaderPanel
                     GUI.Label(new Rect(r.x + 6f, r.y + 22f, r.width - 12f, 18f), view.Title, EditorStyles.boldLabel);
                 return;
 
-            case HGFocusHeaderKind.Variable:
+            case HGFocusHeaderKind.Token:
                 DrawName(new Rect(r.x, r.y, r.width - 12f, 22f), view, inlineName);
                 DrawDescription(r, r.y + 22f, view.Description);
                 return;

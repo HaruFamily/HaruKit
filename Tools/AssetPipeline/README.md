@@ -42,7 +42,7 @@ node editor.
 起點：在 `AssetPipeline` 設定 Prototype 資產群組與節點圖上的步驟清單。
 
 前一步：節點圖卡片上的「驗證」檢查兩層。節點圖層（`APGraphVerifier`）看步驟內容完不完整、
-公式型別相不相容、具名變數有沒有重名或循環，以及 **dynamic key 的產出者有沒有
+公式型別相不相容、具名Token有沒有重名或循環，以及 **dynamic key 的產出者有沒有
 排在讀取者之前**；資產群組層看 prototype key 有沒有對應群組、群組是不是空的。
 通過後建立目前序列化資料的驗證快照。
 
@@ -63,7 +63,7 @@ Inspector 把這個欄位畫成一張卡片（`APGraphDrawer`）：左緣色條�
 只有「開啟節點圖編輯器」與「驗證」兩個入口，圖的內容不在 Inspector 展開。資產
 群組與維護操作收在下方的折疊分區裡。
 
-一個欄位（`FormulaAsset_*`）可以是常數、接一顆內嵌公式節點，或指向一個具名變數。
+一個欄位（`FormulaAsset_*`）可以是常數、接一顆內嵌公式節點，或指向一個具名Token。
 舊版的 `data` / `assetData` 三態由 `GraphNode.Kind` 取代；舊的 AssetSource 模式
 改成「接一顆讀 `AssetPipelineSource` 的葉節點公式」。
 

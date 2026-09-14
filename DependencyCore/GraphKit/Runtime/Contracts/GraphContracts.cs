@@ -7,7 +7,7 @@ using UnityEngine;
 
 /// <summary>
 /// 畫布上的頭端：自己是一顆固定節點，所以要記得座標。
-/// ActionSlot、GraphEndpoint、ActionTimingGroup 與兩種資產基底都是頭端。
+/// ActionSlot、GraphToken、ActionTimingGroup 與兩種資產基底都是頭端。
 /// </summary>
 // 這五個型別原本各自宣告一模一樣的 Pos／HasPos／ClearPos，編輯器只能靠成員名反射取值。
 // 抽成介面後編輯器改走型別，重新命名成員時編譯器會抓到，反射抓不到。
@@ -34,19 +34,81 @@ public interface IOrphanPool
 }
 
 /// <summary>
-/// 擁有具名變數清單的圖主人。對資產而言這份清單同時就是它對呼叫端的參數介面。
+/// 擁有具名Token清單的圖主人。對資產而言這份清單同時就是它對呼叫端的參數介面。
 /// </summary>
-public interface IEndpointOwner
+public interface ITokenOwner
 {
-    /// <summary>本圖的具名變數。從端點開始的整棵子樹都是正式資料。</summary>
-    List<GraphEndpoint> Endpoints { get; }
+    /// <summary>本圖的具名Token。從端點開始的整棵子樹都是正式資料。</summary>
+    List<GraphToken> Tokens { get; }
+}
+
+/// <summary>
+/// 一張圖可選擇啟用的能力。未列入的能力，編輯器把對應的區塊、選單項與右鍵整組收掉。
+/// </summary>
+// 用旗標而不是一個能力一個 bool：新增可選區只加一個列舉值，介面不會每次長出一個新成員。
+[Flags]
+public enum HGCapabilities
+{
+    None = 0,
+
+    /// <summary>共用資產：左欄資產庫與引用區、右鍵「轉存為資產」、換來源選單的資產分組。</summary>
+    SharedAssets = 1,
+
+    /// <summary>具名 Token：左欄 Token 庫、右鍵「轉存為 Token」、換來源選單的 Token 分組。</summary>
+    Tokens = 2,
+
+    /// <summary>資產目錄：左欄目錄庫。內容住在 Owner，不在圖的工作副本裡。</summary>
+    Catalogs = 4,
+}
+
+/// <summary>
+/// 一份具名的資產目錄：手動蒐集的一批專案資產。
+/// </summary>
+// Id 與 Name 分開：節點引用的是 Id，顯示的是 Name。改名不該讓引用失聯——
+// 「節點存名字去找目標」那個設計已經淘汰過一次，見 GraphNode 的 NodeKind 註解。
+public interface IGraphCatalog
+{
+    /// <summary>穩定識別碼。建立後不再變動，改名不影響它。</summary>
+    string Id { get; }
+
+    /// <summary>顯示名稱。可就地改名。</summary>
+    string Name { get; }
+
+    /// <summary>目錄內容。順序即加入順序。</summary>
+    IReadOnlyList<UnityEngine.Object> Items { get; }
+}
+
+/// <summary>
+/// 擁有資產目錄的編輯對象。**實作在 Owner 上，不在 <see cref="IGraphDocument"/> 上**。
+/// </summary>
+// 目錄的內容是「專案資產的分組」，不是圖的內容：它不進編輯器的工作副本，改了就直接寫 Owner，
+// 和共用資產庫同一個模式。掛在圖的契約上會讓它跟著存檔交易走，語意反而不對。
+public interface ICatalogOwner
+{
+    /// <summary>全部目錄。</summary>
+    IReadOnlyList<IGraphCatalog> Catalogs { get; }
+
+    /// <summary>建一個新目錄並回傳它。名稱由實作自動產生，之後再改名。</summary>
+    IGraphCatalog CreateCatalog();
+
+    /// <summary>改名。失敗時回 false 並給出原因（例如重名）。</summary>
+    bool RenameCatalog(string id, string name, out string error);
+
+    /// <summary>刪掉整個目錄。</summary>
+    void DeleteCatalog(string id);
+
+    /// <summary>加入資產。已在目錄裡的重複項由實作跳過，回傳實際加入幾個。</summary>
+    int AddToCatalog(string id, IReadOnlyList<UnityEngine.Object> assets);
+
+    /// <summary>移除單一資產。</summary>
+    void RemoveFromCatalog(string id, UnityEngine.Object asset);
 }
 
 /// <summary>
 /// 一張可編輯的圖對編輯器的完整形狀。編輯器靠這個介面在 Owner 身上找到要編的欄位，
 /// 不認識任何具體的圖型別，所以同一套編輯器可以編不同領域的圖。
 /// </summary>
-public interface IGraphDocument : IOrphanPool, IEndpointOwner
+public interface IGraphDocument : IOrphanPool, ITokenOwner
 {
     /// <summary>畫布上的 HEAD 們。元素型別由實作決定（LogicGraph 給的是時機群組）。</summary>
     IList Roots { get; }
@@ -94,11 +156,11 @@ public interface IGraphDocument : IOrphanPool, IEndpointOwner
     string RootNoun { get; }
 
     /// <summary>
-    /// 本圖支不支援把節點轉存成共用資產。false 時資產庫、引用區與「轉存為資產」整組不出現。
+    /// 本圖啟用哪些可選能力。沒宣告的能力，對應的區塊、選單項與右鍵整組不出現。
     /// </summary>
-    // 由圖宣告而不是讓編輯器去推：推得出來的只有「現在一個資產都沒有」，
+    // 由圖宣告而不是讓編輯器去推：推得出來的只有「現在一筆都沒有」，
     // 推不出「這個領域永遠不會有」——那兩件事在畫面上長得一樣，但一個該顯示空清單，一個該整區收掉。
-    bool SupportsSharedAssets { get; }
+    HGCapabilities Capabilities { get; }
 
     /// <summary>
     /// 節點圖編輯器的視窗標題。領域自己命名，編輯器不寫死。

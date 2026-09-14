@@ -2,7 +2,7 @@
 
 LogicGraph is a Unity UPM framework for authoring and executing serialized
 action graphs. It provides timing-based action dispatch, typed formulas, named
-formula endpoints, reusable ScriptableObject graphs, validation, deep copying,
+formula tokens, reusable ScriptableObject graphs, validation, deep copying,
 and an editor graph interface. It does not define domain types, timing values,
 or action behavior.
 
@@ -13,12 +13,12 @@ or action behavior.
 - `ActionBase<TPack>` performs side effects; `FormulaBase<TResult, TPack>`
   asynchronously evaluates typed values.
 - Slots can use a constant fallback, an inline graph node, a reusable asset,
-  or, for formulas, a named endpoint.
+  or, for formulas, a named token.
 - `GraphNode` preserves its identity, notes, disabled state, and editor layout
   while its source changes.
-- Action and formula assets expose named endpoints as parameters. Each asset
+- Action and formula assets expose named tokens as parameters. Each asset
   invocation receives an isolated token scope with optional caller bindings.
-- Editor validation detects invalid node sources, duplicate timings or endpoint
+- Editor validation detects invalid node sources, duplicate timings or token
   names, incompatible bindings, and graph or asset cycles before execution.
 - `DeepCopy()` preserves polymorphic `SerializeReference` graphs, shared
   references, cycles, and Unity object references.
@@ -122,16 +122,16 @@ A graph node has one source at a time:
   serialized with the graph.
 - **Asset**: a reusable `ActionAssetBase<TPack>` or
   `FormulaAsset<TResult, TPack>` ScriptableObject.
-- **Endpoint**: a named formula source defined by `GraphEndpoint`.
+- **Token**: a named formula source defined by `GraphToken`.
 
-Endpoints are typed by their concrete formula-slot type. Names must therefore
+Tokens are typed by their concrete formula-slot type. Names must therefore
 be unique within a formula family, while different families may use the same
-name. Formula slots resolve endpoint values through `TokenTable<TPack>`, which
+name. Formula slots resolve token values through `TokenTable<TPack>`, which
 also applies asset parameter bindings and prevents recursive resolution.
 
-Asset endpoints form the asset's parameter interface. A node that references
+Asset tokens form the asset's parameter interface. A node that references
 an asset can retain the asset's defaults or provide a constant or graph-based
-binding for each endpoint.
+binding for each token.
 
 ## Authoring And Validation
 
@@ -157,7 +157,7 @@ After validation, execute all actions registered for a timing value:
 await actionSystem.TriggerAction(MyTiming.BeforeExecute, context);
 ```
 
-Each call creates a fresh `TokenTable<TPack>`. Endpoint values are evaluated on
+Each call creates a fresh `TokenTable<TPack>`. Token values are evaluated on
 each request rather than cached, so formulas may safely depend on the current
 execution context.
 

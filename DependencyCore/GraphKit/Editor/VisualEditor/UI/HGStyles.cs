@@ -45,6 +45,7 @@ public static class HGStyles
     public static readonly Color HeaderFormula = new(0.750f, 0.520f, 0.200f); // 琥珀 #BF8533
     public static readonly Color HeaderAsset = new(0.270f, 0.450f, 0.770f);   // 靛藍 #4573C4
     public static readonly Color HeaderToken = new(0.160f, 0.420f, 0.310f);   // 深綠 #296B4F
+    public static readonly Color HeaderCatalog = new(0.235f, 0.455f, 0.475f); // 青藍 #3C747A
 
     /// <summary>Header 是深色，上面的字與小圖示一律近白。</summary>
     public static readonly Color HeaderInk = new(0.97f, 0.93f, 0.95f);
@@ -52,7 +53,7 @@ public static class HGStyles
     /// <summary>Header 上的疊層底色（chip、名稱區）。</summary>
     public static readonly Color HeaderOverlay = new(1f, 1f, 1f, 0.14f);
 
-    // 線與接點用明度分層，不用色相：空槽是暗灰、接了東西是亮白、變數保留一點紫相當作唯一例外。
+    // 線與接點用明度分層，不用色相：空槽是暗灰、接了東西是亮白、Token保留一點紫相當作唯一例外。
     public static readonly Color Link = new(0.80f, 0.80f, 0.82f);
     public static readonly Color PortEmpty = new(0.42f, 0.42f, 0.43f);
     public static readonly Color PortLive = new(0.80f, 0.80f, 0.82f);
@@ -78,6 +79,12 @@ public static class HGStyles
     /// </summary>
     public static Color CellTint(Color kind, bool altRow, bool focused)
         => focused ? kind : Color.Lerp(PanelList, kind, altRow ? 0.52f : 0.38f);
+
+    /// <summary>
+    /// 「一個群組連同它的內容」的底色：比清單格更淡，群組列鋪在它上面仍然是那一塊裡最顯眼的。
+    /// </summary>
+    // 濃度刻意壓到 CellTint 的三分之一左右：這一層的工作是圈出範圍，不是吸引視線。
+    public static Color GroupTint(Color kind) => Color.Lerp(PanelList, kind, 0.14f);
 
     // 語意色：錯誤永遠是紅、警告永遠是琥珀，不參與配色調整。
     public static readonly Color PortError = new(1f, 0.42f, 0.42f);

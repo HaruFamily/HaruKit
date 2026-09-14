@@ -95,8 +95,8 @@ public class ActionSlot<TPack> : ActionSlotBase
 
     public override bool AcceptsAsset(ScriptableObject asset) => asset is ActionAssetBase<TPack>;
 
-    /// <summary>動作欄位不能接具名變數：變數是公式端點，求值不執行副作用。</summary>
-    public override bool AcceptsEndpoint(GraphEndpoint endpoint) => false;
+    /// <summary>動作欄位不能接具名Token：Token是公式端點，求值不執行副作用。</summary>
+    public override bool AcceptsToken(GraphToken endpoint) => false;
 
     public async UniTask Execute(TPack pack, TokenTable<TPack> tokens)
     {

@@ -13,6 +13,9 @@ public struct HGToolbarView
     /// <summary>資產焦點下不給換對象——資產是獨立一層，未儲存狀態與外層各記各的。</summary>
     public bool OwnerPickerEnabled;
 
+    /// <summary>鎖定中：在 Project／Hierarchy 點別的東西不會把這個視窗切走。</summary>
+    public bool Locked;
+
     public bool SaveEnabled;
 
     /// <summary>可存檔時把鈕染紅，讓「有東西還沒存」在餘光裡看得到。</summary>
@@ -40,6 +43,9 @@ public struct HGToolbarCommands
     public Action Undo;
     public Action Redo;
     public Action SwitchTarget;
+
+    /// <summary>切換鎖定。</summary>
+    public Action ToggleLock;
 }
 
 /// <summary>
@@ -59,7 +65,20 @@ public static class HGToolbarPanel
             cmd.PickOwner(ownerPickerRect);
         GUI.enabled = true;
 
-        GUI.Label(new Rect(ownerPickerRect.xMax + 4f, r.y + 2f, r.width - 440f, 18f),
+        // 鎖緊挨著換對象鈕：兩顆都在回答「現在對誰工作」，擺在一起才讀得出是同一件事。
+        // 不用內建的 "IN LockButton" 樣式與鎖頭圖示：樣式名在不同 Unity 版本會變，
+        // 找不到時每一幀都吐錯誤；純文字按鈕沒有這個風險，狀態也直接寫在臉上。
+        var lockRect = new Rect(ownerPickerRect.xMax + 4f, r.y + 1f, 58f, 19f);
+        var lockColor = GUI.backgroundColor;
+        if (view.Locked) GUI.backgroundColor = new Color(1f, 0.85f, 0.5f);
+        if (GUI.Button(lockRect, new GUIContent(view.Locked ? "已鎖定" : "鎖定",
+                view.Locked
+                    ? "已鎖定：在 Project／Hierarchy 點別的東西不會把這個視窗切走。點此解鎖"
+                    : "鎖住目前的編輯對象，之後在 Project／Hierarchy 點別的東西都不會切走")))
+            cmd.ToggleLock();
+        GUI.backgroundColor = lockColor;
+
+        GUI.Label(new Rect(lockRect.xMax + 4f, r.y + 2f, r.width - 502f, 18f),
             view.Crumb, EditorStyles.boldLabel);
 
         float x = r.xMax - 6f;

@@ -13,7 +13,7 @@ namespace HaruFamily.Tools.AssetPipeline
     /// （prototype key 缺漏、dynamic key 在 producer 前被讀取）接到節點圖上。
     /// </summary>
     // 時序是 AssetPipeline 獨有的概念，所以住在這裡而不是 GraphKit 的 HGValidator：
-    // 具名變數沒有先後，步驟清單才有。
+    // 具名Token沒有先後，步驟清單才有。
     public static class APGraphVerifier
     {
         private const BindingFlags Fields = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
@@ -24,7 +24,7 @@ namespace HaruFamily.Tools.AssetPipeline
             var errors = new List<string>();
             if (graph == null) return errors;
 
-            CheckEndpoints(graph, errors);
+            CheckTokens(graph, errors);
             CheckSteps(graph, errors);
             return errors;
         }
@@ -90,22 +90,22 @@ namespace HaruFamily.Tools.AssetPipeline
             }
         }
 
-        private static void CheckEndpoints(APGraph graph, List<string> errors)
+        private static void CheckTokens(APGraph graph, List<string> errors)
         {
-            // 唯一性是「族＋名稱」：同名不同族是兩個變數，不算重複。
+            // 唯一性是「族＋名稱」：同名不同族是兩個Token，不算重複。
             var seen = new HashSet<(Type, string)>();
 
-            for (int i = 0; i < graph.Endpoints.Count; i++)
+            for (int i = 0; i < graph.Tokens.Count; i++)
             {
-                GraphEndpoint endpoint = graph.Endpoints[i];
-                if (endpoint == null) { errors.Add($"變數[{i}] 是空的。"); continue; }
+                GraphToken endpoint = graph.Tokens[i];
+                if (endpoint == null) { errors.Add($"Token[{i}] 是空的。"); continue; }
 
-                string path = $"變數[{endpoint.Name ?? i.ToString()}]";
-                if (string.IsNullOrWhiteSpace(endpoint.Name)) errors.Add($"變數[{i}] 沒有名字。");
+                string path = $"Token[{endpoint.Name ?? i.ToString()}]";
+                if (string.IsNullOrWhiteSpace(endpoint.Name)) errors.Add($"Token[{i}] 沒有名字。");
                 if (endpoint.Slot == null) { errors.Add($"{path} 沒有指定型別。"); continue; }
 
                 if (!string.IsNullOrWhiteSpace(endpoint.Name) && !seen.Add((endpoint.Slot.Kind, endpoint.Name)))
-                    errors.Add($"{path} 與另一個同型別的變數重名。");
+                    errors.Add($"{path} 與另一個同型別的Token重名。");
 
                 CheckFormulaSlot(endpoint.Slot, path, errors, new StepReads(), new HashSet<object>(ReferenceComparer.Instance));
             }
@@ -152,14 +152,14 @@ namespace HaruFamily.Tools.AssetPipeline
 
                 case NodeKind.Token:
                 {
-                    GraphEndpoint endpoint = node.Endpoint;
-                    if (endpoint == null) { errors.Add($"{path} 指向的變數已不存在。"); return; }
-                    if (!slot.AcceptsEndpoint(endpoint)) { errors.Add($"{path} 指向的變數 [{endpoint.Name}] 型別不相容。"); return; }
+                    GraphToken endpoint = node.Token;
+                    if (endpoint == null) { errors.Add($"{path} 指向的Token已不存在。"); return; }
+                    if (!slot.AcceptsToken(endpoint)) { errors.Add($"{path} 指向的Token [{endpoint.Name}] 型別不相容。"); return; }
 
                     // 跨端點的環要在這裡抓：下沉到端點自己的取值欄位繼續走。
                     if (!visiting.Add(endpoint))
                     {
-                        errors.Add($"{path} 形成變數循環（經過 [{endpoint.Name}]）。");
+                        errors.Add($"{path} 形成Token循環（經過 [{endpoint.Name}]）。");
                         return;
                     }
 

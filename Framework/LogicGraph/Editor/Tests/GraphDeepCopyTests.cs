@@ -87,21 +87,21 @@ public class GraphDeepCopyTests
     }
 
     /// <summary>
-    /// 複製圖裡的一小塊（例：複製一個變數）：`shared` 裡的具名變數必須原樣沿用。
+    /// 複製圖裡的一小塊（例：複製一個Token）：`shared` 裡的具名Token必須原樣沿用。
     /// 跟著抄一份就變成不在清單裡的孤兒端點——參照得到、卻永遠查不到值。
     /// </summary>
     [Test]
     public void Copy_WithShared_KeepsSharedObjectsUncopied()
     {
         var otherSlot = new TestSlot(5);
-        var other = new GraphEndpoint("other", otherSlot);
+        var other = new GraphToken("other", otherSlot);
         other.EnsureId();
 
         var reference = new GraphNode();
-        reference.SetEndpoint(other);
+        reference.SetToken(other);
         var sourceSlot = new TestSlot();
         sourceSlot.SetNode(reference);
-        var source = new GraphEndpoint("source", sourceSlot);
+        var source = new GraphToken("source", sourceSlot);
         source.EnsureId();
 
         var copy = GraphDeepCopy.Copy(source, new object[] { other });
@@ -110,11 +110,11 @@ public class GraphDeepCopyTests
         Assert.That(copy, Is.Not.SameAs(source));
         Assert.That(copy.Slot, Is.Not.SameAs(sourceSlot));
         Assert.That(copy.Slot.Node, Is.Not.SameAs(reference), "載體本身仍要複製");
-        Assert.That(copy.Slot.Node.Endpoint, Is.SameAs(other), "共用變數不可跟著複製");
+        Assert.That(copy.Slot.Node.Token, Is.SameAs(other), "共用Token不可跟著複製");
 
         // 沒給 shared 就是整棵抄：這正是複製單一子圖不能用它的原因。
         var plain = GraphDeepCopy.Copy(source);
-        Assert.That(plain.Slot.Node.Endpoint, Is.Not.SameAs(other));
+        Assert.That(plain.Slot.Node.Token, Is.Not.SameAs(other));
     }
 
     [Test]
@@ -147,7 +147,7 @@ public class GraphDeepCopyTests
         var slot = new TestSlot();
         slot.SetNode(new GraphNode(new CountingFormula()));
         var table = new TokenTable<TestPack>();
-        table.Register(new GraphEndpoint("value", slot));
+        table.Register(new GraphToken("value", slot));
 
         int first = await table.Resolve<int>(typeof(TestSlot), "value", default).AsTask();
         int second = await table.Resolve<int>(typeof(TestSlot), "value", default).AsTask();
@@ -162,11 +162,11 @@ public class GraphDeepCopyTests
         var asset = ScriptableObject.CreateInstance<TestFormulaAsset>();
         var internalSlot = new TestSlot();
         internalSlot.SetNode(new GraphNode(new TestFormula()));
-        var parameter = new GraphEndpoint("amount", internalSlot);
-        asset.Endpoints.Add(parameter);
+        var parameter = new GraphToken("amount", internalSlot);
+        asset.Tokens.Add(parameter);
 
         var proxy = new GraphNode();
-        proxy.SetEndpoint(parameter);
+        proxy.SetToken(parameter);
         var target = new PassFormula();
         target.Value.SetNode(proxy);
         asset.SetTarget(target);
@@ -191,7 +191,7 @@ public class GraphDeepCopyTests
         asset.SetTarget(new ResolveFormula());
         var ownerSlot = new TestSlot();
         ownerSlot.SetNode(new GraphNode(new TestFormula()));
-        caller.Register(new GraphEndpoint("owner", ownerSlot));
+        caller.Register(new GraphToken("owner", ownerSlot));
         int leakedValue = await call.Evaluate(default, caller).AsTask();
         Assert.That(leakedValue, Is.EqualTo(0), "資產內容不可直接解析 caller token");
 

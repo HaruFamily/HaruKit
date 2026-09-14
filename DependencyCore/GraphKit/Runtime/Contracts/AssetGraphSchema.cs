@@ -5,7 +5,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>公式與動作資產共同提供的內部圖。資產的參數就是它自己的具名端點清單。</summary>
-public interface IGraphAsset : IOrphanPool, IEndpointOwner, IGraphHead
+public interface IGraphAsset : IOrphanPool, ITokenOwner, IGraphHead
 {
     object ContentObject { get; }
 
@@ -29,7 +29,7 @@ public sealed class AssetParameterDefinition
     public Type ResultType;
     public Type PackType;
     public FormulaSlotBase Slot;
-    public GraphEndpoint Endpoint;
+    public GraphToken Token;
 }
 
 /// <summary>把資產的端點清單讀成參數 schema。清單即介面，不必掃圖。</summary>
@@ -63,10 +63,10 @@ public static class AssetGraphSchema
     {
         duplicates = new List<string>();
         var result = new List<AssetParameterDefinition>();
-        if (asset is not IGraphAsset graph || graph.Endpoints == null) return result;
+        if (asset is not IGraphAsset graph || graph.Tokens == null) return result;
 
         var seen = new HashSet<(Type, string)>();
-        foreach (var endpoint in graph.Endpoints)
+        foreach (var endpoint in graph.Tokens)
         {
             if (endpoint == null) continue;
             string name = endpoint.Name;
@@ -82,7 +82,7 @@ public static class AssetGraphSchema
                 ResultType = resultType,
                 PackType = endpoint.PackType,
                 Slot = endpoint.Slot,
-                Endpoint = endpoint,
+                Token = endpoint,
             });
         }
         result.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));

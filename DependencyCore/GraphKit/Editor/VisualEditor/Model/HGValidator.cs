@@ -73,18 +73,18 @@ public static class HGValidator
         var report = new HGReport();
         if (model?.Data == null) return report;
 
-        var tokens = HGModel.ReadTokens(model.OwnerEndpoints);
+        var tokens = HGModel.ReadTokens(model.OwnerTokens);
         var checkedAssets = new HashSet<UnityEngine.Object>();
 
-        // 1. 變數本身：名稱空白、名稱重複（同族內唯一）
-        //    「宣告後沒有欄位引用」不是問題：變數的用途就是被圖外面用，沒有連入線是正常狀態。
+        // 1. Token本身：名稱空白、名稱重複（同族內唯一）
+        //    「宣告後沒有欄位引用」不是問題：Token的用途就是被圖外面用，沒有連入線是正常狀態。
         var seen = new HashSet<(Type, string)>();
         foreach (var t in tokens)
         {
-            var focus = VariableFocus(t);
+            var focus = TokenFocus(t);
             if (!seen.Add((t.Kind, t.Key)))
-                Err(report, focus, $"變數 {t.Key}", "名稱重複",
-                    "改成同族內唯一的名稱；撞號時外部只查得到其中一個。", null, t.Endpoint);
+                Err(report, focus, $"Token {t.Key}", "名稱重複",
+                    "改成同族內唯一的名稱；撞號時外部只查得到其中一個。", null, t.Token);
 
             ValidateToken(report, model, focus, t);
         }
@@ -114,10 +114,10 @@ public static class HGValidator
             }
         }
 
-        // 從變數的取值欄位開始整棵子樹都是正式資料，要跟動作樹一樣驗。
+        // 從Token的取值欄位開始整棵子樹都是正式資料，要跟動作樹一樣驗。
         foreach (var t in tokens)
         {
-            WalkTokenCarrier(report, model, VariableFocus(t), t, checkedAssets, null);
+            WalkTokenCarrier(report, model, TokenFocus(t), t, checkedAssets, null);
         }
 
         // 2.1 Owner 指名了不存在的標註。runtime 只是 Has 回 false 然後靜默跳過，
@@ -129,8 +129,8 @@ public static class HGValidator
                 if (t.Key == key) { declared = true; break; }
             if (declared) continue;
             Err(report, null, model.Owner != null ? model.Owner.name : "編輯對象",
-                $"Inspector 指名了不存在的變數 '{key}'",
-                "在左欄建一個同名變數，或修正 Inspector 上的名稱；查不到的 key 會被靜默跳過。", null, null);
+                $"Inspector 指名了不存在的 Token '{key}'",
+                "在左欄建一個同名 Token，或修正 Inspector 上的名稱；查不到的 key 會被靜默跳過。", null, null);
         }
 
         // 4. SerializeReference 型別遺失（類別被改名或刪掉）
@@ -162,17 +162,17 @@ public static class HGValidator
 
         var rootCarrier = HGReflect.GetNode(rootSlot);
         if (rootCarrier?.Kind == NodeKind.Token)
-            Err(report, focus, where, "資產內容不能只是一個變數引用",
-                "資產的內容要是公式或動作；要對外開參數請用左欄的變數清單。", rootSlot, rootCarrier);
+            Err(report, focus, where, "資產內容不能只是一個 Token 引用",
+                "資產的內容要是公式或動作；要對外開參數請用左欄的 Token 清單。", rootSlot, rootCarrier);
 
-        var tokens = HGModel.ReadTokens(focus?.AssetEndpoints);
+        var tokens = HGModel.ReadTokens(focus?.AssetTokens);
         var seen = new HashSet<(Type, string)>();
         foreach (var token in tokens)
         {
-            var tokenFocus = AssetVariableFocus(focus, token);
+            var tokenFocus = AssetTokenFocus(focus, token);
             if (!seen.Add((token.Kind, token.Key)))
-                Err(report, tokenFocus, $"變數 {token.Key}", "名稱重複",
-                    "改成這個資產內同族唯一的名稱。", null, token.Endpoint);
+                Err(report, tokenFocus, $"Token {token.Key}", "名稱重複",
+                    "改成這個資產內同族唯一的名稱。", null, token.Token);
             ValidateToken(report, model, tokenFocus, token);
             WalkTokenCarrier(report, model, tokenFocus, token, new HashSet<UnityEngine.Object>(), focus?.AssetObject);
         }
@@ -209,7 +209,7 @@ public static class HGValidator
             AssetObject = asset,
             AssetHostSlot = host,
             AssetOrphans = HGReflect.Orphans(asset),
-            AssetEndpoints = HGReflect.Endpoints(asset),
+            AssetTokens = HGReflect.Tokens(asset),
         };
 
         probeDepth++;
@@ -222,42 +222,42 @@ public static class HGValidator
         return hasError;
     }
 
-    /// <summary>問題要跳回那個變數自己的畫布。</summary>
-    private static HGFocus VariableFocus(HGToken token)
-        => new HGFocus { Kind = HGFocusKind.Variable, Endpoint = token?.Endpoint };
+    /// <summary>問題要跳回那個Token自己的畫布。</summary>
+    private static HGFocus TokenFocus(HGToken token)
+        => new HGFocus { Kind = HGFocusKind.Token, Token = token?.Token };
 
-    private static HGFocus AssetVariableFocus(HGFocus assetFocus, HGToken token)
+    private static HGFocus AssetTokenFocus(HGFocus assetFocus, HGToken token)
         => new HGFocus
         {
             Kind = HGFocusKind.Asset,
             AssetObject = assetFocus?.AssetObject,
             AssetHostSlot = assetFocus?.AssetHostSlot,
             AssetOrphans = assetFocus?.AssetOrphans,
-            AssetEndpoints = assetFocus?.AssetEndpoints,
-            Endpoint = token?.Endpoint,
+            AssetTokens = assetFocus?.AssetTokens,
+            Token = token?.Token,
         };
 
     private static void ValidateToken(HGReport report, HGModel model, HGFocus focus, HGToken token)
     {
-        if (token?.Endpoint == null) return;
-        if (token.Endpoint.Slot == null)
+        if (token?.Token == null) return;
+        if (token.Token.Slot == null)
         {
-            Err(report, focus, $"變數 {token.Key ?? "（未命名）"}", "沒有取值欄位",
-                "刪掉這個變數重建；結果型別是建立時決定的。", null, token.Endpoint);
+            Err(report, focus, $"Token {token.Key ?? "（未命名）"}", "沒有取值欄位",
+                "刪掉這個 Token 重建；結果型別是建立時決定的。", null, token.Token);
             return;
         }
         if (string.IsNullOrEmpty(token.Key))
-            Err(report, focus, $"{HGReflect.ResultTypeName(token.ResultType)} 變數", "沒有名稱",
-                "取一個名字；外部是用名字查它的值。", null, token.Endpoint);
+            Err(report, focus, $"{HGReflect.ResultTypeName(token.ResultType)} Token", "沒有名稱",
+                "取一個名字；外部是用名字查它的值。", null, token.Token);
     }
 
     private static void WalkTokenCarrier(HGReport report, HGModel model, HGFocus focus, HGToken token,
         HashSet<UnityEngine.Object> checkedAssets, UnityEngine.Object rootAsset)
     {
-        if (token?.Endpoint?.Slot == null) return;
-        string where = $"變數 {token.Key}";
-        WalkTree(report, model, focus, token.Endpoint.Slot, where, false);
-        ValidateAssetCycles(report, focus, token.Endpoint.Slot, rootAsset, where, checkedAssets);
+        if (token?.Token?.Slot == null) return;
+        string where = $"Token {token.Key}";
+        WalkTree(report, model, focus, token.Token.Slot, where, false);
+        ValidateAssetCycles(report, focus, token.Token.Slot, rootAsset, where, checkedAssets);
     }
 
     // ===== 節點樹走訪 =====
@@ -311,28 +311,70 @@ public static class HGValidator
         else if (useType == 3)
         {
             // 端點被刪掉時參照會變 null，這裡看得到；不會像字串 key 一樣留著一個查不到的名字。
-            var endpoint = HGReflect.GetEndpoint(slot);
+            var endpoint = HGReflect.GetToken(slot);
             if (endpoint == null)
-                Issue(report, disabled, focus, where, "欄位設為變數，但沒有指定變數",
-                    "選一個變數，或把模式改回常數。", slot, HGReflect.GetNode(slot));
-            else if (!HGReflect.AcceptsEndpoint(slot, endpoint))
-                Err(report, focus, where, $"接的變數 '{endpoint.Name}' 型別不相容",
-                    "改接同結果型別的變數。", slot, HGReflect.GetNode(slot));
+                Issue(report, disabled, focus, where, "欄位設為 Token，但沒有指定 Token",
+                    "選一個 Token，或把模式改回常數。", slot, HGReflect.GetNode(slot));
+            else if (!HGReflect.AcceptsToken(slot, endpoint))
+                Err(report, focus, where, $"接的 Token '{endpoint.Name}' 型別不相容",
+                    "改接同結果型別的 Token。", slot, HGReflect.GetNode(slot));
             else if (!InScope(model, focus, endpoint))
-                Err(report, focus, where, $"接的變數 '{endpoint.Name}' 不屬於這張圖",
-                    "改接本圖變數清單裡的變數；求值是用名字在本圖的變數表查的，跨圖引用永遠查不到，會靜默取預設值。",
+                Err(report, focus, where, $"接的 Token '{endpoint.Name}' 不屬於這張圖",
+                    "改接本圖 Token 清單裡的 Token；求值是用名字在本圖的 Token 表查的，跨圖引用永遠查不到，會靜默取預設值。",
                     slot, HGReflect.GetNode(slot));
+        }
+        else if (useType == 4)
+        {
+            ValidateCatalog(report, model, focus, slot, where, disabled);
         }
     }
 
     /// <summary>
-    /// 這個端點在不在當前這張圖的變數清單裡。資產焦點看資產自己的清單，其餘看 Owner 的。
+    /// 目錄節點的三種問題：指到的目錄不存在、選定型別已經不在目錄裡、目錄是空的。
+    /// </summary>
+    // 目錄住在 Owner，不在圖的工作副本裡，所以它隨時可能被左欄或資產分頁改掉，
+    // 而圖上的節點只存一個 id。這三條是「圖以外的東西變了」在圖上唯一看得見的地方。
+    // 空目錄只是警告：先建目錄再放資產是正常的編輯順序，存檔當下還沒放完不該擋住。
+    private static void ValidateCatalog(HGReport report, HGModel model, HGFocus focus, object slot,
+        string where, bool disabled)
+    {
+        var carrier = HGReflect.GetNode(slot);
+        string id = carrier?.CatalogId;
+        if (string.IsNullOrEmpty(id))
+        {
+            Issue(report, disabled, focus, where, "欄位設為目錄，但沒有指定目錄",
+                "在節點上選一個目錄，或把模式改回常數。", slot, carrier);
+            return;
+        }
+
+        var catalog = FindCatalog(model, id);
+        if (catalog == null)
+        {
+            Err(report, focus, where, "接的目錄已不存在",
+                "目錄可能在左欄被刪掉了。重新選一個目錄，或改用別的來源。", slot, carrier);
+            return;
+        }
+
+        Type filter = HGReflect.CatalogFilterType(carrier.CatalogType);
+        if (filter != null && !HGReflect.CatalogHasType(catalog, filter))
+            Err(report, focus, where, $"目錄 '{catalog.Name}' 裡已經沒有 {filter.Name}",
+                "把型別改回「全部」，或把那種資產補回目錄裡；現在求值會得到空清單。", slot, carrier);
+        else if (catalog.Items == null || catalog.Items.Count == 0)
+            Warn(report, focus, where, $"目錄 '{catalog.Name}' 是空的",
+                "把資產拖進左欄那個目錄；現在求值會得到空清單。", slot, carrier);
+    }
+
+    private static IGraphCatalog FindCatalog(HGModel model, string id)
+        => HGReflect.FindCatalog((model?.Owner as ICatalogOwner)?.Catalogs, id);
+
+    /// <summary>
+    /// 這個端點在不在當前這張圖的Token清單裡。資產焦點看資產自己的清單，其餘看 Owner 的。
     /// </summary>
     // 求值時 Token 節點是拿「名字」去當前作用域的 TokenTable 查（資產作用域只登記資產自己的參數），
     // 所以引用到別張圖的端點物件不會報錯、也不會求出值，只會回預設值——這是唯一擋得住的地方。
-    private static bool InScope(HGModel model, HGFocus focus, GraphEndpoint endpoint)
+    private static bool InScope(HGModel model, HGFocus focus, GraphToken endpoint)
     {
-        var scope = focus != null && focus.Kind == HGFocusKind.Asset ? focus.AssetEndpoints : model?.OwnerEndpoints;
+        var scope = focus != null && focus.Kind == HGFocusKind.Asset ? focus.AssetTokens : model?.OwnerTokens;
         if (scope == null) return true;   // 讀不到清單就不判，寧可不報也不要誤報
         foreach (var other in scope)
             if (ReferenceEquals(other, endpoint)) return true;
@@ -542,7 +584,7 @@ public static class HGValidator
     private static object AssetContent(UnityEngine.Object asset) => HGReflect.AssetRoot(asset)?.BodyObject;
 
     /// <summary>
-    /// Owner 宣告「我會從圖外用字串 key 求值」的那些變數名。編輯器不認得任何專案型別，
+    /// Owner 宣告「我會從圖外用字串 key 求值」的那些Token名。編輯器不認得任何專案型別，
     /// 所以走 Core 的 `IExternalTokenKeys` 介面問，不是去讀 AffixDefinition 之類的欄位。
     /// </summary>
     private static HashSet<string> ExternalTokenKeys(UnityEngine.Object owner)

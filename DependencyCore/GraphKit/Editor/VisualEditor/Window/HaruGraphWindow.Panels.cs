@@ -7,14 +7,14 @@ using UnityEditor;
 using UnityEngine;
 
 /// <summary>
-/// 左欄變數庫／資產庫／引用清單三區，以及底部 Console。
+/// 左欄Token庫／資產庫／引用清單三區，以及底部 Console。
 /// </summary>
 public partial class HaruGraphWindow
 {
     // ===== 左欄：Token／Asset 庫 =====
 
     /// <summary>
-    /// 變數／資產／引用上下分區，中間可拖。刻意不用分頁：資產焦點下，變數列的是「這個資產對呼叫端的參數介面」，
+    /// Token／資產／引用上下分區，中間可拖。刻意不用分頁：資產焦點下，Token列的是「這個資產對呼叫端的參數介面」，
     /// 而資產列是「換去編哪一個」，兩件事交替發生，分頁會逼人每次來回切一趟。
     /// 引用區只在資產焦點出現（`HasReferenceSection`），其餘焦點下另外兩區直接吃掉那段高度。
     /// 每區都各自有 ScrollView，區塊被拖小了就滾動，不會把內容切掉。
@@ -24,13 +24,43 @@ public partial class HaruGraphWindow
         HGStyles.Fill(r, HGStyles.Panel);
         HGStyles.Frame(r, HGStyles.NodeBorder);
 
-        // 面板標題直接當變數區的標題：上面已經沒有第三種東西，再加一條區段標題只是重複佔 20px。
-        GUI.Label(new Rect(r.x + 4f, r.y + 2f, 160f, 18f),
-            new GUIContent("變數庫", "對外端點；點一筆進入它自己的畫布，沒接來源時它就是具名常數"), HGStyles.PanelHeader);
+        // 目錄庫是最上面一區。目前唯一的使用端（AssetPipeline）只宣告這一個能力，
+        // 所以「只有目錄庫」是主要路徑；與其他區並存時它取固定高度，不另外長一條把手——
+        // 沒有真實需求之前不為未知形狀做四區可拖版面。
+        if (HasCatalogSection)
+        {
+            bool alone = !HasTokenSection && !HasAssetSection;
+            float catalogBottom = alone ? r.yMax : r.y + 22f + MinCatalogSection;
+            var catalogRect = new Rect(r.x, r.y, r.width, catalogBottom - r.y);
 
-        float top = r.y + 22f;
+            GUI.Label(new Rect(catalogRect.x + 4f, catalogRect.y + 2f, 160f, 18f),
+                new GUIContent("目錄庫", "手動蒐集的資產分組；先建目錄，再把 Project 的資產拖進某一列"),
+                HGStyles.PanelHeader);
+            catalogLibrary.Draw(catalogRect, catalogRect.y + 22f, CatalogLibraryView(), inlineName, drag,
+                CatalogLibraryCommands());
 
-        // 圖宣告不支援共用資產時，左欄就只有變數庫一區：沒有分隔把手、沒有資料夾鈕，
+            if (alone) return;
+            DrawTokenAndAssetSections(new Rect(r.x, catalogBottom, r.width, r.yMax - catalogBottom));
+            return;
+        }
+
+        DrawTokenAndAssetSections(r);
+    }
+
+    /// <summary>Token 區與資產區（含引用區）的上下分區。目錄庫存在時它拿到的是扣掉目錄庫之後的那一段。</summary>
+    private void DrawTokenAndAssetSections(Rect r)
+    {
+        bool showToken = HasTokenSection;
+
+        // 面板標題直接當 Token 區的標題：上面已經沒有第三種東西，再加一條區段標題只是重複佔 20px。
+        // 圖沒宣告 Token 能力時整條標題都不畫，下一區從面板頂端開始，不留一條空標題佔位。
+        if (showToken)
+            GUI.Label(new Rect(r.x + 4f, r.y + 2f, 160f, 18f),
+                new GUIContent("Token 庫", "對外端點；點一筆進入它自己的畫布，沒接來源時它就是具名常數"), HGStyles.PanelHeader);
+
+        float top = showToken ? r.y + 22f : r.y;
+
+        // 圖宣告不支援共用資產時，左欄就只有 Token 庫一區：沒有分隔把手、沒有資料夾鈕，
         // 也不去掃專案資產。留一個永遠空的清單比收掉它更難解釋——使用者會一直找「東西為什麼沒出現」。
         if (!HasAssetSection)
         {
@@ -40,29 +70,33 @@ public partial class HaruGraphWindow
         }
 
         bool showRef = HasReferenceSection;
-        float avail = r.yMax - top - ResizeHandleWidth * (showRef ? 2f : 1f);
+        // 把手只長在兩區之間：Token↔資產一條、資產↔引用一條，區沒出現那條把手也不存在。
+        float handleCount = (showToken ? 1f : 0f) + (showRef ? 1f : 0f);
+        float avail = r.yMax - top - ResizeHandleWidth * handleCount;
         // 視窗太矮時連各區的最小高度都放不下，這時平均分；寧可擠也不要出現負高度的 Rect。
-        float share = avail / (showRef ? 3f : 2f);
-        float minToken = Mathf.Min(MinTokenSection, share);
+        float share = avail / (1f + handleCount);
+        float minToken = showToken ? Mathf.Min(MinTokenSection, share) : 0f;
         float minAsset = Mathf.Min(MinAssetSection, share);
         float minRef = showRef ? Mathf.Min(MinRefSection, share) : 0f;
 
         // 夾限後寫回欄位：拖曳是累加 delta，記著的值若跟畫面上的高度不同步，下一次拖會整段跳。
-        // 先夾引用區（它是最下面那一段），剩下的才輪到變數區與資產區分。
+        // 先夾引用區（它是最下面那一段），剩下的才輪到 Token 區與資產區分。
         float maxRef = Mathf.Max(minRef, avail - minToken - minAsset);
         if (showRef) refSectionHeight = Mathf.Clamp(refSectionHeight, minRef, maxRef);
         float refHeight = showRef ? refSectionHeight : 0f;
         float maxToken = Mathf.Max(minToken, avail - minAsset - refHeight);
-        tokenSectionHeight = Mathf.Clamp(tokenSectionHeight, minToken, maxToken);
+        if (showToken) tokenSectionHeight = Mathf.Clamp(tokenSectionHeight, minToken, maxToken);
 
-        var tokenRect = new Rect(r.x, top, r.width, tokenSectionHeight);
-        var handle = new Rect(r.x, tokenRect.yMax, r.width, ResizeHandleWidth);
+        var tokenRect = new Rect(r.x, top, r.width, showToken ? tokenSectionHeight : 0f);
+        var handle = new Rect(r.x, tokenRect.yMax, r.width, showToken ? ResizeHandleWidth : 0f);
         var assetRect = new Rect(r.x, handle.yMax, r.width, r.yMax - handle.yMax - refHeight
             - (showRef ? ResizeHandleWidth : 0f));
 
-        HandleLibrarySplitResize(handle, minToken, maxToken);
-
-        tokenLibrary.Draw(tokenRect, tokenRect.y + 2f, TokenLibraryView(), TokenLibraryCommands(), inlineName, drag);
+        if (showToken)
+        {
+            HandleLibrarySplitResize(handle, minToken, maxToken);
+            tokenLibrary.Draw(tokenRect, tokenRect.y + 2f, TokenLibraryView(), TokenLibraryCommands(), inlineName, drag);
+        }
 
         // 資產區標題跟面板標題同一種寫法，三區看起來才是同級的清單，不是主從。
         GUI.Label(new Rect(assetRect.x + 4f, assetRect.y + 2f, 160f, 18f),
@@ -85,7 +119,7 @@ public partial class HaruGraphWindow
 
         assetLibrary.Draw(assetRect, assetRect.y + 24f, AssetLibraryView(), inlineName, drag, RenameAssetFile, ActivateAsset);
 
-        DrawResizeGrip(handle, false, resizingLibrarySplit);
+        if (showToken) DrawResizeGrip(handle, false, resizingLibrarySplit);
 
         if (!showRef) return;
 
@@ -96,26 +130,102 @@ public partial class HaruGraphWindow
         DrawResizeGrip(refHandle, false, resizingRefSplit);
     }
 
-    /// <summary>左欄上下分隔：拖動只改變數區高度，資產區吃剩下的。夾限與 Console 那條同一套。</summary>
+    /// <summary>左欄上下分隔：拖動只改Token區高度，資產區吃剩下的。夾限與 Console 那條同一套。</summary>
+    // ===== 目錄庫 =====
+    // 目錄住在 Owner，不在 model.Data 的工作副本裡，所以這些命令都不走 MarkGraphChanged／Undo，
+    // 每一條都是直接改 Owner 再 SetDirty。取消編輯不會還原目錄——這與共用資產庫一致。
+
+    private ICatalogOwner CatalogOwner => model?.Owner as ICatalogOwner;
+
+    private HGCatalogLibraryView CatalogLibraryView() => new()
+    {
+        Catalogs = CatalogOwner?.Catalogs,
+    };
+
+    private HGCatalogLibraryCommands CatalogLibraryCommands() => new()
+    {
+        Create = CreateCatalog,
+        Rename = RenameCatalog,
+        Remove = DeleteCatalog,
+        Add = AddToCatalog,
+        RemoveItem = RemoveFromCatalog,
+    };
+
+    private string CreateCatalog()
+    {
+        var owner = CatalogOwner;
+        if (owner == null) return null;
+        var catalog = owner.CreateCatalog();
+        if (catalog == null) return null;
+        MarkOwnerDirty();
+        return catalog.Id;
+    }
+
+    private bool RenameCatalog(string id, string name)
+    {
+        var owner = CatalogOwner;
+        if (owner == null) return false;
+        if (!owner.RenameCatalog(id, name, out string error))
+        {
+            ShowNotification(new GUIContent(error));
+            return false;
+        }
+        MarkOwnerDirty();
+        return true;
+    }
+
+    private void DeleteCatalog(string id)
+    {
+        var owner = CatalogOwner;
+        if (owner == null) return;
+        owner.DeleteCatalog(id);
+        MarkOwnerDirty();
+    }
+
+    private void AddToCatalog(string id, IReadOnlyList<UnityEngine.Object> assets)
+    {
+        var owner = CatalogOwner;
+        if (owner == null) return;
+        int added = owner.AddToCatalog(id, assets);
+        // 一個都沒加進去只有一種原因：拖進來的全都已經在裡面。不說一聲會看起來像拖放壞掉。
+        if (added == 0) ShowNotification(new GUIContent("這些資產已經在目錄裡了"));
+        MarkOwnerDirty();
+    }
+
+    private void RemoveFromCatalog(string id, UnityEngine.Object asset)
+    {
+        var owner = CatalogOwner;
+        if (owner == null) return;
+        owner.RemoveFromCatalog(id, asset);
+        MarkOwnerDirty();
+    }
+
+    /// <summary>目錄改完直接寫 Owner。不進工作副本，所以也不碰 model.Dirty 與存檔交易。</summary>
+    private void MarkOwnerDirty()
+    {
+        if (model?.Owner != null) EditorUtility.SetDirty(model.Owner);
+        Repaint();
+    }
+
     private HGTokenLibraryView TokenLibraryView() => new()
     {
-        Tokens = HGModel.ReadTokens(CurrentEndpoints()),
-        FocusedEndpoint = focus.Endpoint,
+        Tokens = HGModel.ReadTokens(CurrentTokens()),
+        FocusedToken = focus.Token,
     };
 
     private HGTokenLibraryCommands TokenLibraryCommands() => new()
     {
-        Rename = RenameEndpointFromLibrary,
-        Activate = ActivateEndpoint,
-        Duplicate = DuplicateEndpoint,
-        Remove = RemoveEndpoint,
-        Create = ShowCreateEndpointMenu,
+        Rename = RenameTokenFromLibrary,
+        Activate = ActivateToken,
+        Duplicate = DuplicateToken,
+        Remove = RemoveToken,
+        Create = ShowCreateTokenMenu,
         IssueOf = TokenIssue,
     };
 
-    private bool RenameEndpointFromLibrary(GraphEndpoint endpoint, string name)
+    private bool RenameTokenFromLibrary(GraphToken endpoint, string name)
     {
-        if (model.RenameEndpoint(endpoint, name, CurrentEndpoints(), out string error))
+        if (model.RenameToken(endpoint, name, CurrentTokens(), out string error))
         {
             MarkGraphChanged();
             return true;
@@ -124,11 +234,11 @@ public partial class HaruGraphWindow
         return false;
     }
 
-    /// <summary>變數庫選了一筆：再點一次目前這格＝退出，不必去找返回鈕。</summary>
-    private void ActivateEndpoint(GraphEndpoint endpoint)
+    /// <summary>Token庫選了一筆：再點一次目前這格＝退出，不必去找返回鈕。</summary>
+    private void ActivateToken(GraphToken endpoint)
     {
-        if (ReferenceEquals(focus.Endpoint, endpoint)) ExitVariable();
-        else EnterVariable(endpoint);
+        if (ReferenceEquals(focus.Token, endpoint)) ExitToken();
+        else EnterToken(endpoint);
     }
 
     private (string reason, bool isError) TokenIssue(HGToken token)
@@ -182,13 +292,13 @@ public partial class HaruGraphWindow
             e.Use();
         }
     }
-    /// <summary>進入這個變數自己的畫布。</summary>
-    private void JumpToToken(HGToken token) => EnterVariable(token?.Endpoint);
+    /// <summary>進入這個Token自己的畫布。</summary>
+    private void JumpToToken(HGToken token) => EnterToken(token?.Token);
 
-    /// <summary>新增變數：先選結果型別，因為它決定端點的取值欄位，之後不再更動。</summary>
-    private void ShowCreateEndpointMenu()
+    /// <summary>新增Token：先選結果型別，因為它決定端點的取值欄位，之後不再更動。</summary>
+    private void ShowCreateTokenMenu()
     {
-        var scope = CurrentEndpoints();
+        var scope = CurrentTokens();
         if (scope == null) return;
 
         var menu = new GenericMenu();
@@ -198,49 +308,49 @@ public partial class HaruGraphWindow
             // 用族名而非結果型別名：同結果型別的多個族（String / Key）否則會列出兩個一模一樣的項目。
             menu.AddItem(new GUIContent(HGReflect.SlotKindName(slotType)), false, () =>
             {
-                var endpoint = model.CreateEndpoint(scope, captured, out string error);
+                var endpoint = model.CreateToken(scope, captured, out string error);
                 if (endpoint == null)
                 {
                     ShowNotification(new GUIContent(error));
                     return;
                 }
                 MarkGraphChanged();
-                EnterVariable(endpoint);
+                EnterToken(endpoint);
             });
         }
         menu.ShowAsContext();
     }
-    /// <summary>複製一個變數，並進去複本的畫布——複製完通常就是要改它。</summary>
-    private void DuplicateEndpoint(GraphEndpoint source)
+    /// <summary>複製一個Token，並進去複本的畫布——複製完通常就是要改它。</summary>
+    private void DuplicateToken(GraphToken source)
     {
-        var scope = CurrentEndpoints();
+        var scope = CurrentTokens();
         if (scope == null) return;
 
         BreakUndoMerge();                   // 複製自成一步
-        var copy = model.DuplicateEndpoint(source, scope, out string error);
+        var copy = model.DuplicateToken(source, scope, out string error);
         if (copy == null) { ShowNotification(new GUIContent(error)); return; }
 
         MarkGraphChanged();
         ShowNotification(new GUIContent($"已複製成 '{copy.Name}'"));
-        EnterVariable(copy);
+        EnterToken(copy);
     }
 
     /// <summary>
-    /// 移除一個變數：指著它的節點會一起清空（`HGModel.DeleteEndpoint`）。
+    /// 移除一個Token：指著它的節點會一起清空（`HGModel.DeleteToken`）。
     /// 不問確認——Owner 焦點 Ctrl+Z 復原得回來，資產焦點按「取消」可整批捨棄，提示裡直接寫出來。
     /// </summary>
-    private void RemoveEndpoint(GraphEndpoint endpoint)
+    private void RemoveToken(GraphToken endpoint)
     {
         if (endpoint == null) return;
-        // scope 與引用數都要在 ExitVariable 之前取：退出變數焦點會換掉「現在在編誰」，清單也就跟著換了。
-        var scope = CurrentEndpoints();
+        // scope 與引用數都要在 ExitToken 之前取：退出Token焦點會換掉「現在在編誰」，清單也就跟著換了。
+        var scope = CurrentTokens();
         if (scope == null) return;
         int used = HGModel.CountReferences(endpoint, SlotsInCurrentGraph());
         string name = string.IsNullOrEmpty(endpoint.Name) ? "（未命名）" : endpoint.Name;
 
         BreakUndoMerge();                   // 刪除自成一步，不跟前一個編輯合併成同一次復原
-        if (ReferenceEquals(focus.Endpoint, endpoint)) ExitVariable();
-        model.DeleteEndpoint(endpoint, scope, CurrentCarrierScope());
+        if (ReferenceEquals(focus.Token, endpoint)) ExitToken();
+        model.DeleteToken(endpoint, scope, CurrentCarrierScope());
         MarkGraphChanged();
 
         string undoHint = focus.Kind == HGFocusKind.Asset ? "「取消」可整批捨棄" : "Ctrl+Z 可復原";
@@ -266,11 +376,11 @@ public partial class HaruGraphWindow
         FocusedAsset = focus.Kind == HGFocusKind.Asset ? focus.AssetObject : null,
     };
 
-    /// <summary>資產庫選了一筆：再點一次目前這格＝退出（在它的變數子畫布時先回到資產本體，由 EnterAsset 處理）。</summary>
+    /// <summary>資產庫選了一筆：再點一次目前這格＝退出（在它的Token子畫布時先回到資產本體，由 EnterAsset 處理）。</summary>
     private void ActivateAsset(ScriptableObject asset, Type slotType)
     {
         bool isFocus = focus.Kind == HGFocusKind.Asset && focus.AssetObject == asset;
-        if (isFocus && focus.Endpoint == null) LeaveAsset();
+        if (isFocus && focus.Token == null) LeaveAsset();
         else EnterAsset(asset, slotType);
     }
 
@@ -326,7 +436,7 @@ public partial class HaruGraphWindow
     private bool HasTokenIssue(HGToken token, out string reason, out bool isError)
     {
         reason = null; isError = false;
-        object target = token?.Endpoint;
+        object target = token?.Token;
         if (target == null) return false;
 
         foreach (var issue in Rep.Issues)

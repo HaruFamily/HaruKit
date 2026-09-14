@@ -10,7 +10,7 @@ using UnityEngine;
 
 public enum HGRowKind
 {
-    /// <summary>參數欄位：有接點，四種狀態（常數／公式／資產／變數）。</summary>
+    /// <summary>參數欄位：有接點，四種狀態（常數／公式／資產／Token）。</summary>
     Slot,
     /// <summary>一般值欄位：沒有接點，直接編輯。</summary>
     Value,
@@ -85,15 +85,19 @@ public class HGRow
 public class HGNodeView
 {
     public GraphNode Carrier;             // 這個節點的載體；HEAD 節點為 null（載體是頭端本身）
-    public object Obj;                    // GraphNodeContent（公式 / 動作）；資產、變數、空節點為 null
+    public object Obj;                    // GraphNodeContent（公式 / 動作）；資產、Token、空節點為 null
     public UnityEngine.Object Asset;      // 資產節點目前指到的資產（可為 null＝尚未指定）
     public bool IsAssetNode;              // 資產節點（不論有沒有指定資產）
-    /// <summary>這顆節點指到的具名變數（不是變數節點就是 null）。內容住在變數自己的畫布。</summary>
-    public GraphEndpoint Endpoint;
-    public bool IsVariableNode;           // 變數節點（不論有沒有指定變數）
-    public Type ResultType;               // 資產／變數節點的結果型別
+    /// <summary>這顆節點指到的具名Token（不是Token節點就是 null）。內容住在Token自己的畫布。</summary>
+    public GraphToken Token;
+    public bool IsTokenNode;           // Token節點（不論有沒有指定Token）
+    /// <summary>目錄節點（不論有沒有指定目錄）。內容住在 Owner 的目錄裡，不在圖上。</summary>
+    public bool IsCatalogNode;
+    /// <summary>這顆節點指到的目錄 Id；不是目錄節點就是 null。顯示名要向 Owner 查，這裡不存名字。</summary>
+    public string CatalogId;
+    public Type ResultType;               // 資產／Token節點的結果型別
     public string Id;
-    public string Title;                  // Header 主文字＝具體型別／變數／資產名稱，節點靠它辨識
+    public string Title;                  // Header 主文字＝具體型別／Token／資產名稱，節點靠它辨識
     public string Chip;                   // Header 右側的結果型別標籤（契約），null 就不畫
     public string Desc;
     public bool IsRoot;
@@ -130,7 +134,7 @@ public class HGNodeView
     public float ContentHeight;
     public float TipsHeight;
     // 換來源的入口是 Header 右端的 ▾；Root HEAD 的來源走它自己的「來源」參數列接點，所以不畫。
-    public bool HasSourceSelector => !IsRoot && (IsPlaceholder || Obj != null || IsAssetNode || IsVariableNode);
+    public bool HasSourceSelector => !IsRoot && (IsPlaceholder || Obj != null || IsAssetNode || IsTokenNode || IsCatalogNode);
 
     public Rect Rect => new Rect(Pos.x, Pos.y, Width, Height);
     public Vector2 OutputPort => new Vector2(Pos.x + HGGraph.PortRadius, Pos.y + HGGraph.HeaderHeight * 0.5f);
@@ -232,7 +236,7 @@ public static class HGGraph
 
     /// <summary>
     /// 建圖。每個 root 畫成一顆固定 HEAD；orphans 是本焦點的候選節點（含拖進畫布的獨立 Token／資產節點）。
-    /// headTitle 是編輯對象自己的名稱（動作標籤／變數名／資產名），直接當 HEAD 的 Header。
+    /// headTitle 是編輯對象自己的名稱（動作標籤／Token名／資產名），直接當 HEAD 的 Header。
     ///
     /// root 有兩種：多數焦點給的是**一個** Slot 頭端；Timing 焦點給的是**全部** ActionTimingGroup 物件，
     /// 每個畫成一顆節點，本體就是那個時機的動作清單。同一張畫布才拉得到跨時機的共用來源。
@@ -311,8 +315,9 @@ public static class HGGraph
     public static string RootNoun(IGraphDocument doc)
         => string.IsNullOrWhiteSpace(doc?.RootNoun) ? "群組" : doc.RootNoun;
 
-    /// <summary>圖支不支援共用資產。沒綁定時當作不支援：沒有 Doc 就沒有資產族，畫出來一定是空清單。</summary>
-    public static bool SupportsSharedAssets(IGraphDocument doc) => doc?.SupportsSharedAssets ?? false;
+    /// <summary>圖有沒有啟用這組能力。沒綁定時一律當作沒有：沒有 Doc 就沒有內容，畫出來一定是空的。</summary>
+    public static bool Has(IGraphDocument doc, HGCapabilities capability)
+        => doc != null && (doc.Capabilities & capability) == capability;
 
     /// <summary>視窗標題。沒綁定或圖沒提供時退回底層自己的名字。</summary>
     public static string WindowTitle(IGraphDocument doc)
@@ -321,7 +326,7 @@ public static class HGGraph
     /// <summary>還沒綁定任何圖時的視窗標題。</summary>
     public const string DefaultWindowTitle = "HaruGraph";
 
-    // headCarrier：HEAD 的座標主人（HGFocus.HeadCarrier）。變數焦點傳 GraphEndpoint、資產本體傳資產 SO，
+    // headCarrier：HEAD 的座標主人（HGFocus.HeadCarrier）。Token焦點傳 GraphToken、資產本體傳資產 SO，
     // 位置才記得住——資產的 HEAD 容器槽是每次進來現做的，記在它上面等於不記。其他焦點沿用 rootSlot。
     private static HGNodeView MakeHeadNode(HGModel model, object rootSlot, string focusId, string headTitle, object headCarrier)
     {
@@ -388,16 +393,32 @@ public static class HGGraph
 
             case NodeKind.Token:
             {
-                var endpoint = carrier.Endpoint;
+                var endpoint = carrier.Token;
                 Type variableResult = endpoint?.ResultType ?? slotResultType;
                 node = new HGNodeView
                 {
-                    Endpoint = endpoint,
-                    IsVariableNode = true,
+                    Token = endpoint,
+                    IsTokenNode = true,
                     ResultType = variableResult,
-                    // 與資產節點同一種版型：Header 只表明身分，選哪一個變數是本體那一列在做。
+                    // 與資產節點同一種版型：Header 只表明身分，選哪一個Token是本體那一列在做。
                     Title = "Token",
                     Chip = ChipText(endpoint?.Kind ?? (slotIsAction ? null : slotType), variableResult, false),
+                };
+                break;
+            }
+
+            case NodeKind.Catalog:
+            {
+                // 唯一一種結果型別要看節點自己的欄位才知道的節點：選了什麼型別，結果就是 List<那個型別>。
+                Type catalogResult = HGReflect.CatalogResultType(carrier.CatalogType);
+                node = new HGNodeView
+                {
+                    IsCatalogNode = true,
+                    CatalogId = carrier.CatalogId,
+                    ResultType = catalogResult,
+                    // 與資產／Token 節點同一種版型：Header 只表明身分，選哪一個目錄由本體那兩列在做。
+                    Title = "Catalog",
+                    Chip = ChipText(null, catalogResult, false),
                 };
                 break;
             }
@@ -751,6 +772,9 @@ public static class HGGraph
             case 2:
                 var a = HGReflect.GetAsset(slot);
                 return a != null ? a.name : "（空資產）";
+            case 4:
+                // 目錄名住在 Owner，這個靜態函式拿不到；顯示身分就夠，名字在節點本體那兩列看得到。
+                return "（目錄）";
             default:
                 // 動作列右半已經不畫狀態文字，操作提示併進標籤裡，否則空著的列看不出下一步要做什麼。
                 return isAction ? "（未啟用，從接點拉線指定動作）" : "常數";
@@ -784,7 +808,7 @@ public static class HGGraph
 
     /// <summary>
     /// 節點寬度：型別標了 `[HGNodeView(Width = n)]` 就用 n 格，否則預設 15 格。
-    /// 只有內嵌節點（`node.Obj` 是具體 Action／Formula）能覆寫；資產、變數、時機、空節點都沒有型別可問，一律預設寬。
+    /// 只有內嵌節點（`node.Obj` 是具體 Action／Formula）能覆寫；資產、Token、時機、空節點都沒有型別可問，一律預設寬。
     /// </summary>
     private static float WidthOf(HGNodeView node)
     {
@@ -796,7 +820,7 @@ public static class HGGraph
     {
         node.Width = WidthOf(node);
         // 節點上不畫型別說明（它是型別常數，重複出現只是噪音），改由畫布左上角的說明面板顯示選取節點的 Desc。
-        // 註解則是「這一顆節點」的資訊，任何節點（含變數／資產葉節點）都能加。
+        // 註解則是「這一顆節點」的資訊，任何節點（含Token／資產葉節點）都能加。
         node.TipsHeight = !node.NoteOpen
             ? 0f
             // 起手一行，換行或折行才長高：註解多半是一句話，預留三行等於每顆節點都被墊高。
@@ -812,8 +836,12 @@ public static class HGGraph
             node.Height = leafY + NodeBottomPad;
             return;
         }
-        // 資產與變數的本體第一列是「選哪一個」的下拉，它不在 Rows 裡，高度要另外加。
-        float y = MeasureRows(node.Rows, HeaderHeight + (node.IsAssetNode || node.IsVariableNode ? RowHeight : 0f));
+        // 資產與Token的本體第一列是「選哪一個」的下拉，它不在 Rows 裡，高度要另外加。
+        // 目錄節點有兩列（選目錄、選型別），所以加兩倍。
+        float refRows = node.IsCatalogNode ? RowHeight * 2f
+            : node.IsAssetNode || node.IsTokenNode ? RowHeight
+            : 0f;
+        float y = MeasureRows(node.Rows, HeaderHeight + refRows);
         if (node.TipsHeight > 0f) y += node.TipsHeight + 10f;
         node.ContentHeight = Mathf.Max(y, HeaderHeight + 8f);
         node.Height = node.ContentHeight + NodeBottomPad;

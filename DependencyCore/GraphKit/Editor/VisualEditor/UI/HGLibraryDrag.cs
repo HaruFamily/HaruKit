@@ -16,25 +16,36 @@ public sealed class HGLibraryDrag
     /// <summary>正在拖的資產。null＝這次拖的不是資產。</summary>
     public ScriptableObject Asset { get; private set; }
 
-    /// <summary>正在拖的變數。null＝這次拖的不是變數。</summary>
-    public GraphEndpoint Endpoint { get; private set; }
+    /// <summary>正在拖的Token。null＝這次拖的不是Token。</summary>
+    public GraphToken Token { get; private set; }
+
+    /// <summary>正在拖的目錄。null＝這次拖的不是目錄。</summary>
+    // 存介面不存 id：拖曳只活在這一次互動裡，期間目錄物件不會被換掉；
+    // 真正寫進節點的才是 Id（改名不斷），那是落下時的事。
+    public IGraphCatalog Catalog { get; private set; }
 
     /// <summary>按下之後真的移動過。沒移動過就還是一次點擊，不是拖曳。</summary>
     public bool AssetActive { get; private set; }
 
-    public bool EndpointActive { get; private set; }
+    public bool TokenActive { get; private set; }
+
+    public bool CatalogActive { get; private set; }
 
     /// <summary>有任何一種拖曳進行中。視窗用它決定要不要持續 Repaint。</summary>
-    public bool Active => AssetActive || EndpointActive;
+    public bool Active => AssetActive || TokenActive || CatalogActive;
 
     /// <summary>拖著資產、可以落下了。</summary>
     public bool DroppingAsset => AssetActive && Asset != null;
 
-    /// <summary>拖著變數、可以落下了。</summary>
-    public bool DroppingEndpoint => EndpointActive && Endpoint != null;
+    /// <summary>拖著Token、可以落下了。</summary>
+    public bool DroppingToken => TokenActive && Token != null;
+
+    /// <summary>拖著目錄、可以落下了。</summary>
+    public bool DroppingCatalog => CatalogActive && Catalog != null;
 
     private ScriptableObject pendingAssetClick;
-    private GraphEndpoint pendingEndpointClick;
+    private GraphToken pendingTokenClick;
+    private IGraphCatalog pendingCatalogClick;
 
     public void BeginAsset(ScriptableObject asset)
     {
@@ -42,10 +53,16 @@ public sealed class HGLibraryDrag
         pendingAssetClick = asset;
     }
 
-    public void BeginEndpoint(GraphEndpoint endpoint)
+    public void BeginToken(GraphToken endpoint)
     {
-        Endpoint = endpoint;
-        pendingEndpointClick = endpoint;
+        Token = endpoint;
+        pendingTokenClick = endpoint;
+    }
+
+    public void BeginCatalog(IGraphCatalog catalog)
+    {
+        Catalog = catalog;
+        pendingCatalogClick = catalog;
     }
 
     /// <summary>MouseDrag 時呼叫：把「按著某個東西」升級成「真的在拖」。</summary>
@@ -53,19 +70,20 @@ public sealed class HGLibraryDrag
     {
         if (Event.current.type != EventType.MouseDrag) return;
         if (Asset != null) AssetActive = true;
-        if (Endpoint != null) EndpointActive = true;
+        if (Token != null) TokenActive = true;
+        if (Catalog != null) CatalogActive = true;
     }
 
     /// <summary>這一格是不是這次拖曳的來源。</summary>
     public bool IsSource(ScriptableObject asset) => Asset != null && Asset == asset;
 
-    public bool IsSource(GraphEndpoint endpoint) => endpoint != null && ReferenceEquals(Endpoint, endpoint);
+    public bool IsSource(GraphToken endpoint) => endpoint != null && ReferenceEquals(Token, endpoint);
 
     /// <summary>放開時該算成一次點擊（按下時是這一格，而且中途沒有拖動過）。</summary>
     public bool IsPendingClick(ScriptableObject asset) => !AssetActive && asset != null && pendingAssetClick == asset;
 
-    public bool IsPendingClick(GraphEndpoint endpoint)
-        => !EndpointActive && endpoint != null && ReferenceEquals(pendingEndpointClick, endpoint);
+    public bool IsPendingClick(GraphToken endpoint)
+        => !TokenActive && endpoint != null && ReferenceEquals(pendingTokenClick, endpoint);
 
     public void ClearAsset()
     {
@@ -74,11 +92,23 @@ public sealed class HGLibraryDrag
         pendingAssetClick = null;
     }
 
-    public void ClearEndpoint()
+    public bool IsSource(IGraphCatalog catalog) => catalog != null && ReferenceEquals(Catalog, catalog);
+
+    public bool IsPendingClick(IGraphCatalog catalog)
+        => !CatalogActive && catalog != null && ReferenceEquals(pendingCatalogClick, catalog);
+
+    public void ClearToken()
     {
-        EndpointActive = false;
-        Endpoint = null;
-        pendingEndpointClick = null;
+        TokenActive = false;
+        Token = null;
+        pendingTokenClick = null;
+    }
+
+    public void ClearCatalog()
+    {
+        CatalogActive = false;
+        Catalog = null;
+        pendingCatalogClick = null;
     }
 
     /// <summary>清掉兩種拖曳的待處理狀態。按下與放開都要清，兩邊都不能只靠一邊。</summary>
@@ -87,7 +117,8 @@ public sealed class HGLibraryDrag
     public void Clear()
     {
         ClearAsset();
-        ClearEndpoint();
+        ClearToken();
+        ClearCatalog();
     }
 
     public void DrawAssetGhost()
@@ -102,13 +133,23 @@ public sealed class HGLibraryDrag
         GUI.Label(r, Asset.name, HGStyles.Chip);
     }
 
-    public void DrawVariableGhost()
+    public void DrawTokenGhost()
     {
-        if (!EndpointActive || Endpoint == null) return;
+        if (!TokenActive || Token == null) return;
         Vector2 p = Event.current.mousePosition;
         var r = new Rect(p.x + 8f, p.y + 8f, 160f, 18f);
         HGStyles.GradientFill(r, HGStyles.HeaderToken, HGStyles.HeaderFormula, GhostCorner);
-        GUI.Label(r, Endpoint.Name ?? "（未命名）", HGStyles.Chip);
+        GUI.Label(r, Token.Name ?? "（未命名）", HGStyles.Chip);
+    }
+
+    public void DrawCatalogGhost()
+    {
+        if (!CatalogActive || Catalog == null) return;
+        Vector2 p = Event.current.mousePosition;
+        var r = new Rect(p.x + 8f, p.y + 8f, 160f, 18f);
+        // 目錄的內容是一批資產，所以殘影走「目錄色→資產色」，和節點 Header 同一條漸層邏輯。
+        HGStyles.GradientFill(r, HGStyles.HeaderCatalog, HGStyles.HeaderAsset, GhostCorner);
+        GUI.Label(r, Catalog.Name ?? "（未命名）", HGStyles.Chip);
     }
 }
 

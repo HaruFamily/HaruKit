@@ -61,7 +61,7 @@ where TTiming : Enum
 
     string IGraphDocument.WindowTitle => "LogicGraph";
 
-    bool IGraphDocument.SupportsSharedAssets => true;
+    HGCapabilities IGraphDocument.Capabilities => HGCapabilities.SharedAssets | HGCapabilities.Tokens;
 
     IList IGraphDocument.ItemsOf(object root)
         => root is ActionTimingGroup<TTiming, TPack> g ? g.Actions : null;
@@ -92,14 +92,14 @@ where TTiming : Enum
         get { _orphans ??= new List<GraphNode>(); return _orphans; }
     }
 
-    // 具名變數的頭端清單：每一筆有自己的畫布與候選池，是這張圖的對外端點。
+    // 具名Token的頭端清單：每一筆有自己的畫布與候選池，是這張圖的對外端點。
     [SerializeReference, HideInInspector]
-    private List<GraphEndpoint> _endpoints = new();
+    private List<GraphToken> _endpoints = new();
 
-    /// <summary>本圖的具名變數。從端點開始的整棵子樹都是正式資料。</summary>
-    public List<GraphEndpoint> Endpoints
+    /// <summary>本圖的具名Token。從端點開始的整棵子樹都是正式資料。</summary>
+    public List<GraphToken> Tokens
     {
-        get { _endpoints ??= new List<GraphEndpoint>(); return _endpoints; }
+        get { _endpoints ??= new List<GraphToken>(); return _endpoints; }
     }
 
     [NonSerialized] private bool _hasLoggedValidationFailure;
@@ -147,7 +147,7 @@ where TTiming : Enum
         }
 
         var table = new TokenTable<TPack>();
-        foreach (var endpoint in Endpoints) table.Register(endpoint);
+        foreach (var endpoint in Tokens) table.Register(endpoint);
         return table;
     }
 

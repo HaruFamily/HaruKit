@@ -14,11 +14,14 @@ public sealed class HGInlineRename
     /// <summary>焦點資訊列那一格。</summary>
     public const string SiteFocus = "focus";
 
-    /// <summary>左欄變數庫的清單格。</summary>
+    /// <summary>左欄Token庫的清單格。</summary>
     public const string SiteTokenLib = "tokenLib";
 
     /// <summary>左欄資產庫的清單格。</summary>
     public const string SiteAssetLib = "assetLib";
+
+    /// <summary>左欄目錄庫的清單格。</summary>
+    public const string SiteCatalogLib = "catalogLib";
 
     /// <summary>節點參數列的動作標籤。</summary>
     public const string SiteRow = "row";

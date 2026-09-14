@@ -12,10 +12,10 @@ editor for free. `LogicGraph` is one such consumer; it is not required here.
 
 - `GraphNode` is the single carrier: identity, position, note, disabled state,
   and one of four content kinds (empty, inline body, shared asset, named
-  endpoint). Swapping the source keeps the id, layout, and every inbound edge.
-- `GraphEndpoint` is a named variable with its own canvas and candidate pool.
+  token). Swapping the source keeps the id, layout, and every inbound edge.
+- `GraphToken` is a named token with its own canvas and candidate pool.
   Referencing nodes store the object, never a name string.
-- `IGraphHead` / `IOrphanPool` / `IEndpointOwner` / `IGraphDocument` are the
+- `IGraphHead` / `IOrphanPool` / `ITokenOwner` / `IGraphDocument` are the
   contracts the editor walks. No member-name reflection anywhere.
 - Root wording comes from the document, not the editor: `RootChip` is the badge
   on the root node, `RootNoun` is the word the editor drops into menus, hints,
@@ -64,6 +64,6 @@ For reproducible builds, pin the package URL to a release tag or commit.
 ## Namespace
 
 Types live in `HaruFamily.Framework.LogicGraph`. The namespace predates the
-split and is kept deliberately: `GraphNode` and `GraphEndpoint` carry
-`[MovedFrom]` for the assembly move only, so existing serialized assets migrate
-without touching their recorded namespace.
+split and is kept deliberately. Serialized assets record the current identity
+directly; there is no `[MovedFrom]` anywhere in the repository, and renames are
+applied by rewriting the `class` / `ns` / `asm` records in the assets instead.

@@ -14,8 +14,8 @@ public static class GraphDeepCopy
 
     /// <summary>
     /// 深複製，但 <paramref name="shared"/> 裡的物件原樣沿用、不跟著複製。
-    /// 複製整張圖時不需要它；**複製圖裡的一小塊時需要**：那一塊裡指向具名變數的節點應該還是指向
-    /// 同一個變數，跟著抄一份就會變成不在清單裡的孤兒端點——參照得到、卻永遠查不到值。
+    /// 複製整張圖時不需要它；**複製圖裡的一小塊時需要**：那一塊裡指向具名Token的節點應該還是指向
+    /// 同一個Token，跟著抄一份就會變成不在清單裡的孤兒端點——參照得到、卻永遠查不到值。
     /// </summary>
     public static T Copy<T>(T source, IEnumerable<object> shared) where T : class
     {

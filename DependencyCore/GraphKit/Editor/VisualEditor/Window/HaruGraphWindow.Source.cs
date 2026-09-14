@@ -27,27 +27,81 @@ public partial class HaruGraphWindow
         AssignAsset(row.Slot, drag.Asset);
     }
 
-    /// <summary>變數落到畫布上：落在參數列就直接接上，空白處就建立候選節點。拖曳與「建立節點」共用。</summary>
-    private void DropEndpointOn(GraphEndpoint endpoint, Vector2 graphMouse)
+    /// <summary>Token落到畫布上：落在參數列就直接接上，空白處就建立候選節點。拖曳與「建立節點」共用。</summary>
+    private void DropTokenOn(GraphToken endpoint, Vector2 graphMouse)
     {
         if (endpoint == null) return;
         var row = RowAt(graphMouse, out _);
         if (row == null)
         {
-            AddVariableReferenceNode(endpoint, graphMouse);
+            AddTokenReferenceNode(endpoint, graphMouse);
             return;
         }
-        if (row.IsActionSlot || !HGReflect.AcceptsEndpoint(row.Slot, endpoint))
+        if (row.IsActionSlot || !HGReflect.AcceptsToken(row.Slot, endpoint))
         {
-            ShowNotification(new GUIContent("變數型別不符，無法接到這個欄位"));
+            ShowNotification(new GUIContent("Token 型別不符，無法接到這個欄位"));
             return;
         }
         BreakUndoMerge();
-        AssignEndpoint(row.Slot, endpoint);
+        AssignToken(row.Slot, endpoint);
     }
 
-    /// <summary>把變數拖到空白畫布：建立一個沒有連線的候選載體。</summary>
-    private void AddVariableReferenceNode(GraphEndpoint endpoint, Vector2 graphMouse)
+    /// <summary>目錄落到畫布上：落在參數列就直接接上，空白處就建立候選節點。與Token那條同一種形狀。</summary>
+    private void DropCatalogOn(IGraphCatalog catalog, Vector2 graphMouse)
+    {
+        if (catalog == null) return;
+        var row = RowAt(graphMouse, out _);
+        if (row == null)
+        {
+            AddCatalogReferenceNode(catalog, graphMouse);
+            return;
+        }
+        // 目錄求出來的是 List<T>，所以只有結果型別是清單的公式欄位接得住。
+        // 判準與換來源選單共用 CatalogElementType，不在落點另寫一套規則。
+        Type element = row.IsActionSlot ? null : CatalogElementType(row.ResultType);
+        if (element == null)
+        {
+            ShowNotification(new GUIContent("這個欄位收不下目錄：目錄求出來的是一份清單"));
+            return;
+        }
+        BreakUndoMerge();
+        AssignCatalog(row.Slot, catalog.Id, element);
+    }
+
+    /// <summary>把欄位接到某個目錄。與 <see cref="AssignToken"/> 同一條路徑。</summary>
+    // 型別過濾跟著欄位走，理由同 ChangeNodeToCatalog：接上去當場就對得上結果型別。
+    private void AssignCatalog(object slot, string catalogId, Type element)
+    {
+        string filter = element == null || element == typeof(UnityEngine.Object)
+            ? null
+            : element.AssemblyQualifiedName;
+
+        PreserveVisibleNodePositions();
+        SoloSource(slot).SetCatalog(catalogId, filter);
+        Invalidate();
+    }
+
+    /// <summary>把目錄拖到空白畫布：建立一個沒有連線的候選載體。型別過濾預設「全部」，之後在節點上選。</summary>
+    private void AddCatalogReferenceNode(IGraphCatalog catalog, Vector2 graphMouse)
+    {
+        if (!CanCreateReferenceNode())
+        {
+            ShowNotification(new GUIContent("先指定根公式或動作，才能放入參照節點"));
+            return;
+        }
+        if (catalog == null) return;
+
+        BreakUndoMerge();
+        var carrier = new GraphNode();
+        carrier.EnsureId();
+        carrier.SetCatalog(catalog.Id);
+        carrier.Pos = SnapToGrid(graphMouse);
+        model.AddOrphan(carrier);
+        Invalidate();
+    }
+
+    /// <summary>把Token拖到空白畫布：建立一個沒有連線的候選載體。</summary>
+    private void AddTokenReferenceNode(GraphToken endpoint, Vector2 graphMouse)
     {
         if (!CanCreateReferenceNode())
         {
@@ -59,7 +113,7 @@ public partial class HaruGraphWindow
         BreakUndoMerge();
         var carrier = new GraphNode();
         carrier.EnsureId();
-        carrier.SetEndpoint(endpoint);
+        carrier.SetToken(endpoint);
         carrier.Pos = SnapToGrid(graphMouse);
         model.AddOrphan(carrier);
         Invalidate();
@@ -131,6 +185,38 @@ public partial class HaruGraphWindow
         return accepted != null && accepted.IsInstanceOfType(asset);
     }
 
+    /// <summary>
+    /// 這個結果型別收不收得下目錄。收得下就回它的元素型別（`List&lt;AudioClip&gt;` → `AudioClip`），否則 null。
+    /// </summary>
+    // 只認 List<>：目錄求值就是裝一份 List<T> 回去（見 AssetPipeline.TryBuildCatalogResult），
+    // 元素型別必須是 UnityEngine.Object 的子型別，目錄裡放的本來就是專案資產。
+    private static Type CatalogElementType(Type resultType)
+    {
+        if (resultType == null || !resultType.IsGenericType) return null;
+        if (resultType.GetGenericTypeDefinition() != typeof(List<>)) return null;
+        Type element = resultType.GetGenericArguments()[0];
+        return typeof(UnityEngine.Object).IsAssignableFrom(element) ? element : null;
+    }
+
+    /// <summary>把這顆節點換成某個目錄。</summary>
+    // 型別過濾跟著欄位走：欄位要 List<AudioClip>，過濾就設成 AudioClip，結果型別當場對上。
+    // 欄位只要 List<Object> 時不設過濾——那等於「整個目錄都要」，之後仍可在節點上自己縮。
+    private void ChangeNodeToCatalog(HGNodeView node, IGraphCatalog catalog, Type element)
+    {
+        var carrier = node?.Carrier;
+        if (carrier == null || catalog == null) return;
+
+        string filter = element == null || element == typeof(UnityEngine.Object)
+            ? null
+            : element.AssemblyQualifiedName;
+
+        BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        carrier.SetCatalog(catalog.Id, filter);
+        Invalidate();
+        MarkGraphChanged();
+    }
+
     private void ShowNodeSourceSelector(HGNodeView node, Rect selector)
     {
         if (node == null) return;
@@ -163,12 +249,38 @@ public partial class HaruGraphWindow
         }
 
         // 族＝Slot 型別。同一個結果型別可以有多個族（例：string 同時有 String 與 Key），
-        // 拿結果型別當判準會把別族的變數一起列進來。
+        // 拿結果型別當判準會把別族的Token一起列進來。
         Type slotKind = isAction ? null : slotType;
 
         // 完全推不出族的候選節點（沒有父欄位、沒有連入線、不是資產、也沒有建立當下的族提示）只剩結果型別
-        // 可比。這是近似：真的接到欄位時 AcceptsEndpoint 仍會擋掉別族。
+        // 可比。這是近似：真的接到欄位時 AcceptsToken 仍會擋掉別族。
         Type resultType = isAction || slotKind != null ? null : node.ResultType;
+
+        // 目錄只填得下結果型別是 List<T> 的公式欄位——它求出來的就是一份清單。
+        // 判準因此不看族看結果型別：目錄沒有族的概念，它是 Owner 上的一批資產，不是某一族的求值端點。
+        // 有父欄位就用欄位的結果型別；候選池裡沒有父欄位的節點退回它自己目前的結果型別。
+        Type catalogSlotResult = isAction ? null
+            : (slotType != null ? HGReflect.ResultType(slotType) : null) ?? node.ResultType;
+        Type catalogElement = CatalogElementType(catalogSlotResult);
+        if (HasCatalogSection && catalogElement != null)
+        {
+            var catalogs = CatalogOwner?.Catalogs;
+            if (catalogs != null)
+            {
+                foreach (var catalog in catalogs)
+                {
+                    if (catalog == null) continue;
+                    var captured = catalog;
+                    options.Add(new HGSourceOption
+                    {
+                        Group = "Catalog",
+                        Name = catalog.Name,
+                        IsCurrent = node.IsCatalogNode && node.CatalogId == catalog.Id,
+                        Apply = () => ChangeNodeToCatalog(node, captured, catalogElement),
+                    });
+                }
+            }
+        }
 
         // 不支援共用資產的圖直接跳過：CanReplaceAssetNode 本來就會全部擋掉，
         // 但 Entries 會觸發一次全專案 ScriptableObject 掃描，那個代價不該白付。
@@ -188,20 +300,21 @@ public partial class HaruGraphWindow
             }
         }
 
-        // 變數與 Formula／Asset 同一層：三者都能填同一族的欄位，所以換來源選單一律列在一起。
+        // Token與 Formula／Asset 同一層：三者都能填同一族的欄位，所以換來源選單一律列在一起。
         // 判準用上面推出來的 slotKind，和 Formula／Asset 兩組同源；動作欄位沒有族，天然排除。
-        if (slotKind != null || resultType != null)
+        // 沒宣告 Token 能力的圖直接跳過：那張圖的Token清單永遠是空的，列出來也只有標題。
+        if (HasTokenSection && (slotKind != null || resultType != null))
         {
-            foreach (var token in HGModel.ReadTokens(CurrentEndpoints()))
+            foreach (var token in HGModel.ReadTokens(CurrentTokens()))
             {
                 if (slotKind != null ? token.Kind != slotKind : token.ResultType != resultType) continue;
-                var endpoint = token.Endpoint;
+                var endpoint = token.Token;
                 options.Add(new HGSourceOption
                 {
                     Group = "Token",
                     Name = token.Key,
-                    IsCurrent = ReferenceEquals(node.Endpoint, endpoint),
-                    Apply = () => ChangeNodeToVariable(node, endpoint),
+                    IsCurrent = ReferenceEquals(node.Token, endpoint),
+                    Apply = () => ChangeNodeToToken(node, endpoint),
                 });
             }
         }
@@ -384,11 +497,11 @@ public partial class HaruGraphWindow
         return n;
     }
 
-    /// <summary>欄位長出一顆變數節點。與 <see cref="AssignAsset"/> 對稱：先長節點，選哪一個變數在節點本體那一列。</summary>
-    private void AssignEndpoint(object slot, GraphEndpoint endpoint)
+    /// <summary>欄位長出一顆Token節點。與 <see cref="AssignAsset"/> 對稱：先長節點，選哪一個Token在節點本體那一列。</summary>
+    private void AssignToken(object slot, GraphToken endpoint)
     {
         PreserveVisibleNodePositions();
-        SoloSource(slot).SetEndpoint(endpoint);
+        SoloSource(slot).SetToken(endpoint);
         Invalidate();
     }
 
@@ -455,49 +568,49 @@ public partial class HaruGraphWindow
     // ===== 右鍵選單 =====
 
     /// <summary>
-    /// 轉存為變數：新建一個端點，把這顆節點搬進它自己的畫布，**所有**指著它的欄位都改接變數節點。
-    /// 和「轉存為資產」同一個手勢，差別是變數留在這張圖裡，不另外開檔。
+    /// 轉存為Token：新建一個端點，把這顆節點搬進它自己的畫布，**所有**指著它的欄位都改接Token節點。
+    /// 和「轉存為資產」同一個手勢，差別是Token留在這張圖裡，不另外開檔。
     /// 空 Node 也收：它只有族、沒有內容，轉出來就是一個具名常數。
     /// </summary>
     // 共用載體在畫布上只畫一顆節點（HGNodeView.ParentSlot 只記走訪先到的那條邊），只改那一條的話，
-    // 其餘欄位會繼續直接指著同一顆載體——那顆載體同時是變數的內容，變成一份資料兩種身分的別名。
-    private void ExtractVariable(HGNodeView node)
+    // 其餘欄位會繼續直接指著同一顆載體——那顆載體同時是Token的內容，變成一份資料兩種身分的別名。
+    private void ExtractToken(HGNodeView node)
     {
         if (node?.Carrier == null || node.ResultType == null) return;
-        var scope = CurrentEndpoints();
+        var scope = CurrentTokens();
         if (scope == null) return;
 
         // 族＝Slot 型別：同一個結果型別可能有多個族（例：string 同時有 String 與 Key），
-        // 只比結果型別會抽出錯的族，變數之後就接不回原本那格。連入邊、資產、建立當下的族提示都算。
+        // 只比結果型別會抽出錯的族，Token之後就接不回原本那格。連入邊、資產、建立當下的族提示都算。
         Type slotType = RepresentativeSlotType(node);
         if (slotType == null)
             foreach (var kind in model.FormulaKinds())
                 if (kind.resultType == node.ResultType) { slotType = kind.slotType; break; }
 
         BreakUndoMerge();
-        var endpoint = model.CreateEndpoint(scope, slotType, out string error);
+        var endpoint = model.CreateToken(scope, slotType, out string error);
         if (endpoint == null)
         {
             ShowNotification(new GUIContent(error));
             return;
         }
 
-        // 先收集再改接：改完之後端點自己的取值欄位也指著這顆載體，邊掃邊改會把它一起換成變數節點。
+        // 先收集再改接：改完之後端點自己的取值欄位也指著這顆載體，邊掃邊改會把它一起換成Token節點。
         var users = new List<object>();
         foreach (var slot in SlotsInCurrentGraph())
             if (slot != null && ReferenceEquals(HGReflect.GetNode(slot), node.Carrier)) users.Add(slot);
 
-        // 端點的取值欄位接下這顆載體；它的子樹整棵跟著搬進變數畫布。
+        // 端點的取值欄位接下這顆載體；它的子樹整棵跟著搬進Token畫布。
         // 空 Node 沒有內容可搬，而且搬進去會讓端點變成「來源接了一顆空節點」——那是存檔驗證會擋的狀態。
-        // 留空＝具名常數，和左欄「＋ 新增變數」建出來的完全一樣。
+        // 留空＝具名常數，和左欄「＋ 新增Token」建出來的完全一樣。
         if (!node.IsPlaceholder) HGReflect.SetNode(endpoint.Slot, node.Carrier);
 
-        // 每個欄位各給一顆變數節點：載體是座標與選取的單位，共用一顆會讓多個引用處黏在同一個位置。
+        // 每個欄位各給一顆Token節點：載體是座標與選取的單位，共用一顆會讓多個引用處黏在同一個位置。
         foreach (var slot in users)
         {
             var proxy = new GraphNode();
             proxy.EnsureId();
-            proxy.SetEndpoint(endpoint);
+            proxy.SetToken(endpoint);
             HGReflect.SetNode(slot, proxy);
         }
 
@@ -506,35 +619,35 @@ public partial class HaruGraphWindow
         MarkGraphChanged();
     }
 
-    /// <summary>只列這個節點收得下的變數。與 <see cref="ShowAssetPicker"/> 同一種版型。</summary>
-    private void ShowVariablePicker(HGNodeView node, Rect anchor)
+    /// <summary>只列這個節點收得下的Token。與 <see cref="ShowAssetPicker"/> 同一種版型。</summary>
+    private void ShowTokenPicker(HGNodeView node, Rect anchor)
     {
         var options = new List<HGSourceOption>();
-        foreach (var token in HGModel.ReadTokens(CurrentEndpoints()))
+        foreach (var token in HGModel.ReadTokens(CurrentTokens()))
         {
-            var endpoint = token.Endpoint;
-            if (!CanReplaceVariableNode(node, endpoint)) continue;
+            var endpoint = token.Token;
+            if (!CanReplaceTokenNode(node, endpoint)) continue;
             options.Add(new HGSourceOption
             {
                 Name = $"{token.Key}　({token.TypeName})",
-                IsCurrent = ReferenceEquals(endpoint, node.Endpoint),
-                Apply = () => ChangeNodeToVariable(node, endpoint),
+                IsCurrent = ReferenceEquals(endpoint, node.Token),
+                Apply = () => ChangeNodeToToken(node, endpoint),
             });
         }
 
         if (options.Count == 0)
         {
-            ShowNotification(new GUIContent("這張圖還沒有型別相容的變數"));
+            ShowNotification(new GUIContent("這張圖還沒有型別相容的 Token"));
             return;
         }
-        HGTypeCatalog.ShowSourcePicker(anchor, options, "選擇變數");
+        HGTypeCatalog.ShowSourcePicker(anchor, options, "選擇 Token");
     }
 
-    /// <summary>這個節點能不能換成這個變數。判定路徑與 <see cref="CanReplaceAssetNode"/> 一致。</summary>
-    private bool CanReplaceVariableNode(HGNodeView node, GraphEndpoint endpoint)
+    /// <summary>這個節點能不能換成這個Token。判定路徑與 <see cref="CanReplaceAssetNode"/> 一致。</summary>
+    private bool CanReplaceTokenNode(HGNodeView node, GraphToken endpoint)
     {
         if (endpoint?.Slot == null) return false;
-        if (node?.ParentSlot != null) return HGReflect.AcceptsEndpoint(node.ParentSlot, endpoint);
+        if (node?.ParentSlot != null) return HGReflect.AcceptsToken(node.ParentSlot, endpoint);
 
         bool hasLink = false;
         if (graph?.Links != null)
@@ -543,7 +656,7 @@ public partial class HaruGraphWindow
             {
                 if (!ReferenceEquals(link.Target, node)) continue;
                 hasLink = true;
-                if (link.ParentRow?.Slot == null || !HGReflect.AcceptsEndpoint(link.ParentRow.Slot, endpoint)) return false;
+                if (link.ParentRow?.Slot == null || !HGReflect.AcceptsToken(link.ParentRow.Slot, endpoint)) return false;
             }
         }
         if (hasLink) return true;
@@ -554,14 +667,14 @@ public partial class HaruGraphWindow
         return node?.ResultType == null || node.ResultType == endpoint.ResultType;
     }
 
-    private void ChangeNodeToVariable(HGNodeView node, GraphEndpoint endpoint)
+    private void ChangeNodeToToken(HGNodeView node, GraphToken endpoint)
     {
-        if (node?.Carrier == null || endpoint == null || ReferenceEquals(node.Endpoint, endpoint)) return;
+        if (node?.Carrier == null || endpoint == null || ReferenceEquals(node.Token, endpoint)) return;
 
         BreakUndoMerge();
         PreserveVisibleNodePositions();
         if (node.Carrier.Kind != NodeKind.Token) DetachChildSourcesForReplacement(node);
-        node.Carrier.SetEndpoint(endpoint);
+        node.Carrier.SetToken(endpoint);
         Invalidate();
         Repaint();
     }
@@ -590,22 +703,23 @@ public partial class HaruGraphWindow
             return;
         }
 
-        // 下鑽走雙擊、換引用對象走本體那列下拉、改名走左欄或變數畫布的標題，都不重複放進右鍵。
+        // 下鑽走雙擊、換引用對象走本體那列下拉、改名走左欄或Token畫布的標題，都不重複放進右鍵。
 
         // === 1. 轉存 ===
-        // 資產根載體不會被資產格式保存；變數畫布的根載體同理，轉存後那張畫布就空了。
+        // 資產根載體不會被資產格式保存；Token畫布的根載體同理，轉存後那張畫布就空了。
         bool assetRoot = focus.Kind == HGFocusKind.Asset && ReferenceEquals(node.ParentSlot, focus.AssetHostSlot);
-        bool variableRoot = focus.Endpoint != null && ReferenceEquals(node.ParentSlot, focus.Endpoint.Slot);
+        bool variableRoot = focus.Token != null && ReferenceEquals(node.ParentSlot, focus.Token.Slot);
         bool canExtract = !assetRoot && !variableRoot;
 
-        // 變數節點自己就是變數，沒有「再轉存成變數」這回事。
+        // Token節點自己就是Token，沒有「再轉存成Token」這回事。
         // 空 Node 收：族已知、沒有內容，轉出來就是具名常數（動作格沒有結果型別，自然被擋掉）。
-        if (canExtract && !node.IsVariableNode && node.Carrier != null && node.ResultType != null)
-            menu.AddItem(new GUIContent("轉存為變數"), false, () => ExtractVariable(node));
+        // 沒宣告 Token 能力的圖連這一項都不出現——轉出來的東西沒有地方可列。
+        if (canExtract && HasTokenSection && !node.IsTokenNode && node.Carrier != null && node.ResultType != null)
+            menu.AddItem(new GUIContent("轉存為 Token"), false, () => ExtractToken(node));
 
-        // 資產要有本體才存得進 SetTarget，所以空 Node 只能轉變數：Obj 為 null 這裡就過不了。
+        // 資產要有本體才存得進 SetTarget，所以空 Node 只能轉Token：Obj 為 null 這裡就過不了。
         // 不支援共用資產的圖連這一項都不出現——點得到卻永遠失敗的選單項比沒有更糟。
-        if (canExtract && HasAssetSection && (node.Obj != null || node.IsVariableNode))
+        if (canExtract && HasAssetSection && (node.Obj != null || node.IsTokenNode))
             menu.AddItem(new GUIContent("轉存為資產"), false, () => ExtractAsset(node));
         Sep();
 
@@ -618,7 +732,7 @@ public partial class HaruGraphWindow
 
         // === 4. 原始碼 ===
         // 擺最後：改程式是離開這張圖的動作，跟編圖不同層級。
-        // 空 Node、資產節點、變數節點沒有自己的程式本體，跳過去也沒東西可看。
+        // 空 Node、資產節點、Token節點沒有自己的程式本體，跳過去也沒東西可看。
         // 這裡不先查「找不找得到原始碼」：查一次要讀整批 .cs，右鍵當場會卡住。
         // 一律放這個項目，真的沒有原始碼（只在 DLL 裡）由 Open 印警告。
         var bodyType = node.Obj?.GetType();
@@ -639,27 +753,27 @@ public partial class HaruGraphWindow
         menu.AddItem(new GUIContent("整理版面"), false, ResetLayout);
     }
 
-    /// <summary>目前這張圖的變數清單。資產焦點是資產的工作副本，其餘是 Owner 的工作副本。</summary>
-    private List<GraphEndpoint> CurrentEndpoints()
-        => focus.Kind == HGFocusKind.Asset ? focus.AssetEndpoints : model.OwnerEndpoints;
+    /// <summary>目前這張圖的Token清單。資產焦點是資產的工作副本，其餘是 Owner 的工作副本。</summary>
+    private List<GraphToken> CurrentTokens()
+        => focus.Kind == HGFocusKind.Asset ? focus.AssetTokens : model.OwnerTokens;
 
-    /// <summary>目前這張圖的所有載體。刪變數要靠它把指著那個變數的節點一起清掉。</summary>
+    /// <summary>目前這張圖的所有載體。刪Token要靠它把指著那個Token的節點一起清掉。</summary>
     private IEnumerable<GraphNode> CurrentCarrierScope()
     {
         if (focus.Kind != HGFocusKind.Asset) return model.AllCarriers();
 
         var roots = new List<object> { focus.AssetHostSlot };
-        foreach (var endpoint in focus.AssetEndpoints ?? new List<GraphEndpoint>())
+        foreach (var endpoint in focus.AssetTokens ?? new List<GraphToken>())
             if (endpoint?.Slot != null) roots.Add(endpoint.Slot);
         return model.CarriersOf(roots, AssetAllOrphans());
     }
 
-    /// <summary>資產交易裡所有候選節點：資產本體那份，加上每個變數畫布自己那份。</summary>
+    /// <summary>資產交易裡所有候選節點：資產本體那份，加上每個Token畫布自己那份。</summary>
     private IEnumerable<GraphNode> AssetAllOrphans()
     {
         foreach (var node in focus.AssetOrphans ?? new List<GraphNode>())
             if (node != null) yield return node;
-        foreach (var endpoint in focus.AssetEndpoints ?? new List<GraphEndpoint>())
+        foreach (var endpoint in focus.AssetTokens ?? new List<GraphToken>())
         {
             if (endpoint == null) continue;
             foreach (var node in endpoint.Orphans)
@@ -677,8 +791,8 @@ public partial class HaruGraphWindow
 
         var visited = new HashSet<object>(HGRefComparer.Instance);
         foreach (var slot in HGModel.WalkSlots(focus.AssetHostSlot, visited)) yield return slot;
-        // 變數的取值欄位也是這張圖的一部分：引用計數與拉線相容都要算進來。
-        foreach (var endpoint in focus.AssetEndpoints ?? new List<GraphEndpoint>())
+        // Token的取值欄位也是這張圖的一部分：引用計數與拉線相容都要算進來。
+        foreach (var endpoint in focus.AssetTokens ?? new List<GraphToken>())
         {
             if (endpoint?.Slot == null) continue;
             foreach (var slot in HGModel.WalkSlots(endpoint.Slot, visited)) yield return slot;
@@ -690,7 +804,7 @@ public partial class HaruGraphWindow
     private void ShowCanvasMenu(Vector2 graphMouse)
     {
         var menu = new GenericMenu();
-        // 有頭端就有候選池可放，判準與拖曳放節點那條一致；變數與資產畫布也算。
+        // 有頭端就有候選池可放，判準與拖曳放節點那條一致；Token與資產畫布也算。
         bool canEditFocus = CanCreateReferenceNode();
 
         // root 節點由使用者自己建，位置就是按下右鍵的地方。
@@ -703,7 +817,7 @@ public partial class HaruGraphWindow
         // 只選族（＝Slot 型別），不選具體 class：長出來的是「（選擇來源）」那種空節點，
         // 內容留到 Header 的 ▾ 再挑。族要先決定，否則空節點沒有型別關係，▾ 也列不出東西。
         // 沒有具體 inline 公式的族（例：Key 刻意不開放 inline 公式，鍵必須恆定）照列：
-        // ▾ 仍然挑得到該族的資產與變數，那正是這種族唯一的來源。
+        // ▾ 仍然挑得到該族的資產與Token，那正是這種族唯一的來源。
         foreach (var (_, slotType) in model.FormulaKinds())
         {
             var captured = slotType;
@@ -746,7 +860,7 @@ public partial class HaruGraphWindow
 
     /// <summary>
     /// 把節點抽成獨立資產，原欄位改指向它。未連接節點則只建立資產。
-    /// 子樹跨出資產邊界的兩件事在這裡收斂：變數引用抬成資產參數、被子樹外共用的節點複製一份留給外部。
+    /// 子樹跨出資產邊界的兩件事在這裡收斂：Token引用抬成資產參數、被子樹外共用的節點複製一份留給外部。
     /// </summary>
     private void ExtractAsset(HGNodeView node)
     {
@@ -762,9 +876,9 @@ public partial class HaruGraphWindow
             "轉存", () => ExtractAssetConfirmed(node));
     }
 
-    /// <summary>轉存的子樹根：變數節點轉存的是它指向的那個變數的內容，不是節點自己。</summary>
+    /// <summary>轉存的子樹根：Token節點轉存的是它指向的那個Token的內容，不是節點自己。</summary>
     private static GraphNode SubtreeRootOf(HGNodeView node)
-        => node == null ? null : (node.IsVariableNode ? node.Endpoint?.Slot?.Node : node.Carrier);
+        => node == null ? null : (node.IsTokenNode ? node.Token?.Slot?.Node : node.Carrier);
 
     private void ExtractAssetConfirmed(HGNodeView node)
     {
@@ -772,8 +886,8 @@ public partial class HaruGraphWindow
 
         BreakUndoMerge();
 
-        // 變數節點自己沒有內容：轉存的對象是它指向的那個變數的算式，變數本身留著。
-        if (node.IsVariableNode) { ExtractVariableContentAsset(node); return; }
+        // Token節點自己沒有內容：轉存的對象是它指向的那個Token的算式，Token本身留著。
+        if (node.IsTokenNode) { ExtractTokenContentAsset(node); return; }
 
         if (node.Obj is not GraphNodeContent source) return;
 
@@ -788,14 +902,14 @@ public partial class HaruGraphWindow
             HGReflect.TypeName(source.GetType()), node.ParentSlot?.GetType());
     }
 
-    /// <summary>把變數的內容轉存成公式資產：變數與所有指著它的節點都不動，只是它的來源換成資產。</summary>
-    private void ExtractVariableContentAsset(HGNodeView node)
+    /// <summary>把Token的內容轉存成公式資產：Token與所有指著它的節點都不動，只是它的來源換成資產。</summary>
+    private void ExtractTokenContentAsset(HGNodeView node)
     {
-        var slot = node.Endpoint?.Slot;
+        var slot = node.Token?.Slot;
         var inner = slot?.Node;
         if (inner?.BodyObject is not GraphNodeContent source)
         {
-            ShowNotification(new GUIContent("這個變數的內容不是可轉存的公式"));
+            ShowNotification(new GUIContent("這個 Token 的內容不是可轉存的公式"));
             return;
         }
 
@@ -836,9 +950,9 @@ public partial class HaruGraphWindow
 
         // 這兩步都要在「原件還完整、且資產已確定會建出來」之間做：
         // 使用者在檔名對話框按取消時上面就 return 了，圖不會被動到。
-        // 先複製共用點給外部（此時子樹裡的變數節點還指著本圖的變數，複本才會接對）。
+        // 先複製共用點給外部（此時子樹裡的Token節點還指著本圖的Token，複本才會接對）。
         DetachBoundaryShared(carrier);
-        // 抬參數要在寫檔之前：資產的變數清單就是它的參數介面，晚了就存不進 .asset。
+        // 抬參數要在寫檔之前：資產的Token清單就是它的參數介面，晚了就存不進 .asset。
         var lifted = LiftTokensToParameters(asset);
 
         asset.name = System.IO.Path.GetFileNameWithoutExtension(path);
@@ -869,24 +983,24 @@ public partial class HaruGraphWindow
 
     // ===== 轉存邊界 =====
     // 資產是另一個序列化根，圖裡的共用跨不過去。子樹裡指向外面的兩種線都要在轉存當下處理掉，
-    // 否則存檔時 Unity 會各抄一份，變成看不見的分家：變數引用查不到值、共用節點默默變兩份。
+    // 否則存檔時 Unity 會各抄一份，變成看不見的分家：Token引用查不到值、共用節點默默變兩份。
 
     /// <summary>
-    /// 把子樹裡的變數引用抬成資產參數：資產內建同型參數、內部的變數節點改指它，
-    /// 回傳「參數名 → 原本那個變數」讓呼叫點把線接回去。
+    /// 把子樹裡的Token引用抬成資產參數：資產內建同型參數、內部的Token節點改指它，
+    /// 回傳「參數名 → 原本那個Token」讓呼叫點把線接回去。
     /// </summary>
     // 不抬的話：資產求值走的是自己的作用域（TokenTable.CreateAssetScope 只登記資產自己的參數），
-    // Owner 的變數名查不到，FormulaSlot 直接回預設值，畫布上與驗證上都看不出來。
-    private List<(GraphEndpoint Parameter, GraphEndpoint Source)> LiftTokensToParameters(ScriptableObject asset)
+    // Owner 的Token名查不到，FormulaSlot 直接回預設值，畫布上與驗證上都看不出來。
+    private List<(GraphToken Parameter, GraphToken Source)> LiftTokensToParameters(ScriptableObject asset)
     {
-        var lifted = new List<(GraphEndpoint, GraphEndpoint)>();
-        var parameters = HGReflect.Endpoints(asset);
+        var lifted = new List<(GraphToken, GraphToken)>();
+        var parameters = HGReflect.Tokens(asset);
         if (parameters == null) return lifted;
 
-        var map = new Dictionary<GraphEndpoint, GraphEndpoint>();
+        var map = new Dictionary<GraphToken, GraphToken>();
         foreach (var carrier in TokenCarriersIn(HGReflect.AssetRoot(asset)))
         {
-            var source = carrier.Endpoint;
+            var source = carrier.Token;
             if (source == null) continue;
             if (parameters.Contains(source)) continue;   // 已經是這個資產自己的參數，不必再抬一層
 
@@ -894,30 +1008,30 @@ public partial class HaruGraphWindow
             {
                 if (HGReflect.CreateInstance(source.Slot?.GetType()) is not FormulaSlotBase slot)
                 {
-                    Debug.LogWarning($"[GraphKit] 變數 '{source.Name}' 建不出資產參數欄位，"
+                    Debug.LogWarning($"[GraphKit] Token '{source.Name}' 建不出資產參數欄位，"
                         + "轉存後資產內這一格會取預設值，請手動改成常數或補上對應的 FormulaSlot 型別。");
                     continue;
                 }
-                parameter = new GraphEndpoint(UniqueParameterName(parameters, source.Name, slot.Kind), slot);
+                parameter = new GraphToken(UniqueParameterName(parameters, source.Name, slot.Kind), slot);
                 parameter.EnsureId();
                 parameters.Add(parameter);
                 map[source] = parameter;
                 lifted.Add((parameter, source));
             }
-            carrier.SetEndpoint(parameter);
+            carrier.SetToken(parameter);
         }
         return lifted;
     }
 
-    /// <summary>子樹裡所有變數引用節點。走訪在端點物件停住：變數的內容住在自己的畫布，不屬於這棵子樹。</summary>
-    // 一顆載體只回一次：共用的變數節點會被多個欄位走到，重複回傳會把剛抬上去的參數再抬一層。
+    /// <summary>子樹裡所有Token引用節點。走訪在端點物件停住：Token的內容住在自己的畫布，不屬於這棵子樹。</summary>
+    // 一顆載體只回一次：共用的Token節點會被多個欄位走到，重複回傳會把剛抬上去的參數再抬一層。
     private List<GraphNode> TokenCarriersIn(object root)
     {
         var result = new List<GraphNode>();
         if (root == null) return result;
 
         var visited = new HashSet<object>(HGRefComparer.Instance);
-        foreach (var endpoint in CurrentEndpoints() ?? new List<GraphEndpoint>())
+        foreach (var endpoint in CurrentTokens() ?? new List<GraphToken>())
             if (endpoint != null) visited.Add(endpoint);
 
         var seen = new HashSet<GraphNode>();
@@ -929,8 +1043,8 @@ public partial class HaruGraphWindow
         return result;
     }
 
-    /// <summary>資產參數名：沿用原變數名，同族撞名才加號碼。名稱是呼叫點綁定用的 key。</summary>
-    private static string UniqueParameterName(List<GraphEndpoint> scope, string preferred, Type kind)
+    /// <summary>資產參數名：沿用原Token名，同族撞名才加號碼。名稱是呼叫點綁定用的 key。</summary>
+    private static string UniqueParameterName(List<GraphToken> scope, string preferred, Type kind)
     {
         var used = new HashSet<string>();
         foreach (var other in scope)
@@ -943,10 +1057,10 @@ public partial class HaruGraphWindow
             if (!used.Contains($"{root}{i}")) return $"{root}{i}";
     }
 
-    /// <summary>呼叫點的參數列接回原本那個變數。</summary>
+    /// <summary>呼叫點的參數列接回原本那個Token。</summary>
     // 一定要打開覆蓋：抬上去的參數在資產內部沒有內容（等於具名常數），不覆蓋就是取那個空欄位的預設值，
-    // 值會從「Owner 的變數」默默變成 0。
-    private void BindLiftedParameters(GraphNode carrier, List<(GraphEndpoint Parameter, GraphEndpoint Source)> lifted)
+    // 值會從「Owner 的Token」默默變成 0。
+    private void BindLiftedParameters(GraphNode carrier, List<(GraphToken Parameter, GraphToken Source)> lifted)
     {
         if (carrier == null || lifted == null) return;
         foreach (var (parameter, source) in lifted)
@@ -960,11 +1074,11 @@ public partial class HaruGraphWindow
             if (binding?.Slot == null)
             {
                 Debug.LogWarning($"[GraphKit] 資產參數 '{name}' 沒有參數列，"
-                    + $"請在這顆資產節點上手動把它接回變數 '{source?.Name}'。");
+                    + $"請在這顆資產節點上手動把它接回 Token '{source?.Name}'。");
                 continue;
             }
             binding.OverrideEnabled = true;
-            HGReflect.SetEndpoint(binding.Slot, source);
+            HGReflect.SetToken(binding.Slot, source);
         }
     }
 
@@ -974,9 +1088,9 @@ public partial class HaruGraphWindow
         var result = new Dictionary<GraphNode, List<object>>();
         if (root == null) return result;
 
-        // 端點先當成走過了：變數的內容不會跟著搬進資產，指著它的欄位也就不算跨邊界。
+        // 端點先當成走過了：Token的內容不會跟著搬進資產，指著它的欄位也就不算跨邊界。
         var visited = new HashSet<object>(HGRefComparer.Instance);
-        foreach (var endpoint in CurrentEndpoints() ?? new List<GraphEndpoint>())
+        foreach (var endpoint in CurrentTokens() ?? new List<GraphToken>())
             if (endpoint != null) visited.Add(endpoint);
 
         var innerSlots = new HashSet<object>(HGRefComparer.Instance);
@@ -1009,9 +1123,9 @@ public partial class HaruGraphWindow
         var boundary = FindBoundaryShared(root);
         if (boundary.Count == 0) return;
 
-        // 變數一律沿用不複製：複本裡的變數節點要繼續指向同一個變數，跟著抄會變成查不到值的孤兒端點。
+        // Token一律沿用不複製：複本裡的Token節點要繼續指向同一個Token，跟著抄會變成查不到值的孤兒端點。
         var shared = new List<object>();
-        foreach (var endpoint in CurrentEndpoints() ?? new List<GraphEndpoint>())
+        foreach (var endpoint in CurrentTokens() ?? new List<GraphToken>())
             if (endpoint != null) shared.Add(endpoint);
 
         foreach (var pair in boundary)
@@ -1091,8 +1205,8 @@ public partial class HaruGraphWindow
     private void RememberOrphanKind(GraphNode carrier, Type slotType)
     {
         if (carrier == null || slotType == null) return;
-        // 有內容的載體型別看得出來，不需要族；資產與變數節點也各有自己的型別來源。
-        if (carrier.BodyObject != null || carrier.AssetObject != null || carrier.Endpoint != null) return;
+        // 有內容的載體型別看得出來，不需要族；資產與Token節點也各有自己的型別來源。
+        if (carrier.BodyObject != null || carrier.AssetObject != null || carrier.Token != null) return;
 
         string id = carrier.EnsureId();
         if (!string.IsNullOrEmpty(id)) orphanKindHints[id] = slotType;

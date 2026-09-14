@@ -5,7 +5,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// 具名變數的頭端（發出點）：自己是一個固定節點，只有一個「來源」接點，並擁有獨立畫布與候選池。
+/// 具名Token的頭端（發出點）：自己是一個固定節點，只有一個「來源」接點，並擁有獨立畫布與候選池。
 ///
 /// 沒接來源＝具名常數（值就是 Slot 的預設值）；接了來源＝具名公式。兩種來源同一個載體，
 /// 所以「取一個常數的名字」不必再多發明一種節點。
@@ -13,7 +13,7 @@ using UnityEngine;
 // 不再 per result kind 各繼承一次：Slot 用 [SerializeReference] 存既有的 IntSlot / FloatSlot…，
 // 型別資訊由 Slot.ResultType / PackType 提供，Core 不必知道專案有哪幾種 kind。
 [Serializable]
-public class GraphEndpoint : IGraphHead, IOrphanPool
+public class GraphToken : IGraphHead, IOrphanPool
 {
     [SerializeField]
     private string _name;
@@ -35,15 +35,15 @@ public class GraphEndpoint : IGraphHead, IOrphanPool
     [SerializeReference, HideInInspector]
     private List<GraphNode> _orphans = new();
 
-    public GraphEndpoint() { }
+    public GraphToken() { }
 
-    public GraphEndpoint(string name, FormulaSlotBase slot)
+    public GraphToken(string name, FormulaSlotBase slot)
     {
         _name = name;
         _slot = slot;
     }
 
-    /// <summary>變數名稱。唯一性是「族＋名稱」（族＝Slot 型別），所以同名不同族可以並存。</summary>
+    /// <summary>Token名稱。唯一性是「族＋名稱」（族＝Slot 型別），所以同名不同族可以並存。</summary>
     public string Name
     {
         get => string.IsNullOrEmpty(_name) ? null : _name;

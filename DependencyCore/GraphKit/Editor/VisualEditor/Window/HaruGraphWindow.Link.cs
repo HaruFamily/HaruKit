@@ -306,10 +306,17 @@ public partial class HaruGraphWindow
         if (row.Locked) return false;             // 沒勾覆蓋的參數不收來源：接上去也不會被採用
         if (target.IsAssetNode)
             return CanAssignAsset(row, target.Asset) && !WouldCreateCycle(row.Slot, target.Carrier);
-        // 變數節點沒有內容，型別由端點的取值欄位決定；環偵測要走進端點的子樹。
-        if (target.IsVariableNode)
-            return HGReflect.AcceptsEndpoint(row.Slot, target.Endpoint)
-                && !WouldCreateCycle(row.Slot, target.Endpoint?.Slot);
+        // Token節點沒有內容，型別由端點的取值欄位決定；環偵測要走進端點的子樹。
+        if (target.IsTokenNode)
+            return HGReflect.AcceptsToken(row.Slot, target.Token)
+                && !WouldCreateCycle(row.Slot, target.Token?.Slot);
+
+        // 目錄節點沒有內容也沒有子欄位，所以不可能成環，只比結果型別。
+        // List<> 是不變的：型別選「全部」（List<Object>）的節點接不進 List<AudioClip> 欄位，
+        // 要先在節點上把型別縮到對得上為止。這是刻意的——靜默放行會在求值時得到空清單。
+        if (target.IsCatalogNode)
+            return row.ResultType != null && target.ResultType != null
+                && row.ResultType.IsAssignableFrom(target.ResultType);
 
         // 空節點沒有內容，但**可能已經有族**：右鍵「建立公式/X」選的、或從欄位切下來時記的。
         // 有族就必須同族——不擋的話 String 空節點接得進 Key 欄位，接上去當場被改寫成 Key 節點，族形同虛設。

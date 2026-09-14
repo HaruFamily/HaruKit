@@ -309,8 +309,8 @@ public partial class HaruGraphWindow
 
     /// <summary>
     /// 複製清單的一項並插在它下面：內容整棵深拷貝（含接上去的節點子樹），複本與原項各自獨立。
-    /// 這張圖的具名變數一律共用——子樹裡指向變數的 Token 節點還是指向同一個端點，
-    /// 跟著抄一份會變成不在清單裡的孤兒端點。理由與 <see cref="HGModel.DuplicateEndpoint"/> 同一條。
+    /// 這張圖的具名Token一律共用——子樹裡指向Token的 Token 節點還是指向同一個端點，
+    /// 跟著抄一份會變成不在清單裡的孤兒端點。理由與 <see cref="HGModel.DuplicateToken"/> 同一條。
     /// </summary>
     private void DuplicateListItem(HGRow owner, int index)
     {
@@ -327,7 +327,7 @@ public partial class HaruGraphWindow
             return;
         }
 
-        var shared = CurrentEndpoints();
+        var shared = CurrentTokens();
         var copy = GraphDeepCopy.Copy(source, shared);
         if (copy == null)
         {
@@ -435,7 +435,9 @@ public partial class HaruGraphWindow
             {
                 1 => HGReflect.GetFormula(slot) is object uf ? HGReflect.TypeName(uf.GetType()) : "（空公式）",
                 2 => HGReflect.GetAsset(slot) is UnityEngine.Object ua ? ua.name : "（空資產）",
-                3 => HGReflect.GetEndpoint(slot)?.Name is string un && !string.IsNullOrEmpty(un) ? $"（變數 {un}）" : "（已接變數）",
+                3 => HGReflect.GetToken(slot)?.Name is string un && !string.IsNullOrEmpty(un) ? $"（Token {un}）" : "（已接 Token）",
+                // 目錄名要向 Owner 查，這一格拿不到；顯示身分就夠，名字在節點本體那兩列看得到。
+                4 => "（已接目錄）",
                 _ => "（未接，用欄位預設）",
             };
             string tip = $"{HGReflect.ResultTypeName(row.ResultType)} 沒有常數保底可編，只能從接點拉線指定來源。";
@@ -445,7 +447,7 @@ public partial class HaruGraphWindow
         {
             var editType = HGReflect.DefaultEditType(slot, row.ResultType);
 
-            // 常數框永遠在。接了公式／資產／變數時它是解析失敗的保底值，只是視覺上轉灰；鎖住時整列不可編。
+            // 常數框永遠在。接了公式／資產／Token時它是解析失敗的保底值，只是視覺上轉灰；鎖住時整列不可編。
             // 替代型別的常數框（editType != ResultType）語意不同：它只在沒接線時採用，不是失敗保底。
             bool isSubstitute = editType != row.ResultType;
 
@@ -458,7 +460,8 @@ public partial class HaruGraphWindow
                 _ when isSubstitute => "已接來源：以接的來源為準，這一格不會被採用",
                 1 => "已接公式：公式解析失敗時回到這個值",
                 2 => "已接資產：資產缺內容時回到這個值",
-                3 => "已接變數：變數不存在或循環時回到這個值",
+                3 => "已接 Token：Token 不存在或循環時回到這個值",
+                4 => "已接目錄：目錄不存在時回到這個值",
                 _ => null,
             };
             EditorGUI.BeginChangeCheck();

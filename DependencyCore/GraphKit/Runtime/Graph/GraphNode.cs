@@ -16,15 +16,18 @@ public enum NodeKind
     /// <summary>共用資產（FormulaAssetBase / ActionAssetBase）。</summary>
     Asset = 2,
 
-    // 3 = 更舊的 Token 引用節點（以字串 key 指向頭端），已淘汰。編號不重用。
+    /// <summary>Owner 上的資產目錄（<see cref="IGraphCatalog"/>）。節點只是引用，內容住在 Owner。</summary>
+    // 3 曾經是更舊的 Token 引用節點（以字串 key 指向頭端），早已淘汰。
+    // 2026-09-14 清查全專案序列化資料，`_kind` 只剩 1 與 4，沒有任何一筆 3，所以把編號收回來用。
+    Catalog = 3,
 
-    /// <summary>本圖的具名變數（<see cref="GraphEndpoint"/>）。節點只是引用，內容住在端點自己的畫布。</summary>
+    /// <summary>本圖的具名Token（<see cref="GraphToken"/>）。節點只是引用，內容住在端點自己的畫布。</summary>
     Token = 4,
 }
 
 /// <summary>
 /// 節點圖的唯一載體：一個畫面上的節點＝一個 GraphNode。
-/// 換來源＝換載體裡的內容（SetBody / SetAsset / SetEndpoint），Id、座標、備註與所有連入邊全部保留。
+/// 換來源＝換載體裡的內容（SetBody / SetAsset / SetToken），Id、座標、備註與所有連入邊全部保留。
 /// </summary>
 // 非泛型才能讓候選池、複製貼上、座標與編輯器走訪全部走同一條路徑；
 // 型別安全收斂在 Slot 的 GetBody<T>() / GetAsset<T>() 一處，不合型別由 Verify() 於編輯期擋下。
@@ -57,9 +60,19 @@ public class GraphNode
     [SerializeField]
     private ScriptableObject _asset;
 
-    // 具名變數引用：直接指向頭端物件，不存名字字串。改名不斷、刪除當場變空、型別編輯期就擋得住。
+    // 具名Token引用：直接指向頭端物件，不存名字字串。改名不斷、刪除當場變空、型別編輯期就擋得住。
     [SerializeReference]
-    private GraphEndpoint _endpoint;
+    private GraphToken _endpoint;
+
+    // 資產目錄引用：存目錄的穩定 Id，不存顯示名。改名不該讓引用失聯——
+    // 早年那個「以字串 key 指向頭端」的節點種類就是因此淘汰的，差別在這裡存的是 id 不是使用者會改的名字。
+    [SerializeField]
+    private string _catalogId;
+
+    // 目錄裡要取哪一種型別，存 AssemblyQualifiedName；空＝不過濾，整個目錄都取。
+    // 不存型別短名：目錄裡放什麼由專案決定，同名不同 namespace 撞得到，短名解不回唯一的 Type。
+    [SerializeField]
+    private string _catalogType;
 
     // 資產呼叫點的參數綁定。它屬於這次引用，不屬於共用資產。
     [SerializeField]
@@ -99,8 +112,14 @@ public class GraphNode
     /// </summary>
     public bool Disabled { get => _disabled; set => _disabled = value; }
 
-    /// <summary>Token 模式指向的具名變數頭端；其他模式為 null。</summary>
-    public GraphEndpoint Endpoint => _kind == NodeKind.Token ? _endpoint : null;
+    /// <summary>Token 模式指向的具名Token頭端；其他模式為 null。</summary>
+    public GraphToken Token => _kind == NodeKind.Token ? _endpoint : null;
+
+    /// <summary>Catalog 模式指向的目錄 Id；其他模式為 null。查不到對應目錄是編輯期的錯，不是這裡的事。</summary>
+    public string CatalogId => _kind == NodeKind.Catalog ? _catalogId : null;
+
+    /// <summary>Catalog 模式的型別過濾（AssemblyQualifiedName）。null／空＝不過濾。</summary>
+    public string CatalogType => _kind == NodeKind.Catalog ? _catalogType : null;
 
     public List<NamedFormulaSlot> Bindings
     {
@@ -135,20 +154,24 @@ public class GraphNode
         _body = body;
         _asset = null;
         _endpoint = null;
+        _catalogId = null;
+        _catalogType = null;
         Bindings.Clear();
         _kind = body != null ? NodeKind.Inline : NodeKind.Empty;
     }
 
-    /// <summary>換成具名變數引用。</summary>
-    // 端點為 null 時退成空節點而不是「沒有變數的變數節點」：那種狀態畫得出來、存得下去，
-    // 卻永遠求不出值，只會變成畫布上一顆看不懂的節點。沒有變數＝還沒選內容。
-    public void SetEndpoint(GraphEndpoint endpoint)
+    /// <summary>換成具名Token引用。</summary>
+    // 端點為 null 時退成空節點而不是「沒有Token的Token節點」：那種狀態畫得出來、存得下去，
+    // 卻永遠求不出值，只會變成畫布上一顆看不懂的節點。沒有Token＝還沒選內容。
+    public void SetToken(GraphToken endpoint)
     {
         if (endpoint == null) { Clear(); return; }
 
         _endpoint = endpoint;
         _body = null;
         _asset = null;
+        _catalogId = null;
+        _catalogType = null;
         Bindings.Clear();
         _kind = NodeKind.Token;
     }
@@ -161,7 +184,32 @@ public class GraphNode
         _asset = asset;
         _body = null;
         _endpoint = null;
+        _catalogId = null;
+        _catalogType = null;
         _kind = NodeKind.Asset;
+    }
+
+    /// <summary>換成資產目錄引用。型別過濾可以是 null＝整個目錄都取。</summary>
+    // 目錄 id 為空時退成空節點，理由與 SetToken 相同：「沒有目錄的目錄節點」畫得出來也存得下去，
+    // 卻永遠求不出值，只會變成畫布上一顆看不懂的節點。
+    public void SetCatalog(string catalogId, string typeName = null)
+    {
+        if (string.IsNullOrEmpty(catalogId)) { Clear(); return; }
+
+        _catalogId = catalogId;
+        _catalogType = typeName;
+        _body = null;
+        _asset = null;
+        _endpoint = null;
+        Bindings.Clear();
+        _kind = NodeKind.Catalog;
+    }
+
+    /// <summary>只換型別過濾，不動指到哪一個目錄。</summary>
+    public void SetCatalogType(string typeName)
+    {
+        if (_kind != NodeKind.Catalog) return;
+        _catalogType = typeName;
     }
 
     /// <summary>清成空節點（編輯中狀態）。</summary>
@@ -170,6 +218,8 @@ public class GraphNode
         _body = null;
         _asset = null;
         _endpoint = null;
+        _catalogId = null;
+        _catalogType = null;
         Bindings.Clear();
         _kind = NodeKind.Empty;
     }

@@ -7,9 +7,9 @@ using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 
 /// <summary>
-/// 一次求值期間的具名變數表：（族, 名稱）→ 端點的取值欄位。族＝<see cref="FormulaSlotBase.Kind"/>。
+/// 一次求值期間的具名Token表：（族, 名稱）→ 端點的取值欄位。族＝<see cref="FormulaSlotBase.Kind"/>。
 ///
-/// 名稱唯一性含族，所以同名不同族可以並存（String 的 'X' 與 Key 的 'X' 是兩個變數）；
+/// 名稱唯一性含族，所以同名不同族可以並存（String 的 'X' 與 Key 的 'X' 是兩個Token）；
 /// 查詢一律帶族，取不到就當作沒有這個值。
 /// 求值不做記憶化：同一個名字被引用兩次就算兩次，非純函式（如 Random）每次都是新的結果。
 /// </summary>
@@ -44,7 +44,7 @@ public class TokenTable<TPack>
     }
 
     /// <summary>登記一個具名端點。同名同族後到者不覆蓋——重複由 Verify 擋，runtime 取先到的那個。</summary>
-    public void Register(GraphEndpoint endpoint)
+    public void Register(GraphToken endpoint)
     {
         if (endpoint == null) return;
         Register(endpoint.Name, endpoint.Slot);
@@ -101,7 +101,7 @@ public class TokenTable<TPack>
 
         if (_inFlight.Contains(ck))
         {
-            Debug.LogWarning($"[TokenTable] {kind.Name} 變數 '{key}' 發生循環參照");
+            Debug.LogWarning($"[TokenTable] {kind.Name} Token '{key}' 發生循環參照");
             return default;
         }
 

@@ -12,7 +12,7 @@ public abstract class FormulaAssetBase : ScriptableObject, IGraphAsset
     /// <summary>本資產的候選節點清單。僅視覺化編輯器使用。</summary>
     public abstract List<GraphNode> Orphans { get; }
     public abstract object ContentObject { get; }
-    public abstract List<GraphEndpoint> Endpoints { get; }
+    public abstract List<GraphToken> Tokens { get; }
 
     /// <summary>根內容的載體。根節點的 Id／座標／備註都住在它身上，和圖上其他節點同一套。</summary>
     public abstract GraphNode Root { get; }
@@ -21,7 +21,7 @@ public abstract class FormulaAssetBase : ScriptableObject, IGraphAsset
     public abstract Type ResultType { get; }
 
     // 資產畫布 HEAD 的座標。HEAD 那個容器槽是編輯期現做的，沒有地方落腳，所以記在資產本體上，
-    // 形狀與 ActionSlot／GraphEndpoint／ActionTimingGroup 一致（Pos／HasPos／ClearPos）。
+    // 形狀與 ActionSlot／GraphToken／ActionTimingGroup 一致（Pos／HasPos／ClearPos）。
     [SerializeField, HideInInspector]
     private Vector2 _headPos;
 
@@ -62,9 +62,9 @@ public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
     [SerializeReference, HideInInspector]
     private List<GraphNode> _orphans = new();
 
-    // 本資產的具名變數，同時就是它對呼叫端的參數介面。
+    // 本資產的具名Token，同時就是它對呼叫端的參數介面。
     [SerializeReference, HideInInspector]
-    private List<GraphEndpoint> _endpoints = new();
+    private List<GraphToken> _endpoints = new();
 
     public async UniTask<T> Evaluate(TPack pack, TokenTable<TPack> caller, IReadOnlyList<NamedFormulaSlot> bindings = null)
     {
@@ -79,9 +79,9 @@ public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
         get { _orphans ??= new List<GraphNode>(); return _orphans; }
     }
 
-    public override List<GraphEndpoint> Endpoints
+    public override List<GraphToken> Tokens
     {
-        get { _endpoints ??= new List<GraphEndpoint>(); return _endpoints; }
+        get { _endpoints ??= new List<GraphToken>(); return _endpoints; }
     }
 
     /// <summary>根內容的載體。舊格式（裸公式）在這裡就地補上載體，呼叫端只需要認 GraphNode。</summary>

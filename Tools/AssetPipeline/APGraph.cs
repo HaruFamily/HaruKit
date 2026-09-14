@@ -54,7 +54,7 @@ namespace HaruFamily.Tools.AssetPipeline
         private List<GraphNode> _orphans = new List<GraphNode>();
 
         [SerializeReference]
-        private List<GraphEndpoint> _endpoints = new List<GraphEndpoint>();
+        private List<GraphToken> _endpoints = new List<GraphToken>();
 
         [SerializeField, HideInInspector]
         private bool _validated;
@@ -86,9 +86,9 @@ namespace HaruFamily.Tools.AssetPipeline
             get { _orphans ??= new List<GraphNode>(); return _orphans; }
         }
 
-        public List<GraphEndpoint> Endpoints
+        public List<GraphToken> Tokens
         {
-            get { _endpoints ??= new List<GraphEndpoint>(); return _endpoints; }
+            get { _endpoints ??= new List<GraphToken>(); return _endpoints; }
         }
 
         public bool IsValidated => _validated;
@@ -118,8 +118,10 @@ namespace HaruFamily.Tools.AssetPipeline
 
         string IGraphDocument.WindowTitle => "AssetPipelineGraph";
 
-        // APSlot 的 AssetBaseType 是 null、AcceptsAsset 永遠 false：管線的欄位接不到共用資產。
-        bool IGraphDocument.SupportsSharedAssets => false;
+        // 只宣告目錄：APSlot 的 AssetBaseType 是 null、AcceptsAsset 永遠 false，管線的欄位接不到共用資產；
+        // Token 則是管線用不到——步驟欄位不收 Token（APActionSlot.AcceptsToken 永遠 false），
+        // 公式欄位要的是「哪一批資產」而不是具名常數。目錄的內容由 Owner（AssetPipeline）提供，見 ICatalogOwner。
+        HGCapabilities IGraphDocument.Capabilities => HGCapabilities.Catalogs;
 
         IList IGraphDocument.ItemsOf(object root) => (root as APStepGroup)?.Steps;
 

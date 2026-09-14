@@ -39,14 +39,14 @@ public partial class HaruGraphWindow
     {
         if (focus.Kind == HGFocusKind.Asset)
         {
-            if (focus.Endpoint != null)
+            if (focus.Token != null)
                 return new HGFocusHeaderView
                 {
-                    Kind = HGFocusHeaderKind.AssetVariable,
-                    NameTarget = focus.Endpoint,
-                    NameDisplay = focus.Endpoint.Name ?? "",
+                    Kind = HGFocusHeaderKind.AssetToken,
+                    NameTarget = focus.Token,
+                    NameDisplay = focus.Token.Name ?? "",
                     NameTooltip = "雙擊可改名",
-                    NameSubmit = name => RenameFocusEndpoint(focus.Endpoint, name),
+                    NameSubmit = name => RenameFocusToken(focus.Token, name),
                     Title = focus.Title,
                 };
 
@@ -64,17 +64,17 @@ public partial class HaruGraphWindow
             return new HGFocusHeaderView { Kind = HGFocusHeaderKind.Asset, Title = focus.Title };
         }
 
-        if (focus.Kind == HGFocusKind.Variable)
+        if (focus.Kind == HGFocusKind.Token)
             return new HGFocusHeaderView
             {
-                Kind = HGFocusHeaderKind.Variable,
-                NameTarget = focus.Endpoint,
-                NameDisplay = focus.Endpoint?.Name ?? "",
+                Kind = HGFocusHeaderKind.Token,
+                NameTarget = focus.Token,
+                NameDisplay = focus.Token?.Name ?? "",
                 NameTooltip = "雙擊可改名",
-                NameSubmit = name => RenameFocusEndpoint(focus.Endpoint, name),
-                Description = focus.Endpoint?.Slot?.Node == null
+                NameSubmit = name => RenameFocusToken(focus.Token, name),
+                Description = focus.Token?.Slot?.Node == null
                     ? "沒接來源＝具名常數，值直接填在 HEAD 的來源欄位。"
-                    : "這個變數的值由下面這棵子樹算出來。外部用它的名字查值。",
+                    : "這個 Token 的值由下面這棵子樹算出來。外部用它的名字查值。",
             };
 
         if (focus.Kind == HGFocusKind.Action && focus.ActionSlot != null)
@@ -125,15 +125,15 @@ public partial class HaruGraphWindow
                 : $"還沒有任何{RootNoun}節點。在畫布空白處按右鍵新增一個。";
         }
         if (focus.Kind == HGFocusKind.None)
-            return $"從右上角的{RootNoun}下拉跳到某個{RootNoun}，或從左欄選一個變數開始編輯。";
+            return $"從右上角的{RootNoun}下拉跳到某個{RootNoun}，或從左欄選一個 Token 開始編輯。";
         return "";
     }
 
-    /// <summary>變數畫布的標題就地改名。名字是外部查詢的 key，改名不影響圖內連線（那是物件參照）。</summary>
-    private bool RenameFocusEndpoint(GraphEndpoint endpoint, string name)
+    /// <summary>Token畫布的標題就地改名。名字是外部查詢的 key，改名不影響圖內連線（那是物件參照）。</summary>
+    private bool RenameFocusToken(GraphToken endpoint, string name)
     {
         if (endpoint == null) return false;
-        if (model.RenameEndpoint(endpoint, name, CurrentEndpoints(), out string error))
+        if (model.RenameToken(endpoint, name, CurrentTokens(), out string error))
         {
             MarkGraphChanged();
             return true;
@@ -466,8 +466,8 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>
-    /// Header 底色：HEAD 深紫紅、Action 洋紅、Formula 琥珀、Asset 靛藍、變數 深綠。
-    /// 容器型節點用漸層表達「容器 → 它承載的東西」：Action 型資產是靛藍→洋紅，變數是深綠→結果型別色。
+    /// Header 底色：HEAD 深紫紅、Action 洋紅、Formula 琥珀、Asset 靛藍、Token 深綠。
+    /// 容器型節點用漸層表達「容器 → 它承載的東西」：Action 型資產是靛藍→洋紅，Token是深綠→結果型別色。
     /// </summary>
     private static void HeaderColors(HGNodeView node, out Color from, out Color to)
     {
@@ -478,10 +478,17 @@ public partial class HaruGraphWindow
             to = node.IsActionNode ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
             return;
         }
-        if (node.IsVariableNode)
+        if (node.IsTokenNode)
         {
             from = HGStyles.HeaderToken;
             to = HGStyles.HeaderFormula;
+            return;
+        }
+        if (node.IsCatalogNode)
+        {
+            // 目錄承載的是一批資產，所以走「目錄色 → 資產色」，與容器型節點同一條規則。
+            from = HGStyles.HeaderCatalog;
+            to = HGStyles.HeaderAsset;
             return;
         }
         if (node.IsAssetNode)
@@ -506,7 +513,7 @@ public partial class HaruGraphWindow
         // 節點層級的問題鋪成 Header 底圖的一部份；參數列層級的問題直接把該列標紅。
         // 資產／空節點自己沒有物件，問題掛在父欄位上，改查父欄位才看得到。
         object issueTarget = node.Obj
-            ?? (node.IsAssetNode || node.IsVariableNode || node.IsPlaceholder ? node.ParentSlot : null);
+            ?? (node.IsAssetNode || node.IsTokenNode || node.IsPlaceholder ? node.ParentSlot : null);
         bool hasNodeIssue = Rep.HasIssue(issueTarget, out bool nodeError);
 
         float headerRight = rect.xMax - 4f;
@@ -525,7 +532,7 @@ public partial class HaruGraphWindow
             headerRight = disableToggle.x - 3f;
         }
 
-        // 註解開關排在停用鈕左邊，變數與資產葉節點也有。
+        // 註解開關排在停用鈕左邊，Token與資產葉節點也有。
         // HEAD 沒有：它的載體是頭端物件（ActionSlot／TokenEntry／資產）而不是 GraphNode，沒有存註解的欄位。
         if (!node.IsRoot)
         {
@@ -591,11 +598,16 @@ public partial class HaruGraphWindow
             : nodeError ? "此節點有錯誤，詳見 Console" : "此節點有警告，詳見 Console";
         GUI.Label(titleRect, HGStyles.Elide(node.Title, HGStyles.NodeTitle, textWidth, titleTip), HGStyles.NodeTitle);
 
-        // 資產與變數的本體是一列「選哪一個」的下拉；一般節點畫自己的參數列；空節點兩者都沒有。
+        // 資產與Token的本體是一列「選哪一個」的下拉；一般節點畫自己的參數列；空節點兩者都沒有。
         // 掛在未勾覆蓋的參數底下＝這一段不會被採用，整顆節點鎖住：控制項灰掉、拉線與清單編輯都擋掉。
         using (new EditorGUI.DisabledScope(node.InLockedSubtree))
         {
-            if (node.IsAssetNode || node.IsVariableNode)
+            if (node.IsCatalogNode)
+            {
+                DrawCatalogPickerRows(node, rect);
+                DrawRows(node, node.Rows, rect);
+            }
+            else if (node.IsAssetNode || node.IsTokenNode)
             {
                 DrawReferencePickerRow(node, rect);
                 DrawRows(node, node.Rows, rect);
@@ -671,24 +683,129 @@ public partial class HaruGraphWindow
     /// 資產節點本體唯一的一列：像一般參數列那樣「標籤 + 下拉」，選的是「指到哪一個資產」。
     /// 換身分（Formula／Asset）是 Header 那顆 ▾ 的事，這裡只換對象。
     /// </summary>
+    /// <summary>
+    /// 目錄節點的本體：兩列下拉——上面選哪一個目錄，下面選要取哪一種型別。
+    /// 型別的候選由目前選中的目錄**現算**，所以換目錄時下面那列跟著變。
+    /// </summary>
+    // 型別候選不從契約拿，而是從 IGraphCatalog.Items 現場算 distinct type：
+    // 目錄內容隨時可能被別的入口改，任何預先整理好的型別清單都會過期。
+    private void DrawCatalogPickerRows(HGNodeView node, Rect nodeRect)
+    {
+        var catalog = FindCatalog(node.CatalogId);
+        float labelWidth = nodeRect.width * 0.34f;
+
+        var row1 = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight, nodeRect.width, HGGraph.RowHeight);
+        GUI.Label(new Rect(row1.x + 6f, row1.y + 1f, labelWidth - 8f, row1.height - 2f), "目錄", HGStyles.RowLabel);
+        var pick1 = new Rect(row1.x + labelWidth, row1.y + 1f, row1.width - labelWidth - 8f, row1.height - 3f);
+        // 目錄被刪掉時節點還留著 id：畫成「（已刪除）」而不是空白，否則看起來像還沒選。
+        string catalogLabel = catalog?.Name
+            ?? (string.IsNullOrEmpty(node.CatalogId) ? "（未指定）" : "（已刪除）");
+        if (EditorGUI.DropdownButton(pick1,
+                HGStyles.Elide(catalogLabel, EditorStyles.miniPullDown, pick1.width - 20f), FocusType.Keyboard))
+            ShowCatalogPicker(node, pick1);
+
+        var row2 = new Rect(nodeRect.x, row1.yMax, nodeRect.width, HGGraph.RowHeight);
+        GUI.Label(new Rect(row2.x + 6f, row2.y + 1f, labelWidth - 8f, row2.height - 2f), "型別", HGStyles.RowLabel);
+        var pick2 = new Rect(row2.x + labelWidth, row2.y + 1f, row2.width - labelWidth - 8f, row2.height - 3f);
+        Type filter = HGReflect.CatalogFilterType(node.Carrier?.CatalogType);
+        string typeLabel = filter != null ? filter.Name : "全部";
+        using (new EditorGUI.DisabledScope(catalog == null))
+        {
+            if (EditorGUI.DropdownButton(pick2,
+                    HGStyles.Elide(typeLabel, EditorStyles.miniPullDown, pick2.width - 20f), FocusType.Keyboard))
+                ShowCatalogTypePicker(node, catalog, pick2);
+        }
+    }
+
+    /// <summary>換這顆節點指到的目錄。</summary>
+    // 換完要重算型別：新目錄裡可能根本沒有原本那個型別，留著會變成「選了一個永遠取不到東西的過濾」。
+    // 不靜默清掉，當場跳一則提示——使用者要知道是換目錄造成的，不是自己改壞的。
+    // 走 ShowNotification 不走 Console：Console 的內容是驗證報告，每次 Verify 整份重建，臨時訊息放不住。
+    private void ShowCatalogPicker(HGNodeView node, Rect anchor)
+    {
+        var owner = CatalogOwner;
+        if (owner?.Catalogs == null || owner.Catalogs.Count == 0)
+        {
+            ShowNotification(new GUIContent("左欄還沒有任何目錄"));
+            return;
+        }
+
+        var menu = new GenericMenu();
+        foreach (var catalog in owner.Catalogs)
+        {
+            if (catalog == null) continue;
+            var captured = catalog;
+            menu.AddItem(new GUIContent(catalog.Name), captured.Id == node.CatalogId,
+                () => ChangeNodeCatalog(node, captured));
+        }
+        menu.DropDown(anchor);
+    }
+
+    private void ChangeNodeCatalog(HGNodeView node, IGraphCatalog catalog)
+    {
+        var carrier = node?.Carrier;
+        if (carrier == null || catalog == null) return;
+
+        Type filter = HGReflect.CatalogFilterType(carrier.CatalogType);
+        bool keep = filter != null && HGReflect.CatalogHasType(catalog, filter);
+        if (filter != null && !keep)
+            ShowNotification(new GUIContent(
+                $"[{catalog.Name}] 裡沒有 {filter.Name}，型別過濾已改回「全部」"));
+
+        BreakUndoMerge();
+        carrier.SetCatalog(catalog.Id, keep ? carrier.CatalogType : null);
+        MarkGraphChanged();
+    }
+
+    private void ShowCatalogTypePicker(HGNodeView node, IGraphCatalog catalog, Rect anchor)
+    {
+        var carrier = node?.Carrier;
+        if (carrier == null || catalog == null) return;
+
+        var menu = new GenericMenu();
+        string current = carrier.CatalogType;
+        menu.AddItem(new GUIContent("全部"), string.IsNullOrEmpty(current), () =>
+        {
+            BreakUndoMerge();
+            carrier.SetCatalogType(null);
+            MarkGraphChanged();
+        });
+
+        foreach (var type in HGReflect.CatalogTypes(catalog))
+        {
+            var captured = type;
+            string aqn = captured.AssemblyQualifiedName;
+            menu.AddItem(new GUIContent(captured.Name), aqn == current, () =>
+            {
+                BreakUndoMerge();
+                carrier.SetCatalogType(aqn);
+                MarkGraphChanged();
+            });
+        }
+        menu.DropDown(anchor);
+    }
+
+    /// <summary>依 Id 找目錄。找不到回 null——目錄可能已經被刪掉，節點還留著 id。</summary>
+    private IGraphCatalog FindCatalog(string id) => HGReflect.FindCatalog(CatalogOwner?.Catalogs, id);
+
     private void DrawReferencePickerRow(HGNodeView node, Rect nodeRect)
     {
         var row = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight, nodeRect.width, HGGraph.RowHeight);
         float labelWidth = row.width * 0.34f;
 
-        bool isVariable = node.IsVariableNode;
+        bool isToken = node.IsTokenNode;
         GUI.Label(new Rect(row.x + 6f, row.y + 1f, labelWidth - 8f, row.height - 2f),
-            isVariable ? "變數" : "資產", HGStyles.RowLabel);
+            isToken ? "Token" : "資產", HGStyles.RowLabel);
 
         var picker = new Rect(row.x + labelWidth, row.y + 1f, row.width - labelWidth - 8f, row.height - 3f);
-        string label = isVariable
-            ? (node.Endpoint != null ? node.Endpoint.Name ?? "（未命名）" : "（未指定）")
+        string label = isToken
+            ? (node.Token != null ? node.Token.Name ?? "（未命名）" : "（未指定）")
             : (node.Asset != null ? node.Asset.name : "（未指定）");
 
         if (!EditorGUI.DropdownButton(picker,
                 HGStyles.Elide(label, EditorStyles.miniPullDown, picker.width - 20f), FocusType.Keyboard)) return;
 
-        if (isVariable) ShowVariablePicker(node, picker);
+        if (isToken) ShowTokenPicker(node, picker);
         else ShowAssetPicker(node, picker);
     }
 

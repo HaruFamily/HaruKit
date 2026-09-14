@@ -53,8 +53,8 @@ public partial class HaruGraphWindow
                 else if (e.button == 0)
                 {
                     if (e.clickCount == 2 && hit != null && hit.IsAssetNode && hit.Asset != null) { EnterAsset(hit); e.Use(); break; }
-                    // 雙擊變數節點＝下鑽進那個變數的畫布，跟雙擊資產節點同一個手勢。
-                    if (e.clickCount == 2 && hit != null && hit.IsVariableNode && hit.Endpoint != null) { EnterVariable(hit.Endpoint); e.Use(); break; }
+                    // 雙擊Token節點＝下鑽進那個Token的畫布，跟雙擊資產節點同一個手勢。
+                    if (e.clickCount == 2 && hit != null && hit.IsTokenNode && hit.Token != null) { EnterToken(hit.Token); e.Use(); break; }
 
                     var link = LinkAt(graphMouse);
                     if (link != null) { CutLink(link); e.Use(); break; }
@@ -202,10 +202,16 @@ public partial class HaruGraphWindow
                     drag.ClearAsset();
                     e.Use();
                 }
-                if (drag.DroppingEndpoint)
+                if (drag.DroppingToken)
                 {
-                    DropEndpointOn(drag.Endpoint, graphMouse);
-                    drag.ClearEndpoint();
+                    DropTokenOn(drag.Token, graphMouse);
+                    drag.ClearToken();
+                    e.Use();
+                }
+                if (drag.DroppingCatalog)
+                {
+                    DropCatalogOn(drag.Catalog, graphMouse);
+                    drag.ClearCatalog();
                     e.Use();
                 }
                 break;
@@ -252,7 +258,7 @@ public partial class HaruGraphWindow
         Invalidate();
     }
 
-    /// <summary>複製選取節點的子樹。資產／變數節點只是引用，不列入。</summary>
+    /// <summary>複製選取節點的子樹。資產／Token節點只是引用，不列入。</summary>
     private void CopySelection()
     {
         clipboard.Clear();

@@ -98,7 +98,7 @@ public class LogicGraphDrawer : PropertyDrawer
     {
         if (multi) return "多個對象：內容摘要不顯示";
         if (timings == 0 && tokens == 0) return "尚未建立任何時機——開啟編輯器新增第一個";
-        return $"{timings} 個時機 · {actions} 個動作 · {tokens} 個變數";
+        return $"{timings} 個時機 · {actions} 個動作 · {tokens} 個 Token";
     }
 
     /// <summary>只讀 SerializedProperty 的長度，不碰實體物件；Inspector 每幀跑得起。</summary>
