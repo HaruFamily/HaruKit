@@ -28,8 +28,18 @@ public partial class HaruGraphWindow
         GUI.Label(new Rect(r.x + 4f, r.y + 2f, 160f, 18f),
             new GUIContent("變數庫", "對外端點；點一筆進入它自己的畫布，沒接來源時它就是具名常數"), HGStyles.PanelHeader);
 
-        bool showRef = HasReferenceSection;
         float top = r.y + 22f;
+
+        // 圖宣告不支援共用資產時，左欄就只有變數庫一區：沒有分隔把手、沒有資料夾鈕，
+        // 也不去掃專案資產。留一個永遠空的清單比收掉它更難解釋——使用者會一直找「東西為什麼沒出現」。
+        if (!HasAssetSection)
+        {
+            tokenLibrary.Draw(new Rect(r.x, top, r.width, r.yMax - top), top + 2f,
+                TokenLibraryView(), TokenLibraryCommands(), inlineName, drag);
+            return;
+        }
+
+        bool showRef = HasReferenceSection;
         float avail = r.yMax - top - ResizeHandleWidth * (showRef ? 2f : 1f);
         // 視窗太矮時連各區的最小高度都放不下，這時平均分；寧可擠也不要出現負高度的 Rect。
         float share = avail / (showRef ? 3f : 2f);
@@ -52,7 +62,7 @@ public partial class HaruGraphWindow
 
         HandleLibrarySplitResize(handle, minToken, maxToken);
 
-        DrawTokenLibrary(tokenRect, tokenRect.y + 2f);
+        tokenLibrary.Draw(tokenRect, tokenRect.y + 2f, TokenLibraryView(), TokenLibraryCommands(), inlineName, drag);
 
         // 資產區標題跟面板標題同一種寫法，三區看起來才是同級的清單，不是主從。
         GUI.Label(new Rect(assetRect.x + 4f, assetRect.y + 2f, 160f, 18f),
@@ -73,7 +83,7 @@ public partial class HaruGraphWindow
             HGAssetIndex.Refresh();
         GUI.color = prevColor;
 
-        DrawAssetLibrary(assetRect, assetRect.y + 24f);
+        assetLibrary.Draw(assetRect, assetRect.y + 24f, AssetLibraryView(), inlineName, drag, RenameAssetFile, ActivateAsset);
 
         DrawResizeGrip(handle, false, resizingLibrarySplit);
 
@@ -82,11 +92,48 @@ public partial class HaruGraphWindow
         var refHandle = new Rect(r.x, assetRect.yMax, r.width, ResizeHandleWidth);
         var refRect = new Rect(r.x, refHandle.yMax, r.width, r.yMax - refHandle.yMax);
         HandleRefSplitResize(refHandle, minRef, maxRef);
-        DrawReferenceSection(refRect);
+        referenceList.Draw(refRect, focus.AssetObject as ScriptableObject, ReferenceListCommands());
         DrawResizeGrip(refHandle, false, resizingRefSplit);
     }
 
     /// <summary>左欄上下分隔：拖動只改變數區高度，資產區吃剩下的。夾限與 Console 那條同一套。</summary>
+    private HGTokenLibraryView TokenLibraryView() => new()
+    {
+        Tokens = HGModel.ReadTokens(CurrentEndpoints()),
+        FocusedEndpoint = focus.Endpoint,
+    };
+
+    private HGTokenLibraryCommands TokenLibraryCommands() => new()
+    {
+        Rename = RenameEndpointFromLibrary,
+        Activate = ActivateEndpoint,
+        Duplicate = DuplicateEndpoint,
+        Remove = RemoveEndpoint,
+        Create = ShowCreateEndpointMenu,
+        IssueOf = TokenIssue,
+    };
+
+    private bool RenameEndpointFromLibrary(GraphEndpoint endpoint, string name)
+    {
+        if (model.RenameEndpoint(endpoint, name, CurrentEndpoints(), out string error))
+        {
+            MarkGraphChanged();
+            return true;
+        }
+        ShowNotification(new GUIContent(error));
+        return false;
+    }
+
+    /// <summary>變數庫選了一筆：再點一次目前這格＝退出，不必去找返回鈕。</summary>
+    private void ActivateEndpoint(GraphEndpoint endpoint)
+    {
+        if (ReferenceEquals(focus.Endpoint, endpoint)) ExitVariable();
+        else EnterVariable(endpoint);
+    }
+
+    private (string reason, bool isError) TokenIssue(HGToken token)
+        => HasTokenIssue(token, out string reason, out bool isError) ? (reason, isError) : (null, false);
+
     private void HandleLibrarySplitResize(Rect handle, float min, float max)
     {
         EditorGUIUtility.AddCursorRect(handle, MouseCursor.ResizeVertical);
@@ -135,93 +182,6 @@ public partial class HaruGraphWindow
             e.Use();
         }
     }
-
-    /// <summary>
-    /// 變數庫：這張圖有哪些對外端點。新增、改名、刪除都在這裡，點一筆進入它自己的畫布。
-    /// 資產焦點下列的是那個資產的變數（＝它對呼叫端的參數介面）。
-    /// </summary>
-    private void DrawTokenLibrary(Rect r, float top)
-    {
-        DrawCreateEndpointButton(new Rect(r.x + 4f, top, r.width - 8f, 20f));
-        DrawRemoveEndpointButton(new Rect(r.x + 4f, top + 22f, r.width - 8f, 20f));
-
-        var searchRect = new Rect(r.x + 4f, top + 46f, r.width - 8f, 20f);
-        GUI.Label(new Rect(searchRect.x + 4f, searchRect.y + 2f, 16f, 16f),
-            EditorGUIUtility.IconContent("Search Icon", "搜尋變數"));
-        tokenSearch = EditorGUI.TextField(new Rect(searchRect.x + 20f, searchRect.y, searchRect.width - 20f, searchRect.height), tokenSearch);
-
-        // r 已經是這一區的範圍，yMax 就是分隔線；高度夾 0 以上，視窗擠到極限時不會出現負高度的 ScrollView。
-        var listRect = new Rect(r.x + 2f, top + 70f, r.width - 4f, Mathf.Max(0f, r.yMax - top - 72f));
-        var tokens = HGModel.ReadTokens(CurrentEndpoints());
-        var shown = new List<HGToken>();
-        foreach (var t in tokens)
-            if (string.IsNullOrWhiteSpace(tokenSearch)
-                || t.Key?.IndexOf(tokenSearch, StringComparison.OrdinalIgnoreCase) >= 0
-                || t.TypeName.IndexOf(tokenSearch, StringComparison.OrdinalIgnoreCase) >= 0)
-                shown.Add(t);
-
-        var content = new Rect(0f, 0f, listRect.width - 16f, shown.Count * TokenCellHeight + 4f);
-        tokenScroll = GUI.BeginScrollView(listRect, tokenScroll, content);
-        for (int i = 0; i < shown.Count; i++)
-        {
-            var token = shown[i];
-            var row = new Rect(2f, i * TokenCellHeight + 2f, content.width - 4f, TokenCellHeight - 3f);
-            bool isFocus = ReferenceEquals(focus.Endpoint, token.Endpoint);
-            // 深綠→琥珀，和畫布上的變數節點同一條漸層。
-            DrawCellBackground(row, HGStyles.HeaderToken, HGStyles.HeaderFormula, i % 2 == 1, isFocus);
-
-            var endpoint = token.Endpoint;
-            var nameRect = new Rect(row.x + 8f, row.y + 2f, row.width - 70f, 18f);
-            bool renaming = DrawInlineName(nameRect, endpoint, InlineSiteTokenLib,
-                string.IsNullOrEmpty(token.Key) ? "（未命名）" : token.Key, token.Key ?? "",
-                HGStyles.RowLabel, "雙擊可改名；外部（Inspector）用這個名字查它的值", name =>
-                {
-                    if (model.RenameEndpoint(endpoint, name, CurrentEndpoints(), out string error))
-                    {
-                        MarkGraphChanged();
-                        return true;
-                    }
-                    ShowNotification(new GUIContent(error));
-                    return false;
-                });
-            var typeRect = new Rect(row.xMax - 58f, row.y + 6f, 42f, 15f);
-            HGStyles.RoundedFill(typeRect, HGStyles.HeaderFormula, CellCornerRadius);
-            GUI.Label(typeRect, HGStyles.Elide(token.TypeName, HGStyles.NodeChip, typeRect.width), HGStyles.NodeChip);
-
-            if (HasTokenIssue(token, out string reason, out bool isError))
-            {
-                var dot = new Rect(row.xMax - 10f, row.y + 10f, 7f, 7f);
-                HGStyles.Fill(dot, isError ? HGStyles.Error : HGStyles.Warning);
-                GUI.Label(dot, new GUIContent("", reason));
-            }
-
-            if (renaming) continue;               // 正在改名的這一格不吃點擊，否則同一下會又改名又切焦點
-
-            var e = Event.current;
-            // 右鍵不做事：改名雙擊、刪除是上面那顆「－ 移除變數」，選單只是多一層要記的東西。
-            if (e.type == EventType.MouseDown && e.button == 0 && row.Contains(e.mousePosition))
-            {
-                dragEndpoint = token.Endpoint;
-                pendingVariableFocus = token.Endpoint;
-                e.Use();
-            }
-            if (e.type == EventType.MouseDrag && ReferenceEquals(dragEndpoint, token.Endpoint)) dragEndpointActive = true;
-            // 名字那一格不切焦點：雙擊改名的第一下否則會先跳進（或跳出）這個變數的畫布。
-            // MouseDown 仍照收，拖曳複製／移除要能從名字上起拖。
-            if (e.type == EventType.MouseUp && ReferenceEquals(pendingVariableFocus, token.Endpoint)
-                && !dragEndpointActive && row.Contains(e.mousePosition) && !nameRect.Contains(e.mousePosition))
-            {
-                pendingVariableFocus = null;
-                dragEndpoint = null;
-                // 再點一次目前這格＝退出，不必去找返回鈕。
-                if (isFocus) ExitVariable();
-                else EnterVariable(token.Endpoint);
-                e.Use();
-            }
-        }
-        GUI.EndScrollView();
-    }
-
     /// <summary>進入這個變數自己的畫布。</summary>
     private void JumpToToken(HGToken token) => EnterVariable(token?.Endpoint);
 
@@ -250,67 +210,6 @@ public partial class HaruGraphWindow
         }
         menu.ShowAsContext();
     }
-
-    /// <summary>
-    /// 「＋ 新增變數」：單擊開型別選單；把變數格**拖到這顆按鈕上放開＝複製那一個**（內容一起複製）。
-    /// </summary>
-    private void DrawCreateEndpointButton(Rect rect)
-    {
-        var e = Event.current;
-        bool dropping = dragEndpointActive && dragEndpoint != null;
-        bool hover = rect.Contains(e.mousePosition);
-
-        if (dropping && hover) HGStyles.Fill(rect, new Color(0.24f, 0.50f, 0.34f, 0.75f));
-
-        bool clicked = GUI.Button(rect, new GUIContent(
-            dropping ? "複製變數" : "＋ 新增變數",
-            "新增一個變數；把左邊的變數拖到這裡＝複製它"));
-
-        // 拖曳放開不會讓 GUI.Button 回 true（它沒在自己身上收到 MouseDown），所以自己判。
-        if (dropping && hover && e.rawType == EventType.MouseUp)
-        {
-            DuplicateEndpoint(dragEndpoint);
-            ClearPendingLibraryDrag();
-            e.Use();
-            return;
-        }
-        if (clicked && !dropping) ShowCreateEndpointMenu();
-    }
-
-    /// <summary>
-    /// 「－ 移除變數」：單擊刪掉**目前正在編輯**的那一個，或把變數格**拖到這顆按鈕上放開**刪掉被拖的那一個。
-    /// 兩條路都要先表態（先點開它，或把它拖過來），所以不再問一次確認框——刪完用提示說明怎麼救回來。
-    /// </summary>
-    private void DrawRemoveEndpointButton(Rect rect)
-    {
-        var e = Event.current;
-        bool dropping = dragEndpointActive && dragEndpoint != null;
-        bool hover = rect.Contains(e.mousePosition);
-
-        // 拖曳中鋪一層紅底當落點：拖著變數在畫面上跑時，看得到「放這裡會刪掉」才敢放手。
-        // 字只拿掉開頭的「－」，不改寫成一句話——按鈕上的字換來換去比底色還吵。
-        if (dropping && hover) HGStyles.Fill(rect, new Color(0.62f, 0.24f, 0.26f, 0.75f));
-
-        bool hasFocusEndpoint = focus.Endpoint != null;
-        bool wasEnabled = GUI.enabled;
-        GUI.enabled = wasEnabled && (dropping || hasFocusEndpoint);
-        bool clicked = GUI.Button(rect, new GUIContent(
-            dropping ? "移除變數" : "－ 移除變數",
-            hasFocusEndpoint
-                ? "移除目前編輯中的變數；也可以把左邊的變數直接拖到這裡"
-                : "先點一個變數進去，或把變數拖到這裡"));
-        GUI.enabled = wasEnabled;
-
-        if (dropping && hover && e.rawType == EventType.MouseUp)
-        {
-            RemoveEndpoint(dragEndpoint);
-            ClearPendingLibraryDrag();
-            e.Use();
-            return;
-        }
-        if (clicked && hasFocusEndpoint) RemoveEndpoint(focus.Endpoint);
-    }
-
     /// <summary>複製一個變數，並進去複本的畫布——複製完通常就是要改它。</summary>
     private void DuplicateEndpoint(GraphEndpoint source)
     {
@@ -360,76 +259,19 @@ public partial class HaruGraphWindow
         Repaint();
     }
 
-    private void DrawAssetLibrary(Rect r, float top)
+    private HGAssetLibraryView AssetLibraryView() => new()
     {
-        // 重掃縮成搜尋列旁的圖示鈕：上下分區後高度是兩區共用的，整條寬按鈕不值那一列。
-        var searchRect = new Rect(r.x + 4f, top, r.width - 30f, 20f);
-        GUI.Label(new Rect(searchRect.x + 4f, searchRect.y + 2f, 16f, 16f),
-            EditorGUIUtility.IconContent("Search Icon", "搜尋資產"));
-        assetSearch = EditorGUI.TextField(new Rect(searchRect.x + 20f, searchRect.y,
-            searchRect.width - 20f, searchRect.height), assetSearch);
-        if (GUI.Button(new Rect(r.xMax - 24f, top, 20f, 20f),
-            EditorGUIUtility.IconContent("Refresh", "重新掃描資產"))) HGAssetIndex.Refresh();
+        Entries = HGAssetIndex.Entries,
+        SlotTypes = AssetSlotTypes(),
+        FocusedAsset = focus.Kind == HGFocusKind.Asset ? focus.AssetObject : null,
+    };
 
-        var shown = new List<(HGAssetEntry entry, Type slotType)>();
-        var slotTypes = AssetSlotTypes();
-        foreach (var entry in HGAssetIndex.Entries)
-        {
-            Type slotType = SlotTypeForAsset(entry.Asset, slotTypes);
-            if (slotType == null) continue;
-            if (!string.IsNullOrWhiteSpace(assetSearch)
-                && entry.Name.IndexOf(assetSearch, StringComparison.OrdinalIgnoreCase) < 0
-                && entry.TypeName.IndexOf(assetSearch, StringComparison.OrdinalIgnoreCase) < 0
-                && (entry.ResultType == null
-                    || HGReflect.ResultTypeName(entry.ResultType).IndexOf(assetSearch, StringComparison.OrdinalIgnoreCase) < 0)) continue;
-            shown.Add((entry, slotType));
-        }
-
-        var listRect = new Rect(r.x + 2f, top + 24f, r.width - 4f, Mathf.Max(0f, r.yMax - top - 26f));
-        var content = new Rect(0f, 0f, listRect.width - 16f, shown.Count * AssetCellHeight + 4f);
-        assetLibraryScroll = GUI.BeginScrollView(listRect, assetLibraryScroll, content);
-        for (int i = 0; i < shown.Count; i++)
-        {
-            var entry = shown[i].entry;
-            var asset = entry.Asset;
-            var row = new Rect(2f, i * AssetCellHeight + 2f, content.width - 4f, AssetCellHeight - 3f);
-            bool isFocus = focus.Kind == HGFocusKind.Asset && focus.AssetObject == asset;
-            // 資產＝藍→內容型別，和畫布上的資產節點同一條漸層。
-            Color payload = entry.IsAction ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
-            DrawCellBackground(row, HGStyles.HeaderAsset, payload, i % 2 == 1, isFocus);
-
-            var nameRect = new Rect(row.x + 8f, row.y + 2f, row.width - 64f, 18f);
-            bool renaming = DrawInlineName(nameRect, asset, InlineSiteAssetLib,
-                asset.name, asset.name, HGStyles.RowLabel, "雙擊可改名（改的是 .asset 檔名）",
-                name => RenameAssetFile(asset, name));
-            string kind = entry.IsAction ? "ACT" : HGReflect.ResultTypeName(entry.ResultType);
-            var typeRect = new Rect(row.xMax - 54f, row.y + 6f, 46f, 15f);
-            HGStyles.RoundedFill(typeRect, payload, CellCornerRadius);
-            GUI.Label(typeRect, HGStyles.Elide(kind, HGStyles.NodeChip, typeRect.width), HGStyles.NodeChip);
-
-            if (renaming) continue;               // 正在改名的這一格不吃點擊
-
-            var e = Event.current;
-            if (e.type == EventType.MouseDown && e.button == 0 && row.Contains(e.mousePosition))
-            {
-                dragAsset = asset;
-                pendingAssetFocus = asset;
-                e.Use();
-            }
-            if (e.type == EventType.MouseDrag && dragAsset == asset) dragAssetActive = true;
-            // 名字那一格不切焦點（同變數庫）：雙擊改名不該順手進出這個資產的畫布。
-            if (e.type == EventType.MouseUp && pendingAssetFocus == asset
-                && !dragAssetActive && row.Contains(e.mousePosition) && !nameRect.Contains(e.mousePosition))
-            {
-                pendingAssetFocus = null;
-                dragAsset = null;
-                // 再點一次目前這格＝退出（在它的變數子畫布時先回到資產本體，由 EnterAsset 處理）。
-                if (isFocus && focus.Endpoint == null) LeaveAsset();
-                else EnterAsset(asset, shown[i].slotType);
-                e.Use();
-            }
-        }
-        GUI.EndScrollView();
+    /// <summary>資產庫選了一筆：再點一次目前這格＝退出（在它的變數子畫布時先回到資產本體，由 EnterAsset 處理）。</summary>
+    private void ActivateAsset(ScriptableObject asset, Type slotType)
+    {
+        bool isFocus = focus.Kind == HGFocusKind.Asset && focus.AssetObject == asset;
+        if (isFocus && focus.Endpoint == null) LeaveAsset();
+        else EnterAsset(asset, slotType);
     }
 
     /// <summary>
@@ -479,13 +321,6 @@ public partial class HaruGraphWindow
         return result;
     }
 
-    private static Type SlotTypeForAsset(ScriptableObject asset, List<(Type acceptedAssetType, Type slotType)> slotTypes)
-    {
-        if (asset == null) return null;
-        foreach (var candidate in slotTypes)
-            if (candidate.acceptedAssetType.IsInstanceOfType(asset)) return candidate.slotType;
-        return null;
-    }
 
     /// <summary>這個標註有沒有問題。標註的問題掛在被標註節點的內容物件上（見 HGValidator）。</summary>
     private bool HasTokenIssue(HGToken token, out string reason, out bool isError)
@@ -509,35 +344,6 @@ public partial class HaruGraphWindow
     // 要在縮小後還看得見就得比留白厚。上限是圓角半徑，再厚左右上角就開始出現直邊。
     private const float IssueBarHeight = 5f;
 
-    /// <summary>
-    /// 清單格底：和節點 Header 同一套語彙——身分色 + 「容器→內容」漸層，只是沖淡。
-    /// payload 傳同一個顏色就是單色（動作沒有容器語意）。
-    /// </summary>
-    private static void DrawCellBackground(Rect row, Color kind, Color payload, bool altRow, bool focused)
-    {
-        HGStyles.GradientFill(row,
-            HGStyles.CellTint(kind, altRow, focused),
-            HGStyles.CellTint(payload, altRow, focused), CellCornerRadius);
-        HGStyles.RoundedFrame(row, focused ? HGStyles.Link : HGStyles.LibraryCellBorder, CellCornerRadius);
-    }
-
-    /// <summary>Console 分頁沒有身分，走中性灰。</summary>
-    /// <summary>Console 分頁：選中才給滿色。</summary>
-    private bool DrawTab(Rect r, string label, bool active)
-    {
-        HGStyles.RoundedFill(r, HGStyles.CellTint(HGStyles.NodeBody, false, active), CellCornerRadius);
-        GUI.Label(r, label, HGStyles.Tiny);
-        return GUI.Button(r, GUIContent.none, GUIStyle.none);
-    }
-
-    private void DrawDragVariableGhost()
-    {
-        if (dragEndpoint == null) return;
-        Vector2 p = Event.current.mousePosition;
-        var r = new Rect(p.x + 8f, p.y + 8f, 160f, 18f);
-        HGStyles.GradientFill(r, HGStyles.HeaderToken, HGStyles.HeaderFormula, CellCornerRadius);
-        GUI.Label(r, dragEndpoint.Name ?? "（未命名）", HGStyles.Chip);
-    }
 
     /// <summary>
     /// 放置模式的殘影：長什麼樣就是等一下會生出來的那顆空節點，配色與標題都照 placeholder 走。
@@ -553,18 +359,6 @@ public partial class HaruGraphWindow
         HGStyles.RoundedFill(r, kind, CellCornerRadius);
         GUI.Label(r, isAction ? "（選擇 Action）" : "（選擇 Formula）", HGStyles.Chip);
         GUI.Label(new Rect(r.x, r.yMax + 2f, 200f, 16f), "點一下放置　Esc 取消", HGStyles.Tiny);
-    }
-
-    private void DrawDragAssetGhost()
-    {
-        if (dragAsset == null) return;
-        Vector2 p = Event.current.mousePosition;
-        var r = new Rect(p.x + 8f, p.y + 8f, 160f, 18f);
-        // 沒有結果型別＝動作資產，和節點那邊同一條判定。
-        bool isActionAsset = HGReflect.AssetResultType(dragAsset) == null;
-        HGStyles.GradientFill(r, HGStyles.HeaderAsset,
-            isActionAsset ? HGStyles.HeaderAction : HGStyles.HeaderFormula, CellCornerRadius);
-        GUI.Label(r, dragAsset.name, HGStyles.Chip);
     }
 
     // ===== 時機選單 =====
@@ -715,75 +509,21 @@ public partial class HaruGraphWindow
 
     // ===== 左欄第三區（資產焦點）：引用清單 =====
 
-    /// <summary>
-    /// 誰引用了目前這顆資產。左欄只有 160px 起跳，所以一列只放名稱與驗證狀態，
-    /// 整列可點＝切換過去編它（會先問要不要離開資產）；兩顆維護動作縮成標題列右側的小按鈕。
-    /// </summary>
-    private void DrawReferenceSection(Rect r)
+    private HGReferenceListCommands ReferenceListCommands() => new()
     {
-        var asset = focus.AssetObject;
-        var users = HGReferenceIndex.Users(asset as ScriptableObject);
-        int count = users.Count;
+        VerifyAll = VerifyAllUsers,
+        Open = OpenReferenceUser,
+        Notify = message => ShowNotification(new GUIContent(message)),
+    };
 
-        GUI.Label(new Rect(r.x + 4f, r.y + 2f, r.width - 74f, 18f),
-            new GUIContent($"引用此資產 {count}", "專案裡已存檔、且引用這顆資產的對象；點一列切換過去編它"),
-            HGStyles.PanelHeader);
-
-        // 重掃與重驗都是低頻維護動作，縮在標題列右側，不吃清單高度。
-        if (GUI.Button(new Rect(r.xMax - 68f, r.y + 2f, 40f, 18f),
-            new GUIContent("重驗", "把所有引用者重跑一次 Core 驗證；只有結果翻轉的才寫檔")))
-            VerifyAllUsers(asset);
-        if (GUI.Button(new Rect(r.xMax - 24f, r.y + 2f, 20f, 18f),
-            EditorGUIUtility.IconContent("Refresh", "重新掃描專案的引用")))
-        {
-            HGReferenceIndex.Refresh();
-            ShowNotification(new GUIContent($"找到 {HGReferenceIndex.Users(asset as ScriptableObject).Count} 個引用"));
-        }
-
-        var listRect = new Rect(r.x + 2f, r.y + 22f, r.width - 4f, Mathf.Max(0f, r.yMax - r.y - 24f));
-        HGStyles.Fill(listRect, HGStyles.PanelList);
-
-        if (count == 0)
-        {
-            GUI.Label(new Rect(listRect.x + 6f, listRect.y + 4f, listRect.width - 12f, 30f),
-                "專案裡沒有已存檔的對象引用它", HGStyles.Tiny);
-            return;
-        }
-
-        var content = new Rect(0f, 0f, listRect.width - 16f, count * RefRowHeight + 4f);
-        referenceScroll = GUI.BeginScrollView(listRect, referenceScroll, content);
-        for (int i = 0; i < count; i++)
-        {
-            var so = users[i];
-            var row = new Rect(0f, i * RefRowHeight, content.width, RefRowHeight - 1f);
-            if (i % 2 == 1) HGStyles.Fill(row, HGStyles.RowAlt);
-
-            if (so == null)
-            {
-                GUI.Label(new Rect(row.x + 4f, row.y + 2f, row.width - 8f, 17f), "（已遺失的對象）", HGStyles.RowLabelError);
-                continue;
-            }
-
-            bool validated = so is IGraphOwner o && o.IsGraphValidated();
-            GUI.Label(new Rect(row.x + 4f, row.y + 2f, row.width - 26f, 17f),
-                HGStyles.Elide(so.name, HGStyles.RowLabel, row.width - 26f), HGStyles.RowLabel);
-            GUI.Label(new Rect(row.xMax - 20f, row.y + 2f, 16f, 17f),
-                new GUIContent(validated ? "✓" : "✗", validated ? "已驗證" : "未驗證（多半是這顆資產改過，存檔它就會重驗）"),
-                validated ? HGStyles.Tiny : HGStyles.RowLabelError);
-
-            var e = Event.current;
-            if (e.type != EventType.MouseDown || e.button != 0 || !row.Contains(e.mousePosition)) continue;
-            e.Use();
-            var target = so;
-            if (!ConfirmLeaveAsset()) continue;
-            ExitAsset();
-            Bind(target);
-            EditorGUIUtility.PingObject(target);
-            // 焦點已經不是資產了，這一區的其餘列不該再畫；ScrollView 要自己收尾才不會破版。
-            GUI.EndScrollView();
-            return;
-        }
-        GUI.EndScrollView();
+    /// <summary>切換去編某個引用者。使用者取消離開資產時回 false，清單就繼續畫。</summary>
+    private bool OpenReferenceUser(ScriptableObject user)
+    {
+        if (!ConfirmLeaveAsset()) return false;
+        ExitAsset();
+        Bind(user);
+        EditorGUIUtility.PingObject(user);
+        return true;
     }
 
     /// <summary>把引用者全部重驗一次。只有驗證結果真的翻轉的才寫檔，其餘一個都不動。</summary>
@@ -810,91 +550,27 @@ public partial class HaruGraphWindow
 
     // ===== Console =====
 
-    private void DrawConsole(Rect r)
+    /// <summary>
+    /// 把視窗的驗證狀態打包成 Console 的一次性快照。
+    /// 「現在看的是資產還是 Owner」這種焦點判斷留在視窗，面板只收結果。
+    /// </summary>
+    private HGConsoleView ConsoleView()
     {
-        HGStyles.Fill(r, HGStyles.Console);
-        HGStyles.Frame(r, HGStyles.NodeBorder);
-
-        var head = new Rect(r.x, r.y, r.width, MinConsole);
-        if (GUI.Button(new Rect(head.x + 2f, head.y + 2f, 18f, 17f), consoleCollapsed ? "▸" : "▾", EditorStyles.miniButton))
-            consoleCollapsed = !consoleCollapsed;
-
-        int errors = Rep.ErrorCount;
-        int warnings = Rep.WarningCount;
-        float tx = head.x + 24f;
-        if (DrawTab(new Rect(tx, head.y + 2f, 68f, 17f), $"全部 {Rep.Issues.Count}", consoleTab == 0)) consoleTab = 0;
-        tx += 70f;
-        if (DrawTab(new Rect(tx, head.y + 2f, 68f, 17f), $"錯誤 {errors}", consoleTab == 1)) consoleTab = 1;
-        tx += 70f;
-        if (DrawTab(new Rect(tx, head.y + 2f, 68f, 17f), $"警告 {warnings}", consoleTab == 2)) consoleTab = 2;
-
-        string verifyStatus = IsCurrentReportFresh
-            ? $"完整驗證 {Rep.Time:HH:mm:ss}"
-            : (focus.Kind == HGFocusKind.Asset ? assetVerifiedOnce : verifiedOnce)
-                ? $"即時驗證 {Rep.Time:HH:mm:ss}"
-                : "尚未驗證";
-        GUI.Label(new Rect(head.xMax - 274f, head.y + 3f, 270f, 16f), verifyStatus, HGStyles.Tiny);
+        bool isAsset = focus.Kind == HGFocusKind.Asset;
 
         // Owner 的 Core 驗證狀態。未驗證的圖 runtime 直接擋下不執行，而這件事原本只有資產焦點的
-        // 右欄（別人的清單）看得到，自己這張畫布反而看不出來。
-        if (focus.Kind != HGFocusKind.Asset && model?.Owner is IGraphOwner owner && !owner.IsGraphValidated())
-            GUI.Label(new Rect(head.xMax - 470f, head.y + 3f, 192f, 16f),
-                "✗ 這份圖未驗證，存檔後才會執行", HGStyles.RowLabelError);
+        // 引用清單（別人的清單）看得到，自己這張畫布反而看不出來。
+        string warning = !isAsset && model?.Owner is IGraphOwner owner && !owner.IsGraphValidated()
+            ? "✗ 這份圖未驗證，存檔後才會執行"
+            : null;
 
-        if (consoleCollapsed) return;
-
-        var listRect = new Rect(r.x + 2f, r.y + MinConsole, r.width - 4f, r.height - MinConsole - 2f);
-        var shown = new List<HGIssue>();
-        foreach (var issue in Rep.Issues)
+        return new HGConsoleView
         {
-            if (consoleTab == 1 && !issue.IsError) continue;
-            if (consoleTab == 2 && issue.IsError) continue;
-            shown.Add(issue);
-        }
-
-        var content = new Rect(0f, 0f, listRect.width - 16f, shown.Count * 20f + 4f);
-        consoleScroll = GUI.BeginScrollView(listRect, consoleScroll, content);
-        for (int i = 0; i < shown.Count; i++)
-        {
-            var issue = shown[i];
-            var row = new Rect(0f, i * 20f, content.width, 19f);
-            if (i % 2 == 1) HGStyles.Fill(row, HGStyles.RowAlt);
-
-            var icon = new Rect(row.x + 4f, row.y + 5f, 9f, 9f);
-            HGStyles.Fill(icon, issue.IsError ? HGStyles.Error : HGStyles.Warning);
-            GUI.Label(new Rect(row.x + 18f, row.y + 1f, row.width - 22f, 17f), issue.Line, HGStyles.ConsoleRow);
-
-            if (Event.current.type == EventType.MouseDown && row.Contains(Event.current.mousePosition))
-            {
-                JumpTo(issue);
-                Event.current.Use();
-            }
-        }
-        GUI.EndScrollView();
-    }
-
-    private void HandleConsoleResize(Rect handle)
-    {
-        EditorGUIUtility.AddCursorRect(handle, MouseCursor.ResizeVertical);
-        var e = Event.current;
-        if (e.type == EventType.MouseDown && e.button == 0 && !consoleCollapsed && handle.Contains(e.mousePosition))
-        {
-            resizingConsole = true;
-            e.Use();
-            return;
-        }
-        if (e.type == EventType.MouseDrag && resizingConsole)
-        {
-            consoleHeight = Mathf.Clamp(consoleHeight - e.delta.y, 60f, position.height - 240f);
-            e.Use();
-            Repaint();
-            return;
-        }
-        if (e.type == EventType.MouseUp && resizingConsole)
-        {
-            resizingConsole = false;
-            e.Use();
-        }
+            Report = Rep,
+            VerifiedOnce = isAsset ? assetVerifiedOnce : verifiedOnce,
+            Fresh = IsCurrentReportFresh,
+            OwnerWarning = warning,
+        };
     }
 
     private void JumpTo(HGIssue issue)

@@ -246,6 +246,17 @@ public static class HGStyles
 
     public static void Fill(Rect r, Color c) => EditorGUI.DrawRect(r, c);
 
+    /// <summary>
+    /// 清單格底：和節點 Header 同一套語彙——身分色 + 「容器→內容」漸層，只是沖淡。
+    /// payload 傳同一個顏色就是單色（動作沒有容器語意）。
+    /// </summary>
+    public static void CellBackground(Rect row, Color kind, Color payload, bool altRow, bool focused,
+        float radius = 3f)
+    {
+        GradientFill(row, CellTint(kind, altRow, focused), CellTint(payload, altRow, focused), radius);
+        RoundedFrame(row, focused ? Link : LibraryCellBorder, radius);
+    }
+
     public static void RoundedFill(Rect r, Color c, float radius)
     {
         GUI.DrawTexture(r, EditorGUIUtility.whiteTexture, ScaleMode.StretchToFill, true, 0f, c, 0f, radius);

@@ -27,7 +27,7 @@ public partial class HaruGraphWindow
                 // 所以先清掉殘留：在畫布外放開滑鼠時 MouseUp 收不到，記錄會留到下一次操作。
                 portClickRow = null;
                 // 這一下多半會被下面 e.Use() 掉，左欄與焦點標題列的改名欄就再也收不到它——先替它們收尾。
-                CommitInlineName();
+                inlineName.Commit();
                 if (e.button == 0 && OutputNodeAt(graphMouse) is HGNodeView outputNode)
                 {
                     BeginLinkFromNode(outputNode);
@@ -196,20 +196,16 @@ public partial class HaruGraphWindow
                     EndLink();
                     e.Use();
                 }
-                if (dragAssetActive && dragAsset != null)
+                if (drag.DroppingAsset)
                 {
                     DropAssetOn(graphMouse);
-                    dragAssetActive = false;
-                    dragAsset = null;
-                    pendingAssetFocus = null;
+                    drag.ClearAsset();
                     e.Use();
                 }
-                if (dragEndpointActive && dragEndpoint != null)
+                if (drag.DroppingEndpoint)
                 {
-                    DropEndpointOn(dragEndpoint, graphMouse);
-                    dragEndpointActive = false;
-                    dragEndpoint = null;
-                    pendingVariableFocus = null;
+                    DropEndpointOn(drag.Endpoint, graphMouse);
+                    drag.ClearEndpoint();
                     e.Use();
                 }
                 break;
@@ -371,7 +367,7 @@ public partial class HaruGraphWindow
 
         focus = next;
         if (model != null) model.TrackChanges = next.Kind != HGFocusKind.Asset;
-        CancelInlineName();
+        inlineName.Cancel();
         selectedIds.Clear();
         graphDirty = true;
         Repaint();

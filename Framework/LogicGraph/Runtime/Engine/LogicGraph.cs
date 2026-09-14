@@ -61,6 +61,8 @@ where TTiming : Enum
 
     string IGraphDocument.WindowTitle => "LogicGraph";
 
+    bool IGraphDocument.SupportsSharedAssets => true;
+
     IList IGraphDocument.ItemsOf(object root)
         => root is ActionTimingGroup<TTiming, TPack> g ? g.Actions : null;
 

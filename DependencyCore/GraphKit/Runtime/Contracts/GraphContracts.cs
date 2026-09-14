@@ -94,6 +94,13 @@ public interface IGraphDocument : IOrphanPool, IEndpointOwner
     string RootNoun { get; }
 
     /// <summary>
+    /// 本圖支不支援把節點轉存成共用資產。false 時資產庫、引用區與「轉存為資產」整組不出現。
+    /// </summary>
+    // 由圖宣告而不是讓編輯器去推：推得出來的只有「現在一個資產都沒有」，
+    // 推不出「這個領域永遠不會有」——那兩件事在畫面上長得一樣，但一個該顯示空清單，一個該整區收掉。
+    bool SupportsSharedAssets { get; }
+
+    /// <summary>
     /// 節點圖編輯器的視窗標題。領域自己命名，編輯器不寫死。
     /// </summary>
     // 同一個 EditorWindow 服務所有領域，標題是使用者辨認「現在編的是哪一種圖」的唯一線索。

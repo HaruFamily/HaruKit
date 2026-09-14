@@ -16,15 +16,15 @@ public partial class HaruGraphWindow
         var row = RowAt(graphMouse, out _);
         if (row == null)
         {
-            AddAssetReferenceNode(dragAsset, graphMouse);
+            AddAssetReferenceNode(drag.Asset, graphMouse);
             return;
         }
-        if (!CanAssignAsset(row, dragAsset))
+        if (!CanAssignAsset(row, drag.Asset))
         {
             ShowNotification(new GUIContent("資產型別不符，無法接到這個欄位"));
             return;
         }
-        AssignAsset(row.Slot, dragAsset);
+        AssignAsset(row.Slot, drag.Asset);
     }
 
     /// <summary>變數落到畫布上：落在參數列就直接接上，空白處就建立候選節點。拖曳與「建立節點」共用。</summary>
@@ -169,6 +169,10 @@ public partial class HaruGraphWindow
         // 完全推不出族的候選節點（沒有父欄位、沒有連入線、不是資產、也沒有建立當下的族提示）只剩結果型別
         // 可比。這是近似：真的接到欄位時 AcceptsEndpoint 仍會擋掉別族。
         Type resultType = isAction || slotKind != null ? null : node.ResultType;
+
+        // 不支援共用資產的圖直接跳過：CanReplaceAssetNode 本來就會全部擋掉，
+        // 但 Entries 會觸發一次全專案 ScriptableObject 掃描，那個代價不該白付。
+        if (HasAssetSection)
         {
             foreach (var entry in HGAssetIndex.Entries)
             {
@@ -276,7 +280,7 @@ public partial class HaruGraphWindow
 
         if (node.Asset is ScriptableObject asset)
         {
-            Type fromAsset = SlotTypeForAsset(asset, AssetSlotTypes());
+            Type fromAsset = HGReflect.SlotTypeForAsset(asset, AssetSlotTypes());
             if (fromAsset != null) return fromAsset;
         }
 
@@ -600,7 +604,8 @@ public partial class HaruGraphWindow
             menu.AddItem(new GUIContent("轉存為變數"), false, () => ExtractVariable(node));
 
         // 資產要有本體才存得進 SetTarget，所以空 Node 只能轉變數：Obj 為 null 這裡就過不了。
-        if (canExtract && (node.Obj != null || node.IsVariableNode))
+        // 不支援共用資產的圖連這一項都不出現——點得到卻永遠失敗的選單項比沒有更糟。
+        if (canExtract && HasAssetSection && (node.Obj != null || node.IsVariableNode))
             menu.AddItem(new GUIContent("轉存為資產"), false, () => ExtractAsset(node));
         Sep();
 

@@ -104,7 +104,7 @@ public partial class HaruGraphWindow
             return true;
         }
 
-        Type compatibleSlot = SlotTypeForAsset(asset, AssetSlotTypes());
+        Type compatibleSlot = HGReflect.SlotTypeForAsset(asset, AssetSlotTypes());
         if (compatibleSlot == null) return false;
 
         // 目前的 Owner 沒有引用它也沒關係：資產只是借它的型別當上下文，不需要真的連著。
@@ -260,8 +260,8 @@ public partial class HaruGraphWindow
         reportStale = false;
         assetVerifiedOnce = false;
         assetReportStale = false;
-        tokenSearch = "";
-        assetSearch = "";
+        tokenLibrary.Reset();
+        assetLibrary.Reset();
         pendingTarget = null;
         returnFocus = null;
         ClearAssetDirty();
@@ -287,8 +287,8 @@ public partial class HaruGraphWindow
     private void OnEnable()
     {
         saveChangesMessage = $"{HGGraph.DefaultWindowTitle} 有未儲存的修改。是否在關閉前存檔？";
-        consoleHeight = EditorPrefs.GetFloat(PrefConsoleHeight, 150f);
-        consoleCollapsed = EditorPrefs.GetBool(PrefConsoleCollapsed, false);
+        inlineName ??= new HGInlineRename(Repaint);
+        console.LoadPrefs();
         leftWidth = EditorPrefs.GetFloat(PrefLeftWidth, DefaultLeftWidth);
         tokenSectionHeight = EditorPrefs.GetFloat(PrefTokenSection, DefaultTokenSection);
         refSectionHeight = EditorPrefs.GetFloat(PrefRefSection, DefaultRefSection);
@@ -297,8 +297,7 @@ public partial class HaruGraphWindow
 
     private void OnDisable()
     {
-        EditorPrefs.SetFloat(PrefConsoleHeight, consoleHeight);
-        EditorPrefs.SetBool(PrefConsoleCollapsed, consoleCollapsed);
+        console.SavePrefs();
         EditorPrefs.SetFloat(PrefLeftWidth, leftWidth);
         EditorPrefs.SetFloat(PrefTokenSection, tokenSectionHeight);
         EditorPrefs.SetFloat(PrefRefSection, refSectionHeight);
@@ -357,7 +356,7 @@ public partial class HaruGraphWindow
             assetReport = HGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
             assetVerifiedOnce = true;
             assetReportStale = false;
-            if (assetReport.ErrorCount > 0) { consoleCollapsed = false; consoleTab = 1; }
+            if (assetReport.ErrorCount > 0) console.RevealErrors();
             if (!silent && assetReport.Issues.Count == 0) ShowNotification(new GUIContent("驗證通過"));
             return;
         }
@@ -365,7 +364,7 @@ public partial class HaruGraphWindow
         report = HGValidator.Run(model, includeMissingTypes: true);
         verifiedOnce = true;
         reportStale = false;
-        if (report.ErrorCount > 0) { consoleCollapsed = false; consoleTab = 1; }
+        if (report.ErrorCount > 0) console.RevealErrors();
         if (!silent && report.ErrorCount == 0 && report.WarningCount == 0)
             ShowNotification(new GUIContent("驗證通過"));
     }
@@ -375,8 +374,7 @@ public partial class HaruGraphWindow
         DoVerify(true);
         if (!report.CanSave)
         {
-            consoleCollapsed = false;
-            consoleTab = 1;
+            console.RevealErrors();
             // Console 已經被展開切到錯誤頁，細節都在那裡；再彈一個要按「好」的框只是多一次跨螢幕來回。
             if (showDialog)
                 ShowNotification(new GUIContent($"無法存檔：還有 {report.ErrorCount} 個錯誤，請先在 Console 修正"));
@@ -540,8 +538,7 @@ public partial class HaruGraphWindow
         // 只搬過座標時不擋：寫回去的內容跟磁碟上完全一樣，錯誤是它本來就有的，沒必要連位置都存不了。
         if (assetContentDirty && !assetReport.CanSave)
         {
-            consoleCollapsed = false;
-            consoleTab = 1;
+            console.RevealErrors();
             if (showDialog)
                 ShowNotification(new GUIContent($"無法存檔：這個資產還有 {assetReport.ErrorCount} 個錯誤"));
             return false;

@@ -19,14 +19,10 @@ public partial class HaruGraphWindow : EditorWindow
     private const float MinCenterWidth = 320f;
     private const float ResizeHandleWidth = 6f;
     private const float HeaderHeight = 46f;
-    private const float MinConsole = 22f;
     private const float NodeCornerRadius = 6f;
     private const float LinkSnapDistance = 24f;
     private const float LinkThickness = 4f;
-    private const float TokenCellHeight = 30f;
-    private const float AssetCellHeight = 30f;
     /// <summary>引用列比清單格矮：它只有名稱與驗證狀態，沒有 chip 也沒有第二行。</summary>
-    private const float RefRowHeight = 22f;
     /// <summary>左欄變數區的最小高度：三顆固定控制項 + 一列，再小就有東西被切掉（標題由面板標題兼任）。</summary>
     private const float MinTokenSection = 106f;
     private const float MinAssetSection = 80f;
@@ -34,11 +30,12 @@ public partial class HaruGraphWindow : EditorWindow
     private const float MinRefSection = 76f;
     private const float DefaultTokenSection = 240f;
     private const float DefaultRefSection = 140f;
-    private const string PrefConsoleHeight = "HaruGraph.ConsoleHeight";
-    private const string PrefConsoleCollapsed = "HaruGraph.ConsoleCollapsed";
     private const string PrefLeftWidth = "HaruGraph.LeftWidth";
     private const string PrefTokenSection = "HaruGraph.TokenSectionHeight";
     private const string PrefRefSection = "HaruGraph.RefSectionHeight";
+
+    /// <summary>下方框。高度、收合、分頁與它的 EditorPrefs 都住在面板裡，視窗只給它一塊 Rect。</summary>
+    private readonly HGConsolePanel console = new();
 
     private HGModel model;
     private HGFocus focus = new();
@@ -62,27 +59,28 @@ public partial class HaruGraphWindow : EditorWindow
     private Rect rootGuiGroupRect;
 
     // 面板狀態
-    private Vector2 tokenScroll, assetLibraryScroll, consoleScroll;
-    private float consoleHeight = 150f;
-    private bool consoleCollapsed;
-    private bool resizingConsole;
     private float leftWidth = DefaultLeftWidth;
     private bool resizingLeftPanel;
-    private int consoleTab;                  // 0 全部 / 1 錯誤 / 2 警告
     // 左欄變數／資產上下分區：存變數區的高度，資產區吃剩下的。編資產時兩份清單要同時看得到，不能再用分頁互斥。
     private float tokenSectionHeight = DefaultTokenSection;
     private bool resizingLibrarySplit;
     // 左欄第三區（引用此資產）：只在資產焦點出現，存自己的高度，資產區吃剩下的。
     private float refSectionHeight = DefaultRefSection;
     private bool resizingRefSplit;
-    private string tokenSearch = "";
-    private string assetSearch = "";
-    private object editingNameTarget;
-    // 哪一個區塊在編輯這個 target：同一個端點／資產在焦點標題與左欄各有一格，不分開就會兩格一起進編輯。
-    private string editingNameSite;
-    private string editingNameDraft = "";
-    // 就地改名的提交入口，由 DrawInlineName 每幀存進來：畫布吃掉點擊時，改名那一欄已經沒機會自己收尾。
-    private Func<string, bool> editingNameSubmit;
+    /// <summary>就地改名。焦點列、左欄兩庫與參數列共用同一份編輯狀態，所以它住在框架不住在面板。</summary>
+    private HGInlineRename inlineName;
+
+    /// <summary>清單面板拖到畫布的跨區拖曳。來源可能是左框也可能是右框，所以狀態住在框架。</summary>
+    private readonly HGLibraryDrag drag = new();
+
+    /// <summary>左欄變數庫。搜尋字與捲動在面板裡，拖曳與改名向框架借。</summary>
+    private readonly HGTokenLibraryPanel tokenLibrary = new();
+
+    /// <summary>左欄第三區：誰引用了目前這顆資產。只在資產焦點出現。</summary>
+    private readonly HGReferenceListPanel referenceList = new();
+
+    /// <summary>左欄資產庫。搜尋字與捲動在面板裡，拖曳與改名向框架借。</summary>
+    private readonly HGAssetLibraryPanel assetLibrary = new();
 
     // 互動
     private HGNodeView dragNode;
@@ -118,13 +116,7 @@ public partial class HaruGraphWindow : EditorWindow
     // 拉線期間的相容性：起手時對全圖判定一次，之後高亮與吸附都讀這份，不必每幀重算。
     private readonly HashSet<string> linkCompatibleNodeIds = new();
     private readonly HashSet<HGRow> linkCompatibleRows = new();
-    private ScriptableObject dragAsset;
-    private bool dragAssetActive;
-    private ScriptableObject pendingAssetFocus;
     // 變數的拖曳與下鑽和資產同一套：按下先記著，拖出去是建節點，原地放開是進它的畫布。
-    private GraphEndpoint dragEndpoint;
-    private bool dragEndpointActive;
-    private GraphEndpoint pendingVariableFocus;
     // 「建立節點」的放置模式：新節點跟著滑鼠，點一下才落在畫布上。Esc 或右鍵取消。
     private object placingSlot;
     // 候選池裡的空節點屬於哪一族（值＝代表性的 Slot 型別）。key 是載體 Id，所以撐得過 Undo 與重建圖。
@@ -169,7 +161,6 @@ public partial class HaruGraphWindow : EditorWindow
     // 只有它為 true 才需要擋存檔與通知 subscriber 重新驗證——搬個位置不該驚動任何引用者。
     private bool assetContentDirty;
     private HGReport assetReport = new();
-    private Vector2 referenceScroll;
 
     // 資產的復原歷程。資產不在 Owner 的工作副本裡，HGModel 那份 Undo 蓋不到，得自己記一份。
     private readonly HGAssetHistory assetHistory = new();
@@ -177,7 +168,10 @@ public partial class HaruGraphWindow : EditorWindow
     private bool HasUnsavedWork => model?.Dirty == true || assetDirty;
 
     /// <summary>引用清單只在資產焦點有意義，作為左欄第三區出現（2026-08-20 由整條右欄改成分區）。</summary>
-    private bool HasReferenceSection => focus.Kind == HGFocusKind.Asset;
+    /// <summary>資產庫與引用區要不要存在。由圖宣告，不從「現在有幾筆資產」推。</summary>
+    private bool HasAssetSection => HGGraph.SupportsSharedAssets(model?.Doc);
+
+    private bool HasReferenceSection => HasAssetSection && focus.Kind == HGFocusKind.Asset;
     private bool IsCurrentReportFresh => focus.Kind == HGFocusKind.Asset
         ? assetVerifiedOnce && !assetReportStale
         : verifiedOnce && !reportStale;
@@ -204,26 +198,25 @@ public partial class HaruGraphWindow : EditorWindow
         // 新的一次按下代表上一次拖曳一定結束了。清在這裡是因為 MouseUp 不保證收得到——
         // 在視窗外放開就沒有那個事件，狀態會一直掛著，之後任何一次拖曳都會被誤判成「還在拖那個東西」。
         // 順序很重要：先清，再讓左欄在同一個 MouseDown 裡重新設定。
-        if (Event.current.type == EventType.MouseDown) ClearPendingLibraryDrag();
+        if (Event.current.type == EventType.MouseDown) drag.Clear();
 
-        if (Event.current.type == EventType.MouseDrag && dragAsset != null) dragAssetActive = true;
-        if (Event.current.type == EventType.MouseDrag && dragEndpoint != null) dragEndpointActive = true;
+        drag.PromoteOnDrag();
 
         // 縮放畫布先畫；固定面板最後畫，吸收 IMGUI 縮放在邊界可能漏出的次像素。
         DrawCenter(center);
         DrawLibraryPanel(left);
-        DrawToolbar(toolbar);
+        HGToolbarPanel.Draw(toolbar, ToolbarView(), ToolbarCommands());
         DrawResizeGrip(leftHandle, true, resizingLeftPanel);
 
-        if (dragAssetActive) DrawDragAssetGhost();
+        drag.DrawAssetGhost();
         // 放置模式沒有按住按鍵，收不到 MouseDrag；要 MouseMove 殘影才跟得上滑鼠。
         wantsMouseMove = placingSlot != null;
-        if (dragEndpointActive) DrawDragVariableGhost();
+        drag.DrawVariableGhost();
         if (placingSlot != null) DrawPlacingGhost();
         if (Event.current.rawType == EventType.MouseUp)
         {
             if (Event.current.button == 0) EndLink();
-            ClearPendingLibraryDrag();
+            drag.Clear();
             // 放開才真的搬：拖曳中途放棄不會留下任何改動。
             if (dragListRow != null && dragListTarget >= 0 && dragListTarget != dragListIndex)
                 MoveListItem(dragListRow, dragListIndex, dragListTarget);
@@ -231,7 +224,7 @@ public partial class HaruGraphWindow : EditorWindow
             dragListIndex = -1;
             dragListTarget = -1;
         }
-        if (Event.current.type == EventType.MouseDrag || linking || dragAssetActive || dragEndpointActive
+        if (Event.current.type == EventType.MouseDrag || linking || drag.Active
             || placingSlot != null) Repaint();
         ShowPendingConfirm();
         UpdateUnsavedState();
@@ -255,17 +248,6 @@ public partial class HaruGraphWindow : EditorWindow
         var popup = pendingConfirm;
         pendingConfirm = null;
         PopupWindow.Show(pendingConfirmAnchor, popup);
-    }
-
-    /// <summary>清掉左欄拖曳（資產／變數）的待處理狀態。按下與放開都要清，兩邊都不能只靠一邊。</summary>
-    private void ClearPendingLibraryDrag()
-    {
-        dragAssetActive = false;
-        dragAsset = null;
-        pendingAssetFocus = null;
-        dragEndpointActive = false;
-        dragEndpoint = null;
-        pendingVariableFocus = null;
     }
 
     private void GetLayout(out Rect toolbar, out Rect left, out Rect center, out Rect leftHandle)
@@ -334,7 +316,7 @@ public partial class HaruGraphWindow : EditorWindow
     {
         HGStyles.Fill(toolbar, HGStyles.Toolbar);
 
-        // Bind 不依賴既有狀態，閒置沒理由只留 Project 選取一條路；位置與綁定後的 DrawToolbar 一致。
+        // Bind 不依賴既有狀態，閒置沒理由只留 Project 選取一條路；位置與綁定後的 HGToolbarPanel 一致。
         var ownerPickerRect = new Rect(toolbar.x + 4f, toolbar.y + 2f, 18f, 18f);
         if (GUI.Button(ownerPickerRect, new GUIContent("", "選擇編輯對象"), EditorStyles.popup))
             HGOwnerIndex.ShowPicker(ownerPickerRect, PickOwner);
@@ -358,14 +340,14 @@ public partial class HaruGraphWindow : EditorWindow
         GUI.Label(new Rect(header.x + 6f, header.y + 24f, header.width - 12f, 16f),
             "按左上角的選擇器挑一個對象，或從 Project／Hierarchy 點選含節點圖的對象。", HGStyles.Tiny);
 
-        var canvas = new Rect(center.x, center.y + HeaderHeight, center.width, center.height - HeaderHeight - MinConsole);
+        var canvas = new Rect(center.x, center.y + HeaderHeight, center.width, center.height - HeaderHeight - HGConsolePanel.HeaderHeight);
         HGStyles.Fill(canvas, HGStyles.Canvas);
         DrawGrid(canvas);
 
-        var console = new Rect(center.x, canvas.yMax, center.width, MinConsole);
-        HGStyles.Fill(console, HGStyles.Console);
-        HGStyles.Frame(console, HGStyles.NodeBorder);
-        GUI.Label(new Rect(console.x + 6f, console.y + 3f, console.width - 12f, 16f), "尚未驗證", HGStyles.Tiny);
+        var consoleBar = new Rect(center.x, canvas.yMax, center.width, HGConsolePanel.HeaderHeight);
+        HGStyles.Fill(consoleBar, HGStyles.Console);
+        HGStyles.Frame(consoleBar, HGStyles.NodeBorder);
+        GUI.Label(new Rect(consoleBar.x + 6f, consoleBar.y + 3f, consoleBar.width - 12f, 16f), "尚未驗證", HGStyles.Tiny);
     }
 
     private static void DrawIdlePanel(Rect r, string title)
@@ -855,22 +837,12 @@ public partial class HaruGraphWindow : EditorWindow
 
     // ===== 頂部 =====
 
-    private void DrawToolbar(Rect r)
+    private HGToolbarView ToolbarView()
     {
-        HGStyles.Fill(r, HGStyles.Toolbar);
-
-        // 麵包屑：資產是獨立一層，未儲存狀態與外層各記各的。
-        var ownerPickerRect = new Rect(r.x + 4f, r.y + 2f, 18f, 18f);
-        GUI.enabled = focus.Kind != HGFocusKind.Asset;
-        if (GUI.Button(ownerPickerRect, new GUIContent("", "換編輯對象"), EditorStyles.popup))
-            HGOwnerIndex.ShowPicker(ownerPickerRect, PickOwner);
-        GUI.enabled = true;
+        bool inAsset = focus.Kind == HGFocusKind.Asset;
 
         string ownerPath = AssetDatabase.GetAssetPath(model.Owner);
         if (string.IsNullOrEmpty(ownerPath)) ownerPath = "Scene";
-        bool inAsset = focus.Kind == HGFocusKind.Asset;
-        string crumb = $"{model.Owner.name} ({model.Owner.GetType().Name})({ownerPath})";
-        GUI.Label(new Rect(ownerPickerRect.xMax + 4f, r.y + 2f, r.width - 440f, 18f), crumb, EditorStyles.boldLabel);
 
         // 即時檢查一有錯就把存檔鈕關掉；沒有錯時仍可按，存檔當下再跑一次嚴格驗證。
         bool blocked = !Rep.CanSave;
@@ -881,73 +853,53 @@ public partial class HaruGraphWindow : EditorWindow
         bool needsRevalidate = !inAsset && model.Owner is IGraphOwner asOwner && !asOwner.IsGraphValidated();
         bool hasChanges = inAsset ? assetDirty : (model.Dirty || needsRevalidate);
         bool canSave = hasChanges && !blocked;
-
-        float x = r.xMax - 6f;
-        x -= 96f;
-        var saveRect = new Rect(x, r.y + 1f, 94f, 19f);
-        GUI.enabled = canSave;
-        var saveColor = GUI.backgroundColor;
-        if (canSave) GUI.backgroundColor = new Color(0.85f, 0.28f, 0.28f);
         bool revalidateOnly = needsRevalidate && !model.Dirty;
-        string saveLabel = blocked ? "存檔（有錯誤）" : revalidateOnly ? "存檔（未驗證）" : "存檔";
-        string saveTooltip = blocked ? "驗證有錯誤，先在 Console 修正才能存檔"
-            : revalidateOnly ? "這份圖目前未驗證（多半是引用的資產改過），按下後重跑 Core 驗證並寫回"
-            : !hasChanges ? "目前沒有未儲存的修改"
-            : !IsCurrentReportFresh ? "按下後先做完整驗證（含循環與型別遺失），通過才會存檔"
-            : "驗證通過後寫回資產";
-        if (GUI.Button(saveRect, new GUIContent(saveLabel, saveTooltip)))
-        {
-            if (inAsset) SaveAsset(); else DoSave();
-        }
-        GUI.backgroundColor = saveColor;
-        GUI.enabled = true;
 
-        x -= 62f;
-        // 資產焦點的「返回」與存檔分開：存檔留在畫布上，返回才退出（有未存修改會先問要不要捨棄）。
-        var backLabel = inAsset
-            ? new GUIContent("返回", "回到上一層；有未儲存的修改會先問要不要捨棄")
-            : new GUIContent("取消", "捨棄自上次存檔以來的所有修改");
-        if (GUI.Button(new Rect(x, r.y + 1f, 60f, 19f), backLabel))
+        return new HGToolbarView
         {
-            if (inAsset) LeaveAsset(); else DoCancel();
-        }
-
-        // 資產焦點也有復原：它走自己的歷程（HGAssetHistory），與 Owner 那份互不干擾。
-        x -= 48f;
-        GUI.enabled = CanRedoNow;
-        if (GUI.Button(new Rect(x, r.y + 1f, 46f, 19f), new GUIContent("重做", "Ctrl+Y / Ctrl+Shift+Z"))) DoRedo();
-        GUI.enabled = true;
-
-        x -= 48f;
-        GUI.enabled = CanUndoNow;
-        if (GUI.Button(new Rect(x, r.y + 1f, 46f, 19f), new GUIContent("復原", "Ctrl+Z"))) DoUndo();
-        GUI.enabled = true;
-
-        x -= 132f;
-        var switchRect = new Rect(x, r.y + 1f, 130f, 19f);
-        if (pendingTarget != null)
-        {
-            var label = new GUIContent($"切換→{pendingTarget.name}", "剛才選取了別的對象，按此切換（目前的修改會依提示處理）");
-            var old = GUI.backgroundColor;
-            GUI.backgroundColor = new Color(1f, 0.85f, 0.5f);
-            if (GUI.Button(switchRect, label))
-            {
-                var target = pendingTarget;
-                pendingTarget = null;
-                if (inAsset)
-                {
-                    if (!ConfirmLeaveAsset()) { GUI.backgroundColor = old; return; }
-                    ExitAsset();
-                }
-                if (target is ScriptableObject asset && IsSharedAsset(asset)) OpenSharedAsset(asset);
-                else Bind(target);
-            }
-            GUI.backgroundColor = old;
-        }
-        else
-        {
-        }
+            Crumb = $"{model.Owner.name} ({model.Owner.GetType().Name})({ownerPath})",
+            OwnerPickerEnabled = !inAsset,
+            SaveEnabled = canSave,
+            SaveHighlight = canSave,
+            SaveLabel = blocked ? "存檔（有錯誤）" : revalidateOnly ? "存檔（未驗證）" : "存檔",
+            SaveTooltip = blocked ? "驗證有錯誤，先在 Console 修正才能存檔"
+                : revalidateOnly ? "這份圖目前未驗證（多半是引用的資產改過），按下後重跑 Core 驗證並寫回"
+                : !hasChanges ? "目前沒有未儲存的修改"
+                : !IsCurrentReportFresh ? "按下後先做完整驗證（含循環與型別遺失），通過才會存檔"
+                : "驗證通過後寫回資產",
+            // 資產焦點的「返回」與存檔分開：存檔留在畫布上，返回才退出（有未存修改會先問要不要捨棄）。
+            BackLabel = inAsset ? "返回" : "取消",
+            BackTooltip = inAsset ? "回到上一層；有未儲存的修改會先問要不要捨棄" : "捨棄自上次存檔以來的所有修改",
+            CanUndo = CanUndoNow,
+            CanRedo = CanRedoNow,
+            PendingTargetName = pendingTarget != null ? pendingTarget.name : null,
+        };
     }
+
+    private HGToolbarCommands ToolbarCommands() => new()
+    {
+        PickOwner = rect => HGOwnerIndex.ShowPicker(rect, PickOwner),
+        Save = () => { if (focus.Kind == HGFocusKind.Asset) SaveAsset(); else DoSave(); },
+        Back = () => { if (focus.Kind == HGFocusKind.Asset) LeaveAsset(); else DoCancel(); },
+        Undo = () => DoUndo(),
+        Redo = () => DoRedo(),
+        SwitchTarget = SwitchToPendingTarget,
+    };
+
+    /// <summary>切到剛才在 Project／Hierarchy 選的那個對象。資產焦點要先確認離開。</summary>
+    private void SwitchToPendingTarget()
+    {
+        var target = pendingTarget;
+        pendingTarget = null;
+        if (focus.Kind == HGFocusKind.Asset)
+        {
+            if (!ConfirmLeaveAsset()) return;
+            ExitAsset();
+        }
+        if (target is ScriptableObject asset && IsSharedAsset(asset)) OpenSharedAsset(asset);
+        else Bind(target);
+    }
+
 }
 
 }

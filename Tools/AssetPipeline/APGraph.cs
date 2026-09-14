@@ -118,6 +118,9 @@ namespace HaruFamily.Tools.AssetPipeline
 
         string IGraphDocument.WindowTitle => "AssetPipelineGraph";
 
+        // APSlot 的 AssetBaseType 是 null、AcceptsAsset 永遠 false：管線的欄位接不到共用資產。
+        bool IGraphDocument.SupportsSharedAssets => false;
+
         IList IGraphDocument.ItemsOf(object root) => (root as APStepGroup)?.Steps;
 
         object IGraphDocument.AddRoot(object key)

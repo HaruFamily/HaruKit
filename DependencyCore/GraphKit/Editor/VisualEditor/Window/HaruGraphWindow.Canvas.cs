@@ -19,77 +19,100 @@ public partial class HaruGraphWindow
 
         var header = new Rect(r.x, r.y, r.width, HeaderHeight);
 
-        float consoleH = consoleCollapsed ? MinConsole : Mathf.Clamp(consoleHeight, MinConsole, r.height - HeaderHeight - 80f);
+        float consoleH = console.LayoutHeight(r.height - HeaderHeight - 80f);
         canvasRect = new Rect(r.x, r.y + HeaderHeight, r.width, r.height - HeaderHeight - consoleH);
         var consoleRect = new Rect(r.x, canvasRect.yMax, r.width, consoleH);
         var consoleHandle = new Rect(consoleRect.x, consoleRect.y - 3f, consoleRect.width, ResizeHandleWidth);
 
-        HandleConsoleResize(consoleHandle);
+        if (console.HandleResize(consoleHandle, position.height - 240f)) Repaint();
 
         DrawCanvas(canvasRect);
-        DrawFocusHeader(header);
-        DrawConsole(consoleRect);
-        DrawResizeGrip(consoleHandle, false, resizingConsole);
+        HGFocusHeaderPanel.Draw(header, FocusHeaderView(), inlineName);
+        console.Draw(consoleRect, ConsoleView(), JumpTo);
+        DrawResizeGrip(consoleHandle, false, console.IsResizing);
     }
 
-    private void DrawFocusHeader(Rect r)
+    /// <summary>
+    /// 把焦點狀態打包成資訊列的一次性快照。四種型態各有自己的版面，所以型態要明講。
+    /// </summary>
+    private HGFocusHeaderView FocusHeaderView()
     {
-        HGStyles.Fill(r, HGStyles.PanelSection);
-        HGStyles.Frame(r, HGStyles.NodeBorder);
-
         if (focus.Kind == HGFocusKind.Asset)
         {
-            var banner = new Rect(r.x + 2f, r.y + 2f, r.width - 4f, 18f);
-            HGStyles.Fill(banner, new Color(0.45f, 0.32f, 0.18f));
-            GUI.Label(banner, "　共用資產：修改會影響所有引用它的對象。存檔是獨立的一次交易。", HGStyles.RowLabel);
             if (focus.Endpoint != null)
-            {
-                // 移除／返回都在左欄變數庫：資產焦點下那一區列的就是這個資產的變數，
-                // 點同一格退出、拖到「－ 移除變數」刪除，標頭不重複第二個入口（與 Variable 焦點一致）。
-                DrawVariableName(new Rect(r.x, r.y + 20f, r.width - 12f, 22f), focus.Endpoint);
-            }
-            else if (focus.AssetObject != null)
-            {
-                // 資產本體的標題就是檔名，和變數標題同一套手勢：雙擊改名、Enter 提交。
-                var asset = focus.AssetObject;
-                DrawInlineName(new Rect(r.x + 6f, r.y + 21f, r.width - 12f, 20f), asset, InlineSiteFocus,
-                    asset.name, asset.name, HGStyles.FocusTitle, "雙擊可改名（改的是 .asset 檔名）",
-                    name => RenameAssetFile(asset, name));
-            }
-            else GUI.Label(new Rect(r.x + 6f, r.y + 22f, r.width - 12f, 18f), focus.Title, EditorStyles.boldLabel);
-            return;
+                return new HGFocusHeaderView
+                {
+                    Kind = HGFocusHeaderKind.AssetVariable,
+                    NameTarget = focus.Endpoint,
+                    NameDisplay = focus.Endpoint.Name ?? "",
+                    NameTooltip = "雙擊可改名",
+                    NameSubmit = name => RenameFocusEndpoint(focus.Endpoint, name),
+                    Title = focus.Title,
+                };
+
+            var asset = focus.AssetObject;
+            if (asset != null)
+                return new HGFocusHeaderView
+                {
+                    Kind = HGFocusHeaderKind.Asset,
+                    NameTarget = asset,
+                    NameDisplay = asset.name,
+                    NameTooltip = "雙擊可改名（改的是 .asset 檔名）",
+                    NameSubmit = name => RenameAssetFile(asset, name),
+                };
+
+            return new HGFocusHeaderView { Kind = HGFocusHeaderKind.Asset, Title = focus.Title };
         }
 
         if (focus.Kind == HGFocusKind.Variable)
-        {
-            // 移除／返回都在左欄變數庫：點同一格退出、拖到「－ 移除變數」刪除，標頭不重複這兩顆。
-            DrawVariableName(new Rect(r.x, r.y, r.width - 12f, 22f), focus.Endpoint);
-            GUI.Label(new Rect(r.x + 6f, r.y + 22f, r.width - 12f, 16f),
-                focus.Endpoint?.Slot?.Node == null
-                    ? "沒接來源＝具名常數，值直接填在 HEAD 的來源欄位。"
-                    : "這個變數的值由下面這棵子樹算出來。外部用它的名字查值。", HGStyles.Tiny);
-            return;
-        }
-
-        if (focus.Kind == HGFocusKind.Action && focus.ActionSlot != null)
-        {
-            DrawFocusName(r, focus.ActionSlot, focus.Title, name =>
+            return new HGFocusHeaderView
             {
-                HGReflect.SetLabel(focus.ActionSlot, name);
-                Invalidate();
-                return true;
-            });
-        }
-        else GUI.Label(new Rect(r.x + 6f, r.y + 3f, r.width - 12f, 18f), focus.Title, EditorStyles.boldLabel);
+                Kind = HGFocusHeaderKind.Variable,
+                NameTarget = focus.Endpoint,
+                NameDisplay = focus.Endpoint?.Name ?? "",
+                NameTooltip = "雙擊可改名",
+                NameSubmit = name => RenameFocusEndpoint(focus.Endpoint, name),
+                Description = focus.Endpoint?.Slot?.Node == null
+                    ? "沒接來源＝具名常數，值直接填在 HEAD 的來源欄位。"
+                    : "這個變數的值由下面這棵子樹算出來。外部用它的名字查值。",
+            };
 
-        string desc = "";
         if (focus.Kind == HGFocusKind.Action && focus.ActionSlot != null)
         {
-            var f = HGReflect.GetFormula(focus.ActionSlot);
-            desc = f != null ? HGReflect.TypeDescription(f.GetType()) : "這個動作還沒有內容，請從根節點下拉選擇。";
-            if (HGReflect.GetDisabled(focus.ActionSlot)) desc += "　（已停用，不會執行）";
+            var slot = focus.ActionSlot;
+            var formula = HGReflect.GetFormula(slot);
+            string desc = formula != null
+                ? HGReflect.TypeDescription(formula.GetType())
+                : "這個動作還沒有內容，請從根節點下拉選擇。";
+            if (HGReflect.GetDisabled(slot)) desc += "　（已停用，不會執行）";
+
+            return new HGFocusHeaderView
+            {
+                Kind = HGFocusHeaderKind.Action,
+                NameTarget = slot,
+                NameDisplay = focus.Title,
+                NameTooltip = "雙擊可改名",
+                NameSubmit = name =>
+                {
+                    HGReflect.SetLabel(slot, name);
+                    Invalidate();
+                    return true;
+                },
+                Description = desc,
+            };
         }
-        else if (focus.Kind == HGFocusKind.Timing)
+
+        return new HGFocusHeaderView
+        {
+            Kind = HGFocusHeaderKind.Plain,
+            Title = focus.Title,
+            Description = PlainFocusDescription(),
+        };
+    }
+
+    private string PlainFocusDescription()
+    {
+        if (focus.Kind == HGFocusKind.Timing)
         {
             int groups = 0, actions = 0;
             foreach (var g in model.ReadGroups())
@@ -97,38 +120,26 @@ public partial class HaruGraphWindow
                 groups++;
                 actions += g.Actions?.Count ?? 0;
             }
-            desc = groups > 0
+            return groups > 0
                 ? $"{groups} 個{RootNoun}、{actions} 個動作。{RootNoun}節點可自由擺位；跨{RootNoun}共用來源直接拉線即可。"
                 : $"還沒有任何{RootNoun}節點。在畫布空白處按右鍵新增一個。";
         }
-        else if (focus.Kind == HGFocusKind.None)
-        {
-            desc = $"從右上角的{RootNoun}下拉跳到某個{RootNoun}，或從左欄選一個變數開始編輯。";
-        }
-        GUI.Label(new Rect(r.x + 6f, r.y + 24f, r.width - 12f, 16f), desc, HGStyles.Tiny);
+        if (focus.Kind == HGFocusKind.None)
+            return $"從右上角的{RootNoun}下拉跳到某個{RootNoun}，或從左欄選一個變數開始編輯。";
+        return "";
     }
 
     /// <summary>變數畫布的標題就地改名。名字是外部查詢的 key，改名不影響圖內連線（那是物件參照）。</summary>
-    private void DrawVariableName(Rect header, GraphEndpoint endpoint)
+    private bool RenameFocusEndpoint(GraphEndpoint endpoint, string name)
     {
-        if (endpoint == null) return;
-        DrawFocusName(header, endpoint, endpoint.Name ?? "", name =>
+        if (endpoint == null) return false;
+        if (model.RenameEndpoint(endpoint, name, CurrentEndpoints(), out string error))
         {
-            if (model.RenameEndpoint(endpoint, name, CurrentEndpoints(), out string error))
-            {
-                MarkGraphChanged();
-                return true;
-            }
-            ShowNotification(new GUIContent(error));
-            return false;
-        });
-    }
-
-    /// <summary>焦點標題：雙擊就地改名，Enter 提交、Esc 取消。和節點上的動作標籤同一套手勢。</summary>
-    private void DrawFocusName(Rect header, object target, string displayName, Func<string, bool> submit)
-    {
-        var nameRect = new Rect(header.x + 6f, header.y + 2f, header.width - 12f, 22f);
-        DrawInlineName(nameRect, target, InlineSiteFocus, displayName, displayName, HGStyles.FocusTitle, "雙擊可改名", submit);
+            MarkGraphChanged();
+            return true;
+        }
+        ShowNotification(new GUIContent(error));
+        return false;
     }
 
     // ===== 畫布 =====

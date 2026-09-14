@@ -106,6 +106,16 @@ public static class HGReflect
     /// <summary>Slot 可接的 Formula Asset 型別（例如 IntAsset）。</summary>
     public static Type AssetType(Type slotType) => FormulaProbe(slotType)?.AssetBaseType;
 
+    /// <summary>這個資產可以接進哪一種欄位。挑第一個型別相容的族，沒有就回 null（＝這張圖用不到它）。</summary>
+    public static Type SlotTypeForAsset(UnityEngine.ScriptableObject asset,
+        System.Collections.Generic.List<(Type acceptedAssetType, Type slotType)> slotTypes)
+    {
+        if (asset == null || slotTypes == null) return null;
+        foreach (var candidate in slotTypes)
+            if (candidate.acceptedAssetType.IsInstanceOfType(asset)) return candidate.slotType;
+        return null;
+    }
+
     /// <summary>動作欄位可接的 Action base 型別。</summary>
     public static Type ActionBaseType(Type actionSlotType) => ActionProbe(actionSlotType)?.BodyBaseType;
 

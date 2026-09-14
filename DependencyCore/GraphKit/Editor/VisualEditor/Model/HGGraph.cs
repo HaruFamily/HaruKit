@@ -311,6 +311,9 @@ public static class HGGraph
     public static string RootNoun(IGraphDocument doc)
         => string.IsNullOrWhiteSpace(doc?.RootNoun) ? "群組" : doc.RootNoun;
 
+    /// <summary>圖支不支援共用資產。沒綁定時當作不支援：沒有 Doc 就沒有資產族，畫出來一定是空清單。</summary>
+    public static bool SupportsSharedAssets(IGraphDocument doc) => doc?.SupportsSharedAssets ?? false;
+
     /// <summary>視窗標題。沒綁定或圖沒提供時退回底層自己的名字。</summary>
     public static string WindowTitle(IGraphDocument doc)
         => string.IsNullOrWhiteSpace(doc?.WindowTitle) ? DefaultWindowTitle : doc.WindowTitle;

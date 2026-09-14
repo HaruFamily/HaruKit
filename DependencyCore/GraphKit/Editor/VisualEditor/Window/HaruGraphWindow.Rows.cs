@@ -489,87 +489,6 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>
-    /// 就地改名：平常畫成一般標籤，雙擊變輸入框，Enter 提交、Esc 取消、點到別處也提交。
-    /// site 是這一格的所在區塊（焦點標題／變數庫／資產庫／參數列），同一個 target 會同時出現在兩個區塊。
-    /// display 是平常顯示的字（可能是自動名），editSeed 是進入編輯時填進去的字（實際存的名字）。
-    /// submit 回傳 false＝名稱不合法，維持編輯狀態讓使用者改。回傳 true 代表這一格正在編輯，
-    /// 呼叫端要跳過自己的點擊處理，否則同一下會又改名又切焦點。
-    /// </summary>
-    private bool DrawInlineName(Rect rect, object target, string site, string display, string editSeed,
-        GUIStyle style, string tooltip, Func<string, bool> submit)
-    {
-        var e = Event.current;
-        if (!ReferenceEquals(editingNameTarget, target) || editingNameSite != site)
-        {
-            GUI.Label(rect, HGStyles.Elide(display, style, rect.width, tooltip), style);
-            if (e.type != EventType.MouseDown || e.button != 0 || e.clickCount != 2) return false;
-            if (!rect.Contains(e.mousePosition)) return false;
-
-            editingNameTarget = target;
-            editingNameSite = site;
-            editingNameDraft = editSeed ?? "";
-            editingNameSubmit = submit;
-            GUI.FocusControl(null);
-            e.Use();
-            Repaint();
-            return true;
-        }
-
-        // 每幀重存：submit 是 closure，換一份資料就是換一個委派，留舊的會寫到上一輪的物件上。
-        editingNameSubmit = submit;
-
-        // 鍵盤事件要在畫欄位**之前**判斷：TextField 會把 Return 吃掉，畫完再問就永遠問不到。
-        bool enter = e.type == EventType.KeyDown
-            && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter);
-        bool escape = e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape;
-
-        // 控制項名稱帶 site：同一個 target 在焦點標題與左欄各有一格，同名的兩個控制項會互搶鍵盤焦點。
-        string control = InlineNameControl + site;
-        GUI.SetNextControlName(control);
-        editingNameDraft = EditorGUI.TextField(rect, editingNameDraft);
-        // 只在還沒拿到焦點時搶：每幀都搶的話，滑鼠點進去放游標或拉選取會被下一幀重設。
-        if (GUI.GetNameOfFocusedControl() != control) EditorGUI.FocusTextInControl(control);
-
-        // 點到別的地方＝提交：改名是小編輯，留著一個開著的輸入框比直接收掉更容易誤觸。
-        bool clickedAway = e.type == EventType.MouseDown && !rect.Contains(e.mousePosition);
-        if (!clickedAway && !enter && !escape) return true;
-
-        if (escape) CancelInlineName();
-        else CommitInlineName();
-        if (enter || escape) e.Use();             // 點走的那一下要留給底下的控制項處理
-        Repaint();
-        return true;
-    }
-
-    private const string InlineNameControl = "agInlineName";
-    // 同一個端點／資產會同時出現在焦點標題與左欄，用 site 區分是哪一格在編輯。
-    private const string InlineSiteFocus = "focus";
-    private const string InlineSiteTokenLib = "tokenLib";
-    private const string InlineSiteAssetLib = "assetLib";
-    private const string InlineSiteRow = "row";
-
-    /// <summary>
-    /// 提交目前開著的就地改名（沒有就什麼都不做）。名稱不合法時保持編輯狀態。
-    /// **畫布也要呼叫它**：`HandleCanvasInput` 會把點擊 `e.Use()` 掉，畫在它後面的左欄與焦點標題列
-    /// 因此看不到那一下 MouseDown，自己收不了尾。
-    /// </summary>
-    private void CommitInlineName()
-    {
-        if (editingNameTarget == null) return;
-        if (editingNameSubmit != null && !editingNameSubmit(editingNameDraft.Trim())) return;
-        CancelInlineName();
-    }
-
-    private void CancelInlineName()
-    {
-        editingNameTarget = null;
-        editingNameSite = null;
-        editingNameDraft = "";
-        editingNameSubmit = null;
-        GUI.FocusControl(null);
-    }
-
-    /// <summary>
     /// 動作列的標籤：雙擊就地改名，清空＝拿掉標籤改回顯示型別／資產名。
     /// 標籤是同型別動作之間的唯一區分（「主傷害」「濺射」），統一畫布之後這裡是唯一的改名入口。
     /// </summary>
@@ -582,7 +501,7 @@ public partial class HaruGraphWindow
             return;
         }
 
-        DrawInlineName(labelRect, slot, InlineSiteRow, row.Label, HGReflect.GetLabel(slot) ?? "", labelStyle,
+        inlineName.Draw(labelRect, slot, HGInlineRename.SiteRow, row.Label, HGReflect.GetLabel(slot) ?? "", labelStyle,
             "雙擊可改名；清空改回顯示型別／資產名", name =>
             {
                 BreakUndoMerge();
