@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
     using System;
     using UnityEditor;
@@ -7,7 +7,7 @@ namespace HaruFamily.Framework.LogicGraph.Editor
 /// <summary>
 /// 把任意型別的值畫成一個輸入框。畫不了的型別顯示唯讀說明，不會把內部欄位攤開誤導使用者。
 /// </summary>
-public static class LGValueField
+public static class HGValueField
 {
     /// <summary>
     /// 這個型別畫不畫得出輸入框。呼叫端要拿那一格畫別的內容時先問這裡，別畫出誤導的空框。
@@ -93,9 +93,9 @@ public static class LGValueField
             for (int i = 0; i < names.Length; i++)
             {
                 var member = type.GetField(names[i]);
-                var attr = member?.GetCustomAttributes(typeof(LGLabelAttribute), false);
+                var attr = member?.GetCustomAttributes(typeof(HGLabelAttribute), false);
                 labels[i] = attr != null && attr.Length > 0
-                    ? ((LGLabelAttribute)attr[0]).Name
+                    ? ((HGLabelAttribute)attr[0]).Name
                     : names[i];
             }
 
@@ -176,12 +176,12 @@ public static class LGValueField
     /// <summary>畫不了就講清楚，不要假裝可以編。</summary>
     private static void DrawUnsupported(Rect rect, Type type)
     {
-        // 顯示名走 ResultTypeName：企劃看到的是 [LGKind] 的族名（Entity），不是 CLR 的 List`1。
-        var label = new GUIContent($"（{LGReflect.ResultTypeName(type)}：此型別沒有對應的輸入介面）",
-            $"{type.FullName} 不支援在節點圖上編輯。若企劃需要，請改用支援的型別，或在 LGValueField 補一個欄位。");
+        // 顯示名走 ResultTypeName：企劃看到的是 [HGKind] 的族名（Entity），不是 CLR 的 List`1。
+        var label = new GUIContent($"（{HGReflect.ResultTypeName(type)}：此型別沒有對應的輸入介面）",
+            $"{type.FullName} 不支援在節點圖上編輯。若企劃需要，請改用支援的型別，或在 HGValueField 補一個欄位。");
         var old = GUI.color;
         GUI.color = new Color(1f, 1f, 1f, 0.55f);
-        EditorGUI.LabelField(rect, label, LGStyles.Tiny);
+        EditorGUI.LabelField(rect, label, HGStyles.Tiny);
         GUI.color = old;
     }
 

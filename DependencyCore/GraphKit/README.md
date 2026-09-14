@@ -23,7 +23,7 @@ editor for free. `LogicGraph` is one such consumer; it is not required here.
 - `FormulaSlotBase` and `ActionSlotBase` are zero-field non-generic bases, so a
   consumer can add generic execution subclasses without changing the serialized
   format.
-- `LogicGraphDeepCopy` preserves polymorphic `SerializeReference` graphs, shared
+- `GraphDeepCopy` preserves polymorphic `SerializeReference` graphs, shared
   references, cycles, and Unity object references.
 - The included editor window uses GraphKit attributes only and has no Odin
   dependency.

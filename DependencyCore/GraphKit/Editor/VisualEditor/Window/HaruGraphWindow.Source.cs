@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -9,7 +9,7 @@ using UnityEngine;
 /// <summary>
 /// 換來源：Asset 節點建立與拖放、型別替換、抽出資產、標註，以及節點右鍵選單。
 /// </summary>
-public partial class LogicGraphWindow
+public partial class HaruGraphWindow
 {
     private void DropAssetOn(Vector2 graphMouse)
     {
@@ -37,7 +37,7 @@ public partial class LogicGraphWindow
             AddVariableReferenceNode(endpoint, graphMouse);
             return;
         }
-        if (row.IsActionSlot || !LGReflect.AcceptsEndpoint(row.Slot, endpoint))
+        if (row.IsActionSlot || !HGReflect.AcceptsEndpoint(row.Slot, endpoint))
         {
             ShowNotification(new GUIContent("變數型別不符，無法接到這個欄位"));
             return;
@@ -122,40 +122,40 @@ public partial class LogicGraphWindow
     // 有頭端才有候選池可放；資產焦點的頭端是資產本身，時機畫布的頭端是整套 LogicGraph。
     private bool CanCreateReferenceNode() => focus.Head != null;
 
-    private static bool CanAssignAsset(LGRow row, UnityEngine.Object asset)
+    private static bool CanAssignAsset(HGRow row, UnityEngine.Object asset)
     {
         if (row?.Slot == null || asset == null) return false;
         Type accepted = row.IsActionSlot
-            ? LGReflect.ActionAssetType(row.Slot.GetType())
-            : LGReflect.AssetType(row.Slot.GetType());
+            ? HGReflect.ActionAssetType(row.Slot.GetType())
+            : HGReflect.AssetType(row.Slot.GetType());
         return accepted != null && accepted.IsInstanceOfType(asset);
     }
 
-    private void ShowNodeSourceSelector(LGNodeView node, Rect selector)
+    private void ShowNodeSourceSelector(HGNodeView node, Rect selector)
     {
         if (node == null) return;
-        var options = new List<LGSourceOption>();
+        var options = new List<HGSourceOption>();
         object slot = SourceSlot(node);
 
         // 同一族的 Formula／Asset／Token 一律可以互換，包含候選池裡沒有父欄位的節點：
         // 族靠「代表性的 Slot 型別」推導，推不出來才退回用目前內容的基底型別。
         Type slotType = slot?.GetType() ?? RepresentativeSlotType(node);
         bool isAction = slotType != null
-            ? LGReflect.IsActionSlotType(slotType)
+            ? HGReflect.IsActionSlotType(slotType)
             : node.IsActionNode || (node.IsAssetNode && node.ResultType == null);
         Type baseType = slotType != null
-            ? (isAction ? LGReflect.ActionBaseType(slotType) : LGReflect.FormulaBaseType(slotType))
-            : LGReflect.NodeBaseType(node.Obj?.GetType());
+            ? (isAction ? HGReflect.ActionBaseType(slotType) : HGReflect.FormulaBaseType(slotType))
+            : HGReflect.NodeBaseType(node.Obj?.GetType());
         if (baseType != null)
         {
             string kind = isAction ? "Action" : "Formula";
-            foreach (var type in LGTypeCatalog.Concrete(baseType))
+            foreach (var type in HGTypeCatalog.Concrete(baseType))
             {
                 Type captured = type;
-                options.Add(new LGSourceOption
+                options.Add(new HGSourceOption
                 {
-                    Group = kind + "/" + LGReflect.TypeCategory(type),
-                    Name = LGReflect.TypeName(type),
+                    Group = kind + "/" + HGReflect.TypeCategory(type),
+                    Name = HGReflect.TypeName(type),
                     IsCurrent = node.Obj?.GetType() == type,
                     Apply = () => ReplaceNodeType(node, captured),
                 });
@@ -170,11 +170,11 @@ public partial class LogicGraphWindow
         // 可比。這是近似：真的接到欄位時 AcceptsEndpoint 仍會擋掉別族。
         Type resultType = isAction || slotKind != null ? null : node.ResultType;
         {
-            foreach (var entry in LGAssetIndex.Entries)
+            foreach (var entry in HGAssetIndex.Entries)
             {
                 if (entry.Asset == null || !CanReplaceAssetNode(node, entry.Asset)) continue;
                 var asset = entry.Asset;
-                options.Add(new LGSourceOption
+                options.Add(new HGSourceOption
                 {
                     Group = "Asset",
                     Name = entry.Name,
@@ -188,11 +188,11 @@ public partial class LogicGraphWindow
         // 判準用上面推出來的 slotKind，和 Formula／Asset 兩組同源；動作欄位沒有族，天然排除。
         if (slotKind != null || resultType != null)
         {
-            foreach (var token in LGModel.ReadTokens(CurrentEndpoints()))
+            foreach (var token in HGModel.ReadTokens(CurrentEndpoints()))
             {
                 if (slotKind != null ? token.Kind != slotKind : token.ResultType != resultType) continue;
                 var endpoint = token.Endpoint;
-                options.Add(new LGSourceOption
+                options.Add(new HGSourceOption
                 {
                     Group = "Token",
                     Name = token.Key,
@@ -202,10 +202,10 @@ public partial class LogicGraphWindow
             }
         }
 
-        LGTypeCatalog.ShowSourcePicker(selector, options);
+        HGTypeCatalog.ShowSourcePicker(selector, options);
     }
 
-    private object SourceSlot(LGNodeView node)
+    private object SourceSlot(HGNodeView node)
     {
         if (node?.ParentSlot != null) return node.ParentSlot;
         if (graph?.Links == null) return null;
@@ -216,10 +216,10 @@ public partial class LogicGraphWindow
     }
 
     /// <summary>換節點型別＝換載體裡的內容。載體 Id、座標、備註與所有連入邊都不動，這才是真的「替換」。</summary>
-    private void ReplaceNodeType(LGNodeView node, Type type)
+    private void ReplaceNodeType(HGNodeView node, Type type)
     {
         if (node?.Carrier == null || type == null || node.Obj?.GetType() == type) return;
-        if (LGReflect.CreateInstance(type) is not LogicGraphNode instance) return;
+        if (HGReflect.CreateInstance(type) is not GraphNodeContent instance) return;
 
         BreakUndoMerge();
         PreserveVisibleNodePositions();
@@ -229,14 +229,14 @@ public partial class LogicGraphWindow
         Repaint();
     }
 
-    private bool CanReplaceAssetNode(LGNodeView node, ScriptableObject asset)
+    private bool CanReplaceAssetNode(HGNodeView node, ScriptableObject asset)
     {
         if (node?.ParentSlot != null)
         {
             Type slotType = node.ParentSlot.GetType();
-            Type accepted = LGReflect.IsActionSlotType(slotType)
-                ? LGReflect.ActionAssetType(slotType)
-                : LGReflect.AssetType(slotType);
+            Type accepted = HGReflect.IsActionSlotType(slotType)
+                ? HGReflect.ActionAssetType(slotType)
+                : HGReflect.AssetType(slotType);
             return accepted != null && accepted.IsInstanceOfType(asset);
         }
 
@@ -260,7 +260,7 @@ public partial class LogicGraphWindow
     /// 這個節點「相當於掛在哪一種 Slot 上」。候選池的節點沒有父欄位，型別關係只能這樣推：
     /// 父欄位 → 連入邊的欄位 → 目前資產對應的欄位 → 建立當下記下的族。
     /// </summary>
-    private Type RepresentativeSlotType(LGNodeView node)
+    private Type RepresentativeSlotType(HGNodeView node)
     {
         if (node == null) return null;
         if (node.ParentSlot != null) return node.ParentSlot.GetType();
@@ -284,16 +284,16 @@ public partial class LogicGraphWindow
         return null;
     }
 
-    private Type AcceptedAssetType(LGNodeView node)
+    private Type AcceptedAssetType(HGNodeView node)
     {
         Type slotType = RepresentativeSlotType(node);
         if (slotType == null) return null;
-        return LGReflect.IsActionSlotType(slotType)
-            ? LGReflect.ActionAssetType(slotType)
-            : LGReflect.AssetType(slotType);
+        return HGReflect.IsActionSlotType(slotType)
+            ? HGReflect.ActionAssetType(slotType)
+            : HGReflect.AssetType(slotType);
     }
 
-    private void ChangeNodeToAsset(LGNodeView node, ScriptableObject asset)
+    private void ChangeNodeToAsset(HGNodeView node, ScriptableObject asset)
     {
         if (node?.Carrier == null || asset == null || node.Asset == asset) return;
 
@@ -335,15 +335,15 @@ public partial class LogicGraphWindow
     }
 
     /// <summary>換掉節點內容前，先把它的直接來源拆散：子載體原位變成候選，完整子樹與座標都留著。</summary>
-    private void DetachChildSourcesForReplacement(LGNodeView node)
+    private void DetachChildSourcesForReplacement(HGNodeView node)
     {
         if (node?.Carrier == null) return;
-        foreach (var row in LGGraph.AllRows(node.Rows))
+        foreach (var row in HGGraph.AllRows(node.Rows))
         {
-            if (row.Kind != LGRowKind.Slot || row.Slot == null) continue;
-            var child = LGReflect.GetNode(row.Slot);
+            if (row.Kind != HGRowKind.Slot || row.Slot == null) continue;
+            var child = HGReflect.GetNode(row.Slot);
             if (child == null) continue;
-            LGReflect.SetNode(row.Slot, null);
+            HGReflect.SetNode(row.Slot, null);
             model.AddOrphan(child);
         }
     }
@@ -354,7 +354,7 @@ public partial class LogicGraphWindow
     /// </summary>
     private GraphNode SoloSource(object slot)
     {
-        var carrier = LGReflect.GetNode(slot);
+        var carrier = HGReflect.GetNode(slot);
         bool reusable = carrier != null && carrier.Kind != NodeKind.Inline && CountCarrierUsers(carrier) <= 1;
         return reusable ? carrier : NewSource(slot);
     }
@@ -374,9 +374,9 @@ public partial class LogicGraphWindow
         if (carrier == null) return 0;
         int n = 0;
         foreach (var slot in SlotsInCurrentGraph())
-            if (ReferenceEquals(LGReflect.GetNode(slot), carrier)) n++;
-        if (focus.Kind == LGFocusKind.Asset && focus.AssetHostSlot != null
-            && ReferenceEquals(LGReflect.GetNode(focus.AssetHostSlot), carrier)) n++;
+            if (ReferenceEquals(HGReflect.GetNode(slot), carrier)) n++;
+        if (focus.Kind == HGFocusKind.Asset && focus.AssetHostSlot != null
+            && ReferenceEquals(HGReflect.GetNode(focus.AssetHostSlot), carrier)) n++;
         return n;
     }
 
@@ -422,7 +422,7 @@ public partial class LogicGraphWindow
         }
     }
 
-    private void DeleteNode(LGNodeView node, bool pushUndo = true)
+    private void DeleteNode(HGNodeView node, bool pushUndo = true)
     {
         if (node == null) return;
         // 時機節點是使用者自己建出來的，就讓他自己刪掉；其餘 HEAD 是焦點本身，沒有「刪除」可言。
@@ -438,10 +438,10 @@ public partial class LogicGraphWindow
 
         // 刪節點＝斷開所有指著這個載體的欄位，並把它移出候選池。
         foreach (var slot in SlotsInCurrentGraph())
-            if (ReferenceEquals(LGReflect.GetNode(slot), node.Carrier)) LGReflect.SetNode(slot, null);
-        if (focus.Kind == LGFocusKind.Asset && focus.AssetHostSlot != null
-            && ReferenceEquals(LGReflect.GetNode(focus.AssetHostSlot), node.Carrier))
-            LGReflect.SetNode(focus.AssetHostSlot, null);
+            if (ReferenceEquals(HGReflect.GetNode(slot), node.Carrier)) HGReflect.SetNode(slot, null);
+        if (focus.Kind == HGFocusKind.Asset && focus.AssetHostSlot != null
+            && ReferenceEquals(HGReflect.GetNode(focus.AssetHostSlot), node.Carrier))
+            HGReflect.SetNode(focus.AssetHostSlot, null);
         model.RemoveOrphan(node.Carrier);
 
         selectedIds.Remove(node.Id);
@@ -455,9 +455,9 @@ public partial class LogicGraphWindow
     /// 和「轉存為資產」同一個手勢，差別是變數留在這張圖裡，不另外開檔。
     /// 空 Node 也收：它只有族、沒有內容，轉出來就是一個具名常數。
     /// </summary>
-    // 共用載體在畫布上只畫一顆節點（LGNodeView.ParentSlot 只記走訪先到的那條邊），只改那一條的話，
+    // 共用載體在畫布上只畫一顆節點（HGNodeView.ParentSlot 只記走訪先到的那條邊），只改那一條的話，
     // 其餘欄位會繼續直接指著同一顆載體——那顆載體同時是變數的內容，變成一份資料兩種身分的別名。
-    private void ExtractVariable(LGNodeView node)
+    private void ExtractVariable(HGNodeView node)
     {
         if (node?.Carrier == null || node.ResultType == null) return;
         var scope = CurrentEndpoints();
@@ -481,12 +481,12 @@ public partial class LogicGraphWindow
         // 先收集再改接：改完之後端點自己的取值欄位也指著這顆載體，邊掃邊改會把它一起換成變數節點。
         var users = new List<object>();
         foreach (var slot in SlotsInCurrentGraph())
-            if (slot != null && ReferenceEquals(LGReflect.GetNode(slot), node.Carrier)) users.Add(slot);
+            if (slot != null && ReferenceEquals(HGReflect.GetNode(slot), node.Carrier)) users.Add(slot);
 
         // 端點的取值欄位接下這顆載體；它的子樹整棵跟著搬進變數畫布。
         // 空 Node 沒有內容可搬，而且搬進去會讓端點變成「來源接了一顆空節點」——那是存檔驗證會擋的狀態。
         // 留空＝具名常數，和左欄「＋ 新增變數」建出來的完全一樣。
-        if (!node.IsPlaceholder) LGReflect.SetNode(endpoint.Slot, node.Carrier);
+        if (!node.IsPlaceholder) HGReflect.SetNode(endpoint.Slot, node.Carrier);
 
         // 每個欄位各給一顆變數節點：載體是座標與選取的單位，共用一顆會讓多個引用處黏在同一個位置。
         foreach (var slot in users)
@@ -494,7 +494,7 @@ public partial class LogicGraphWindow
             var proxy = new GraphNode();
             proxy.EnsureId();
             proxy.SetEndpoint(endpoint);
-            LGReflect.SetNode(slot, proxy);
+            HGReflect.SetNode(slot, proxy);
         }
 
         if (node.ParentSlot == null) model.RemoveOrphan(node.Carrier);   // 原本是候選節點：搬走就不再掛在這張畫布上
@@ -503,14 +503,14 @@ public partial class LogicGraphWindow
     }
 
     /// <summary>只列這個節點收得下的變數。與 <see cref="ShowAssetPicker"/> 同一種版型。</summary>
-    private void ShowVariablePicker(LGNodeView node, Rect anchor)
+    private void ShowVariablePicker(HGNodeView node, Rect anchor)
     {
-        var options = new List<LGSourceOption>();
-        foreach (var token in LGModel.ReadTokens(CurrentEndpoints()))
+        var options = new List<HGSourceOption>();
+        foreach (var token in HGModel.ReadTokens(CurrentEndpoints()))
         {
             var endpoint = token.Endpoint;
             if (!CanReplaceVariableNode(node, endpoint)) continue;
-            options.Add(new LGSourceOption
+            options.Add(new HGSourceOption
             {
                 Name = $"{token.Key}　({token.TypeName})",
                 IsCurrent = ReferenceEquals(endpoint, node.Endpoint),
@@ -523,14 +523,14 @@ public partial class LogicGraphWindow
             ShowNotification(new GUIContent("這張圖還沒有型別相容的變數"));
             return;
         }
-        LGTypeCatalog.ShowSourcePicker(anchor, options, "選擇變數");
+        HGTypeCatalog.ShowSourcePicker(anchor, options, "選擇變數");
     }
 
     /// <summary>這個節點能不能換成這個變數。判定路徑與 <see cref="CanReplaceAssetNode"/> 一致。</summary>
-    private bool CanReplaceVariableNode(LGNodeView node, GraphEndpoint endpoint)
+    private bool CanReplaceVariableNode(HGNodeView node, GraphEndpoint endpoint)
     {
         if (endpoint?.Slot == null) return false;
-        if (node?.ParentSlot != null) return LGReflect.AcceptsEndpoint(node.ParentSlot, endpoint);
+        if (node?.ParentSlot != null) return HGReflect.AcceptsEndpoint(node.ParentSlot, endpoint);
 
         bool hasLink = false;
         if (graph?.Links != null)
@@ -539,7 +539,7 @@ public partial class LogicGraphWindow
             {
                 if (!ReferenceEquals(link.Target, node)) continue;
                 hasLink = true;
-                if (link.ParentRow?.Slot == null || !LGReflect.AcceptsEndpoint(link.ParentRow.Slot, endpoint)) return false;
+                if (link.ParentRow?.Slot == null || !HGReflect.AcceptsEndpoint(link.ParentRow.Slot, endpoint)) return false;
             }
         }
         if (hasLink) return true;
@@ -550,7 +550,7 @@ public partial class LogicGraphWindow
         return node?.ResultType == null || node.ResultType == endpoint.ResultType;
     }
 
-    private void ChangeNodeToVariable(LGNodeView node, GraphEndpoint endpoint)
+    private void ChangeNodeToVariable(HGNodeView node, GraphEndpoint endpoint)
     {
         if (node?.Carrier == null || endpoint == null || ReferenceEquals(node.Endpoint, endpoint)) return;
 
@@ -567,7 +567,7 @@ public partial class LogicGraphWindow
     /// 分隔線由 <c>Sep()</c> 依實際有沒有項目補，所以某一段缺席不會留下空隙。
     /// </summary>
     // 換來源走 Header 的 ▾、換引用對象走本體那列下拉、中斷連線雙擊連線，三者都不重複放進右鍵。
-    private void ShowNodeMenu(LGNodeView node)
+    private void ShowNodeMenu(HGNodeView node)
     {
         var menu = new GenericMenu();
         int section = 0;
@@ -590,7 +590,7 @@ public partial class LogicGraphWindow
 
         // === 1. 轉存 ===
         // 資產根載體不會被資產格式保存；變數畫布的根載體同理，轉存後那張畫布就空了。
-        bool assetRoot = focus.Kind == LGFocusKind.Asset && ReferenceEquals(node.ParentSlot, focus.AssetHostSlot);
+        bool assetRoot = focus.Kind == HGFocusKind.Asset && ReferenceEquals(node.ParentSlot, focus.AssetHostSlot);
         bool variableRoot = focus.Endpoint != null && ReferenceEquals(node.ParentSlot, focus.Endpoint.Slot);
         bool canExtract = !assetRoot && !variableRoot;
 
@@ -620,7 +620,7 @@ public partial class LogicGraphWindow
         if (bodyType != null)
         {
             Sep();
-            menu.AddItem(new GUIContent("編輯程式"), false, () => LGScriptLocator.Open(bodyType));
+            menu.AddItem(new GUIContent("編輯程式"), false, () => HGScriptLocator.Open(bodyType));
         }
 
         menu.ShowAsContext();
@@ -636,12 +636,12 @@ public partial class LogicGraphWindow
 
     /// <summary>目前這張圖的變數清單。資產焦點是資產的工作副本，其餘是 Owner 的工作副本。</summary>
     private List<GraphEndpoint> CurrentEndpoints()
-        => focus.Kind == LGFocusKind.Asset ? focus.AssetEndpoints : model.OwnerEndpoints;
+        => focus.Kind == HGFocusKind.Asset ? focus.AssetEndpoints : model.OwnerEndpoints;
 
     /// <summary>目前這張圖的所有載體。刪變數要靠它把指著那個變數的節點一起清掉。</summary>
     private IEnumerable<GraphNode> CurrentCarrierScope()
     {
-        if (focus.Kind != LGFocusKind.Asset) return model.AllCarriers();
+        if (focus.Kind != HGFocusKind.Asset) return model.AllCarriers();
 
         var roots = new List<object> { focus.AssetHostSlot };
         foreach (var endpoint in focus.AssetEndpoints ?? new List<GraphEndpoint>())
@@ -664,22 +664,22 @@ public partial class LogicGraphWindow
 
     private IEnumerable<object> SlotsInCurrentGraph()
     {
-        if (focus.Kind != LGFocusKind.Asset)
+        if (focus.Kind != HGFocusKind.Asset)
         {
             foreach (var slot in model.AllSlots()) yield return slot;
             yield break;
         }
 
-        var visited = new HashSet<object>(LGRefComparer.Instance);
-        foreach (var slot in LGModel.WalkSlots(focus.AssetHostSlot, visited)) yield return slot;
+        var visited = new HashSet<object>(HGRefComparer.Instance);
+        foreach (var slot in HGModel.WalkSlots(focus.AssetHostSlot, visited)) yield return slot;
         // 變數的取值欄位也是這張圖的一部分：引用計數與拉線相容都要算進來。
         foreach (var endpoint in focus.AssetEndpoints ?? new List<GraphEndpoint>())
         {
             if (endpoint?.Slot == null) continue;
-            foreach (var slot in LGModel.WalkSlots(endpoint.Slot, visited)) yield return slot;
+            foreach (var slot in HGModel.WalkSlots(endpoint.Slot, visited)) yield return slot;
         }
         foreach (var orphan in AssetAllOrphans())
-            foreach (var slot in LGModel.WalkSlots(orphan, visited)) yield return slot;
+            foreach (var slot in HGModel.WalkSlots(orphan, visited)) yield return slot;
     }
 
     private void ShowCanvasMenu(Vector2 graphMouse)
@@ -689,7 +689,7 @@ public partial class LogicGraphWindow
         bool canEditFocus = CanCreateReferenceNode();
 
         // root 節點由使用者自己建，位置就是按下右鍵的地方。
-        if (focus.Kind == LGFocusKind.Timing)
+        if (focus.Kind == HGFocusKind.Timing)
         {
             AddTimingMenuItems(menu, $"新增{RootNoun}節點/", graphMouse);
             menu.AddSeparator("");
@@ -702,7 +702,7 @@ public partial class LogicGraphWindow
         foreach (var (_, slotType) in model.FormulaKinds())
         {
             var captured = slotType;
-            var content = new GUIContent($"建立公式/{LGReflect.SlotKindName(slotType)}");
+            var content = new GUIContent($"建立公式/{HGReflect.SlotKindName(slotType)}");
             if (canEditFocus) menu.AddItem(content, false, () => CreateOrphan(graphMouse, captured));
             else menu.AddDisabledItem(content);
         }
@@ -732,8 +732,8 @@ public partial class LogicGraphWindow
     private static Vector2 SnapToGrid(Vector2 value)
     {
         return new Vector2(
-            Mathf.Round(value.x / LGGraph.GridSize) * LGGraph.GridSize,
-            Mathf.Round(value.y / LGGraph.GridSize) * LGGraph.GridSize);
+            Mathf.Round(value.x / HGGraph.GridSize) * HGGraph.GridSize,
+            Mathf.Round(value.y / HGGraph.GridSize) * HGGraph.GridSize);
     }
 
 
@@ -743,7 +743,7 @@ public partial class LogicGraphWindow
     /// 把節點抽成獨立資產，原欄位改指向它。未連接節點則只建立資產。
     /// 子樹跨出資產邊界的兩件事在這裡收斂：變數引用抬成資產參數、被子樹外共用的節點複製一份留給外部。
     /// </summary>
-    private void ExtractAsset(LGNodeView node)
+    private void ExtractAsset(HGNodeView node)
     {
         if (node?.Carrier == null) return;
 
@@ -751,17 +751,17 @@ public partial class LogicGraphWindow
         int shared = FindBoundaryShared(SubtreeRootOf(node)).Count;
         if (shared == 0) { ExtractAssetConfirmed(node); return; }
 
-        RequestConfirm(GraphToWindowRect(new Rect(node.Pos.x, node.Pos.y, node.Width, LGGraph.HeaderHeight)),
+        RequestConfirm(GraphToWindowRect(new Rect(node.Pos.x, node.Pos.y, node.Width, HGGraph.HeaderHeight)),
             $"這棵子樹裡有 {shared} 個節點還被子樹外的欄位使用，轉存時會各複製一份留給它們。"
             + "轉存後兩份各自獨立，改一邊不會影響另一邊。",
             "轉存", () => ExtractAssetConfirmed(node));
     }
 
     /// <summary>轉存的子樹根：變數節點轉存的是它指向的那個變數的內容，不是節點自己。</summary>
-    private static GraphNode SubtreeRootOf(LGNodeView node)
+    private static GraphNode SubtreeRootOf(HGNodeView node)
         => node == null ? null : (node.IsVariableNode ? node.Endpoint?.Slot?.Node : node.Carrier);
 
-    private void ExtractAssetConfirmed(LGNodeView node)
+    private void ExtractAssetConfirmed(HGNodeView node)
     {
         if (node?.Carrier == null) return;
 
@@ -770,7 +770,7 @@ public partial class LogicGraphWindow
         // 變數節點自己沒有內容：轉存的對象是它指向的那個變數的算式，變數本身留著。
         if (node.IsVariableNode) { ExtractVariableContentAsset(node); return; }
 
-        if (node.Obj is not LogicGraphNode source) return;
+        if (node.Obj is not GraphNodeContent source) return;
 
         var assetType = AssetTypeFor(node);
         if (assetType == null)
@@ -780,35 +780,35 @@ public partial class LogicGraphWindow
         }
 
         CreateExtractedAsset(node.Carrier, node.ParentSlot == null, source, assetType,
-            LGReflect.TypeName(source.GetType()), node.ParentSlot?.GetType());
+            HGReflect.TypeName(source.GetType()), node.ParentSlot?.GetType());
     }
 
     /// <summary>把變數的內容轉存成公式資產：變數與所有指著它的節點都不動，只是它的來源換成資產。</summary>
-    private void ExtractVariableContentAsset(LGNodeView node)
+    private void ExtractVariableContentAsset(HGNodeView node)
     {
         var slot = node.Endpoint?.Slot;
         var inner = slot?.Node;
-        if (inner?.BodyObject is not LogicGraphNode source)
+        if (inner?.BodyObject is not GraphNodeContent source)
         {
             ShowNotification(new GUIContent("這個變數的內容不是可轉存的公式"));
             return;
         }
 
-        var assetType = LGReflect.AssetType(slot.GetType());
+        var assetType = HGReflect.AssetType(slot.GetType());
         if (assetType == null)
         {
             ShowNotification(new GUIContent("找不到對應的資產型別"));
             return;
         }
 
-        CreateExtractedAsset(inner, false, source, assetType, LGReflect.TypeName(source.GetType()), slot.GetType());
+        CreateExtractedAsset(inner, false, source, assetType, HGReflect.TypeName(source.GetType()), slot.GetType());
     }
 
     /// hostSlotType：轉存後拿來驗新資產內容的欄位型別；未連接節點沒有父欄位，傳 null 就略過那次驗證。
-    private void CreateExtractedAsset(GraphNode carrier, bool isOrphan, LogicGraphNode source, Type assetType,
+    private void CreateExtractedAsset(GraphNode carrier, bool isOrphan, GraphNodeContent source, Type assetType,
         string assetName, Type hostSlotType)
     {
-        if (!LGAssetStore.TryGetUniquePath(assetName, out string path))
+        if (!HGAssetStore.TryGetUniquePath(assetName, out string path))
         {
             ShowNotification(new GUIContent("尚未指定共用資產資料夾：左欄「資產庫」標題列的按鈕"));
             return;
@@ -840,11 +840,11 @@ public partial class LogicGraphWindow
         AssetDatabase.CreateAsset(asset, path);
 
         AssetDatabase.SaveAssets();
-        LGAssetIndex.Refresh();
+        HGAssetIndex.Refresh();
 
         // 轉存的內容來自已驗證的圖，這一關正常一定過；沒過代表轉存本身把內容抄壞了，
         // 當場報出來，而不是等別人存檔時被 Core 擋在「Owner 未寫入」那個沒有細節的對話框。
-        if (hostSlotType != null && LGValidator.AssetHasError(model, hostSlotType, asset))
+        if (hostSlotType != null && HGValidator.AssetHasError(model, hostSlotType, asset))
             Debug.LogError($"[GraphKit] 轉存出來的資產 '{asset.name}' 內部有錯誤，請雙擊它進入資產畫布查看驗證訊息。", asset);
 
         BreakUndoMerge();
@@ -875,11 +875,11 @@ public partial class LogicGraphWindow
     private List<(GraphEndpoint Parameter, GraphEndpoint Source)> LiftTokensToParameters(ScriptableObject asset)
     {
         var lifted = new List<(GraphEndpoint, GraphEndpoint)>();
-        var parameters = LGReflect.Endpoints(asset);
+        var parameters = HGReflect.Endpoints(asset);
         if (parameters == null) return lifted;
 
         var map = new Dictionary<GraphEndpoint, GraphEndpoint>();
-        foreach (var carrier in TokenCarriersIn(LGReflect.AssetRoot(asset)))
+        foreach (var carrier in TokenCarriersIn(HGReflect.AssetRoot(asset)))
         {
             var source = carrier.Endpoint;
             if (source == null) continue;
@@ -887,7 +887,7 @@ public partial class LogicGraphWindow
 
             if (!map.TryGetValue(source, out var parameter))
             {
-                if (LGReflect.CreateInstance(source.Slot?.GetType()) is not FormulaSlotBase slot)
+                if (HGReflect.CreateInstance(source.Slot?.GetType()) is not FormulaSlotBase slot)
                 {
                     Debug.LogWarning($"[GraphKit] 變數 '{source.Name}' 建不出資產參數欄位，"
                         + "轉存後資產內這一格會取預設值，請手動改成常數或補上對應的 FormulaSlot 型別。");
@@ -911,14 +911,14 @@ public partial class LogicGraphWindow
         var result = new List<GraphNode>();
         if (root == null) return result;
 
-        var visited = new HashSet<object>(LGRefComparer.Instance);
+        var visited = new HashSet<object>(HGRefComparer.Instance);
         foreach (var endpoint in CurrentEndpoints() ?? new List<GraphEndpoint>())
             if (endpoint != null) visited.Add(endpoint);
 
         var seen = new HashSet<GraphNode>();
-        foreach (var slot in LGModel.WalkSlots(root, visited))
+        foreach (var slot in HGModel.WalkSlots(root, visited))
         {
-            var carrier = LGReflect.GetNode(slot);
+            var carrier = HGReflect.GetNode(slot);
             if (carrier != null && carrier.Kind == NodeKind.Token && seen.Add(carrier)) result.Add(carrier);
         }
         return result;
@@ -959,7 +959,7 @@ public partial class LogicGraphWindow
                 continue;
             }
             binding.OverrideEnabled = true;
-            LGReflect.SetEndpoint(binding.Slot, source);
+            HGReflect.SetEndpoint(binding.Slot, source);
         }
     }
 
@@ -970,17 +970,17 @@ public partial class LogicGraphWindow
         if (root == null) return result;
 
         // 端點先當成走過了：變數的內容不會跟著搬進資產，指著它的欄位也就不算跨邊界。
-        var visited = new HashSet<object>(LGRefComparer.Instance);
+        var visited = new HashSet<object>(HGRefComparer.Instance);
         foreach (var endpoint in CurrentEndpoints() ?? new List<GraphEndpoint>())
             if (endpoint != null) visited.Add(endpoint);
 
-        var innerSlots = new HashSet<object>(LGRefComparer.Instance);
-        foreach (var slot in LGModel.WalkSlots(root, visited)) innerSlots.Add(slot);
+        var innerSlots = new HashSet<object>(HGRefComparer.Instance);
+        foreach (var slot in HGModel.WalkSlots(root, visited)) innerSlots.Add(slot);
 
         var innerCarriers = new HashSet<GraphNode>();
         foreach (var slot in innerSlots)
         {
-            var carrier = LGReflect.GetNode(slot);
+            var carrier = HGReflect.GetNode(slot);
             if (carrier != null && !ReferenceEquals(carrier, root)) innerCarriers.Add(carrier);
         }
         if (innerCarriers.Count == 0) return result;
@@ -988,7 +988,7 @@ public partial class LogicGraphWindow
         foreach (var slot in SlotsInCurrentGraph())
         {
             if (slot == null || innerSlots.Contains(slot)) continue;
-            var carrier = LGReflect.GetNode(slot);
+            var carrier = HGReflect.GetNode(slot);
             if (carrier == null || !innerCarriers.Contains(carrier)) continue;
 
             if (!result.TryGetValue(carrier, out var users)) result[carrier] = users = new List<object>();
@@ -1011,27 +1011,27 @@ public partial class LogicGraphWindow
 
         foreach (var pair in boundary)
         {
-            var copy = LogicGraphDeepCopy.Copy(pair.Key, shared);
+            var copy = GraphDeepCopy.Copy(pair.Key, shared);
             if (copy == null)
             {
                 Debug.LogError("[GraphKit] 複製共用節點失敗，該欄位會跟著資產一起失去內容，詳見上一則訊息。");
                 continue;
             }
             // 新舊載體不可共用識別碼：座標與選取狀態都掛在它身上。
-            LGModel.ResetNodeIds(copy, shared);
-            foreach (var slot in pair.Value) LGReflect.SetNode(slot, copy);
+            HGModel.ResetNodeIds(copy, shared);
+            foreach (var slot in pair.Value) HGReflect.SetNode(slot, copy);
         }
     }
 
     /// <summary>這顆節點的內容該存成哪一種資產。動作與公式各走各的資產族，呼叫端不必自己分辨。</summary>
-    private Type AssetTypeFor(LGNodeView node)
+    private Type AssetTypeFor(HGNodeView node)
     {
         if (node.ParentSlot != null)
         {
             var slotType = node.ParentSlot.GetType();
-            if (LGReflect.IsActionSlotType(slotType))
-                return ConcreteAssetType(LGReflect.ActionAssetType(slotType));
-            return LGReflect.AssetType(slotType);
+            if (HGReflect.IsActionSlotType(slotType))
+                return ConcreteAssetType(HGReflect.ActionAssetType(slotType));
+            return HGReflect.AssetType(slotType);
         }
 
         // 未連接節點沒有父欄位，靠型別回推它屬於哪一族。
@@ -1041,9 +1041,9 @@ public partial class LogicGraphWindow
 
         foreach (var (_, slotType) in model.FormulaKinds())
         {
-            var formulaBase = LGReflect.FormulaBaseType(slotType);
+            var formulaBase = HGReflect.FormulaBaseType(slotType);
             if (formulaBase != null && formulaBase.IsInstanceOfType(node.Obj))
-                return LGReflect.AssetType(slotType);
+                return HGReflect.AssetType(slotType);
         }
         return null;
     }
@@ -1063,7 +1063,7 @@ public partial class LogicGraphWindow
         {
             if (g.Actions == null) continue;
             var slotType = g.Actions.GetType().GetGenericArguments()[0];
-            return LGReflect.ActionAssetType(slotType);
+            return HGReflect.ActionAssetType(slotType);
         }
         return null;
     }
@@ -1074,7 +1074,7 @@ public partial class LogicGraphWindow
         {
             if (g.Actions == null) continue;
             var slotType = g.Actions.GetType().GetGenericArguments()[0];
-            return LGReflect.ActionBaseType(slotType);
+            return HGReflect.ActionBaseType(slotType);
         }
         return null;
     }

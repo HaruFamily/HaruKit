@@ -6,8 +6,9 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit;
 
-public class LogicGraphDeepCopyTests
+public class GraphDeepCopyTests
 {
     [Test]
     public void Copy_ClonesGraphAndPreservesReferences()
@@ -18,7 +19,7 @@ public class LogicGraphDeepCopyTests
         source.Shared = new CloneLeaf { Value = 7 };
         source.Other = source.Shared;
 
-        var copy = LogicGraphDeepCopy.Copy(source);
+        var copy = GraphDeepCopy.Copy(source);
 
         Assert.That(copy, Is.Not.Null);
         Assert.That(copy, Is.Not.SameAs(source));
@@ -40,7 +41,7 @@ public class LogicGraphDeepCopyTests
         carrier.Pos = new Vector2(120f, 40f);
         var holder = new CarrierHolder { A = carrier, B = carrier };
 
-        var copy = LogicGraphDeepCopy.Copy(holder);
+        var copy = GraphDeepCopy.Copy(holder);
 
         Assert.That(copy, Is.Not.Null);
         Assert.That(copy.A, Is.Not.SameAs(carrier));
@@ -58,7 +59,7 @@ public class LogicGraphDeepCopyTests
         carrier.EnsureId();
         body.Child = carrier;
 
-        var copy = LogicGraphDeepCopy.Copy(carrier);
+        var copy = GraphDeepCopy.Copy(carrier);
 
         Assert.That(copy, Is.Not.Null);
         Assert.That(copy, Is.Not.SameAs(carrier));
@@ -77,7 +78,7 @@ public class LogicGraphDeepCopyTests
         var carrier = new GraphNode();
         carrier.SetAsset(asset);
 
-        var copy = LogicGraphDeepCopy.Copy(carrier);
+        var copy = GraphDeepCopy.Copy(carrier);
 
         Assert.That(copy.Kind, Is.EqualTo(NodeKind.Asset));
         Assert.That(copy.AssetObject, Is.SameAs(asset));
@@ -103,7 +104,7 @@ public class LogicGraphDeepCopyTests
         var source = new GraphEndpoint("source", sourceSlot);
         source.EnsureId();
 
-        var copy = LogicGraphDeepCopy.Copy(source, new object[] { other });
+        var copy = GraphDeepCopy.Copy(source, new object[] { other });
 
         Assert.That(copy, Is.Not.Null);
         Assert.That(copy, Is.Not.SameAs(source));
@@ -112,7 +113,7 @@ public class LogicGraphDeepCopyTests
         Assert.That(copy.Slot.Node.Endpoint, Is.SameAs(other), "共用變數不可跟著複製");
 
         // 沒給 shared 就是整棵抄：這正是複製單一子圖不能用它的原因。
-        var plain = LogicGraphDeepCopy.Copy(source);
+        var plain = GraphDeepCopy.Copy(source);
         Assert.That(plain.Slot.Node.Endpoint, Is.Not.SameAs(other));
     }
 
@@ -127,7 +128,7 @@ public class LogicGraphDeepCopyTests
         slot.SetNode(child);
         source.Bindings.Add(new NamedFormulaSlot("amount", slot) { OverrideEnabled = true });
 
-        var copy = LogicGraphDeepCopy.Copy(source);
+        var copy = GraphDeepCopy.Copy(source);
 
         Assert.That(copy, Is.Not.Null);
         Assert.That(copy.AssetObject, Is.SameAs(asset));
@@ -205,7 +206,7 @@ public class LogicGraphDeepCopyTests
     }
 
     [Serializable]
-    private sealed class CarrierNode : LogicGraphNode
+    private sealed class CarrierNode : GraphNodeContent
     {
         public GraphNode Child;
     }

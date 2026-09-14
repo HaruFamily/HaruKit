@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections.Generic;
@@ -12,7 +12,7 @@ using UnityEngine;
 // 不能用 MonoScript 的檔名對應：一個 .cs 裝十幾個節點類別（ActionAsset.cs、EntityIdListAsset.cs 都是），
 // 而且它們是純 [Serializable] 類別不是 ScriptableObject，Unity 根本沒建立型別→腳本的索引。
 // 行號一律點下去當場用宣告文字算，不存進任何檔案：程式一改行號就跟著對，沒有會過期的座標。
-public static class LGScriptLocator
+public static class HGScriptLocator
 {
     // 型別 → 宣告位置。查一次就記著，domain reload 會清空重算。
     private static readonly Dictionary<Type, Located> cache = new();

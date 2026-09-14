@@ -77,7 +77,7 @@ Inspector 把這個欄位畫成一張卡片（`APGraphDrawer`）：左緣色條�
 using HaruFamily.Framework.LogicGraph;
 using HaruFamily.Tools.AssetPipeline;
 
-[LGNode("我的步驟", "做一件事", "步驟")]
+[HGNode("我的步驟", "做一件事", "步驟")]
 [Serializable]
 public class MyStep : APActionBase
 {

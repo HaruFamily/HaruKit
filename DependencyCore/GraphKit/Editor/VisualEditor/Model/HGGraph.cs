@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -8,7 +8,7 @@ using System.Text;
 using UnityEditor;
 using UnityEngine;
 
-public enum LGRowKind
+public enum HGRowKind
 {
     /// <summary>參數欄位：有接點，四種狀態（常數／公式／資產／變數）。</summary>
     Slot,
@@ -21,9 +21,9 @@ public enum LGRowKind
 }
 
 /// <summary>節點上的一列。Slot 列右端有接點，其餘沒有。</summary>
-public class LGRow
+public class HGRow
 {
-    public LGRowKind Kind;
+    public HGRowKind Kind;
     public string Label;
     public int Depth;
 
@@ -41,7 +41,7 @@ public class LGRow
     public Type ElementType;
     public bool Collapsed;           // Kind == List：折疊時子列不畫、不可互動
 
-    public List<LGRow> Children = new();
+    public List<HGRow> Children = new();
 
     /// <summary>欄位在節點內的唯一路徑（`/action/steps[2]/value`），折疊狀態靠它記憶。</summary>
     public string Path;
@@ -59,7 +59,7 @@ public class LGRow
     /// 所屬的清單標題列與索引。**元素展開出來的子列也會帶著它**，斑馬紋才涵蓋整段；
     /// 只有元素標題有底、內部欄位沒有的話，看起來會像清單只有一行。
     /// </summary>
-    public LGRow ListOwner;
+    public HGRow ListOwner;
     public int ListIndex = -1;
 
     /// <summary>
@@ -75,17 +75,17 @@ public class LGRow
     public bool Hidden;              // 被折疊的清單蓋住：不畫、不畫接點、不可當拉線目標
     public Rect ScreenRect;
     public Vector2 PortPos;
-    public bool HasPort => Kind == LGRowKind.Slot;
+    public bool HasPort => Kind == HGRowKind.Slot;
 
     /// <summary>可以拉線的欄位：折疊起來的列不算，否則會接到看不見的東西。</summary>
-    public bool IsLinkable => Kind == LGRowKind.Slot && !Hidden;
+    public bool IsLinkable => Kind == HGRowKind.Slot && !Hidden;
 }
 
 /// <summary>編輯區上的一個節點。</summary>
-public class LGNodeView
+public class HGNodeView
 {
     public GraphNode Carrier;             // 這個節點的載體；HEAD 節點為 null（載體是頭端本身）
-    public object Obj;                    // LogicGraphNode（公式 / 動作）；資產、變數、空節點為 null
+    public object Obj;                    // GraphNodeContent（公式 / 動作）；資產、變數、空節點為 null
     public UnityEngine.Object Asset;      // 資產節點目前指到的資產（可為 null＝尚未指定）
     public bool IsAssetNode;              // 資產節點（不論有沒有指定資產）
     /// <summary>這顆節點指到的具名變數（不是變數節點就是 null）。內容住在變數自己的畫布。</summary>
@@ -118,14 +118,14 @@ public class LGNodeView
     public bool NoteOpen;
 
     public object ParentSlot;             // 這個節點接在哪個 Slot 上（root / orphan 為 null）
-    public LGRow ParentRow;
+    public HGRow ParentRow;
 
-    public List<LGRow> Rows = new();
+    public List<HGRow> Rows = new();
     public Rect TitleRect;                // Header 名稱區（graph space）：拖曳抓取區，繪製時寫入
     /// <summary>Header 右端的 ▾（graph space）：換來源的唯一入口。整塊名稱區可按會跟拖曳打架。</summary>
     public Rect SourceMenuRect;
     public Vector2 Pos;
-    public float Width = LGGraph.NodeWidth;
+    public float Width = HGGraph.NodeWidth;
     public float Height = 60f;
     public float ContentHeight;
     public float TipsHeight;
@@ -133,26 +133,26 @@ public class LGNodeView
     public bool HasSourceSelector => !IsRoot && (IsPlaceholder || Obj != null || IsAssetNode || IsVariableNode);
 
     public Rect Rect => new Rect(Pos.x, Pos.y, Width, Height);
-    public Vector2 OutputPort => new Vector2(Pos.x + LGGraph.PortRadius, Pos.y + LGGraph.HeaderHeight * 0.5f);
+    public Vector2 OutputPort => new Vector2(Pos.x + HGGraph.PortRadius, Pos.y + HGGraph.HeaderHeight * 0.5f);
 }
 
 /// <summary>一次焦點的完整節點圖。每次資料變動就整份重建，不做增量。</summary>
-public class LGGraphView
+public class HGGraphView
 {
-    public List<LGNodeView> Nodes = new();
-    public List<LGLink> Links = new();
-    public Dictionary<object, LGNodeView> BySlot = new(LGRefComparer.Instance);
+    public List<HGNodeView> Nodes = new();
+    public List<HGLink> Links = new();
+    public Dictionary<object, HGNodeView> BySlot = new(HGRefComparer.Instance);
 
     // 同一個載體被多個欄位指到＝共用來源：只畫一個節點，連線各自一條。GraphNode 沒有覆寫 Equals，預設就是參考比對。
-    public Dictionary<GraphNode, LGNodeView> ByCarrier = new();
+    public Dictionary<GraphNode, HGNodeView> ByCarrier = new();
 
     /// <summary>
     /// 這張圖裡有幾個欄位指著同一個載體。給「隱藏子樹時要不要留下共用節點」用——隱藏是視覺操作，
-    /// 只算畫得出來的引用。要問「停用會影響幾個欄位」是全域問題，那走 LogicGraphWindow.CarrierUsers。
+    /// 只算畫得出來的引用。要問「停用會影響幾個欄位」是全域問題，那走 HaruGraphWindow.CarrierUsers。
     /// </summary>
     public Dictionary<GraphNode, int> CarrierUsers = new();
 
-    public LGNodeView FindByObject(object obj)
+    public HGNodeView FindByObject(object obj)
     {
         foreach (var n in Nodes)
             if (ReferenceEquals(n.Obj, obj)) return n;
@@ -160,18 +160,18 @@ public class LGGraphView
     }
 }
 
-public class LGLink
+public class HGLink
 {
-    public LGRow ParentRow;
-    public LGNodeView Target;
+    public HGRow ParentRow;
+    public HGNodeView Target;
     /// <summary>ParentRow 所屬的節點。父節點被收起來時線也要跟著不畫，否則會留一條從空白處拉出的線。</summary>
-    public LGNodeView Owner;
+    public HGNodeView Owner;
 }
 
 /// <summary>
 /// 由焦點根 Slot 遞迴展開節點圖：節點 → 參數列 → 子節點，並套用記憶座標或樹狀自動排版。
 /// </summary>
-public static class LGGraph
+public static class HGGraph
 {
     public const float RowHeight = 20f;
     public const float HeaderHeight = 20f;
@@ -184,7 +184,7 @@ public static class LGGraph
     public const float ColumnGap = 90f;
     public const float NodeGap = 24f;
     // 預設所有節點同寬：接點排成一條垂直線、AutoLayout 的欄位不會因父節點文字長度而漂移。
-    // 只有型別明確標了 [LGNodeView(Width = n)] 才例外——寬度不一會讓同一欄的右緣（接點）不成直線，
+    // 只有型別明確標了 [HGNodeView(Width = n)] 才例外——寬度不一會讓同一欄的右緣（接點）不成直線，
     // 是拿對齊感換欄位空間，不是預設值。300 = 15 格。
     public const float NodeWidth = 300f;
 
@@ -203,7 +203,7 @@ public static class LGGraph
     public const float LabelRatio = 0.3f;
 
     /// <summary>
-    /// 一列的標籤欄寬度（px）。`overrideUnits`＝`[LGLabel(Width = n)]` 的格數，`overrideRatio`＝`[LGLabel(WidthRatio = n)]` 的 0～1；
+    /// 一列的標籤欄寬度（px）。`overrideUnits`＝`[HGLabel(Width = n)]` 的格數，`overrideRatio`＝`[HGLabel(WidthRatio = n)]` 的 0～1；
     /// 兩個都是 0 就走預設比例。格數是絕對值直接乘；比例路徑一律進位到整格，欄寬永遠落在格線上。
     /// 預設寬的節點（15 格）＝ 300 × 0.3 = 90px → 進位 5 格 = 100px。
     /// </summary>
@@ -237,12 +237,12 @@ public static class LGGraph
     /// root 有兩種：多數焦點給的是**一個** Slot 頭端；Timing 焦點給的是**全部** ActionTimingGroup 物件，
     /// 每個畫成一顆節點，本體就是那個時機的動作清單。同一張畫布才拉得到跨時機的共用來源。
     /// </summary>
-    public static LGGraphView Build(LGModel model, IReadOnlyList<object> roots, IList orphans, string focusId,
+    public static HGGraphView Build(HGModel model, IReadOnlyList<object> roots, IList orphans, string focusId,
         string headTitle, IReadOnlyDictionary<string, bool> listCollapse = null,
         string noteOpenId = null, ICollection<string> noteCollapsed = null, object headCarrier = null,
         IReadOnlyDictionary<string, Type> orphanHints = null)
     {
-        var view = new LGGraphView();
+        var view = new HGGraphView();
 
         // 每次重建都重新登記 id → 載體，座標與備註的讀寫才找得到人。
         model.ClearCarriers();
@@ -251,7 +251,7 @@ public static class LGGraph
         foreach (var root in roots ?? Array.Empty<object>())
         {
             if (root == null) continue;
-            var rootNode = LGReflect.IsSlotType(root.GetType())
+            var rootNode = HGReflect.IsSlotType(root.GetType())
                 ? MakeHeadNode(model, root, focusId, headTitle, headCarrier)
                 : MakeGroupNode(model, root);
             Collect(model, rootNode, view, 0, listCollapse, false, false);
@@ -284,7 +284,7 @@ public static class LGGraph
     /// 所以每個動作直接是清單的一列——序號、拖曳把手、刪除鈕、折疊、斑馬紋全部沿用清單那一套，
     /// 不需要為動作另做一組互動。一張畫布上有幾個時機就有幾顆。
     /// </summary>
-    private static LGNodeView MakeGroupNode(LGModel model, object group)
+    private static HGNodeView MakeGroupNode(HGModel model, object group)
     {
         var node = MakeNodeForObject(group, null, null, null);
         node.Id = GroupHeadId(model, group);
@@ -302,22 +302,29 @@ public static class LGGraph
     }
 
     /// <summary>時機群組節點的識別碼。識別值本身就是身分，不可重複，所以不必再配流水號。</summary>
-    public static string GroupHeadId(LGModel model, object group) => "head:tim:" + GroupTitle(model, group);
+    public static string GroupHeadId(HGModel model, object group) => "head:tim:" + GroupTitle(model, group);
 
-    public static string GroupTitle(LGModel model, object group)
+    public static string GroupTitle(HGModel model, object group)
         => model?.Doc?.TitleOf(group) ?? $"（未指定{RootNoun(model?.Doc)}）";
 
     /// <summary>root 在句子裡的稱呼。圖沒提供時退回中性詞，UI 不會出現空字。</summary>
     public static string RootNoun(IGraphDocument doc)
         => string.IsNullOrWhiteSpace(doc?.RootNoun) ? "群組" : doc.RootNoun;
 
-    // headCarrier：HEAD 的座標主人（LGFocus.HeadCarrier）。變數焦點傳 GraphEndpoint、資產本體傳資產 SO，
+    /// <summary>視窗標題。沒綁定或圖沒提供時退回底層自己的名字。</summary>
+    public static string WindowTitle(IGraphDocument doc)
+        => string.IsNullOrWhiteSpace(doc?.WindowTitle) ? DefaultWindowTitle : doc.WindowTitle;
+
+    /// <summary>還沒綁定任何圖時的視窗標題。</summary>
+    public const string DefaultWindowTitle = "HaruGraph";
+
+    // headCarrier：HEAD 的座標主人（HGFocus.HeadCarrier）。變數焦點傳 GraphEndpoint、資產本體傳資產 SO，
     // 位置才記得住——資產的 HEAD 容器槽是每次進來現做的，記在它上面等於不記。其他焦點沿用 rootSlot。
-    private static LGNodeView MakeHeadNode(LGModel model, object rootSlot, string focusId, string headTitle, object headCarrier)
+    private static HGNodeView MakeHeadNode(HGModel model, object rootSlot, string focusId, string headTitle, object headCarrier)
     {
-        bool isAction = LGReflect.IsActionSlotType(rootSlot.GetType());
-        Type resultType = isAction ? null : LGReflect.ResultType(rootSlot.GetType());
-        var node = new LGNodeView
+        bool isAction = HGReflect.IsActionSlotType(rootSlot.GetType());
+        Type resultType = isAction ? null : HGReflect.ResultType(rootSlot.GetType());
+        var node = new HGNodeView
         {
             Id = HeadId(focusId),
             // 名字由焦點提供；真的沒有名字時給預設值，不留空白 Header。
@@ -336,16 +343,16 @@ public static class LGGraph
     public static string HeadId(string focusId) => "head:" + (focusId ?? "?");
 
     /// <summary>一個載體＝一個節點。內容種類決定畫成公式／動作、資產葉或編輯中的空節點。</summary>
-    private static LGNodeView MakeNodeForCarrier(LGModel model, GraphNode carrier, object parentSlot, LGRow parentRow,
+    private static HGNodeView MakeNodeForCarrier(HGModel model, GraphNode carrier, object parentSlot, HGRow parentRow,
         Type hintSlotType = null)
     {
         string id = carrier.EnsureId();
         // 候選節點沒有父欄位，用建立時記下的族當代表；有父欄位時一律以父欄位為準。
         Type slotType = parentSlot?.GetType() ?? hintSlotType;
-        bool slotIsAction = slotType != null && LGReflect.IsActionSlotType(slotType);
-        Type slotResultType = slotType != null && !slotIsAction ? LGReflect.ResultType(slotType) : null;
+        bool slotIsAction = slotType != null && HGReflect.IsActionSlotType(slotType);
+        Type slotResultType = slotType != null && !slotIsAction ? HGReflect.ResultType(slotType) : null;
 
-        LGNodeView node;
+        HGNodeView node;
         switch (carrier.Kind)
         {
             case NodeKind.Inline when carrier.BodyObject != null:
@@ -354,8 +361,8 @@ public static class LGGraph
 
             case NodeKind.Asset:
             {
-                Type assetResult = slotResultType ?? LGReflect.AssetResultType(carrier.AssetObject);
-                node = new LGNodeView
+                Type assetResult = slotResultType ?? HGReflect.AssetResultType(carrier.AssetObject);
+                node = new HGNodeView
                 {
                     Asset = carrier.AssetObject,
                     IsAssetNode = true,
@@ -380,7 +387,7 @@ public static class LGGraph
             {
                 var endpoint = carrier.Endpoint;
                 Type variableResult = endpoint?.ResultType ?? slotResultType;
-                node = new LGNodeView
+                node = new HGNodeView
                 {
                     Endpoint = endpoint,
                     IsVariableNode = true,
@@ -394,7 +401,7 @@ public static class LGGraph
 
             default:
             {
-                node = new LGNodeView
+                node = new HGNodeView
                 {
                     Title = slotIsAction ? "（選擇 Action）" : "（選擇 Formula）",
                     Chip = ChipText(slotIsAction ? null : slotType, slotResultType, slotIsAction),
@@ -420,34 +427,34 @@ public static class LGGraph
     /// </summary>
     private static string ChipText(Type slotType, Type resultType, bool isAction)
     {
-        if (!isAction && slotType != null) return LGReflect.SlotKindName(slotType);
-        if (resultType != null) return LGReflect.ResultTypeName(resultType);
+        if (!isAction && slotType != null) return HGReflect.SlotKindName(slotType);
+        if (resultType != null) return HGReflect.ResultTypeName(resultType);
         return isAction ? "Action" : null;
     }
 
-    private static LGNodeView MakeNodeForObject(object obj, object parentSlot, LGRow parentRow, Type slotResultType)
+    private static HGNodeView MakeNodeForObject(object obj, object parentSlot, HGRow parentRow, Type slotResultType)
     {
-        bool isAction = LGReflect.IsActionNodeType(obj.GetType());
+        bool isAction = HGReflect.IsActionNodeType(obj.GetType());
         Type resultType = !isAction && slotResultType != null
             ? slotResultType
-            : LGReflect.FormulaResultType(obj.GetType());
-        var node = new LGNodeView
+            : HGReflect.FormulaResultType(obj.GetType());
+        var node = new HGNodeView
         {
             Obj = obj,
             ParentSlot = parentSlot,
             ParentRow = parentRow,
-            Title = LGReflect.TypeName(obj.GetType()),
+            Title = HGReflect.TypeName(obj.GetType()),
             Chip = ChipText(isAction ? null : parentSlot?.GetType(), resultType, isAction),
-            Desc = LGReflect.TypeDescription(obj.GetType()),
+            Desc = HGReflect.TypeDescription(obj.GetType()),
             IsActionNode = isAction,
             ResultType = resultType,
         };
-        BuildRows(obj, 0, node.Rows, new HashSet<object>(LGRefComparer.Instance), "", 0f);
+        BuildRows(obj, 0, node.Rows, new HashSet<object>(HGRefComparer.Instance), "", 0f);
         return node;
     }
 
     /// <summary>把節點與其子樹加入視圖。已經畫過的載體只補一條連線，不重複建節點。</summary>
-    private static void Collect(LGModel model, LGNodeView node, LGGraphView view, int depth,
+    private static void Collect(HGModel model, HGNodeView node, HGGraphView view, int depth,
         IReadOnlyDictionary<string, bool> listCollapse, bool disabled, bool locked)
     {
         if (depth > 24) return;                       // 資料異常時不讓編輯器堆疊爆掉
@@ -470,9 +477,9 @@ public static class LGGraph
 
         foreach (var row in AllRows(node.Rows))
         {
-            if (row.Kind != LGRowKind.Slot || row.Slot == null) continue;
+            if (row.Kind != HGRowKind.Slot || row.Slot == null) continue;
 
-            var carrier = LGReflect.GetNode(row.Slot);
+            var carrier = HGReflect.GetNode(row.Slot);
             if (carrier == null) continue;            // 常數／空槽留在列上，不長節點
 
             view.CarrierUsers.TryGetValue(carrier, out int users);
@@ -481,7 +488,7 @@ public static class LGGraph
             // 共用來源：同一個載體被多個欄位指到時只有一個節點，這裡只補連線。
             if (view.ByCarrier.TryGetValue(carrier, out var existing))
             {
-                view.Links.Add(new LGLink { ParentRow = row, Target = existing, Owner = node });
+                view.Links.Add(new HGLink { ParentRow = row, Target = existing, Owner = node });
                 view.BySlot[row.Slot] = existing;
                 // 這條路徑沒被停用就整顆恢復：共用節點只要還有一條會求值的路徑，它就不是停用的。
                 bool rowLocked = row.AssetBinding != null && !row.AssetBinding.OverrideEnabled;
@@ -498,7 +505,7 @@ public static class LGGraph
             // 連線在這裡建，父節點才記得住：畫線時要靠它判斷「線的起點還在不在畫面上」。
             // 超過深度上限被擋掉的子節點沒有進圖，也就不該有線。
             if (view.ByCarrier.TryGetValue(carrier, out var placed) && ReferenceEquals(placed, child))
-                view.Links.Add(new LGLink { ParentRow = row, Target = child, Owner = node });
+                view.Links.Add(new HGLink { ParentRow = row, Target = child, Owner = node });
         }
     }
 
@@ -506,7 +513,7 @@ public static class LGGraph
     /// 共用節點先被停用路徑走到、之後又被啟用路徑指上時，把整棵子樹的壓暗狀態撤回。
     /// 自己被明確停用的節點不撤——那不是繼承來的。已經是 false 就直接回，順便擋住環。
     /// </summary>
-    private static void ClearDisabledSubtree(LGNodeView node, LGGraphView view)
+    private static void ClearDisabledSubtree(HGNodeView node, HGGraphView view)
     {
         if (node == null || !node.InDisabledSubtree) return;
         if (node.Carrier != null && node.Carrier.Disabled) return;
@@ -520,7 +527,7 @@ public static class LGGraph
     }
 
     /// <summary>共用節點被一條「有勾覆蓋」的路徑指上時撤回鎖定：只要有一條路徑會被採用，它就不是鎖的。</summary>
-    private static void ClearLockedSubtree(LGNodeView node, LGGraphView view)
+    private static void ClearLockedSubtree(HGNodeView node, HGGraphView view)
     {
         if (node == null || !node.InLockedSubtree) return;
         node.InLockedSubtree = false;
@@ -534,23 +541,23 @@ public static class LGGraph
     }
 
     /// <summary>清單折疊狀態的鍵：節點 Id + 欄位路徑，重建圖之後仍然指到同一個清單。</summary>
-    public static string CollapseKey(string nodeId, LGRow row) => nodeId + "#" + row.Path;
+    public static string CollapseKey(string nodeId, HGRow row) => nodeId + "#" + row.Path;
 
     /// <summary>沒有明確記錄過的清單，項數多就預設折疊。</summary>
-    private static bool DefaultCollapsed(LGRow row) => (row.List?.Count ?? 0) > ListAutoCollapseCount;
+    private static bool DefaultCollapsed(HGRow row) => (row.List?.Count ?? 0) > ListAutoCollapseCount;
 
-    private static void ApplyListCollapse(LGNodeView node, IReadOnlyDictionary<string, bool> listCollapse)
+    private static void ApplyListCollapse(HGNodeView node, IReadOnlyDictionary<string, bool> listCollapse)
     {
         foreach (var row in AllRows(node.Rows))
         {
-            if (row.Kind != LGRowKind.List) continue;
+            if (row.Kind != HGRowKind.List) continue;
             row.Collapsed = listCollapse != null && listCollapse.TryGetValue(CollapseKey(node.Id, row), out bool stored)
                 ? stored
                 : DefaultCollapsed(row);
         }
     }
 
-    public static IEnumerable<LGRow> AllRows(List<LGRow> rows)
+    public static IEnumerable<HGRow> AllRows(List<HGRow> rows)
     {
         foreach (var r in rows)
         {
@@ -561,28 +568,28 @@ public static class LGGraph
 
     // ===== 參數列 =====
 
-    private static void BuildRows(object obj, int depth, List<LGRow> into, HashSet<object> visited, string path, float leftPad)
+    private static void BuildRows(object obj, int depth, List<HGRow> into, HashSet<object> visited, string path, float leftPad)
     {
         if (obj == null || depth > 5 || !visited.Add(obj)) return;
 
-        foreach (var f in LGReflect.Fields(obj.GetType()))
+        foreach (var f in HGReflect.Fields(obj.GetType()))
         {
             if (SkipFields.Contains(f.Name)) continue;
-            if (LGReflect.IsHidden(f)) continue;
-            if (!LGReflect.IsShown(obj, f)) continue;
+            if (HGReflect.IsHidden(f)) continue;
+            if (!HGReflect.IsShown(obj, f)) continue;
             if (f.IsNotSerialized) continue;
             if (f.IsStatic) continue;
 
             var t = f.FieldType;
-            string label = LGReflect.FieldLabel(f);
+            string label = HGReflect.FieldLabel(f);
             string fieldPath = path + "/" + f.Name;
 
-            if (LGReflect.IsSlotType(t))
+            if (HGReflect.IsSlotType(t))
             {
                 var slot = f.GetValue(obj);
                 if (slot == null)
                 {
-                    slot = LGReflect.CreateInstance(t);      // 缺 Slot 就補一個，避免整列不可編輯
+                    slot = HGReflect.CreateInstance(t);      // 缺 Slot 就補一個，避免整列不可編輯
                     if (slot != null) f.SetValue(obj, slot);
                 }
                 if (slot == null) continue;
@@ -590,18 +597,18 @@ public static class LGGraph
                 row.Field = f;
                 row.Path = fieldPath;
                 row.LeftPad = leftPad;
-                row.IsEnum = LGReflect.IsEnum(f);
-                row.HideLabel = LGReflect.IsLabelHidden(f);
+                row.IsEnum = HGReflect.IsEnum(f);
+                row.HideLabel = HGReflect.IsLabelHidden(f);
                 into.Add(row);
                 continue;
             }
 
-            if (LGReflect.IsList(t, out var elem))
+            if (HGReflect.IsList(t, out var elem))
             {
-                var list = LGReflect.EnsureList(obj, f);
-                var row = new LGRow
+                var list = HGReflect.EnsureList(obj, f);
+                var row = new HGRow
                 {
-                    Kind = LGRowKind.List,
+                    Kind = HGRowKind.List,
                     Label = label,
                     Depth = depth,
                     Path = fieldPath,
@@ -610,8 +617,8 @@ public static class LGGraph
                     ElementType = elem,
                     Target = obj,
                     Field = f,
-                    IsEnum = LGReflect.IsEnum(f),
-                    HideLabel = LGReflect.IsLabelHidden(f),
+                    IsEnum = HGReflect.IsEnum(f),
+                    HideLabel = HGReflect.IsLabelHidden(f),
                 };
                 BuildListChildren(row, depth + 1, visited);
                 into.Add(row);
@@ -620,17 +627,17 @@ public static class LGGraph
 
             if (IsLeafValue(t))
             {
-                into.Add(new LGRow
+                into.Add(new HGRow
                 {
-                    Kind = LGRowKind.Value,
+                    Kind = HGRowKind.Value,
                     Label = label,
                     Depth = depth,
                     Path = fieldPath,
                     LeftPad = leftPad,
                     Target = obj,
                     Field = f,
-                    IsEnum = LGReflect.IsEnum(f),
-                    HideLabel = LGReflect.IsLabelHidden(f),
+                    IsEnum = HGReflect.IsEnum(f),
+                    HideLabel = HGReflect.IsLabelHidden(f),
                 });
                 continue;
             }
@@ -638,15 +645,15 @@ public static class LGGraph
             // 其餘視為巢狀資料：展開成一個群組，內容遞迴。
             var value = f.GetValue(obj);
             if (value == null) continue;
-            var group = new LGRow
+            var group = new HGRow
             {
-                Kind = LGRowKind.Group,
+                Kind = HGRowKind.Group,
                 Label = label,
                 Depth = depth,
                 Path = fieldPath,
                 LeftPad = leftPad,
                 Field = f,
-                HideLabel = LGReflect.IsLabelHidden(f),
+                HideLabel = HGReflect.IsLabelHidden(f),
             };
             BuildRows(value, depth + 1, group.Children, visited, fieldPath, leftPad);
             if (group.Children.Count > 0) into.Add(group);
@@ -654,7 +661,7 @@ public static class LGGraph
     }
 
     /// <summary>清單元素展開：Slot 元素直接成列，複合元素展開成子群組。</summary>
-    private static void BuildListChildren(LGRow row, int depth, HashSet<object> visited)
+    private static void BuildListChildren(HGRow row, int depth, HashSet<object> visited)
     {
         row.Children.Clear();
         if (row.List == null) return;
@@ -666,25 +673,25 @@ public static class LGGraph
         {
             var item = row.List[i];
             string childPath = row.Path + "[" + i + "]";
-            LGRow child;
+            HGRow child;
 
             if (item == null)
             {
-                child = new LGRow { Kind = LGRowKind.Value, Label = "（空）", Depth = depth };
+                child = new HGRow { Kind = HGRowKind.Value, Label = "（空）", Depth = depth };
             }
-            else if (LGReflect.IsSlotType(item.GetType()))
+            else if (HGReflect.IsSlotType(item.GetType()))
             {
                 // 序號已經有自己的欄位，標籤只留內容。
                 child = SlotRow(item, SlotShortName(item), depth);
             }
             else if (IsLeafValue(item.GetType()))
             {
-                child = new LGRow { Kind = LGRowKind.Value, Label = "", Depth = depth, Target = row.List, Field = null, HideLabel = true };
+                child = new HGRow { Kind = HGRowKind.Value, Label = "", Depth = depth, Target = row.List, Field = null, HideLabel = true };
             }
             else
             {
-                child = new LGRow { Kind = LGRowKind.Group, Label = LGReflect.TypeName(item.GetType()), Depth = depth };
-                BuildRows(item, depth + 1, child.Children, visited ?? new HashSet<object>(LGRefComparer.Instance),
+                child = new HGRow { Kind = HGRowKind.Group, Label = HGReflect.TypeName(item.GetType()), Depth = depth };
+                BuildRows(item, depth + 1, child.Children, visited ?? new HashSet<object>(HGRefComparer.Instance),
                     childPath, elementPad);
             }
 
@@ -697,7 +704,7 @@ public static class LGGraph
     }
 
     /// <summary>把元素與它展開出來的子列都認到同一個清單索引下，讓斑馬紋覆蓋整段。</summary>
-    private static void MarkListSubtree(LGRow row, LGRow owner, int index)
+    private static void MarkListSubtree(HGRow row, HGRow owner, int index)
     {
         // 內層清單已經認領的子樹不被外層覆蓋，巢狀清單才各自算自己的奇偶。
         if (row.ListOwner != null) return;
@@ -706,40 +713,40 @@ public static class LGGraph
         foreach (var child in row.Children) MarkListSubtree(child, owner, index);
     }
 
-    private static LGRow SlotRow(object slot, string label, int depth)
+    private static HGRow SlotRow(object slot, string label, int depth)
     {
-        bool isAction = LGReflect.IsActionSlotType(slot.GetType());
-        return new LGRow
+        bool isAction = HGReflect.IsActionSlotType(slot.GetType());
+        return new HGRow
         {
-            Kind = LGRowKind.Slot,
+            Kind = HGRowKind.Slot,
             Label = label,
             Depth = depth,
             Slot = slot,
             IsActionSlot = isAction,
-            ResultType = isAction ? null : LGReflect.ResultType(slot.GetType()),
+            ResultType = isAction ? null : HGReflect.ResultType(slot.GetType()),
         };
     }
 
     /// <summary>清單裡的 Slot 顯示它目前接了什麼，企劃不用逐一點開。</summary>
     private static string SlotShortName(object slot)
     {
-        bool isAction = LGReflect.IsActionSlotType(slot.GetType());
+        bool isAction = HGReflect.IsActionSlotType(slot.GetType());
 
         // 動作欄位的自訂標籤優先：它存在的目的就是區分同型別的動作（「主傷害」「濺射」）。
         if (isAction)
         {
-            string label = LGReflect.GetLabel(slot);
+            string label = HGReflect.GetLabel(slot);
             if (!string.IsNullOrEmpty(label)) return label;
         }
 
-        int useType = LGReflect.UseType(slot);
+        int useType = HGReflect.UseType(slot);
         switch (useType)
         {
             case 1:
-                var f = LGReflect.GetFormula(slot);
-                return f != null ? LGReflect.TypeName(f.GetType()) : "（空）";
+                var f = HGReflect.GetFormula(slot);
+                return f != null ? HGReflect.TypeName(f.GetType()) : "（空）";
             case 2:
-                var a = LGReflect.GetAsset(slot);
+                var a = HGReflect.GetAsset(slot);
                 return a != null ? a.name : "（空資產）";
             default:
                 // 動作列右半已經不畫狀態文字，操作提示併進標籤裡，否則空著的列看不出下一步要做什麼。
@@ -773,16 +780,16 @@ public static class LGGraph
     // ===== 尺寸與排版 =====
 
     /// <summary>
-    /// 節點寬度：型別標了 `[LGNodeView(Width = n)]` 就用 n 格，否則預設 15 格。
+    /// 節點寬度：型別標了 `[HGNodeView(Width = n)]` 就用 n 格，否則預設 15 格。
     /// 只有內嵌節點（`node.Obj` 是具體 Action／Formula）能覆寫；資產、變數、時機、空節點都沒有型別可問，一律預設寬。
     /// </summary>
-    private static float WidthOf(LGNodeView node)
+    private static float WidthOf(HGNodeView node)
     {
-        int units = LGReflect.NodeWidthUnits(node.Obj?.GetType());
+        int units = HGReflect.NodeWidthUnits(node.Obj?.GetType());
         return units <= 0 ? NodeWidth : units * GridSize;
     }
 
-    public static void MeasureNode(LGNodeView node)
+    public static void MeasureNode(HGNodeView node)
     {
         node.Width = WidthOf(node);
         // 節點上不畫型別說明（它是型別常數，重複出現只是噪音），改由畫布左上角的說明面板顯示選取節點的 Desc。
@@ -809,7 +816,7 @@ public static class LGGraph
         node.Height = node.ContentHeight + NodeBottomPad;
     }
 
-    private static void ApplyViewState(LGModel model, LGGraphView view, string noteOpenId,
+    private static void ApplyViewState(HGModel model, HGGraphView view, string noteOpenId,
         ICollection<string> noteCollapsed)
     {
         foreach (var node in view.Nodes)
@@ -823,7 +830,7 @@ public static class LGGraph
         foreach (var node in view.Nodes) MeasureNode(node);
     }
 
-    private static float MeasureRows(List<LGRow> rows, float y)
+    private static float MeasureRows(List<HGRow> rows, float y)
     {
         foreach (var r in rows)
         {
@@ -831,12 +838,12 @@ public static class LGGraph
             r.Hidden = false;
             switch (r.Kind)
             {
-                case LGRowKind.Group:
+                case HGRowKind.Group:
                     r.Height = RowHeight;
                     y += RowHeight;
                     y = MeasureRows(r.Children, y);
                     break;
-                case LGRowKind.List:
+                case HGRowKind.List:
                     r.Height = RowHeight;
                     y += RowHeight;
                     if (r.Collapsed)
@@ -860,7 +867,7 @@ public static class LGGraph
     }
 
     /// <summary>把整個子樹壓到同一條列上並標記隱藏；高度保留是為了讓接點落在標題列中心。</summary>
-    private static void CollapseRows(List<LGRow> rows, float y, float height)
+    private static void CollapseRows(List<HGRow> rows, float y, float height)
     {
         foreach (var r in rows)
         {
@@ -872,15 +879,15 @@ public static class LGGraph
     }
 
     /// <summary>先算樹狀自動排版，再用記憶座標覆蓋（有記憶的節點以使用者擺放為準）。</summary>
-    private static void AutoLayout(LGModel model, LGGraphView view)
+    private static void AutoLayout(HGModel model, HGGraphView view)
     {
-        var children = new Dictionary<LGNodeView, List<LGNodeView>>();
-        foreach (var n in view.Nodes) children[n] = new List<LGNodeView>();
+        var children = new Dictionary<HGNodeView, List<HGNodeView>>();
+        foreach (var n in view.Nodes) children[n] = new List<HGNodeView>();
 
-        var roots = new List<LGNodeView>();
+        var roots = new List<HGNodeView>();
         foreach (var n in view.Nodes)
         {
-            LGNodeView parent = null;
+            HGNodeView parent = null;
             if (n.ParentRow != null)
             {
                 foreach (var p in view.Nodes)
@@ -897,8 +904,8 @@ public static class LGGraph
 
         // HEAD 先排、候選後排：候選節點不該插進 HEAD 前面。
         // 刻意不用 List.Sort——它不穩定，會把候選之間的相對順序打亂。
-        var heads = new List<LGNodeView>();
-        var loose = new List<LGNodeView>();
+        var heads = new List<HGNodeView>();
+        var loose = new List<HGNodeView>();
         foreach (var r in roots) (r.IsRoot ? heads : loose).Add(r);
 
         float cursorY = 40f;
@@ -912,7 +919,7 @@ public static class LGGraph
     }
 
     /// <summary>把節點放在 (x, y)，子節點往右排；回傳這棵子樹用掉的底部 Y。</summary>
-    private static float Place(LGNodeView node, float x, float y, Dictionary<LGNodeView, List<LGNodeView>> children)
+    private static float Place(HGNodeView node, float x, float y, Dictionary<HGNodeView, List<HGNodeView>> children)
     {
         // 節點高度含 NodeBottomPad、欄距與列距都不是格線倍數，直接累加會讓整理後的節點跟拖曳出來的節點對不到同一條線。
         // 一律往上取整到格線：只會把間距撐大，不會讓相鄰節點壓在一起。

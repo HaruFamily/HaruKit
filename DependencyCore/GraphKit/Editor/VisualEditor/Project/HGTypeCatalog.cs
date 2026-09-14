@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections.Generic;
@@ -6,8 +6,8 @@ using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 
-/// <summary>可建立的節點型別清單，依 LogicGraph [LGNodeView] 的分組整理。</summary>
-public static class LGTypeCatalog
+/// <summary>可建立的節點型別清單，依 LogicGraph [HGNodeView] 的分組整理。</summary>
+public static class HGTypeCatalog
 {
     private static readonly Dictionary<Type, List<Type>> cache = new();
 
@@ -38,10 +38,10 @@ public static class LGTypeCatalog
         }
         list.Sort((a, b) =>
         {
-            int c = string.Compare(LGReflect.TypeCategory(a), LGReflect.TypeCategory(b), StringComparison.Ordinal);
+            int c = string.Compare(HGReflect.TypeCategory(a), HGReflect.TypeCategory(b), StringComparison.Ordinal);
             if (c != 0) return c;
-            c = LGReflect.TypePriority(a).CompareTo(LGReflect.TypePriority(b));
-            return c != 0 ? c : string.Compare(LGReflect.TypeName(a), LGReflect.TypeName(b), StringComparison.Ordinal);
+            c = HGReflect.TypePriority(a).CompareTo(HGReflect.TypePriority(b));
+            return c != 0 ? c : string.Compare(HGReflect.TypeName(a), HGReflect.TypeName(b), StringComparison.Ordinal);
         });
         cache[baseType] = list;
         return list;
@@ -63,22 +63,22 @@ public static class LGTypeCatalog
             Debug.LogWarning($"[GraphKit] 找不到 {baseType?.Name} 的可用型別。");
             return;
         }
-        var dropdown = new LGTypeDropdown(new AdvancedDropdownState(), types, title, onPick);
+        var dropdown = new HGTypeDropdown(new AdvancedDropdownState(), types, title, onPick);
         dropdown.Show(rect);
     }
 
-    public static void ShowSourcePicker(Rect rect, List<LGSourceOption> options, string title = "變更來源")
+    public static void ShowSourcePicker(Rect rect, List<HGSourceOption> options, string title = "變更來源")
     {
         if (options == null || options.Count == 0)
         {
             Debug.LogWarning("[GraphKit] 找不到可用的 Node 來源。");
             return;
         }
-        new LGSourceDropdown(new AdvancedDropdownState(), options, title).Show(rect);
+        new HGSourceDropdown(new AdvancedDropdownState(), options, title).Show(rect);
     }
 }
 
-public class LGSourceOption
+public class HGSourceOption
 {
     public string Group;
     public string Name;
@@ -87,19 +87,19 @@ public class LGSourceOption
 }
 
 /// <summary>統一選擇 inline Node、Token 與 Asset 的搜尋下拉。</summary>
-public class LGSourceDropdown : AdvancedDropdown
+public class HGSourceDropdown : AdvancedDropdown
 {
     private class SourceItem : AdvancedDropdownItem
     {
-        public readonly LGSourceOption Option;
-        public SourceItem(LGSourceOption option) : base(option.IsCurrent ? "✓ " + option.Name : option.Name)
+        public readonly HGSourceOption Option;
+        public SourceItem(HGSourceOption option) : base(option.IsCurrent ? "✓ " + option.Name : option.Name)
             => Option = option;
     }
 
-    private readonly List<LGSourceOption> options;
+    private readonly List<HGSourceOption> options;
     private readonly string title;
 
-    public LGSourceDropdown(AdvancedDropdownState state, List<LGSourceOption> options, string title) : base(state)
+    public HGSourceDropdown(AdvancedDropdownState state, List<HGSourceOption> options, string title) : base(state)
     {
         this.options = options;
         this.title = title;
@@ -138,8 +138,8 @@ public class LGSourceDropdown : AdvancedDropdown
     }
 }
 
-/// <summary>型別選擇下拉：分組為資料夾，選項名稱用 [LGNodeView.Name]。</summary>
-public class LGTypeDropdown : AdvancedDropdown
+/// <summary>型別選擇下拉：分組為資料夾，選項名稱用 [HGNodeView.Name]。</summary>
+public class HGTypeDropdown : AdvancedDropdown
 {
     private class TypeItem : AdvancedDropdownItem
     {
@@ -151,7 +151,7 @@ public class LGTypeDropdown : AdvancedDropdown
     private readonly string title;
     private readonly Action<Type> onPick;
 
-    public LGTypeDropdown(AdvancedDropdownState state, List<Type> types, string title, Action<Type> onPick) : base(state)
+    public HGTypeDropdown(AdvancedDropdownState state, List<Type> types, string title, Action<Type> onPick) : base(state)
     {
         this.types = types;
         this.title = title;
@@ -166,14 +166,14 @@ public class LGTypeDropdown : AdvancedDropdown
 
         foreach (var t in types)
         {
-            string category = LGReflect.TypeCategory(t);
+            string category = HGReflect.TypeCategory(t);
             if (!folders.TryGetValue(category, out var folder))
             {
                 folder = new AdvancedDropdownItem(category);
                 folders[category] = folder;
                 root.AddChild(folder);
             }
-            folder.AddChild(new TypeItem(LGReflect.TypeName(t), t));
+            folder.AddChild(new TypeItem(HGReflect.TypeName(t), t));
         }
         return root;
     }

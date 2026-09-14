@@ -4,6 +4,7 @@ using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit;
 
 public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAsset
 {
@@ -93,7 +94,7 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAss
     public void SetTarget(ActionBase<TPack> action) => SetRoot(action == null ? null : new GraphNode(action));
     internal ActionBase<TPack> EditorGetAction() => Root?.GetBody<ActionBase<TPack>>();
 
-    // 「誰引用我」不存在資產身上：那是衍生資料，存了就會過期。編輯器要用時從 LGReferenceIndex 現算。
+    // 「誰引用我」不存在資產身上：那是衍生資料，存了就會過期。編輯器要用時從 HGReferenceIndex 現算。
 #endif
 }
 

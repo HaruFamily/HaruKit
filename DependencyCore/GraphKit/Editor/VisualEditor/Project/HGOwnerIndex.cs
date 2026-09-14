@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections.Generic;
@@ -7,7 +7,7 @@ using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 
 /// <summary>一個可編輯對象（含 LogicGraph 欄位的 SO）。</summary>
-public class LGOwnerEntry
+public class HGOwnerEntry
 {
     public ScriptableObject Owner;
     public string Name;
@@ -18,22 +18,22 @@ public class LGOwnerEntry
 /// <summary>
 /// 專案中所有「支援的類型」索引。用 GetMainAssetTypeAtPath 先過濾型別，只載入真的有 LogicGraph 欄位的資產。
 /// </summary>
-public static class LGOwnerIndex
+public static class HGOwnerIndex
 {
-    private static List<LGOwnerEntry> cache;
+    private static List<HGOwnerEntry> cache;
 
-    public static List<LGOwnerEntry> Entries => cache ??= Scan();
+    public static List<HGOwnerEntry> Entries => cache ??= Scan();
 
     public static bool HasCache => cache != null;
 
     public static void Refresh() => cache = Scan();
 
-    /// <summary>下次取用時才重掃。專案內容變動時由 <see cref="LGReferenceIndex"/> 呼叫。</summary>
+    /// <summary>下次取用時才重掃。專案內容變動時由 <see cref="HGReferenceIndex"/> 呼叫。</summary>
     public static void Invalidate() => cache = null;
 
-    private static List<LGOwnerEntry> Scan()
+    private static List<HGOwnerEntry> Scan()
     {
-        var result = new List<LGOwnerEntry>();
+        var result = new List<HGOwnerEntry>();
         var guids = AssetDatabase.FindAssets("t:ScriptableObject");
         try
         {
@@ -47,12 +47,12 @@ public static class LGOwnerIndex
                 var path = AssetDatabase.GUIDToAssetPath(guids[i]);
                 // 先看型別再決定要不要載入：整個專案的 SO 全載一次太慢。
                 var type = AssetDatabase.GetMainAssetTypeAtPath(path);
-                if (type == null || LGModel.FindSystemField(type) == null) continue;
+                if (type == null || HGModel.FindSystemField(type) == null) continue;
 
                 var so = AssetDatabase.LoadAssetAtPath<ScriptableObject>(path);
                 if (so == null) continue;
 
-                result.Add(new LGOwnerEntry
+                result.Add(new HGOwnerEntry
                 {
                     Owner = so,
                     Name = so.name,
@@ -77,13 +77,13 @@ public static class LGOwnerIndex
     /// <summary>開啟「選擇編輯對象」下拉（依型別分組，內建搜尋）。</summary>
     public static void ShowPicker(Rect rect, Action<ScriptableObject> onPick)
     {
-        var dropdown = new LGOwnerDropdown(new AdvancedDropdownState(), Entries, onPick);
+        var dropdown = new HGOwnerDropdown(new AdvancedDropdownState(), Entries, onPick);
         dropdown.Show(rect);
     }
 }
 
 /// <summary>可編輯對象的選擇下拉：資料夾＝型別，項目＝資產名稱。</summary>
-public class LGOwnerDropdown : AdvancedDropdown
+public class HGOwnerDropdown : AdvancedDropdown
 {
     private class OwnerItem : AdvancedDropdownItem
     {
@@ -91,10 +91,10 @@ public class LGOwnerDropdown : AdvancedDropdown
         public OwnerItem(string name, ScriptableObject owner) : base(name) => Owner = owner;
     }
 
-    private readonly List<LGOwnerEntry> entries;
+    private readonly List<HGOwnerEntry> entries;
     private readonly Action<ScriptableObject> onPick;
 
-    public LGOwnerDropdown(AdvancedDropdownState state, List<LGOwnerEntry> entries, Action<ScriptableObject> onPick)
+    public HGOwnerDropdown(AdvancedDropdownState state, List<HGOwnerEntry> entries, Action<ScriptableObject> onPick)
         : base(state)
     {
         this.entries = entries;
@@ -107,7 +107,7 @@ public class LGOwnerDropdown : AdvancedDropdown
         var root = new AdvancedDropdownItem("選擇編輯對象");
         if (entries.Count == 0)
         {
-            root.AddChild(new AdvancedDropdownItem("（專案裡找不到含 LogicGraph 的資產）"));
+            root.AddChild(new AdvancedDropdownItem("（專案裡找不到含節點圖的資產）"));
             return root;
         }
 

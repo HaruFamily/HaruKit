@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -9,13 +9,13 @@ using UnityEngine;
 /// <summary>
 /// 中欄畫布：焦點標頭、zoom group、格線、連線與節點本體繪製。
 /// </summary>
-public partial class LogicGraphWindow
+public partial class HaruGraphWindow
 {
     // ===== 中欄 =====
 
     private void DrawCenter(Rect r)
     {
-        LGStyles.Fill(r, LGStyles.Canvas);
+        HGStyles.Fill(r, HGStyles.Canvas);
 
         var header = new Rect(r.x, r.y, r.width, HeaderHeight);
 
@@ -34,14 +34,14 @@ public partial class LogicGraphWindow
 
     private void DrawFocusHeader(Rect r)
     {
-        LGStyles.Fill(r, LGStyles.PanelSection);
-        LGStyles.Frame(r, LGStyles.NodeBorder);
+        HGStyles.Fill(r, HGStyles.PanelSection);
+        HGStyles.Frame(r, HGStyles.NodeBorder);
 
-        if (focus.Kind == LGFocusKind.Asset)
+        if (focus.Kind == HGFocusKind.Asset)
         {
             var banner = new Rect(r.x + 2f, r.y + 2f, r.width - 4f, 18f);
-            LGStyles.Fill(banner, new Color(0.45f, 0.32f, 0.18f));
-            GUI.Label(banner, "　共用資產：修改會影響所有引用它的對象。存檔是獨立的一次交易。", LGStyles.RowLabel);
+            HGStyles.Fill(banner, new Color(0.45f, 0.32f, 0.18f));
+            GUI.Label(banner, "　共用資產：修改會影響所有引用它的對象。存檔是獨立的一次交易。", HGStyles.RowLabel);
             if (focus.Endpoint != null)
             {
                 // 移除／返回都在左欄變數庫：資產焦點下那一區列的就是這個資產的變數，
@@ -53,29 +53,29 @@ public partial class LogicGraphWindow
                 // 資產本體的標題就是檔名，和變數標題同一套手勢：雙擊改名、Enter 提交。
                 var asset = focus.AssetObject;
                 DrawInlineName(new Rect(r.x + 6f, r.y + 21f, r.width - 12f, 20f), asset, InlineSiteFocus,
-                    asset.name, asset.name, LGStyles.FocusTitle, "雙擊可改名（改的是 .asset 檔名）",
+                    asset.name, asset.name, HGStyles.FocusTitle, "雙擊可改名（改的是 .asset 檔名）",
                     name => RenameAssetFile(asset, name));
             }
             else GUI.Label(new Rect(r.x + 6f, r.y + 22f, r.width - 12f, 18f), focus.Title, EditorStyles.boldLabel);
             return;
         }
 
-        if (focus.Kind == LGFocusKind.Variable)
+        if (focus.Kind == HGFocusKind.Variable)
         {
             // 移除／返回都在左欄變數庫：點同一格退出、拖到「－ 移除變數」刪除，標頭不重複這兩顆。
             DrawVariableName(new Rect(r.x, r.y, r.width - 12f, 22f), focus.Endpoint);
             GUI.Label(new Rect(r.x + 6f, r.y + 22f, r.width - 12f, 16f),
                 focus.Endpoint?.Slot?.Node == null
                     ? "沒接來源＝具名常數，值直接填在 HEAD 的來源欄位。"
-                    : "這個變數的值由下面這棵子樹算出來。外部用它的名字查值。", LGStyles.Tiny);
+                    : "這個變數的值由下面這棵子樹算出來。外部用它的名字查值。", HGStyles.Tiny);
             return;
         }
 
-        if (focus.Kind == LGFocusKind.Action && focus.ActionSlot != null)
+        if (focus.Kind == HGFocusKind.Action && focus.ActionSlot != null)
         {
             DrawFocusName(r, focus.ActionSlot, focus.Title, name =>
             {
-                LGReflect.SetLabel(focus.ActionSlot, name);
+                HGReflect.SetLabel(focus.ActionSlot, name);
                 Invalidate();
                 return true;
             });
@@ -83,13 +83,13 @@ public partial class LogicGraphWindow
         else GUI.Label(new Rect(r.x + 6f, r.y + 3f, r.width - 12f, 18f), focus.Title, EditorStyles.boldLabel);
 
         string desc = "";
-        if (focus.Kind == LGFocusKind.Action && focus.ActionSlot != null)
+        if (focus.Kind == HGFocusKind.Action && focus.ActionSlot != null)
         {
-            var f = LGReflect.GetFormula(focus.ActionSlot);
-            desc = f != null ? LGReflect.TypeDescription(f.GetType()) : "這個動作還沒有內容，請從根節點下拉選擇。";
-            if (LGReflect.GetDisabled(focus.ActionSlot)) desc += "　（已停用，不會執行）";
+            var f = HGReflect.GetFormula(focus.ActionSlot);
+            desc = f != null ? HGReflect.TypeDescription(f.GetType()) : "這個動作還沒有內容，請從根節點下拉選擇。";
+            if (HGReflect.GetDisabled(focus.ActionSlot)) desc += "　（已停用，不會執行）";
         }
-        else if (focus.Kind == LGFocusKind.Timing)
+        else if (focus.Kind == HGFocusKind.Timing)
         {
             int groups = 0, actions = 0;
             foreach (var g in model.ReadGroups())
@@ -101,11 +101,11 @@ public partial class LogicGraphWindow
                 ? $"{groups} 個{RootNoun}、{actions} 個動作。{RootNoun}節點可自由擺位；跨{RootNoun}共用來源直接拉線即可。"
                 : $"還沒有任何{RootNoun}節點。在畫布空白處按右鍵新增一個。";
         }
-        else if (focus.Kind == LGFocusKind.None)
+        else if (focus.Kind == HGFocusKind.None)
         {
             desc = $"從右上角的{RootNoun}下拉跳到某個{RootNoun}，或從左欄選一個變數開始編輯。";
         }
-        GUI.Label(new Rect(r.x + 6f, r.y + 24f, r.width - 12f, 16f), desc, LGStyles.Tiny);
+        GUI.Label(new Rect(r.x + 6f, r.y + 24f, r.width - 12f, 16f), desc, HGStyles.Tiny);
     }
 
     /// <summary>變數畫布的標題就地改名。名字是外部查詢的 key，改名不影響圖內連線（那是物件參照）。</summary>
@@ -128,14 +128,14 @@ public partial class LogicGraphWindow
     private void DrawFocusName(Rect header, object target, string displayName, Func<string, bool> submit)
     {
         var nameRect = new Rect(header.x + 6f, header.y + 2f, header.width - 12f, 22f);
-        DrawInlineName(nameRect, target, InlineSiteFocus, displayName, displayName, LGStyles.FocusTitle, "雙擊可改名", submit);
+        DrawInlineName(nameRect, target, InlineSiteFocus, displayName, displayName, HGStyles.FocusTitle, "雙擊可改名", submit);
     }
 
     // ===== 畫布 =====
 
     private void DrawCanvas(Rect r)
     {
-        LGStyles.Fill(r, LGStyles.Canvas);
+        HGStyles.Fill(r, HGStyles.Canvas);
         DrawGrid(r);
 
         var e = Event.current;
@@ -155,7 +155,7 @@ public partial class LogicGraphWindow
         {
             if (graph != null)
             {
-                LGNodeView linkTarget = LinkTargetNode(graphMouse);
+                HGNodeView linkTarget = LinkTargetNode(graphMouse);
                 foreach (var node in graph.Nodes)
                 {
                     if (node.Hidden) continue;
@@ -166,8 +166,8 @@ public partial class LogicGraphWindow
                 {
                     var box = BoxRect();
                     var visual = new Rect(box.position + pan, box.size);
-                    LGStyles.Fill(visual, new Color(0.42f, 0.78f, 1f, 0.10f));
-                    LGStyles.Frame(visual, LGStyles.Link);
+                    HGStyles.Fill(visual, new Color(0.42f, 0.78f, 1f, 0.10f));
+                    HGStyles.Frame(visual, HGStyles.Link);
                 }
             }
         }
@@ -236,7 +236,7 @@ public partial class LogicGraphWindow
         if (step > 4f)
         {
             Vector2 offset = new Vector2(pan.x * zoom % step, pan.y * zoom % step);
-            Handles.color = LGStyles.Grid;
+            Handles.color = HGStyles.Grid;
             for (float x = r.x + offset.x; x < r.xMax; x += step)
                 Handles.DrawLine(new Vector3(x, r.y), new Vector3(x, r.yMax));
             for (float y = r.y + offset.y; y < r.yMax; y += step)
@@ -275,7 +275,7 @@ public partial class LogicGraphWindow
     /// <summary>
     /// 這條線接在選取的節點上：兩端任一端被選取就算。純視覺，不改資料也不影響命中測試。
     /// </summary>
-    private bool IsTracedLink(LGLink link)
+    private bool IsTracedLink(HGLink link)
         => selectedIds.Count > 0
             && (selectedIds.Contains(link.Target.Id) || selectedIds.Contains(link.ParentRow.OwnerNodeId));
 
@@ -285,12 +285,12 @@ public partial class LogicGraphWindow
     /// </summary>
     private void DrawEmptyTimingHint()
     {
-        if (focus.Kind != LGFocusKind.Timing || graph.Nodes.Count > 0) return;
+        if (focus.Kind != HGFocusKind.Timing || graph.Nodes.Count > 0) return;
 
-        var rect = new Rect(new Vector2(40f, 40f) + pan, new Vector2(LGGraph.NodeWidth, LGGraph.HeaderHeight + 4f));
-        LGStyles.RoundedFill(rect, LGStyles.NodeBody, NodeCornerRadius);
-        LGStyles.RoundedFrame(rect, LGStyles.NodeBorder, NodeCornerRadius, 1f);
-        if (GUI.Button(rect, $"＋ 新增第一個{RootNoun}節點", LGStyles.ListAdd))
+        var rect = new Rect(new Vector2(40f, 40f) + pan, new Vector2(HGGraph.NodeWidth, HGGraph.HeaderHeight + 4f));
+        HGStyles.RoundedFill(rect, HGStyles.NodeBody, NodeCornerRadius);
+        HGStyles.RoundedFrame(rect, HGStyles.NodeBorder, NodeCornerRadius, 1f);
+        if (GUI.Button(rect, $"＋ 新增第一個{RootNoun}節點", HGStyles.ListAdd))
             ShowAddTimingMenu(new Vector2(40f, 40f));
     }
 
@@ -311,7 +311,7 @@ public partial class LogicGraphWindow
 
     /// <summary>畫布中心的 graph 座標：從下拉新增的時機節點放這裡，使用者才看得到它。</summary>
     private Vector2 CanvasCenterInGraph()
-        => new Vector2(canvasRect.width * 0.5f / zoom - pan.x - LGGraph.NodeWidth * 0.5f,
+        => new Vector2(canvasRect.width * 0.5f / zoom - pan.x - HGGraph.NodeWidth * 0.5f,
                        canvasRect.height * 0.5f / zoom - pan.y);
 
     private const float InfoOverlayWidth = 300f;
@@ -324,7 +324,7 @@ public partial class LogicGraphWindow
     {
         if (graph == null || selectedIds.Count != 1) return;
 
-        LGNodeView node = null;
+        HGNodeView node = null;
         foreach (var n in graph.Nodes)
         {
             if (!selectedIds.Contains(n.Id)) continue;
@@ -333,24 +333,24 @@ public partial class LogicGraphWindow
         }
         if (node == null) return;
 
-        // 有物件卻沒有說明＝作者忘了寫 [LGNodeView] 描述，直接講出來，不要靜默留白。
+        // 有物件卻沒有說明＝作者忘了寫 [HGNodeView] 描述，直接講出來，不要靜默留白。
         string desc = !string.IsNullOrWhiteSpace(node.Desc) ? node.Desc
-            : node.Obj != null ? "（這個型別沒有 [LGNodeView] 說明）"
+            : node.Obj != null ? "（這個型別沒有 [HGNodeView] 說明）"
             : null;
 
         float width = Mathf.Min(InfoOverlayWidth, canvas.width - 16f);
         if (width < 80f) return;
 
         float textWidth = width - 16f;
-        float descHeight = desc == null ? 0f : LGStyles.NodeDesc.CalcHeight(new GUIContent(desc), textWidth);
+        float descHeight = desc == null ? 0f : HGStyles.NodeDesc.CalcHeight(new GUIContent(desc), textWidth);
         var panel = new Rect(canvas.x + 8f, canvas.y + 8f, width, 20f + descHeight + 10f);
 
-        LGStyles.RoundedFill(panel, new Color(0.10f, 0.11f, 0.13f, 0.88f), 4f);
-        LGStyles.RoundedFrame(panel, LGStyles.NodeBorder, 4f);
+        HGStyles.RoundedFill(panel, new Color(0.10f, 0.11f, 0.13f, 0.88f), 4f);
+        HGStyles.RoundedFrame(panel, HGStyles.NodeBorder, 4f);
         GUI.Label(new Rect(panel.x + 2f, panel.y + 4f, textWidth, 18f),
-            LGStyles.Elide(node.Title, LGStyles.OverlayTitle, textWidth), LGStyles.OverlayTitle);
+            HGStyles.Elide(node.Title, HGStyles.OverlayTitle, textWidth), HGStyles.OverlayTitle);
         if (desc != null)
-            GUI.Label(new Rect(panel.x + 2f, panel.y + 22f, textWidth, descHeight), desc, LGStyles.NodeDesc);
+            GUI.Label(new Rect(panel.x + 2f, panel.y + 22f, textWidth, descHeight), desc, HGStyles.NodeDesc);
     }
 
     /// <summary>graph space → window space；zoom clip 外要用視窗座標的地方（選單錨點、直線）走這裡。</summary>
@@ -364,8 +364,8 @@ public partial class LogicGraphWindow
         if (!ClipLine(canvasRect, ref from, ref to)) return;
 
         // 顏色只表達「這條線接的是選取中的節點」，透明度仍歸停用管——兩件事互不覆蓋。
-        Color color = traced ? LGStyles.NodeBorderSelected : Color.white;
-        if (dim) color.a *= LGStyles.LinkDisabled.a;
+        Color color = traced ? HGStyles.NodeBorderSelected : Color.white;
+        if (dim) color.a *= HGStyles.LinkDisabled.a;
 
         Color oldColor = Handles.color;
         Handles.color = color;
@@ -427,8 +427,8 @@ public partial class LogicGraphWindow
 
     private static bool DrawNoteToggle(Rect r, bool open, bool hasNote)
     {
-        if (open) LGStyles.RoundedFill(r, LGStyles.HeaderOverlay, 2f);
-        GUI.Label(r, "✎", open || hasNote ? LGStyles.HeaderButton : LGStyles.HeaderButtonDim);
+        if (open) HGStyles.RoundedFill(r, HGStyles.HeaderOverlay, 2f);
+        GUI.Label(r, "✎", open || hasNote ? HGStyles.HeaderButton : HGStyles.HeaderButtonDim);
         return GUI.Button(r, new GUIContent("",
             open ? "收起註解（內容保留）" : hasNote ? "展開註解" : "加上註解"), GUIStyle.none);
     }
@@ -442,10 +442,10 @@ public partial class LogicGraphWindow
 
     private static bool DrawDisableToggle(Rect r, bool disabled, int users)
     {
-        if (disabled) LGStyles.RoundedFill(r, LGStyles.HeaderOverlay, 2f);
+        if (disabled) HGStyles.RoundedFill(r, HGStyles.HeaderOverlay, 2f);
         disableIcon ??= EditorGUIUtility.IconContent("d_PauseButton On");
         GUI.Label(r, disableIcon?.image != null ? disableIcon : DisableFallbackIcon,
-            disabled ? LGStyles.HeaderButton : LGStyles.HeaderButtonDim);
+            disabled ? HGStyles.HeaderButton : HGStyles.HeaderButtonDim);
 
         // 載體是共用單位，停用一顆被多個欄位指著的節點會同時影響全部引用處，講清楚才不會變成遠端的靜默行為。
         string tip = disabled
@@ -458,38 +458,38 @@ public partial class LogicGraphWindow
     /// Header 底色：HEAD 深紫紅、Action 洋紅、Formula 琥珀、Asset 靛藍、變數 深綠。
     /// 容器型節點用漸層表達「容器 → 它承載的東西」：Action 型資產是靛藍→洋紅，變數是深綠→結果型別色。
     /// </summary>
-    private static void HeaderColors(LGNodeView node, out Color from, out Color to)
+    private static void HeaderColors(HGNodeView node, out Color from, out Color to)
     {
         // HEAD 從流程入口深紫紅漸層到目前焦點可接的內容色。
         if (node.IsRoot)
         {
-            from = LGStyles.HeaderHead;
-            to = node.IsActionNode ? LGStyles.HeaderAction : LGStyles.HeaderFormula;
+            from = HGStyles.HeaderHead;
+            to = node.IsActionNode ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
             return;
         }
         if (node.IsVariableNode)
         {
-            from = LGStyles.HeaderToken;
-            to = LGStyles.HeaderFormula;
+            from = HGStyles.HeaderToken;
+            to = HGStyles.HeaderFormula;
             return;
         }
         if (node.IsAssetNode)
         {
-            from = LGStyles.HeaderAsset;
-            to = node.ResultType == null ? LGStyles.HeaderAction : LGStyles.HeaderFormula;
+            from = HGStyles.HeaderAsset;
+            to = node.ResultType == null ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
             return;
         }
-        from = to = node.IsActionNode ? LGStyles.HeaderAction : LGStyles.HeaderFormula;
+        from = to = node.IsActionNode ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
     }
 
-    private void DrawNode(LGNodeView node, bool isLinkTarget)
+    private void DrawNode(HGNodeView node, bool isLinkTarget)
     {
         var rect = new Rect(node.Pos + pan, new Vector2(node.Width, node.Height));
 
-        LGStyles.RoundedFill(rect, LGStyles.NodeBody, NodeCornerRadius);
-        var header = new Rect(rect.x, rect.y, rect.width, LGGraph.HeaderHeight);
+        HGStyles.RoundedFill(rect, HGStyles.NodeBody, NodeCornerRadius);
+        var header = new Rect(rect.x, rect.y, rect.width, HGGraph.HeaderHeight);
         HeaderColors(node, out Color headerFrom, out Color headerTo);
-        LGStyles.HeaderFill(header, headerFrom, headerTo, NodeCornerRadius);
+        HGStyles.HeaderFill(header, headerFrom, headerTo, NodeCornerRadius);
 
         // Header 由右往左排：停用 → 註解 ✎ → 結果型別 chip，剩下的寬度全給名稱區（＝換來源的按鈕）。
         // 節點層級的問題鋪成 Header 底圖的一部份；參數列層級的問題直接把該列標紅。
@@ -543,18 +543,18 @@ public partial class LogicGraphWindow
 
         if (!string.IsNullOrEmpty(node.Chip))
         {
-            float chipWidth = Mathf.Min(LGStyles.NodeChip.CalcSize(new GUIContent(node.Chip)).x, 96f);
+            float chipWidth = Mathf.Min(HGStyles.NodeChip.CalcSize(new GUIContent(node.Chip)).x, 96f);
             var chipRect = new Rect(headerRight - chipWidth, rect.y + 3f, chipWidth, 14f);
-            LGStyles.RoundedFill(chipRect, LGStyles.HeaderOverlay, 3f);
-            GUI.Label(chipRect, LGStyles.Elide(node.Chip, LGStyles.NodeChip, chipWidth), LGStyles.NodeChip);
+            HGStyles.RoundedFill(chipRect, HGStyles.HeaderOverlay, 3f);
+            GUI.Label(chipRect, HGStyles.Elide(node.Chip, HGStyles.NodeChip, chipWidth), HGStyles.NodeChip);
             headerRight = chipRect.x - 2f;
         }
 
         // 左端只讓開輸出接點；停用鈕已固定在右上角。
-        float titleInset = node.IsRoot ? 0f : LGGraph.PortDiameter + 2f;
+        float titleInset = node.IsRoot ? 0f : HGGraph.PortDiameter + 2f;
 
         float titleWidth = Mathf.Max(24f, headerRight - rect.x - titleInset);
-        var titleRect = new Rect(rect.x + titleInset, rect.y, titleWidth, LGGraph.HeaderHeight);
+        var titleRect = new Rect(rect.x + titleInset, rect.y, titleWidth, HGGraph.HeaderHeight);
         // 命中測試在 zoom clip 外做，所以存 graph space。
         node.TitleRect = new Rect(titleRect.position - pan, titleRect.size);
 
@@ -565,12 +565,12 @@ public partial class LogicGraphWindow
             // 只有右端這顆 ▾ 是換來源的按鈕，名稱區其餘部分留給拖曳。
             // 整塊可按會讓「想搬節點」變成「開了選單」——Header 本來就是唯一的拖曳抓取區。
             // 空節點也一樣，不再例外：它同樣要能被拖著擺位。
-            var lift = LGStyles.HeaderOverlay;
+            var lift = HGStyles.HeaderOverlay;
             var arrow = new Rect(titleRect.xMax - SourceArrowWidth, titleRect.y + 2f,
                 SourceArrowWidth, titleRect.height - 4f);
             var hot = arrow;
-            LGStyles.RoundedFill(hot, new Color(lift.r, lift.g, lift.b, lift.a * 0.65f), 3f);
-            GUI.Label(arrow, new GUIContent("▾", node.IsPlaceholder ? "選擇來源" : "換來源"), LGStyles.HeaderButton);
+            HGStyles.RoundedFill(hot, new Color(lift.r, lift.g, lift.b, lift.a * 0.65f), 3f);
+            GUI.Label(arrow, new GUIContent("▾", node.IsPlaceholder ? "選擇來源" : "換來源"), HGStyles.HeaderButton);
             // 命中測試在 zoom clip 外做，所以存 graph space。
             node.SourceMenuRect = new Rect(hot.position - pan, hot.size);
             textWidth = titleWidth - SourceArrowWidth - 2f;
@@ -578,7 +578,7 @@ public partial class LogicGraphWindow
         // 色塊帶是底圖、沒有自己的熱區，問題提示併進名稱區：整條名稱都是可滑到的地方。
         string titleTip = !hasNodeIssue ? null
             : nodeError ? "此節點有錯誤，詳見 Console" : "此節點有警告，詳見 Console";
-        GUI.Label(titleRect, LGStyles.Elide(node.Title, LGStyles.NodeTitle, textWidth, titleTip), LGStyles.NodeTitle);
+        GUI.Label(titleRect, HGStyles.Elide(node.Title, HGStyles.NodeTitle, textWidth, titleTip), HGStyles.NodeTitle);
 
         // 資產與變數的本體是一列「選哪一個」的下拉；一般節點畫自己的參數列；空節點兩者都沒有。
         // 掛在未勾覆蓋的參數底下＝這一段不會被採用，整顆節點鎖住：控制項灰掉、拉線與清單編輯都擋掉。
@@ -597,8 +597,8 @@ public partial class LogicGraphWindow
             float noteTop = rect.y + node.ContentHeight - node.TipsHeight - 4f;
             var tipsField = new Rect(rect.x + 8f, noteTop, rect.width - 16f, node.TipsHeight);
             var noteRect = new Rect(rect.x + 4f, noteTop - 3f, rect.width - 8f, node.TipsHeight + 6f);
-            LGStyles.Fill(noteRect, LGStyles.NodeNote);
-            LGStyles.Frame(noteRect, LGStyles.NodeNoteBorder);
+            HGStyles.Fill(noteRect, HGStyles.NodeNote);
+            HGStyles.Frame(noteRect, HGStyles.NodeNoteBorder);
             EditorGUI.BeginChangeCheck();
             GUI.SetNextControlName(NoteControlName(node.Id));
             string tips = EditorGUI.TextArea(tipsField, node.Tips ?? "");
@@ -623,7 +623,7 @@ public partial class LogicGraphWindow
         // 暗紗蓋在內容之上、問題色條之下：不會求值的節點要一眼看出來，但它的錯誤與警告仍然要讀得到。
         // 暗紗只是貼圖：停用（Disabled）仍可編輯，鎖定（未勾覆蓋的參數底下）才由 DisabledScope 擋掉輸入。
         if (node.InDisabledSubtree || node.InLockedSubtree)
-            LGStyles.RoundedFill(rect, LGStyles.DisabledVeil, NodeCornerRadius);
+            HGStyles.RoundedFill(rect, HGStyles.DisabledVeil, NodeCornerRadius);
 
         // 問題色條：貼在節點頂緣、壓在 Header 上，紅＝錯誤、琥珀＝警告。
         // 放頂端不放底緣：單行 Formula 與空 Node 的 body 只有 3～11px，底緣那條在它們身上等於整個下半截。
@@ -631,28 +631,28 @@ public partial class LogicGraphWindow
         if (hasNodeIssue)
         {
             var issueBar = new Rect(rect.x, rect.y, rect.width, IssueBarHeight);
-            LGStyles.TopStripeFill(issueBar, nodeError ? LGStyles.Error : LGStyles.Warning, NodeCornerRadius);
+            HGStyles.TopStripeFill(issueBar, nodeError ? HGStyles.Error : HGStyles.Warning, NodeCornerRadius);
             GUI.Label(issueBar, new GUIContent("", nodeError ? "此節點有錯誤，詳見 Console" : "此節點有警告，詳見 Console"));
         }
 
         bool selected = selectedIds.Contains(node.Id);
         // 拉線期間：可以接的 Node 整個亮外框，滑鼠實際吸到的那個再加粗。
         bool linkCandidate = linking && linkRow != null && linkCompatibleNodeIds.Contains(node.Id);
-        Color borderColor = isLinkTarget ? LGStyles.Link
-            : linkCandidate ? new Color(LGStyles.Link.r, LGStyles.Link.g, LGStyles.Link.b, 0.55f)
-            : selected ? LGStyles.NodeBorderSelected
-            : node.IsRoot ? LGStyles.HeadBorder : LGStyles.NodeBorder;
+        Color borderColor = isLinkTarget ? HGStyles.Link
+            : linkCandidate ? new Color(HGStyles.Link.r, HGStyles.Link.g, HGStyles.Link.b, 0.55f)
+            : selected ? HGStyles.NodeBorderSelected
+            : node.IsRoot ? HGStyles.HeadBorder : HGStyles.NodeBorder;
         float thickness = isLinkTarget || selected ? 2f : linkCandidate ? 1.5f : node.IsRoot ? 2f : 1f;
 
         // HEAD 是整張圖的起點，再套一圈外光暈把它和一般節點分開（顏色會被選取／拉線狀態蓋過，光暈不會）。
         if (node.IsRoot)
         {
             var halo = new Rect(rect.x - 3f, rect.y - 3f, rect.width + 6f, rect.height + 6f);
-            LGStyles.RoundedFrame(halo, new Color(LGStyles.HeadBorder.r, LGStyles.HeadBorder.g, LGStyles.HeadBorder.b, 0.35f),
+            HGStyles.RoundedFrame(halo, new Color(HGStyles.HeadBorder.r, HGStyles.HeadBorder.g, HGStyles.HeadBorder.b, 0.35f),
                 NodeCornerRadius + 3f, 1f);
         }
 
-        LGStyles.RoundedFrame(rect, borderColor, NodeCornerRadius, thickness);
+        HGStyles.RoundedFrame(rect, borderColor, NodeCornerRadius, thickness);
         DrawNodePorts(node, rect);
     }
 
@@ -660,14 +660,14 @@ public partial class LogicGraphWindow
     /// 資產節點本體唯一的一列：像一般參數列那樣「標籤 + 下拉」，選的是「指到哪一個資產」。
     /// 換身分（Formula／Asset）是 Header 那顆 ▾ 的事，這裡只換對象。
     /// </summary>
-    private void DrawReferencePickerRow(LGNodeView node, Rect nodeRect)
+    private void DrawReferencePickerRow(HGNodeView node, Rect nodeRect)
     {
-        var row = new Rect(nodeRect.x, nodeRect.y + LGGraph.HeaderHeight, nodeRect.width, LGGraph.RowHeight);
+        var row = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight, nodeRect.width, HGGraph.RowHeight);
         float labelWidth = row.width * 0.34f;
 
         bool isVariable = node.IsVariableNode;
         GUI.Label(new Rect(row.x + 6f, row.y + 1f, labelWidth - 8f, row.height - 2f),
-            isVariable ? "變數" : "資產", LGStyles.RowLabel);
+            isVariable ? "變數" : "資產", HGStyles.RowLabel);
 
         var picker = new Rect(row.x + labelWidth, row.y + 1f, row.width - labelWidth - 8f, row.height - 3f);
         string label = isVariable
@@ -675,21 +675,21 @@ public partial class LogicGraphWindow
             : (node.Asset != null ? node.Asset.name : "（未指定）");
 
         if (!EditorGUI.DropdownButton(picker,
-                LGStyles.Elide(label, EditorStyles.miniPullDown, picker.width - 20f), FocusType.Keyboard)) return;
+                HGStyles.Elide(label, EditorStyles.miniPullDown, picker.width - 20f), FocusType.Keyboard)) return;
 
         if (isVariable) ShowVariablePicker(node, picker);
         else ShowAssetPicker(node, picker);
     }
 
     /// <summary>只列這個欄位收得下的資產。</summary>
-    private void ShowAssetPicker(LGNodeView node, Rect anchor)
+    private void ShowAssetPicker(HGNodeView node, Rect anchor)
     {
-        var options = new List<LGSourceOption>();
-        foreach (var entry in LGAssetIndex.Entries)
+        var options = new List<HGSourceOption>();
+        foreach (var entry in HGAssetIndex.Entries)
         {
             if (entry.Asset == null || !CanReplaceAssetNode(node, entry.Asset)) continue;
             var asset = entry.Asset;
-            options.Add(new LGSourceOption
+            options.Add(new HGSourceOption
             {
                 Name = entry.Name,
                 IsCurrent = node.Asset == asset,
@@ -702,31 +702,31 @@ public partial class LogicGraphWindow
             ShowNotification(new GUIContent("沒有相容的共用資產"));
             return;
         }
-        LGTypeCatalog.ShowSourcePicker(anchor, options, "選擇資產");
+        HGTypeCatalog.ShowSourcePicker(anchor, options, "選擇資產");
     }
 
     /// <summary>外框完成後最後畫接點；圓點完整位於 Node 內側。</summary>
-    private void DrawNodePorts(LGNodeView node, Rect nodeRect)
+    private void DrawNodePorts(HGNodeView node, Rect nodeRect)
     {
-        foreach (var row in LGGraph.AllRows(node.Rows))
+        foreach (var row in HGGraph.AllRows(node.Rows))
         {
             // 折疊的清單：子列的接點會全部疊在標題列上，所以只在標題列畫一顆代表「裡面有連線」，
             // 沒有它的話連線會停在節點邊緣的空白處，看起來像斷掉。
-            if (row.Kind == LGRowKind.List && row.Collapsed)
+            if (row.Kind == HGRowKind.List && row.Collapsed)
             {
                 if (!HasConnectedElement(row)) continue;
-                LGStyles.Port(PortRectOf(row, nodeRect), LGStyles.PortLive);
+                HGStyles.Port(PortRectOf(row, nodeRect), HGStyles.PortLive);
                 continue;
             }
             if (!row.IsLinkable) continue;
             var portRect = PortRectOf(row, nodeRect);
-            LGStyles.Port(portRect, SlotPortColor(row));
+            HGStyles.Port(portRect, SlotPortColor(row));
             DrawPortGlyph(row, portRect);
         }
 
         if (node.IsRoot) return;
-        LGStyles.Port(new Rect(nodeRect.x, nodeRect.y + LGGraph.HeaderHeight * 0.5f - LGGraph.PortRadius,
-            LGGraph.PortDiameter, LGGraph.PortDiameter), LGStyles.PortLive);
+        HGStyles.Port(new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight * 0.5f - HGGraph.PortRadius,
+            HGGraph.PortDiameter, HGGraph.PortDiameter), HGStyles.PortLive);
     }
 
     /// <summary>
@@ -734,56 +734,56 @@ public partial class LogicGraphWindow
     /// 那種列沒有子樹可收，圓上乾乾淨淨剛好也說明「這裡只能拉線」。
     /// 不掛 tooltip：接點在滑鼠移動的必經路徑上，跳說明框只會擋住底下的圖。
     /// </summary>
-    private void DrawPortGlyph(LGRow row, Rect portRect)
+    private void DrawPortGlyph(HGRow row, Rect portRect)
     {
-        if (LGReflect.GetNode(row.Slot) == null) return;
+        if (HGReflect.GetNode(row.Slot) == null) return;
 
-        string key = LGGraph.CollapseKey(row.OwnerNodeId, row);
+        string key = HGGraph.CollapseKey(row.OwnerNodeId, row);
         bool solo = soloSlotKey == key;
         bool hidden = effectiveHidden.Contains(key);
 
         // solo 額外墊一層底：它和一般展開都顯示 -，靠底色分辨「只看這一段」。
-        if (solo) LGStyles.RoundedFill(portRect, LGStyles.HeaderOverlay, LGGraph.PortRadius);
+        if (solo) HGStyles.RoundedFill(portRect, HGStyles.HeaderOverlay, HGGraph.PortRadius);
 
-        GUI.Label(portRect, hidden && !solo ? "+" : "-", LGStyles.PortGlyph);
+        GUI.Label(portRect, hidden && !solo ? "+" : "-", HGStyles.PortGlyph);
     }
 
     /// <summary>
     /// 接點圓的位置。**永遠貼齊節點右緣**，不因為那一列是不是清單元素而縮排——
     /// 所有接點排成一條垂直線是這張圖的基本語彙，讓開刪除鈕的是 ✕ 自己（它排到接點左邊）。
     /// </summary>
-    private static Rect PortRectOf(LGRow row, Rect nodeRect)
-        => new Rect(nodeRect.xMax - LGGraph.PortDiameter,
-            nodeRect.y + row.LocalY + row.Height * 0.5f - LGGraph.PortRadius,
-            LGGraph.PortDiameter, LGGraph.PortDiameter);
+    private static Rect PortRectOf(HGRow row, Rect nodeRect)
+        => new Rect(nodeRect.xMax - HGGraph.PortDiameter,
+            nodeRect.y + row.LocalY + row.Height * 0.5f - HGGraph.PortRadius,
+            HGGraph.PortDiameter, HGGraph.PortDiameter);
 
     /// <summary>折疊的清單裡有沒有已經接上來源的元素。</summary>
-    private static bool HasConnectedElement(LGRow listRow)
+    private static bool HasConnectedElement(HGRow listRow)
     {
-        foreach (var child in LGGraph.AllRows(listRow.Children))
-            if (child.Kind == LGRowKind.Slot && child.Slot != null && LGReflect.GetNode(child.Slot) != null) return true;
+        foreach (var child in HGGraph.AllRows(listRow.Children))
+            if (child.Kind == HGRowKind.Slot && child.Slot != null && HGReflect.GetNode(child.Slot) != null) return true;
         return false;
     }
 
-    private Color SlotPortColor(LGRow row)
+    private Color SlotPortColor(HGRow row)
     {
         // 從 Node 發點拉線時，收得下它的欄位接點先亮起來，使用者不用逐一試。
-        if (linking && linkNode != null && linkCompatibleRows.Contains(row)) return LGStyles.Link;
+        if (linking && linkNode != null && linkCompatibleRows.Contains(row)) return HGStyles.Link;
 
         bool hasIssue = Rep.HasIssue(row.Slot, out bool isError);
-        int useType = LGReflect.UseType(row.Slot);
-        return hasIssue && isError ? LGStyles.PortError
-            : useType == 1 || useType == 2 ? LGStyles.PortLive
-            : LGStyles.PortEmpty;
+        int useType = HGReflect.UseType(row.Slot);
+        return hasIssue && isError ? HGStyles.PortError
+            : useType == 1 || useType == 2 ? HGStyles.PortLive
+            : HGStyles.PortEmpty;
     }
 
     /// <summary>把每一列的圖面座標（命中測試與接點）更新成目前的節點位置。</summary>
-    private static void UpdateRowGeometry(LGNodeView node, List<LGRow> rows)
+    private static void UpdateRowGeometry(HGNodeView node, List<HGRow> rows)
     {
         foreach (var row in rows)
         {
             row.ScreenRect = new Rect(node.Pos.x, node.Pos.y + row.LocalY, node.Width, row.Height);
-            row.PortPos = new Vector2(node.Pos.x + node.Width - LGGraph.PortRadius,
+            row.PortPos = new Vector2(node.Pos.x + node.Width - HGGraph.PortRadius,
                 node.Pos.y + row.LocalY + row.Height * 0.5f);
             UpdateRowGeometry(node, row.Children);
         }

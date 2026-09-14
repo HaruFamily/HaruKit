@@ -1,19 +1,19 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System.IO;
 using UnityEditor;
 using UnityEngine;
 
 /// <summary>
-/// LogicGraph 共用資產的存放位置與命名規則。
+/// 共用資產的存放位置與命名規則。
 ///
 /// 位置由使用端專案決定，不由套件寫死：套件若硬指一個 Assets 底下的路徑，等於替每個安裝它的專案
 /// 決定資料夾配置，而且刪掉那個資料夾後下次抽出又會自己長回來。這裡改成第一次抽出時問使用者，
 /// 選擇存在 EditorPrefs（key 綁專案，換專案不互相污染）。
 /// </summary>
-public static class LGAssetStore
+public static class HGAssetStore
 {
-    private static readonly string PrefKey = $"LogicGraph.AssetFolder.{Application.dataPath.GetHashCode():X8}";
+    private static readonly string PrefKey = $"HaruGraph.AssetFolder.{Application.dataPath.GetHashCode():X8}";
 
     /// <summary>共用資產資料夾（"Assets/..." 相對路徑）。未設定或已被刪除時回傳空字串。</summary>
     public static string Folder
@@ -47,7 +47,7 @@ public static class LGAssetStore
     {
         folder = null;
 
-        string picked = EditorUtility.OpenFolderPanel("選擇 LogicGraph 共用資產存放資料夾", Application.dataPath, string.Empty);
+        string picked = EditorUtility.OpenFolderPanel("選擇共用資產存放資料夾", Application.dataPath, string.Empty);
         if (string.IsNullOrEmpty(picked)) return false;
 
         // AssetDatabase 只認 "Assets/" 開頭的相對路徑；選到專案外的資料夾一律擋掉。
@@ -73,7 +73,7 @@ public static class LGAssetStore
 
     private static string SanitizeFileName(string value)
     {
-        if (string.IsNullOrWhiteSpace(value)) return "LogicGraphAsset";
+        if (string.IsNullOrWhiteSpace(value)) return "GraphAsset";
 
         var chars = value.Trim().ToCharArray();
         const string invalid = "/\\:*?\"<>|";
@@ -81,7 +81,7 @@ public static class LGAssetStore
             if (char.IsControl(chars[i]) || invalid.IndexOf(chars[i]) >= 0) chars[i] = '_';
 
         string result = new string(chars).Trim('.', ' ');
-        return string.IsNullOrEmpty(result) ? "LogicGraphAsset" : result;
+        return string.IsNullOrEmpty(result) ? "GraphAsset" : result;
     }
 }
 }

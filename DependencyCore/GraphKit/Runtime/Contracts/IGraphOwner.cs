@@ -1,11 +1,11 @@
-namespace HaruFamily.Framework.LogicGraph
+namespace HaruFamily.DependencyCore.GraphKit
 {
-public interface ILogicGraphOwner
+public interface IGraphOwner
 {
-    void MarkLogicGraphDirty();
-    bool IsLogicGraphValidated();
+    void MarkGraphDirty();
+    bool IsGraphValidated();
 #if UNITY_EDITOR
-    void VerifyLogicGraph();
+    void VerifyGraph();
 
     /// <summary>
     /// 本載體實際會被觸發的時機。編輯器的時機選單只列這些值，接不到不會跑的時機。

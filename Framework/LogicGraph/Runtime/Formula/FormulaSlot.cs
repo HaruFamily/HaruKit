@@ -3,6 +3,7 @@ namespace HaruFamily.Framework.LogicGraph
 using Cysharp.Threading.Tasks;
 using System;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit;
 
 [Serializable]
 public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlotBase, IFormulaSlot<TResult, TPack>
@@ -47,7 +48,7 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
         }
     }
 
-    public override bool AcceptsBody(LogicGraphNode body) => body is TFormula;
+    public override bool AcceptsBody(GraphNodeContent body) => body is TFormula;
 
     public override bool AcceptsAsset(ScriptableObject asset) => asset is TAsset;
 

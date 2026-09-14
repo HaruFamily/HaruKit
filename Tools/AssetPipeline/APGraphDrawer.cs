@@ -1,6 +1,6 @@
-using HaruFamily.Framework.LogicGraph.Editor;
 using UnityEditor;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit.Editor;
 
 namespace HaruFamily.Tools.AssetPipeline.Editor
 {
@@ -66,7 +66,7 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
             {
                 var open = new GUIContent("開啟節點圖編輯器",
                     "節點圖是唯一的編輯入口；Inspector 不展開圖的內容。");
-                if (GUI.Button(openRect, open)) LogicGraphWindow.OpenFor(target);
+                if (GUI.Button(openRect, open)) HaruGraphWindow.OpenFor(target);
             }
 
             var pipeline = target as AssetPipeline;

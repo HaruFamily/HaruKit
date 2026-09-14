@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph
+namespace HaruFamily.DependencyCore.GraphKit
 {
 using System.Collections.Generic;
 

@@ -1,9 +1,9 @@
-using HaruFamily.Framework.LogicGraph;
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit;
 using Object = UnityEngine.Object;
 
 namespace HaruFamily.Tools.AssetPipeline
@@ -12,7 +12,7 @@ namespace HaruFamily.Tools.AssetPipeline
     /// 節點圖的走訪與驗證。把舊 PipelineGraphAnalyzer 的兩條檢查
     /// （prototype key 缺漏、dynamic key 在 producer 前被讀取）接到節點圖上。
     /// </summary>
-    // 時序是 AssetPipeline 獨有的概念，所以住在這裡而不是 GraphKit 的 LGValidator：
+    // 時序是 AssetPipeline 獨有的概念，所以住在這裡而不是 GraphKit 的 HGValidator：
     // 具名變數沒有先後，步驟清單才有。
     public static class APGraphVerifier
     {
@@ -126,7 +126,7 @@ namespace HaruFamily.Tools.AssetPipeline
                 return;
             }
 
-            LogicGraphNode body = node.BodyObject;
+            GraphNodeContent body = node.BodyObject;
             if (body == null) { errors.Add($"{path} 的節點是空的。"); return; }
             if (!slot.AcceptsBody(body)) { errors.Add($"{path} 接的 {body.GetType().Name} 不是管線步驟。"); return; }
 
@@ -170,7 +170,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
                 case NodeKind.Inline:
                 {
-                    LogicGraphNode body = node.BodyObject;
+                    GraphNodeContent body = node.BodyObject;
                     if (body == null) { errors.Add($"{path} 的節點是空的。"); return; }
                     if (!slot.AcceptsBody(body)) { errors.Add($"{path} 接的 {body.GetType().Name} 型別不相容。"); return; }
 

@@ -1,11 +1,11 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
 /// <summary>編輯器共用的顏色與 GUIStyle。GUIStyle 只能在 OnGUI 期間建立，全部走 lazy。</summary>
-public static class LGStyles
+public static class HGStyles
 {
     // 配色原則：**灰是結構，色只留給語意**。畫布、面板、節點本體、線全部無彩，
     // 只有「節點身分」（五種 Header）與「狀態」（選取、錯誤、警告）帶色相，色彩因此永遠等於資訊。
@@ -64,7 +64,7 @@ public static class LGStyles
     // 清單是「一段」而不是「一堆長得一樣的列」：底帶、斑馬紋與縱線都是結構訊息，所以只用明度不用色相。
     // 底帶壓暗而不是提亮：節點本體已經是中灰，往下沉才分得出「這一段是凹進去的清單」。
     public static readonly Color ListBand = new(0f, 0f, 0f, 0.24f);
-    // 斑馬紋做成雙向（一亮一暗）而不是單向疊一層淡白：Slot 元素右半被 LGValueField 的欄位框蓋住，
+    // 斑馬紋做成雙向（一亮一暗）而不是單向疊一層淡白：Slot 元素右半被 HGValueField 的欄位框蓋住，
     // 只剩左半在比對，單向 5% 的差異等於看不見。
     public static readonly Color ListStripeEven = new(1f, 1f, 1f, 0.07f);
     public static readonly Color ListStripeOdd = new(0f, 0f, 0f, 0.12f);

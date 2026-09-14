@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph
+namespace HaruFamily.DependencyCore.GraphKit
 {
 using System;
 using System.Collections;
@@ -8,7 +8,7 @@ using System.Runtime.Serialization;
 using UnityEngine;
 
 /// <summary>LogicGraph 序列化圖的反射深複製：保留 Unity 物件參考、共享參考與循環。</summary>
-public static class LogicGraphDeepCopy
+public static class GraphDeepCopy
 {
     public static T Copy<T>(T source) where T : class => Copy(source, null);
 

@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph
+namespace HaruFamily.DependencyCore.GraphKit
 {
 using System;
 using System.Collections;
@@ -92,6 +92,12 @@ public interface IGraphDocument : IOrphanPool, IEndpointOwner
     /// </summary>
     // 只給名詞，不要帶「節點」「群組」：那兩個字由編輯器自己按句子接上，接法各處不同。
     string RootNoun { get; }
+
+    /// <summary>
+    /// 節點圖編輯器的視窗標題。領域自己命名，編輯器不寫死。
+    /// </summary>
+    // 同一個 EditorWindow 服務所有領域，標題是使用者辨認「現在編的是哪一種圖」的唯一線索。
+    string WindowTitle { get; }
 
     /// <summary>這個 root 底下的項目清單。</summary>
     IList ItemsOf(object root);

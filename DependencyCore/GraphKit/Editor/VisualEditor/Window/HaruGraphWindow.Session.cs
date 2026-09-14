@@ -1,4 +1,4 @@
-﻿namespace HaruFamily.Framework.LogicGraph.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections.Generic;
@@ -8,7 +8,7 @@ using UnityEngine;
 /// <summary>
 /// 開窗入口、Owner 綁定、選取切換、存檔／取消／驗證交易，以及共用資產焦點的進出與引用者重驗。
 /// </summary>
-public partial class LogicGraphWindow
+public partial class HaruGraphWindow
 {
     // ===== 開啟 =====
 
@@ -23,40 +23,49 @@ public partial class LogicGraphWindow
         if (target is ScriptableObject so && IsSharedAsset(so)) window.OpenSharedAsset(so);
     }
 
-    [MenuItem("PinTools/LogicGraph")]
+    [MenuItem("PinTools/HaruGraph")]
     public static void OpenFromMenu() => OpenWindow();
 
-    private static LogicGraphWindow OpenWindow()
+    private static HaruGraphWindow OpenWindow()
     {
-        var window = GetWindow<LogicGraphWindow>("LogicGraph");
+        var window = GetWindow<HaruGraphWindow>();
         window.minSize = new Vector2(980f, 560f);
+        window.ApplyWindowTitle();
         window.Show();
         return window;
     }
 
+    /// <summary>標題跟著綁定的圖走，所以每次換對象都要重套一次。</summary>
+    // GetWindow 的 title 參數只在「建立」時生效，既存視窗會沿用序列化下來的舊標題。一律自己設。
+    private void ApplyWindowTitle()
+    {
+        string text = HGGraph.WindowTitle(model?.Doc);
+        if (titleContent.text != text) titleContent = new GUIContent(text);
+    }
+
     /// <summary>從資產開啟（Project 視窗右鍵）。Owner 直接編輯；公式／動作資產則找一個引用它的 Owner 當上下文後下鑽。</summary>
-    [MenuItem("Assets/LogicGraph", false, 30)]
+    [MenuItem("Assets/HaruGraph", false, 30)]
     public static void OpenFromAsset() => OpenFor(Selection.activeObject);
 
-    [MenuItem("Assets/LogicGraph", true)]
+    [MenuItem("Assets/HaruGraph", true)]
     public static bool OpenFromAssetValidate()
-        => Selection.activeObject is ScriptableObject so && (LGModel.CanEdit(so) || IsSharedAsset(so));
+        => Selection.activeObject is ScriptableObject so && (HGModel.CanEdit(so) || IsSharedAsset(so));
 
     /// <summary>是否為公式／動作資產（可下鑽編輯的共用資產）。</summary>
-    private static bool IsSharedAsset(ScriptableObject so) => so is ILogicGraphAsset;
+    private static bool IsSharedAsset(ScriptableObject so) => so is IGraphAsset;
 
     /// <summary>從引用者裡挑一個可以當上下文的 Owner。索引是現算的，只有專案裡真的沒人引用時才是空的。</summary>
     private static ScriptableObject FindContextOwner(ScriptableObject asset)
     {
-        foreach (var so in LGReferenceIndex.Users(asset))
-            if (so != null && LGModel.CanEdit(so)) return so;
+        foreach (var so in HGReferenceIndex.Users(asset))
+            if (so != null && HGModel.CanEdit(so)) return so;
         return null;
     }
 
     /// <summary>資產本身沒有變數清單與欄位型別，必須借一個引用它的 Owner 當上下文。</summary>
     private void OpenSharedAsset(ScriptableObject asset)
     {
-        if (focus.Kind == LGFocusKind.Asset)
+        if (focus.Kind == HGFocusKind.Asset)
         {
             if (focus.AssetObject == asset) return;
             if (!ConfirmLeaveAsset()) return;
@@ -68,7 +77,7 @@ public partial class LogicGraphWindow
         // 索引可能是這個 session 早先算的，中間有人在別的視窗存了檔。重掃一次再判定「真的沒人引用」。
         if (owner == null)
         {
-            LGReferenceIndex.Refresh();
+            HGReferenceIndex.Refresh();
             owner = FindContextOwner(asset);
         }
         if (owner == null)
@@ -90,7 +99,7 @@ public partial class LogicGraphWindow
         if (model == null) return false;
         foreach (var slot in model.AllSlots())
         {
-            if (LGReflect.GetAsset(slot) != asset) continue;
+            if (HGReflect.GetAsset(slot) != asset) continue;
             EnterAsset(asset, slot.GetType());
             return true;
         }
@@ -111,10 +120,10 @@ public partial class LogicGraphWindow
 
         returnFocus = null;
         ClearAssetDirty();
-        assetReport = new LGReport();
+        assetReport = new HGReport();
         assetVerifiedOnce = false;
         assetReportStale = false;
-        model = new LGModel();
+        model = new HGModel();
         if (!model.Bind(owner))
         {
             model = null;
@@ -123,17 +132,18 @@ public partial class LogicGraphWindow
         }
         pendingTarget = null;
 
-        focus = new LGFocus();
+        focus = new HGFocus();
         ClearViewState();
         graphDirty = true;
         verifiedOnce = false;
-        report = LGValidator.Run(model, includeMissingTypes: true);
+        report = HGValidator.Run(model, includeMissingTypes: true);
         verifiedOnce = true;
         reportStale = false;
 
         // 所有時機共用一張畫布，綁定後直接進去；不再有「記住上次看的是哪個時機」這件事。
         SetFocus(AllTimingsFocus());
 
+        ApplyWindowTitle();
         UpdateUnsavedState();
         Repaint();
         return true;
@@ -156,17 +166,17 @@ public partial class LogicGraphWindow
     {
         if (Selection.activeObject is ScriptableObject asset && IsSharedAsset(asset))
         {
-            if (focus.Kind == LGFocusKind.Asset && focus.AssetObject == asset) return;
+            if (focus.Kind == HGFocusKind.Asset && focus.AssetObject == asset) return;
 
             // 同一 Owner 的工作副本已引用此資產時可安全下鑽，不會丟掉 Owner 修改。
-            if (focus.Kind != LGFocusKind.Asset && TryEnterSharedAsset(asset))
+            if (focus.Kind != HGFocusKind.Asset && TryEnterSharedAsset(asset))
             {
                 pendingTarget = null;
                 Repaint();
                 return;
             }
 
-            bool assetSwitchBusy = model != null && (model.Dirty || (focus.Kind == LGFocusKind.Asset && assetDirty));
+            bool assetSwitchBusy = model != null && (model.Dirty || (focus.Kind == HGFocusKind.Asset && assetDirty));
             if (assetSwitchBusy) pendingTarget = asset;
             else { pendingTarget = null; OpenSharedAsset(asset); }
             Repaint();
@@ -181,7 +191,7 @@ public partial class LogicGraphWindow
         }
         if (model != null && ReferenceEquals(picked, model.Owner)) return;
 
-        bool busy = model != null && (model.Dirty || focus.Kind == LGFocusKind.Asset);
+        bool busy = model != null && (model.Dirty || focus.Kind == HGFocusKind.Asset);
         if (busy) pendingTarget = picked;
         else { pendingTarget = null; Bind(picked); }
         Repaint();
@@ -190,7 +200,7 @@ public partial class LogicGraphWindow
     /// <summary>離開目前編輯交易並回到無選取版型；任一存檔失敗或取消都留在原畫面。</summary>
     private bool TryReturnToIdle()
     {
-        if (focus.Kind == LGFocusKind.Asset && assetDirty)
+        if (focus.Kind == HGFocusKind.Asset && assetDirty)
         {
             int choice = EditorUtility.DisplayDialogComplex("資產未儲存",
                 "目前資產有未儲存的修改。", "存檔並離開", "捨棄並離開", "取消");
@@ -203,7 +213,7 @@ public partial class LogicGraphWindow
             if (choice == 0 && !SaveAsset()) return false;
         }
 
-        if (focus.Kind == LGFocusKind.Asset) ExitAsset();
+        if (focus.Kind == HGFocusKind.Asset) ExitAsset();
 
         if (!model.Dirty) return true;
 
@@ -241,11 +251,11 @@ public partial class LogicGraphWindow
     private void ReturnToIdle()
     {
         model = null;
-        focus = new LGFocus();
+        focus = new HGFocus();
         graph = null;
         graphDirty = true;
-        report = new LGReport();
-        assetReport = new LGReport();
+        report = new HGReport();
+        assetReport = new HGReport();
         verifiedOnce = false;
         reportStale = false;
         assetVerifiedOnce = false;
@@ -264,19 +274,19 @@ public partial class LogicGraphWindow
     private static UnityEngine.Object ResolveOwner(UnityEngine.Object selected)
     {
         if (selected == null) return null;
-        if (LGModel.CanEdit(selected)) return selected;
+        if (HGModel.CanEdit(selected)) return selected;
 
         if (selected is GameObject go)
         {
             foreach (var c in go.GetComponents<Component>())
-                if (c != null && LGModel.CanEdit(c)) return c;
+                if (c != null && HGModel.CanEdit(c)) return c;
         }
         return null;
     }
 
     private void OnEnable()
     {
-        saveChangesMessage = "LogicGraph 有未儲存的修改。是否在關閉前存檔？";
+        saveChangesMessage = $"{HGGraph.DefaultWindowTitle} 有未儲存的修改。是否在關閉前存檔？";
         consoleHeight = EditorPrefs.GetFloat(PrefConsoleHeight, 150f);
         consoleCollapsed = EditorPrefs.GetBool(PrefConsoleCollapsed, false);
         leftWidth = EditorPrefs.GetFloat(PrefLeftWidth, DefaultLeftWidth);
@@ -302,15 +312,15 @@ public partial class LogicGraphWindow
             return;
         }
 
-        if (focus.Kind == LGFocusKind.Asset)
+        if (focus.Kind == HGFocusKind.Asset)
         {
             if (assetDirty && !SaveAsset(false))
-                throw new InvalidOperationException("共用資產驗證失敗，LogicGraph 保留未儲存內容並取消關閉。");
-            if (focus.Kind == LGFocusKind.Asset) ExitAsset();
+                throw new InvalidOperationException($"共用資產驗證失敗，{HGGraph.WindowTitle(model?.Doc)} 保留未儲存內容並取消關閉。");
+            if (focus.Kind == HGFocusKind.Asset) ExitAsset();
         }
 
         if (model?.Dirty == true && !DoSave(false))
-            throw new InvalidOperationException("編輯對象驗證失敗，LogicGraph 保留未儲存內容並取消關閉。");
+            throw new InvalidOperationException($"編輯對象驗證失敗，{HGGraph.WindowTitle(model?.Doc)} 保留未儲存內容並取消關閉。");
 
         UpdateUnsavedState();
         base.SaveChanges();
@@ -318,7 +328,7 @@ public partial class LogicGraphWindow
 
     public override void DiscardChanges()
     {
-        if (focus.Kind == LGFocusKind.Asset) ExitAsset();
+        if (focus.Kind == HGFocusKind.Asset) ExitAsset();
         if (model?.Dirty == true)
         {
             model.Reload();
@@ -334,17 +344,17 @@ public partial class LogicGraphWindow
         hasUnsavedChanges = HasUnsavedWork;
         if (!hasUnsavedChanges) return;
 
-        string ownerName = model?.Owner != null ? model.Owner.name : "LogicGraph";
-        saveChangesMessage = focus.Kind == LGFocusKind.Asset && assetDirty
+        string ownerName = model?.Owner != null ? model.Owner.name : HGGraph.WindowTitle(model?.Doc);
+        saveChangesMessage = focus.Kind == HGFocusKind.Asset && assetDirty
             ? $"共用資產與 '{ownerName}' 有未儲存的修改。是否在關閉前存檔？"
             : $"'{ownerName}' 有未儲存的修改。是否在關閉前存檔？";
     }
 
     private void DoVerify(bool silent)
     {
-        if (focus.Kind == LGFocusKind.Asset)
+        if (focus.Kind == HGFocusKind.Asset)
         {
-            assetReport = LGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
+            assetReport = HGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
             assetVerifiedOnce = true;
             assetReportStale = false;
             if (assetReport.ErrorCount > 0) { consoleCollapsed = false; consoleTab = 1; }
@@ -352,7 +362,7 @@ public partial class LogicGraphWindow
             return;
         }
 
-        report = LGValidator.Run(model, includeMissingTypes: true);
+        report = HGValidator.Run(model, includeMissingTypes: true);
         verifiedOnce = true;
         reportStale = false;
         if (report.ErrorCount > 0) { consoleCollapsed = false; consoleTab = 1; }
@@ -379,7 +389,7 @@ public partial class LogicGraphWindow
             return false;
         }
         // Owner 的引用內容變了，反向索引跟著失效。下次要用時才重算，這裡不掃。
-        LGReferenceIndex.Invalidate();
+        HGReferenceIndex.Invalidate();
         AssetDatabase.SaveAssets();
         UpdateUnsavedState();
         ShowNotification(new GUIContent("已存檔"));
@@ -403,7 +413,7 @@ public partial class LogicGraphWindow
     // ===== 資產焦點（獨立存檔交易）=====
 
     /// <summary>下鑽進資產內部編輯。編輯的是資產內容的工作副本，存檔才寫回資產檔案。</summary>
-    private void EnterAsset(LGNodeView node)
+    private void EnterAsset(HGNodeView node)
     {
         if (node.Asset == null || node.ParentSlot == null) return;
         EnterAsset(node.Asset, node.ParentSlot.GetType());
@@ -418,11 +428,11 @@ public partial class LogicGraphWindow
         if (endpoint == null) return;
         if (ReferenceEquals(focus.Endpoint, endpoint)) return;
 
-        if (focus.Kind == LGFocusKind.Asset)
+        if (focus.Kind == HGFocusKind.Asset)
         {
-            SetFocus(new LGFocus
+            SetFocus(new HGFocus
             {
-                Kind = LGFocusKind.Asset,
+                Kind = HGFocusKind.Asset,
                 AssetObject = focus.AssetObject,
                 AssetHostSlot = focus.AssetHostSlot,
                 AssetOrphans = focus.AssetOrphans,
@@ -432,7 +442,7 @@ public partial class LogicGraphWindow
         }
         else
         {
-            SetFocus(new LGFocus { Kind = LGFocusKind.Variable, Endpoint = endpoint });
+            SetFocus(new HGFocus { Kind = HGFocusKind.Variable, Endpoint = endpoint });
         }
         selectedIds.Clear();
         graphDirty = true;
@@ -443,11 +453,11 @@ public partial class LogicGraphWindow
     private void ExitVariable()
     {
         if (focus.Endpoint == null) return;
-        if (focus.Kind == LGFocusKind.Asset)
+        if (focus.Kind == HGFocusKind.Asset)
         {
-            SetFocus(new LGFocus
+            SetFocus(new HGFocus
             {
-                Kind = LGFocusKind.Asset,
+                Kind = HGFocusKind.Asset,
                 AssetObject = focus.AssetObject,
                 AssetHostSlot = focus.AssetHostSlot,
                 AssetOrphans = focus.AssetOrphans,
@@ -465,16 +475,16 @@ public partial class LogicGraphWindow
     {
         if (asset == null) return;
         // 已經在這個資產裡：從變數子畫布回到資產本體，不重開交易。
-        if (focus.Kind == LGFocusKind.Asset && focus.AssetObject == asset)
+        if (focus.Kind == HGFocusKind.Asset && focus.AssetObject == asset)
         {
             if (focus.Endpoint != null) ExitVariable();
             SelectAssetInProject(asset);
             return;
         }
-        LGFocus back = focus.Kind == LGFocusKind.Asset ? returnFocus : focus;
-        if (focus.Kind == LGFocusKind.Asset && !ConfirmLeaveAsset()) return;
+        HGFocus back = focus.Kind == HGFocusKind.Asset ? returnFocus : focus;
+        if (focus.Kind == HGFocusKind.Asset && !ConfirmLeaveAsset()) return;
 
-        object host = slotType != null ? LGReflect.CreateInstance(slotType) : null;
+        object host = slotType != null ? HGReflect.CreateInstance(slotType) : null;
         if (host == null)
         {
             ShowNotification(new GUIContent("無法編輯：找不到這個資產對應的欄位型別"));
@@ -484,23 +494,23 @@ public partial class LogicGraphWindow
         // 內容、候選與變數必須同一次複製：變數節點指著端點物件，分幾次抄就會抄成幾份不相干的端點。
         var pack = new List<object>
         {
-            LGReflect.AssetRoot(asset),
-            LGReflect.Orphans(asset) ?? new List<GraphNode>(),
-            LGReflect.Endpoints(asset) ?? new List<GraphEndpoint>(),
+            HGReflect.AssetRoot(asset),
+            HGReflect.Orphans(asset) ?? new List<GraphNode>(),
+            HGReflect.Endpoints(asset) ?? new List<GraphEndpoint>(),
         };
-        var packCopy = LogicGraphDeepCopy.Copy(pack);
+        var packCopy = GraphDeepCopy.Copy(pack);
         // 根節點連載體一起抄進容器槽：座標、備註、Id 都在載體上，容器槽本身是拋棄式的。
-        LGReflect.SetNode(host, packCopy?[0] as GraphNode);
+        HGReflect.SetNode(host, packCopy?[0] as GraphNode);
 
-        SetFocus(new LGFocus
+        SetFocus(new HGFocus
         {
-            Kind = LGFocusKind.Asset,
+            Kind = HGFocusKind.Asset,
             AssetObject = asset,
             AssetHostSlot = host,
             AssetOrphans = packCopy?[1] as List<GraphNode> ?? new List<GraphNode>(),
             AssetEndpoints = packCopy?[2] as List<GraphEndpoint> ?? new List<GraphEndpoint>(),
         });
-        returnFocus = back ?? new LGFocus();
+        returnFocus = back ?? new HGFocus();
         ClearAssetDirty();
         // 每個資產是一次獨立交易，復原歷程跟著交易開始；進來當下的狀態就是第一次修改要退回的地方。
         assetHistory.Reset(CaptureAssetState());
@@ -537,7 +547,7 @@ public partial class LogicGraphWindow
             return false;
         }
 
-        int useType = LGReflect.UseType(host);
+        int useType = HGReflect.UseType(host);
         if (useType == 2 || useType == 3)
         {
             if (showDialog)
@@ -555,20 +565,20 @@ public partial class LogicGraphWindow
         // 寫回也是一次抄三份：內容裡的變數節點與變數清單必須指到同一批端點物件。
         var pack = new List<object>
         {
-            useType == 1 ? LGReflect.GetNode(host) : null,
+            useType == 1 ? HGReflect.GetNode(host) : null,
             focus.AssetOrphans ?? new List<GraphNode>(),
             focus.AssetEndpoints ?? new List<GraphEndpoint>(),
         };
-        var packCopy = LogicGraphDeepCopy.Copy(pack);
+        var packCopy = GraphDeepCopy.Copy(pack);
         setRoot.Invoke(asset, new object[] { packCopy?[0] as GraphNode });
 
-        var storedOrphans = LGReflect.Orphans(asset);
+        var storedOrphans = HGReflect.Orphans(asset);
         if (storedOrphans != null)
         {
             storedOrphans.Clear();
             if (packCopy?[1] is List<GraphNode> orphanCopy) storedOrphans.AddRange(orphanCopy);
         }
-        if (LGReflect.Endpoints(asset) is List<GraphEndpoint> storedEndpoints)
+        if (HGReflect.Endpoints(asset) is List<GraphEndpoint> storedEndpoints)
         {
             storedEndpoints.Clear();
             if (packCopy?[2] is List<GraphEndpoint> endpointCopy) storedEndpoints.AddRange(endpointCopy);
@@ -611,8 +621,8 @@ public partial class LogicGraphWindow
         assetHistory.Reset(null);
         assetVerifiedOnce = false;
         assetReportStale = false;
-        assetReport = new LGReport();
-        SetFocus(back != null && back.Kind != LGFocusKind.None ? back : AllTimingsFocus());
+        assetReport = new HGReport();
+        SetFocus(back != null && back.Kind != HGFocusKind.None ? back : AllTimingsFocus());
         DoVerify(true);
         UpdateUnsavedState();
         Repaint();
@@ -629,15 +639,15 @@ public partial class LogicGraphWindow
     {
         var failed = new List<string>();
         var touched = 0;
-        foreach (var so in LGReferenceIndex.Users(asset as ScriptableObject))
+        foreach (var so in HGReferenceIndex.Users(asset as ScriptableObject))
         {
             // 索引是這個 session 算的，中間可能有人刪掉資產；碰 name 前先擋掉已銷毀的引用。
-            if (so == null || so is not ILogicGraphOwner owner) continue;
+            if (so == null || so is not IGraphOwner owner) continue;
 
-            bool wasValidated = owner.IsLogicGraphValidated();
-            owner.MarkLogicGraphDirty();
-            owner.VerifyLogicGraph();
-            bool nowValidated = owner.IsLogicGraphValidated();
+            bool wasValidated = owner.IsGraphValidated();
+            owner.MarkGraphDirty();
+            owner.VerifyGraph();
+            bool nowValidated = owner.IsGraphValidated();
 
             if (!nowValidated) failed.Add(so.name);
             if (wasValidated == nowValidated) continue;

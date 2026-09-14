@@ -1,18 +1,18 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
 using System.Collections.Generic;
 
 /// <summary>一則驗證訊息：在哪裡、是什麼問題、怎麼處理。</summary>
-public class LGIssue
+public class HGIssue
 {
     public bool IsError;
     public string Message;
     public string Where;
     public string Fix;
 
-    public LGFocus Focus;      // 點擊要跳到的焦點
+    public HGFocus Focus;      // 點擊要跳到的焦點
     public object Slot;        // 出問題的參數欄位（可空）
     public object Node;        // 出問題的節點（可空）
 
@@ -20,9 +20,9 @@ public class LGIssue
 }
 
 /// <summary>驗證結果彙總。</summary>
-public class LGReport
+public class HGReport
 {
-    public List<LGIssue> Issues = new();
+    public List<HGIssue> Issues = new();
     public DateTime Time = DateTime.Now;
 
     public int ErrorCount
@@ -33,7 +33,7 @@ public class LGReport
     public bool CanSave => ErrorCount == 0;
 
     /// <summary>某個焦點下的問題數（右欄動作清單與時機下拉要顯示）。</summary>
-    public void CountFor(LGFocus focus, out int errors, out int warnings)
+    public void CountFor(HGFocus focus, out int errors, out int warnings)
     {
         errors = 0; warnings = 0;
         foreach (var i in Issues)
@@ -61,19 +61,19 @@ public class LGReport
 /// <summary>
 /// 依需求書 §10 產生結構化驗證訊息。跟 Core 的 Verify 規則同源，但額外帶「跳轉位置」，Console 才能一鍵定位。
 /// </summary>
-public static class LGValidator
+public static class HGValidator
 {
     /// <summary>
     /// 圖的內容規則只有一套，編輯時與存檔時跑的是同一份（含 Token 循環與 Asset 參照循環）。
     /// includeMissingTypes 另外處理：它檢查的是 Owner 資產本身，編輯工作副本不會改變它，只在綁定與存檔時才有意義。
     /// </summary>
-    public static LGReport Run(LGModel model, bool includeMissingTypes = false)
+    public static HGReport Run(HGModel model, bool includeMissingTypes = false)
     {
         if (probeDepth == 0) assetHealth.Clear();
-        var report = new LGReport();
+        var report = new HGReport();
         if (model?.Data == null) return report;
 
-        var tokens = LGModel.ReadTokens(model.OwnerEndpoints);
+        var tokens = HGModel.ReadTokens(model.OwnerEndpoints);
         var checkedAssets = new HashSet<UnityEngine.Object>();
 
         // 1. 變數本身：名稱空白、名稱重複（同族內唯一）
@@ -97,16 +97,16 @@ public static class LGValidator
             {
                 var slot = g.Actions[i];
                 if (slot == null) continue;
-                var focus = new LGFocus
+                var focus = new HGFocus
                 {
-                    Kind = LGFocusKind.Action,
+                    Kind = HGFocusKind.Action,
                     Timing = g.Timing,
                     ActionList = g.Actions,
                     ActionIndex = i,
                     ActionSlot = slot,
                 };
-                bool disabled = LGReflect.GetDisabled(slot) || (LGReflect.GetNode(slot)?.Disabled ?? false);
-                if (LGReflect.UseType(slot) == 0)
+                bool disabled = HGReflect.GetDisabled(slot) || (HGReflect.GetNode(slot)?.Disabled ?? false);
+                if (HGReflect.UseType(slot) == 0)
                     Issue(report, disabled, focus, $"{g.Timing} 第 {i + 1} 個動作", "尚未指定 Action 類型",
                         "在空 Action Node 的下拉選單選擇一個 Action。", slot, null);
                 WalkTree(report, model, focus, slot, $"{g.Timing} 第 {i + 1} 個動作", disabled);
@@ -151,21 +151,21 @@ public static class LGValidator
     }
 
     /// <summary>只驗一棵子樹（資產焦點用）。</summary>
-    public static LGReport RunSubtree(LGModel model, LGFocus focus, object rootSlot, string where)
+    public static HGReport RunSubtree(HGModel model, HGFocus focus, object rootSlot, string where)
     {
         if (probeDepth == 0) assetHealth.Clear();
-        var report = new LGReport();
+        var report = new HGReport();
         if (model?.Data == null || rootSlot == null) return report;
 
         WalkTree(report, model, focus, rootSlot, where, false);
         ValidateAssetCycles(report, focus, rootSlot, focus?.AssetObject, where, new HashSet<UnityEngine.Object>());
 
-        var rootCarrier = LGReflect.GetNode(rootSlot);
+        var rootCarrier = HGReflect.GetNode(rootSlot);
         if (rootCarrier?.Kind == NodeKind.Token)
             Err(report, focus, where, "資產內容不能只是一個變數引用",
                 "資產的內容要是公式或動作；要對外開參數請用左欄的變數清單。", rootSlot, rootCarrier);
 
-        var tokens = LGModel.ReadTokens(focus?.AssetEndpoints);
+        var tokens = HGModel.ReadTokens(focus?.AssetEndpoints);
         var seen = new HashSet<(Type, string)>();
         foreach (var token in tokens)
         {
@@ -190,30 +190,30 @@ public static class LGValidator
     /// 但呼叫端只拿一個是非——細項留在資產畫布裡報，才不會在改不了它的畫布上列一堆跳不過去的訊息。
     /// </summary>
     /// hostSlotType：資產內容要塞進哪一種欄位才驗得動（＝引用它的那個欄位型別）。資產本身不記這件事。
-    public static bool AssetHasError(LGModel model, Type hostSlotType, UnityEngine.Object asset)
+    public static bool AssetHasError(HGModel model, Type hostSlotType, UnityEngine.Object asset)
     {
         if (model == null || asset == null || hostSlotType == null) return false;
         if (assetHealth.TryGetValue(asset, out bool cached)) return cached;
         // 先佔位：巢狀引用繞回自己時當成沒問題，循環本身由 ValidateAssetCycles 專門報。
         assetHealth[asset] = false;
 
-        var root = LGReflect.AssetRoot(asset);
+        var root = HGReflect.AssetRoot(asset);
         if (root == null) return false;   // 空資產：資產畫布也不報，這裡跟著不報
-        object host = LGReflect.CreateInstance(hostSlotType);
+        object host = HGReflect.CreateInstance(hostSlotType);
         if (host == null) return false;
-        LGReflect.SetNode(host, root);
+        HGReflect.SetNode(host, root);
 
-        var probeFocus = new LGFocus
+        var probeFocus = new HGFocus
         {
-            Kind = LGFocusKind.Asset,
+            Kind = HGFocusKind.Asset,
             AssetObject = asset,
             AssetHostSlot = host,
-            AssetOrphans = LGReflect.Orphans(asset),
-            AssetEndpoints = LGReflect.Endpoints(asset),
+            AssetOrphans = HGReflect.Orphans(asset),
+            AssetEndpoints = HGReflect.Endpoints(asset),
         };
 
         probeDepth++;
-        LGReport probe;
+        HGReport probe;
         try { probe = RunSubtree(model, probeFocus, host, asset.name); }
         finally { probeDepth--; }
 
@@ -223,13 +223,13 @@ public static class LGValidator
     }
 
     /// <summary>問題要跳回那個變數自己的畫布。</summary>
-    private static LGFocus VariableFocus(LGToken token)
-        => new LGFocus { Kind = LGFocusKind.Variable, Endpoint = token?.Endpoint };
+    private static HGFocus VariableFocus(HGToken token)
+        => new HGFocus { Kind = HGFocusKind.Variable, Endpoint = token?.Endpoint };
 
-    private static LGFocus AssetVariableFocus(LGFocus assetFocus, LGToken token)
-        => new LGFocus
+    private static HGFocus AssetVariableFocus(HGFocus assetFocus, HGToken token)
+        => new HGFocus
         {
-            Kind = LGFocusKind.Asset,
+            Kind = HGFocusKind.Asset,
             AssetObject = assetFocus?.AssetObject,
             AssetHostSlot = assetFocus?.AssetHostSlot,
             AssetOrphans = assetFocus?.AssetOrphans,
@@ -237,7 +237,7 @@ public static class LGValidator
             Endpoint = token?.Endpoint,
         };
 
-    private static void ValidateToken(LGReport report, LGModel model, LGFocus focus, LGToken token)
+    private static void ValidateToken(HGReport report, HGModel model, HGFocus focus, HGToken token)
     {
         if (token?.Endpoint == null) return;
         if (token.Endpoint.Slot == null)
@@ -247,11 +247,11 @@ public static class LGValidator
             return;
         }
         if (string.IsNullOrEmpty(token.Key))
-            Err(report, focus, $"{LGReflect.ResultTypeName(token.ResultType)} 變數", "沒有名稱",
+            Err(report, focus, $"{HGReflect.ResultTypeName(token.ResultType)} 變數", "沒有名稱",
                 "取一個名字；外部是用名字查它的值。", null, token.Endpoint);
     }
 
-    private static void WalkTokenCarrier(LGReport report, LGModel model, LGFocus focus, LGToken token,
+    private static void WalkTokenCarrier(HGReport report, HGModel model, HGFocus focus, HGToken token,
         HashSet<UnityEngine.Object> checkedAssets, UnityEngine.Object rootAsset)
     {
         if (token?.Endpoint?.Slot == null) return;
@@ -262,26 +262,26 @@ public static class LGValidator
 
     // ===== 節點樹走訪 =====
 
-    private static void WalkTree(LGReport report, LGModel model, LGFocus focus, object slot,
+    private static void WalkTree(HGReport report, HGModel model, HGFocus focus, object slot,
         string where, bool disabled)
     {
-        var visited = new HashSet<object>(LGRefComparer.Instance);
+        var visited = new HashSet<object>(HGRefComparer.Instance);
         WalkSlot(report, model, focus, slot, where, visited, disabled);
     }
 
-    private static void WalkSlot(LGReport report, LGModel model, LGFocus focus, object slot,
+    private static void WalkSlot(HGReport report, HGModel model, HGFocus focus, object slot,
         string where, HashSet<object> visited, bool disabled)
     {
         if (slot == null || !visited.Add(slot)) return;
 
-        int useType = LGReflect.UseType(slot);
+        int useType = HGReflect.UseType(slot);
 
         // 停用往下傳染：載體停用後整棵子樹都不求值，殘缺一律降成警告。
-        disabled = disabled || (LGReflect.GetNode(slot)?.Disabled ?? false);
+        disabled = disabled || (HGReflect.GetNode(slot)?.Disabled ?? false);
 
         if (useType == 1)
         {
-            var formula = LGReflect.GetFormula(slot);
+            var formula = HGReflect.GetFormula(slot);
             if (formula == null)
                 Issue(report, disabled, focus, where, "欄位設為公式，但內容是空的", "選一個公式，或把模式改回常數。", slot, null);
             else
@@ -289,10 +289,10 @@ public static class LGValidator
         }
         else if (useType == 2)
         {
-            var asset = LGReflect.GetAsset(slot);
+            var asset = HGReflect.GetAsset(slot);
             if (asset == null)
                 Issue(report, disabled, focus, where, "欄位設為資產，但沒有指定資產", "指定一個資產，或把模式改回常數。", slot, null);
-            var carrier = LGReflect.GetNode(slot);
+            var carrier = HGReflect.GetNode(slot);
             ValidateAssetBindings(report, focus, carrier, where);
 
             // 資產內部殘缺在這張畫布上修不了，所以只報一條入口級錯誤讓人跳進去；不報的話會變成
@@ -311,17 +311,17 @@ public static class LGValidator
         else if (useType == 3)
         {
             // 端點被刪掉時參照會變 null，這裡看得到；不會像字串 key 一樣留著一個查不到的名字。
-            var endpoint = LGReflect.GetEndpoint(slot);
+            var endpoint = HGReflect.GetEndpoint(slot);
             if (endpoint == null)
                 Issue(report, disabled, focus, where, "欄位設為變數，但沒有指定變數",
-                    "選一個變數，或把模式改回常數。", slot, LGReflect.GetNode(slot));
-            else if (!LGReflect.AcceptsEndpoint(slot, endpoint))
+                    "選一個變數，或把模式改回常數。", slot, HGReflect.GetNode(slot));
+            else if (!HGReflect.AcceptsEndpoint(slot, endpoint))
                 Err(report, focus, where, $"接的變數 '{endpoint.Name}' 型別不相容",
-                    "改接同結果型別的變數。", slot, LGReflect.GetNode(slot));
+                    "改接同結果型別的變數。", slot, HGReflect.GetNode(slot));
             else if (!InScope(model, focus, endpoint))
                 Err(report, focus, where, $"接的變數 '{endpoint.Name}' 不屬於這張圖",
                     "改接本圖變數清單裡的變數；求值是用名字在本圖的變數表查的，跨圖引用永遠查不到，會靜默取預設值。",
-                    slot, LGReflect.GetNode(slot));
+                    slot, HGReflect.GetNode(slot));
         }
     }
 
@@ -330,16 +330,16 @@ public static class LGValidator
     /// </summary>
     // 求值時 Token 節點是拿「名字」去當前作用域的 TokenTable 查（資產作用域只登記資產自己的參數），
     // 所以引用到別張圖的端點物件不會報錯、也不會求出值，只會回預設值——這是唯一擋得住的地方。
-    private static bool InScope(LGModel model, LGFocus focus, GraphEndpoint endpoint)
+    private static bool InScope(HGModel model, HGFocus focus, GraphEndpoint endpoint)
     {
-        var scope = focus != null && focus.Kind == LGFocusKind.Asset ? focus.AssetEndpoints : model?.OwnerEndpoints;
+        var scope = focus != null && focus.Kind == HGFocusKind.Asset ? focus.AssetEndpoints : model?.OwnerEndpoints;
         if (scope == null) return true;   // 讀不到清單就不判，寧可不報也不要誤報
         foreach (var other in scope)
             if (ReferenceEquals(other, endpoint)) return true;
         return false;
     }
 
-    private static void ValidateAssetBindings(LGReport report, LGFocus focus, GraphNode carrier, string where)
+    private static void ValidateAssetBindings(HGReport report, HGFocus focus, GraphNode carrier, string where)
     {
         if (carrier?.AssetObject == null) return;
         var parameters = AssetGraphSchema.Read(carrier.AssetObject, out var duplicates);
@@ -374,13 +374,13 @@ public static class LGValidator
         }
     }
 
-    private static void WalkNode(LGReport report, LGModel model, LGFocus focus, object node,
+    private static void WalkNode(HGReport report, HGModel model, HGFocus focus, object node,
         string where, HashSet<object> visited, bool disabled)
     {
         if (node == null || !visited.Add(node)) return;
-        string nodeWhere = $"{where} → {LGReflect.TypeName(node.GetType())}";
+        string nodeWhere = $"{where} → {HGReflect.TypeName(node.GetType())}";
 
-        foreach (var f in LGReflect.Fields(node.GetType()))
+        foreach (var f in HGReflect.Fields(node.GetType()))
         {
             if (f.IsNotSerialized || f.IsStatic) continue;
             var val = f.GetValue(node);
@@ -389,9 +389,9 @@ public static class LGValidator
             var t = val.GetType();
             if (t.IsPrimitive || t.IsEnum || val is string || val is UnityEngine.Object) continue;
 
-            if (LGReflect.IsSlotType(t))
+            if (HGReflect.IsSlotType(t))
             {
-                WalkSlot(report, model, focus, val, $"{nodeWhere}.{LGReflect.FieldLabel(f)}", visited, disabled);
+                WalkSlot(report, model, focus, val, $"{nodeWhere}.{HGReflect.FieldLabel(f)}", visited, disabled);
                 continue;
             }
 
@@ -400,13 +400,13 @@ public static class LGValidator
                 for (int i = 0; i < list.Count; i++)
                 {
                     var item = list[i];
-                    string itemWhere = $"{nodeWhere}.{LGReflect.FieldLabel(f)}[{i + 1}]";
+                    string itemWhere = $"{nodeWhere}.{HGReflect.FieldLabel(f)}[{i + 1}]";
                     if (item == null)
                     {
                         Warn(report, focus, itemWhere, "清單有空項目", "填入內容或移除這一列。", null, node);
                         continue;
                     }
-                    if (LGReflect.IsSlotType(item.GetType()))
+                    if (HGReflect.IsSlotType(item.GetType()))
                         WalkSlot(report, model, focus, item, itemWhere, visited, disabled);
                     else if (!item.GetType().IsPrimitive && item is not string && item is not UnityEngine.Object)
                         WalkNode(report, model, focus, item, itemWhere, visited, disabled);
@@ -422,7 +422,7 @@ public static class LGValidator
 
     // ===== Asset 參照循環 =====
 
-    private static void ValidateAssetCycles(LGReport report, LGFocus focus, object root,
+    private static void ValidateAssetCycles(HGReport report, HGFocus focus, object root,
         UnityEngine.Object rootAsset, string where, HashSet<UnityEngine.Object> completed)
     {
         var stack = new HashSet<UnityEngine.Object>();
@@ -489,7 +489,7 @@ public static class LGValidator
     private static IEnumerable<UnityEngine.Object> DirectAssetReferences(object root)
     {
         var result = new List<UnityEngine.Object>();
-        CollectDirectAssetReferences(root, new HashSet<object>(LGRefComparer.Instance), result);
+        CollectDirectAssetReferences(root, new HashSet<object>(HGRefComparer.Instance), result);
         return result;
     }
 
@@ -498,15 +498,15 @@ public static class LGValidator
     {
         if (node == null || !visited.Add(node)) return;
         Type type = node.GetType();
-        if (LGReflect.IsSlotType(type))
+        if (HGReflect.IsSlotType(type))
         {
-            int useType = LGReflect.UseType(node);
+            int useType = HGReflect.UseType(node);
             if (useType == 1)
-                CollectDirectAssetReferences(LGReflect.GetFormula(node), visited, result);
-            else if (useType == 2 && LGReflect.GetAsset(node) is UnityEngine.Object asset)
+                CollectDirectAssetReferences(HGReflect.GetFormula(node), visited, result);
+            else if (useType == 2 && HGReflect.GetAsset(node) is UnityEngine.Object asset)
             {
                 result.Add(asset);
-                var carrier = LGReflect.GetNode(node);
+                var carrier = HGReflect.GetNode(node);
                 if (carrier != null)
                     foreach (var binding in carrier.Bindings)
                         if (binding?.Slot != null) CollectDirectAssetReferences(binding.Slot, visited, result);
@@ -525,7 +525,7 @@ public static class LGValidator
             return;
         }
 
-        foreach (var field in LGReflect.Fields(type))
+        foreach (var field in HGReflect.Fields(type))
         {
             if (field.IsStatic || field.IsNotSerialized) continue;
             var value = field.GetValue(node);
@@ -539,7 +539,7 @@ public static class LGValidator
         }
     }
 
-    private static object AssetContent(UnityEngine.Object asset) => LGReflect.AssetRoot(asset)?.BodyObject;
+    private static object AssetContent(UnityEngine.Object asset) => HGReflect.AssetRoot(asset)?.BodyObject;
 
     /// <summary>
     /// Owner 宣告「我會從圖外用字串 key 求值」的那些變數名。編輯器不認得任何專案型別，
@@ -557,21 +557,21 @@ public static class LGValidator
         return keys;
     }
 
-    private static void Err(LGReport r, LGFocus focus, string where, string message, string fix, object slot, object node)
-        => r.Issues.Add(new LGIssue { IsError = true, Focus = focus, Where = where, Message = message, Fix = fix, Slot = slot, Node = node });
+    private static void Err(HGReport r, HGFocus focus, string where, string message, string fix, object slot, object node)
+        => r.Issues.Add(new HGIssue { IsError = true, Focus = focus, Where = where, Message = message, Fix = fix, Slot = slot, Node = node });
 
     /// <summary>
     /// 停用路徑上的殘缺降成警告：那段 runtime 直接回保底值、不求值，擋存檔只會妨礙測試。
     /// 共用載體若同時被啟用路徑指著，那條路徑會另外走一遍並報成錯誤，所以不必在這裡取聯集。
     /// </summary>
-    private static void Issue(LGReport r, bool disabled, LGFocus focus, string where, string message, string fix, object slot, object node)
+    private static void Issue(HGReport r, bool disabled, HGFocus focus, string where, string message, string fix, object slot, object node)
     {
         if (disabled) Warn(r, focus, where, message, fix, slot, node);
         else Err(r, focus, where, message, fix, slot, node);
     }
 
-    private static void Warn(LGReport r, LGFocus focus, string where, string message, string fix, object slot, object node)
-        => r.Issues.Add(new LGIssue { IsError = false, Focus = focus, Where = where, Message = message, Fix = fix, Slot = slot, Node = node });
+    private static void Warn(HGReport r, HGFocus focus, string where, string message, string fix, object slot, object node)
+        => r.Issues.Add(new HGIssue { IsError = false, Focus = focus, Where = where, Message = message, Fix = fix, Slot = slot, Node = node });
 }
 
 }

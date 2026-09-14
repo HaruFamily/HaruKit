@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit;
 
 public partial class LogicGraph<TTiming, TPack>
 where TTiming : Enum
@@ -339,7 +340,7 @@ where TTiming : Enum
     {
         if (node == null || !visited.Add(node)) return;
 
-        if (node is ILogicGraphAsset assetGraph)
+        if (node is IGraphAsset assetGraph)
         {
             ValidateSlotSources(assetGraph.ContentObject, visited);
             // 資產的端點就是它的參數介面，跟內容一樣是正式資料；候選池不驗。
@@ -528,7 +529,7 @@ where TTiming : Enum
 
     // 節點是唯一來源，所以只需檢查「這個節點的內容有沒有、對不對型別」一件事。
     private void CheckNode(GraphNode node, string where,
-        Func<LogicGraphNode, bool> acceptsBody, Func<ScriptableObject, bool> acceptsAsset,
+        Func<GraphNodeContent, bool> acceptsBody, Func<ScriptableObject, bool> acceptsAsset,
         Func<GraphEndpoint, bool> acceptsEndpoint)
     {
         if (node == null) return;   // 動作＝空槽、公式＝常數，都是合法狀態

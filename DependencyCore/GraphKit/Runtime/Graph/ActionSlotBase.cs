@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph
+namespace HaruFamily.DependencyCore.GraphKit
 {
 using System;
 using System.Collections.Generic;
@@ -50,7 +50,7 @@ public abstract class ActionSlotBase : IGraphHead, IOrphanPool
     public abstract Type AssetBaseType { get; }
 
     /// <summary>這個欄位能不能接這個內嵌內容。</summary>
-    public abstract bool AcceptsBody(LogicGraphNode body);
+    public abstract bool AcceptsBody(GraphNodeContent body);
 
     /// <summary>這個欄位能不能接這個資產。</summary>
     public abstract bool AcceptsAsset(ScriptableObject asset);

@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
     using System;
     using UnityEditor;
@@ -10,7 +10,7 @@ namespace HaruFamily.Framework.LogicGraph.Editor
 /// 每按一次刪除都要把滑鼠跨螢幕拉過去再拉回來。
 /// Enter＝確認、Esc＝取消，點到別處也是取消（PopupWindow 失焦自動關）。
 /// </summary>
-public class LGConfirmPopup : PopupWindowContent
+public class HGConfirmPopup : PopupWindowContent
 {
     private const float Width = 268f;
     private const float Padding = 8f;
@@ -20,7 +20,7 @@ public class LGConfirmPopup : PopupWindowContent
     private readonly string confirmLabel;
     private readonly Action onConfirm;
 
-    public LGConfirmPopup(string message, string confirmLabel, Action onConfirm)
+    public HGConfirmPopup(string message, string confirmLabel, Action onConfirm)
     {
         this.message = message ?? "";
         this.confirmLabel = string.IsNullOrEmpty(confirmLabel) ? "確定" : confirmLabel;

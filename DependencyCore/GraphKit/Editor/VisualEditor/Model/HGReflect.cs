@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -10,7 +10,7 @@ using System.Text;
 /// 視覺化編輯器唯一的反射入口：解析 Slot 內部欄位、節點的參數欄位、以及型別／欄位的顯示名稱。
 /// </summary>
 // Core 的 Slot 欄位是 private 且散在泛型 base，Editor 又是獨立 assembly；統一用反射比逐型別開 internal API 好維護。
-public static class LGReflect
+public static class HGReflect
 {
     private const BindingFlags Flags = BindingFlags.Instance
                                      | BindingFlags.Public
@@ -113,7 +113,7 @@ public static class LGReflect
     public static Type ActionAssetType(Type actionSlotType) => ActionProbe(actionSlotType)?.AssetBaseType;
 
     /// <summary>公式資產的結果型別；動作資產沒有結果型別，回 null。</summary>
-    public static Type AssetResultType(UnityEngine.Object asset) => (asset as ILogicGraphAsset)?.ResultType;
+    public static Type AssetResultType(UnityEngine.Object asset) => (asset as IGraphAsset)?.ResultType;
 
     // ===== Slot 的節點存取 =====
     // Slot 只有「有沒有接節點」一種狀態；來源種類、內容與座標全在 GraphNode 上。
@@ -193,7 +193,7 @@ public static class LGReflect
     /// <summary>這個欄位能不能接這個內嵌內容 / 資產。跨 pack 或跨結果型別在這裡擋下。</summary>
     public static bool AcceptsBody(object slot, object body)
     {
-        if (body is not LogicGraphNode node) return false;
+        if (body is not GraphNodeContent node) return false;
         if (slot is FormulaSlotBase fsb) return fsb.AcceptsBody(node);
         return slot is ActionSlotBase asb && asb.AcceptsBody(node);
     }
@@ -267,7 +267,7 @@ public static class LGReflect
     public static List<GraphNode> Orphans(object head) => (head as IOrphanPool)?.Orphans;
 
     /// <summary>資產根內容的載體。舊格式（只存裸內容）由資產自己就地補上載體，這裡一律拿得到 GraphNode。</summary>
-    public static GraphNode AssetRoot(object asset) => (asset as ILogicGraphAsset)?.Root;
+    public static GraphNode AssetRoot(object asset) => (asset as IGraphAsset)?.Root;
 
     /// <summary>圖主人的具名變數清單（LogicGraph、公式／動作資產各一份）。</summary>
     public static List<GraphEndpoint> Endpoints(object owner) => (owner as IEndpointOwner)?.Endpoints;
@@ -340,8 +340,8 @@ public static class LGReflect
 
     // 名稱與分類只認 LogicGraph 自有屬性，避免 Graph 操作體驗受外部 Inspector 插件影響。
 
-    private static LGNodeAttribute NodeAttr(Type t)
-        => t?.GetCustomAttribute<LGNodeAttribute>(false);
+    private static HGNodeAttribute NodeAttr(Type t)
+        => t?.GetCustomAttribute<HGNodeAttribute>(false);
 
     /// <summary>節點顯示名。</summary>
     public static string TypeName(Type t)
@@ -364,8 +364,8 @@ public static class LGReflect
     }
 
     /// <summary>
-    /// 欄位指定的標籤欄寬度：`Units`＝`[LGLabel(Width = n)]` 的格數，`Ratio`＝`[LGLabel(WidthRatio = n)]` 的 0～1 比例。
-    /// 都沒標回 (0, 0)＝走預設比例。換算成 px 在 `LGGraph.LabelWidthOf`。
+    /// 欄位指定的標籤欄寬度：`Units`＝`[HGLabel(Width = n)]` 的格數，`Ratio`＝`[HGLabel(WidthRatio = n)]` 的 0～1 比例。
+    /// 都沒標回 (0, 0)＝走預設比例。換算成 px 在 `HGGraph.LabelWidthOf`。
     /// </summary>
     // 每列每次重繪都會問一次，反射結果進快取。FieldInfo 是 Type 快取出來的同一個實例，可以當 key。
     public static (int Units, float Ratio) LabelWidth(FieldInfo f)
@@ -373,7 +373,7 @@ public static class LGReflect
         if (f == null) return (0, 0f);
         if (labelWidthCache.TryGetValue(f, out var cached)) return cached;
 
-        var attr = f.GetCustomAttribute<LGLabelAttribute>(false);
+        var attr = f.GetCustomAttribute<HGLabelAttribute>(false);
         var value = (Units: attr?.Width ?? 0, Ratio: attr?.WidthRatio ?? 0f);
 
         labelWidthCache[f] = value;
@@ -381,8 +381,8 @@ public static class LGReflect
     }
 
     /// <summary>
-    /// 型別指定的節點寬度，單位＝格線格數（`[LGNodeView(Width = n)]`）。沒標回 0＝用預設寬。
-    /// 夾範圍與換算成 px 在 `LGGraph.MeasureNode`，這裡只回原始宣告。
+    /// 型別指定的節點寬度，單位＝格線格數（`[HGNodeView(Width = n)]`）。沒標回 0＝用預設寬。
+    /// 夾範圍與換算成 px 在 `HGGraph.MeasureNode`，這裡只回原始宣告。
     /// </summary>
     // MeasureNode 每次重建整張圖都會逐節點問一次，反射結果一律進快取。
     public static int NodeWidthUnits(Type t)
@@ -408,7 +408,7 @@ public static class LGReflect
     {
         if (f == null) return "?";
 
-        string label = f.GetCustomAttribute<LGLabelAttribute>(false)?.Name;
+        string label = f.GetCustomAttribute<HGLabelAttribute>(false)?.Name;
         if (!string.IsNullOrEmpty(label)) return label;
 
         return Prettify(f.Name);
@@ -418,21 +418,21 @@ public static class LGReflect
     public static string FieldDescription(FieldInfo f)
     {
         if (f == null) return "";
-        return f.GetCustomAttribute<LGDescriptionAttribute>(false)?.Text ?? "";
+        return f.GetCustomAttribute<HGDescriptionAttribute>(false)?.Text ?? "";
     }
 
     /// <summary>
-    /// 這個欄位要不要畫出來。`[LGHide]` 是明講的；`[HideInInspector]` 也算——節點圖就是 Inspector 的替代品，
+    /// 這個欄位要不要畫出來。`[HGHide]` 是明講的；`[HideInInspector]` 也算——節點圖就是 Inspector 的替代品，
     /// 而 Core 用它標的都是編輯期內部欄位（座標、識別碼、候選池），出現在節點上只是雜訊。
     /// </summary>
     public static bool IsHidden(FieldInfo f)
-        => f != null && (f.IsDefined(typeof(LGHideAttribute), false)
+        => f != null && (f.IsDefined(typeof(HGHideAttribute), false)
                       || f.IsDefined(typeof(UnityEngine.HideInInspector), false));
 
-    /// <summary>取得 [LGShowIf] 的條件；設定錯誤時保持顯示，避免欄位被靜默隱藏。</summary>
+    /// <summary>取得 [HGShowIf] 的條件；設定錯誤時保持顯示，避免欄位被靜默隱藏。</summary>
     public static bool IsShown(object target, FieldInfo field)
     {
-        var attr = field?.GetCustomAttribute<LGShowIfAttribute>(false);
+        var attr = field?.GetCustomAttribute<HGShowIfAttribute>(false);
         if (attr == null) return true;
 
         if (string.IsNullOrWhiteSpace(attr.ConditionName))
@@ -486,15 +486,15 @@ public static class LGReflect
         string typeName = target?.GetType().FullName ?? "（空）";
         string key = $"{typeName}.{field?.Name}:{message}";
         if (showConditionErrors.Add(key))
-            UnityEngine.Debug.LogError($"[GraphKit] [LGShowIf] {typeName}.{field?.Name}：{message}");
+            UnityEngine.Debug.LogError($"[GraphKit] [HGShowIf] {typeName}.{field?.Name}：{message}");
     }
 
-    /// <summary>這一列要不要畫左側標籤。清單子項是另一條路：`BuildListChildren` 直接設 `LGRow.HideLabel`，不經過欄位屬性。</summary>
+    /// <summary>這一列要不要畫左側標籤。清單子項是另一條路：`BuildListChildren` 直接設 `HGRow.HideLabel`，不經過欄位屬性。</summary>
     public static bool IsLabelHidden(FieldInfo f)
-        => f?.IsDefined(typeof(LGHideLabelAttribute), false) ?? false;
+        => f?.IsDefined(typeof(HGHideLabelAttribute), false) ?? false;
 
     public static bool IsEnum(FieldInfo f)
-        => f?.IsDefined(typeof(LGEnumAttribute), false) ?? false;
+        => f?.IsDefined(typeof(HGEnumAttribute), false) ?? false;
 
     /// <summary>節點在同分類內的排序權重。</summary>
     public static int TypePriority(Type t)
@@ -522,7 +522,7 @@ public static class LGReflect
         return sb.ToString().Replace('_', ' ');
     }
 
-    /// <summary>結果型別的短名，給節點 chip、Token 分頁與型別檢查提示用。族的 Slot 標了 [LGKind] 就用它。</summary>
+    /// <summary>結果型別的短名，給節點 chip、Token 分頁與型別檢查提示用。族的 Slot 標了 [HGKind] 就用它。</summary>
     public static string ResultTypeName(Type t)
     {
         if (t == null) return "動作";
@@ -549,8 +549,8 @@ public static class LGReflect
     }
 
     /// <summary>
-    /// 這個 Slot 所屬族的 [LGKind] 顯示名。手上有 Slot 就用這支，才分得出同一結果型別的不同族
-    /// （例：string 同時有 String 與 Key）。沒標 [LGKind] 時退回結果型別的短名。
+    /// 這個 Slot 所屬族的 [HGKind] 顯示名。手上有 Slot 就用這支，才分得出同一結果型別的不同族
+    /// （例：string 同時有 String 與 Key）。沒標 [HGKind] 時退回結果型別的短名。
     /// </summary>
     public static string SlotKindName(object slot) => SlotKindName(slot?.GetType());
 
@@ -563,7 +563,7 @@ public static class LGReflect
         return ResultTypeName(ResultType(slotType));
     }
 
-    // [LGKind] 顯示名兩張表。掃一次全專案的 Slot 建表；domain reload 會自然重建。
+    // [HGKind] 顯示名兩張表。掃一次全專案的 Slot 建表；domain reload 會自然重建。
     // bySlot 是權威：族的身份是 Slot 型別。byResult 只是給「手上只有結果型別」的呼叫端用的近似，
     // 所以同一結果型別有多個族時該項會留空，寧可退回 "string" 也不要顯示錯的族名。
     private static Dictionary<Type, string> kindNamesBySlot;
@@ -583,8 +583,8 @@ public static class LGReflect
         kindNamesByResult = new Dictionary<Type, string>();
         var familyCount = new Dictionary<Type, int>();
 
-        // 先數每個結果型別有幾個族。判歧義要數族，不能數 [LGKind]：只有一個族標了名字的情況
-        // （string 有 String 與 Key，但只有 Key 標了 LGKind）若不數族，String 的 chip 會被叫成 Key。
+        // 先數每個結果型別有幾個族。判歧義要數族，不能數 [HGKind]：只有一個族標了名字的情況
+        // （string 有 String 與 Key，但只有 Key 標了 HGKind）若不數族，String 的 chip 會被叫成 Key。
         foreach (var slotType in UnityEditor.TypeCache.GetTypesDerivedFrom<FormulaSlotBase>())
         {
             if (slotType.IsAbstract || slotType.ContainsGenericParameters) continue;
@@ -594,7 +594,7 @@ public static class LGReflect
             familyCount.TryGetValue(resultType, out int n);
             familyCount[resultType] = n + 1;
 
-            var attr = slotType.GetCustomAttribute<LGKindAttribute>(false);
+            var attr = slotType.GetCustomAttribute<HGKindAttribute>(false);
             if (attr != null && !string.IsNullOrEmpty(attr.Name)) kindNamesBySlot[slotType] = attr.Name;
         }
 

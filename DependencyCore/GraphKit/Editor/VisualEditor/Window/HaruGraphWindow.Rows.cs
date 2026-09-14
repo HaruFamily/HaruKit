@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -9,9 +9,9 @@ using UnityEngine;
 /// <summary>
 /// 節點內的參數列與清單列繪製與互動。
 /// </summary>
-public partial class LogicGraphWindow
+public partial class HaruGraphWindow
 {
-    private void DrawRows(LGNodeView node, List<LGRow> rows, Rect nodeRect)
+    private void DrawRows(HGNodeView node, List<HGRow> rows, Rect nodeRect)
     {
         foreach (var row in rows)
         {
@@ -23,26 +23,26 @@ public partial class LogicGraphWindow
 
             switch (row.Kind)
             {
-                case LGRowKind.Slot:
+                case HGRowKind.Slot:
                     if (row.IsListElement) DrawListElementControls(row, rowRect, nodeRect);
                     DrawSlotRow(row, rowRect);
                     break;
-                case LGRowKind.Value:
+                case HGRowKind.Value:
                     if (row.IsListElement) DrawListElementControls(row, rowRect, nodeRect);
                     DrawValueRow(row, rowRect);
                     break;
-                case LGRowKind.Group:
+                case HGRowKind.Group:
                     if (row.IsListElement) DrawListElementControls(row, rowRect, nodeRect);
                     if (!row.HideLabel)
                     {
                         var groupRect = Indent(rowRect, row);
                         GUI.Label(groupRect,
-                            LGStyles.Elide(row.Label, LGStyles.RowLabel, groupRect.width, LGReflect.FieldDescription(row.Field)),
-                            LGStyles.RowLabel);
+                            HGStyles.Elide(row.Label, HGStyles.RowLabel, groupRect.width, HGReflect.FieldDescription(row.Field)),
+                            HGStyles.RowLabel);
                     }
                     DrawRows(node, row.Children, nodeRect);
                     break;
-                case LGRowKind.List:
+                case HGRowKind.List:
                     DrawList(node, row, rowRect, nodeRect);
                     break;
             }
@@ -53,7 +53,7 @@ public partial class LogicGraphWindow
     /// 清單畫成「一段」而不是一堆同高的列：底帶包住整段、左側一條縱線串起元素、尾端是整列寬的新增列。
     /// 折疊時只留標題列，子列由 MeasureRows 標成 Hidden。
     /// </summary>
-    private void DrawList(LGNodeView node, LGRow row, Rect rowRect, Rect nodeRect)
+    private void DrawList(HGNodeView node, HGRow row, Rect rowRect, Rect nodeRect)
     {
         int count = row.List?.Count ?? 0;
         bool fixedSize = row.List != null && row.List.IsFixedSize;
@@ -61,10 +61,10 @@ public partial class LogicGraphWindow
         // 底帶要先畫（在所有內容之下），所以這裡就得知道整段的下緣。
         float bandBottom = row.Collapsed
             ? rowRect.yMax
-            : Mathf.Min(nodeRect.yMax, nodeRect.y + row.AddRowY + LGGraph.RowHeight);
+            : Mathf.Min(nodeRect.yMax, nodeRect.y + row.AddRowY + HGGraph.RowHeight);
         var band = ListBandRect(row, rowRect);
         band.height = bandBottom - rowRect.y;
-        if (band.height > 0f) LGStyles.RoundedFill(band, LGStyles.ListBand, 3f);
+        if (band.height > 0f) HGStyles.RoundedFill(band, HGStyles.ListBand, 3f);
 
         DrawListHeader(row, rowRect, count);
         if (row.Collapsed) return;
@@ -73,40 +73,40 @@ public partial class LogicGraphWindow
         DrawRows(node, row.Children, nodeRect);
         if (ReferenceEquals(dragListRow, row)) DrawListInsertLine(row, nodeRect, band);
 
-        var addRect = new Rect(nodeRect.x, nodeRect.y + row.AddRowY, nodeRect.width, LGGraph.RowHeight);
+        var addRect = new Rect(nodeRect.x, nodeRect.y + row.AddRowY, nodeRect.width, HGGraph.RowHeight);
         if (addRect.yMax > nodeRect.yMax) return;
 
         // 整列寬的按鈕：60px 的小鈕在 0.45 倍縮放下只剩 27px，按不到也讀不到。
-        var addBtn = new Rect(band.x + 4f, addRect.y + 2f, band.width - 8f, LGGraph.RowHeight - 4f);
+        var addBtn = new Rect(band.x + 4f, addRect.y + 2f, band.width - 8f, HGGraph.RowHeight - 4f);
         if (fixedSize)
         {
             GUI.Label(addBtn, new GUIContent("陣列長度固定", "陣列長度在程式或 Inspector 決定，這裡不能增刪；需要增刪請把欄位改成 List<T>"),
-                LGStyles.ListAdd);
+                HGStyles.ListAdd);
             return;
         }
-        LGStyles.RoundedFrame(addBtn, LGStyles.ListRule, 3f);
-        if (GUI.Button(addBtn, new GUIContent(count == 0 ? "＋ 新增第一項" : "＋ 新增", "在清單尾端加一項"), LGStyles.ListAdd))
+        HGStyles.RoundedFrame(addBtn, HGStyles.ListRule, 3f);
+        if (GUI.Button(addBtn, new GUIContent(count == 0 ? "＋ 新增第一項" : "＋ 新增", "在清單尾端加一項"), HGStyles.ListAdd))
             AddListItem(row);
     }
 
     /// <summary>拖曳重排的插入位置：一條線就夠，不需要動到資料。</summary>
-    private void DrawListInsertLine(LGRow row, Rect nodeRect, Rect band)
+    private void DrawListInsertLine(HGRow row, Rect nodeRect, Rect band)
     {
         if (dragListTarget < 0 || dragListTarget >= row.Children.Count) return;
         var child = row.Children[dragListTarget];
         float y = nodeRect.y + child.LocalY;
         if (dragListTarget > dragListIndex) y += child.Height;      // 往下搬時線畫在目標列的下緣
-        LGStyles.Fill(new Rect(band.x + 2f, y - 1f, band.width - 4f, 2f), LGStyles.Link);
+        HGStyles.Fill(new Rect(band.x + 2f, y - 1f, band.width - 4f, 2f), HGStyles.Link);
     }
 
     /// <summary>
     /// 列的左緣＝縮排 + LeftPad（清單元素的序號欄）。子列繼承父的 LeftPad，父子左緣才對得齊。
     /// spansRow＝這個 Rect 是整列寬，右側要讓開刪除鈕；只是列內的標籤欄時傳 false。
     /// </summary>
-    private static Rect Indent(Rect r, LGRow row, bool spansRow = true)
+    private static Rect Indent(Rect r, HGRow row, bool spansRow = true)
     {
-        float left = 4f + row.LeftPad + row.Depth * LGGraph.IndentWidth;
-        float right = 4f + (spansRow && row.IsListElement ? LGGraph.ListDeleteWidth : 0f);
+        float left = 4f + row.LeftPad + row.Depth * HGGraph.IndentWidth;
+        float right = 4f + (spansRow && row.IsListElement ? HGGraph.ListDeleteWidth : 0f);
         return new Rect(r.x + left, r.y + 1f, Mathf.Max(8f, r.width - left - right), r.height - 2f);
     }
 
@@ -115,21 +115,21 @@ public partial class LogicGraphWindow
     /// 一條垂直線），✕ 往左推。位置固定不隨「有沒有接來源」滑動，欄位寬度才不會跳。
     /// 這裡回傳 ✕ 佔掉的橫向空間，清單元素才有。
     /// </summary>
-    private static float ListRightInset(LGRow row)
-        => row.IsListElement ? LGGraph.ListDeleteWidth : 0f;
+    private static float ListRightInset(HGRow row)
+        => row.IsListElement ? HGGraph.ListDeleteWidth : 0f;
 
     /// <summary>接點固定佔住的右緣寬度。收合鈕與 ✕ 都從這裡往左推。</summary>
-    private const float PortReserve = LGGraph.PortDiameter;
+    private const float PortReserve = HGGraph.PortDiameter;
 
     /// <summary>
-    /// 把一列切成「標籤欄｜欄位欄」。欄寬規則只有這一份（`LGGraph.LabelWidthOf`），
-    /// 欄位欄一律吃掉剩下的寬度——節點加寬（`[LGNodeView(Width)]`）多出來的空間全進欄位，不進標籤。
+    /// 把一列切成「標籤欄｜欄位欄」。欄寬規則只有這一份（`HGGraph.LabelWidthOf`），
+    /// 欄位欄一律吃掉剩下的寬度——節點加寬（`[HGNodeView(Width)]`）多出來的空間全進欄位，不進標籤。
     /// `rightInset` 由呼叫端算：接點、chip、✕ 都住在那裡，欄位只吃剩下的。
     /// </summary>
-    private static void SplitRow(Rect rowRect, LGRow row, float rightInset, out Rect labelRect, out Rect fieldRect)
+    private static void SplitRow(Rect rowRect, HGRow row, float rightInset, out Rect labelRect, out Rect fieldRect)
     {
-        var (units, ratio) = LGReflect.LabelWidth(row.Field);
-        float labelWidth = LGGraph.LabelWidthOf(rowRect.width, units, ratio);
+        var (units, ratio) = HGReflect.LabelWidth(row.Field);
+        float labelWidth = HGGraph.LabelWidthOf(rowRect.width, units, ratio);
 
         labelRect = Indent(new Rect(rowRect.x, rowRect.y, labelWidth, rowRect.height), row, false);
         fieldRect = new Rect(rowRect.x + labelWidth, rowRect.y + 1f,
@@ -140,69 +140,69 @@ public partial class LogicGraphWindow
     /// 這一列右端要讓給型別 chip 的寬度。**只有畫得出 chip 的列讓**：純值列與動作欄位不留白，
     /// 常數框直接吃到底。左緣對齊由 `SplitRow` 保證，所以這裡只影響右緣。
     /// </summary>
-    private static float ChipInset(LGRow row)
-        => row.Kind == LGRowKind.Slot && !row.IsActionSlot && row.ResultType != null && !row.HideLabel
-            ? LGGraph.SlotChipColumn
+    private static float ChipInset(HGRow row)
+        => row.Kind == HGRowKind.Slot && !row.IsActionSlot && row.ResultType != null && !row.HideLabel
+            ? HGGraph.SlotChipColumn
             : 0f;
 
     /// <summary>
     /// 型別 chip，畫在列右端（由右往左：接點 → chip → ✕ → 常數框）。內容與 Header 右側那顆一致
-    /// （`LGReflect.ResultTypeName`）。**寬度固定不隨文字長短浮動**：所有 chip 貼著接點排成一條垂直線。
+    /// （`HGReflect.ResultTypeName`）。**寬度固定不隨文字長短浮動**：所有 chip 貼著接點排成一條垂直線。
     /// 裝不下的型別名在 chip 內截字，完整名進 tooltip。
     /// </summary>
-    private static void DrawSlotChip(LGRow row, Rect rowRect)
+    private static void DrawSlotChip(HGRow row, Rect rowRect)
     {
         float inset = ChipInset(row);
         if (inset <= 0f) return;
 
         // 走 Slot 而非結果型別：同一結果型別可能有多個族（string 有 String 與 Key），
         // 只看結果型別的話兩者的 chip 會長得一樣，企劃分不出這格收的是哪一族。
-        string text = LGReflect.SlotKindName(row.Slot);
-        float width = inset - LGGraph.SlotChipGap;   // 間距留在 chip 與接點之間
+        string text = HGReflect.SlotKindName(row.Slot);
+        float width = inset - HGGraph.SlotChipGap;   // 間距留在 chip 與接點之間
         float height = Mathf.Min(14f, rowRect.height);
         var chipRect = new Rect(rowRect.xMax - PortReserve - inset,
             rowRect.y + (rowRect.height - height) * 0.5f, width, height);
-        LGStyles.RoundedFill(chipRect, LGStyles.SlotChipBody, 2f);
-        GUI.Label(chipRect, LGStyles.Elide(text, LGStyles.SlotChip, width - 4f, text), LGStyles.SlotChip);
+        HGStyles.RoundedFill(chipRect, HGStyles.SlotChipBody, 2f);
+        GUI.Label(chipRect, HGStyles.Elide(text, HGStyles.SlotChip, width - 4f, text), HGStyles.SlotChip);
     }
 
     /// <summary>清單元素的刪除鈕：排在接點左邊，不搶右緣那條接點垂直線。</summary>
-    private static Rect DeleteRectOf(Rect rowRect, LGRow row)
-        => new Rect(rowRect.xMax - PortReserve - ChipInset(row) - LGGraph.ListDeleteWidth,
+    private static Rect DeleteRectOf(Rect rowRect, HGRow row)
+        => new Rect(rowRect.xMax - PortReserve - ChipInset(row) - HGGraph.ListDeleteWidth,
             rowRect.y + 3f, 14f, rowRect.height - 6f);
 
     /// <summary>
     /// 清單底帶的左右邊界（高度由呼叫端填）。標題列與元素列都用它，斑馬紋才會和底帶切齊。
     /// listRow 傳清單標題列；元素列傳自己的 ListOwner。
     /// </summary>
-    private static Rect ListBandRect(LGRow listRow, Rect rowRect)
+    private static Rect ListBandRect(HGRow listRow, Rect rowRect)
     {
-        float left = rowRect.x + 2f + listRow.LeftPad + listRow.Depth * LGGraph.IndentWidth;
+        float left = rowRect.x + 2f + listRow.LeftPad + listRow.Depth * HGGraph.IndentWidth;
         return new Rect(left, rowRect.y, Mathf.Max(8f, rowRect.xMax - left - 2f), rowRect.height);
     }
 
     /// <summary>
     /// 清單一列的底：斑馬紋做成雙向（一亮一暗），單向疊一層淡白在 Slot 元素上看不出來——
-    /// 右半被 LGValueField 的欄位框蓋住，只剩左半在比對。拖曳／hover 再疊一層。
+    /// 右半被 HGValueField 的欄位框蓋住，只剩左半在比對。拖曳／hover 再疊一層。
     /// 元素展開出來的子列也走這裡，整段才是同一條紋。
     /// </summary>
-    private void DrawListRowBackground(LGRow row, Rect rowRect)
+    private void DrawListRowBackground(HGRow row, Rect rowRect)
     {
         var owner = row.ListOwner;
         var band = ListBandRect(owner, rowRect);
-        LGStyles.Fill(band, row.ListIndex % 2 == 0 ? LGStyles.ListStripeEven : LGStyles.ListStripeOdd);
+        HGStyles.Fill(band, row.ListIndex % 2 == 0 ? HGStyles.ListStripeEven : HGStyles.ListStripeOdd);
 
         if (ReferenceEquals(dragListRow, owner) && dragListIndex == row.ListIndex)
-            LGStyles.Fill(band, LGStyles.ListRowDragging);
+            HGStyles.Fill(band, HGStyles.ListRowDragging);
         else if (rowRect.Contains(Event.current.mousePosition))
-            LGStyles.Fill(band, LGStyles.ListRowHover);
+            HGStyles.Fill(band, HGStyles.ListRowHover);
     }
 
     /// <summary>
     /// 清單元素左側的序號 + 拖曳把手、右側的刪除鈕。
     /// 把手與 ✕ 都常態顯示，但刻意放在列的兩端：舊版把 ✕ 貼在把手右邊 1px，想拖曳結果刪掉。
     /// </summary>
-    private void DrawListElementControls(LGRow row, Rect rowRect, Rect nodeRect)
+    private void DrawListElementControls(HGRow row, Rect rowRect, Rect nodeRect)
     {
         var owner = row.ListOwner;
         if (owner?.List == null) return;
@@ -214,13 +214,13 @@ public partial class LogicGraphWindow
 
         // 序號與把手各佔控制欄一半：序號是順序資訊，把手是操作入口，兩件事不該互相取代。
         // 把手排在最前面——它是這一列的抓取點，放在最外緣最好瞄準。
-        float x = rowRect.x + 4f + row.Depth * LGGraph.IndentWidth + row.LeftPad - LGGraph.ListGutter;
+        float x = rowRect.x + 4f + row.Depth * HGGraph.IndentWidth + row.LeftPad - HGGraph.ListGutter;
         var handle = new Rect(x, rowRect.y, 13f, rowRect.height);
         var index = new Rect(x + 13f, rowRect.y, 15f, rowRect.height);
-        GUI.Label(index, new GUIContent((row.ListIndex + 1) + ".", "序號即執行順序"), LGStyles.ListIndex);
+        GUI.Label(index, new GUIContent((row.ListIndex + 1) + ".", "序號即執行順序"), HGStyles.ListIndex);
         GUI.Label(handle,
             new GUIContent("≡", fixedSize ? "陣列長度固定，不能重排" : "拖曳可調整順序；右鍵有插入與刪除"),
-            dragging ? LGStyles.RowLabel : LGStyles.Tiny);
+            dragging ? HGStyles.RowLabel : HGStyles.Tiny);
 
         var remove = DeleteRectOf(rowRect, row);
         // 存回原本的 GUI.enabled，不能寫死 true——外層可能正把整顆鎖定節點畫成不可編輯。
@@ -228,7 +228,7 @@ public partial class LogicGraphWindow
         GUI.enabled = wasEnabled && !fixedSize;
         bool clickedRemove = GUI.Button(remove,
             new GUIContent("✕", fixedSize ? "陣列不能刪除項目" : "刪除這一項（可用 Ctrl+Z 復原）"),
-            LGStyles.ListAdd);
+            HGStyles.ListAdd);
         GUI.enabled = wasEnabled;
         if (clickedRemove && !fixedSize)
         {
@@ -260,7 +260,7 @@ public partial class LogicGraphWindow
     }
 
     /// <summary>依滑鼠 Y 算出要插到清單的第幾格。</summary>
-    private static int ListIndexAt(LGRow owner, Rect nodeRect, float mouseY)
+    private static int ListIndexAt(HGRow owner, Rect nodeRect, float mouseY)
     {
         if (owner.Children.Count == 0) return -1;
         for (int i = 0; i < owner.Children.Count; i++)
@@ -272,7 +272,7 @@ public partial class LogicGraphWindow
         return owner.Children.Count - 1;
     }
 
-    private void ShowListElementMenu(LGRow owner, int index)
+    private void ShowListElementMenu(HGRow owner, int index)
     {
         var menu = new GenericMenu();
         if (owner.List != null && owner.List.IsFixedSize)
@@ -286,7 +286,7 @@ public partial class LogicGraphWindow
         {
             var item = owner.ElementType.IsValueType || owner.ElementType == typeof(string)
                 ? DefaultOf(owner.ElementType)
-                : LGReflect.CreateInstance(owner.ElementType);
+                : HGReflect.CreateInstance(owner.ElementType);
             if (item == null && owner.ElementType != typeof(string)) return;
             BreakUndoMerge();
             owner.List.Insert(index, item);
@@ -310,9 +310,9 @@ public partial class LogicGraphWindow
     /// <summary>
     /// 複製清單的一項並插在它下面：內容整棵深拷貝（含接上去的節點子樹），複本與原項各自獨立。
     /// 這張圖的具名變數一律共用——子樹裡指向變數的 Token 節點還是指向同一個端點，
-    /// 跟著抄一份會變成不在清單裡的孤兒端點。理由與 <see cref="LGModel.DuplicateEndpoint"/> 同一條。
+    /// 跟著抄一份會變成不在清單裡的孤兒端點。理由與 <see cref="HGModel.DuplicateEndpoint"/> 同一條。
     /// </summary>
-    private void DuplicateListItem(LGRow owner, int index)
+    private void DuplicateListItem(HGRow owner, int index)
     {
         if (owner?.List == null || owner.List.IsFixedSize) return;
         if (index < 0 || index >= owner.List.Count) return;
@@ -328,7 +328,7 @@ public partial class LogicGraphWindow
         }
 
         var shared = CurrentEndpoints();
-        var copy = LogicGraphDeepCopy.Copy(source, shared);
+        var copy = GraphDeepCopy.Copy(source, shared);
         if (copy == null)
         {
             ShowNotification(new GUIContent("複製這一項失敗，詳見 Console。"));
@@ -336,7 +336,7 @@ public partial class LogicGraphWindow
         }
 
         // 識別碼一定要換：載體的 Id 決定節點座標與選取，沿用原本的會讓兩份黏在同一個位置。
-        LGModel.ResetNodeIds(copy, shared);
+        HGModel.ResetNodeIds(copy, shared);
 
         BreakUndoMerge();
         owner.List.Insert(index + 1, copy);
@@ -344,7 +344,7 @@ public partial class LogicGraphWindow
         Repaint();
     }
 
-    private void MoveListItem(LGRow owner, int from, int to)
+    private void MoveListItem(HGRow owner, int from, int to)
     {
         if (owner?.List == null || owner.List.IsFixedSize) return;
         if (to < 0 || to >= owner.List.Count || from == to) return;
@@ -356,10 +356,10 @@ public partial class LogicGraphWindow
         Repaint();
     }
 
-    private void DrawSlotRow(LGRow row, Rect rowRect)
+    private void DrawSlotRow(HGRow row, Rect rowRect)
     {
         var slot = row.Slot;
-        int useType = LGReflect.UseType(slot);
+        int useType = HGReflect.UseType(slot);
         bool hasIssue = Rep.HasIssue(slot, out bool isError);
 
         // 由右往左：接點 → chip → ✕ → 常數框。收合鈕已經併進接點自己（見 DrawPortGlyph），不另外佔寬。
@@ -382,7 +382,7 @@ public partial class LogicGraphWindow
         // 沒勾覆蓋＝資產用自己內部的預設，這一列填什麼都不會被採用，所以連名稱帶欄位一起鎖住。
         EditorGUI.BeginDisabledGroup(row.Locked);
 
-        var labelStyle = hasIssue && isError ? LGStyles.RowLabelError : LGStyles.RowLabel;
+        var labelStyle = hasIssue && isError ? HGStyles.RowLabelError : HGStyles.RowLabel;
 
         // 動作清單的元素：標籤本身就是「現在接了什麼」（見 SlotShortName），右半再寫一次型別名只是重複，
         // 接了什麼順著線看子節點的 Header 更完整。所以這種列讓標籤吃滿整列，右半不畫。
@@ -397,7 +397,7 @@ public partial class LogicGraphWindow
             else
             {
                 GUI.Label(labelRect,
-                    LGStyles.Elide(row.Label, labelStyle, labelRect.width, LGReflect.FieldDescription(row.Field)), labelStyle);
+                    HGStyles.Elide(row.Label, labelStyle, labelRect.width, HGReflect.FieldDescription(row.Field)), labelStyle);
             }
         }
 
@@ -419,38 +419,38 @@ public partial class LogicGraphWindow
         {
             string text = useType switch
             {
-                1 => LGReflect.GetFormula(slot) is object f ? LGReflect.TypeName(f.GetType()) : "（空）",
-                2 => LGReflect.GetAsset(slot) is UnityEngine.Object a ? a.name : "（空資產）",
+                1 => HGReflect.GetFormula(slot) is object f ? HGReflect.TypeName(f.GetType()) : "（空）",
+                2 => HGReflect.GetAsset(slot) is UnityEngine.Object a ? a.name : "（空資產）",
                 _ => "（未啟用，從接點拉線指定動作）",
             };
-            GUI.Label(fieldRect, LGStyles.Elide(text, LGStyles.Tiny, fieldRect.width), LGStyles.Tiny);
+            GUI.Label(fieldRect, HGStyles.Elide(text, HGStyles.Tiny, fieldRect.width), HGStyles.Tiny);
         }
         // 常數框畫的型別可以不等於結果型別（見 FormulaSlotBase.DefaultEditType）：清單這種畫不出輸入框的
         // 結果型別，可以改用一格 enum 表示「沒接線時取什麼」。拉線相容性仍然只看 row.ResultType。
-        else if (!LGValueField.CanDraw(LGReflect.DefaultEditType(slot, row.ResultType)))
+        else if (!HGValueField.CanDraw(HGReflect.DefaultEditType(slot, row.ResultType)))
         {
             // 這個型別連替代的常數框都沒有。畫「此型別沒有對應的輸入介面」只會讓企劃以為欄位壞了，
             // 改成直說這一格現在接了什麼；來源仍然只能從接點拉線指定。
             string text = useType switch
             {
-                1 => LGReflect.GetFormula(slot) is object uf ? LGReflect.TypeName(uf.GetType()) : "（空公式）",
-                2 => LGReflect.GetAsset(slot) is UnityEngine.Object ua ? ua.name : "（空資產）",
-                3 => LGReflect.GetEndpoint(slot)?.Name is string un && !string.IsNullOrEmpty(un) ? $"（變數 {un}）" : "（已接變數）",
+                1 => HGReflect.GetFormula(slot) is object uf ? HGReflect.TypeName(uf.GetType()) : "（空公式）",
+                2 => HGReflect.GetAsset(slot) is UnityEngine.Object ua ? ua.name : "（空資產）",
+                3 => HGReflect.GetEndpoint(slot)?.Name is string un && !string.IsNullOrEmpty(un) ? $"（變數 {un}）" : "（已接變數）",
                 _ => "（未接，用欄位預設）",
             };
-            string tip = $"{LGReflect.ResultTypeName(row.ResultType)} 沒有常數保底可編，只能從接點拉線指定來源。";
-            GUI.Label(fieldRect, LGStyles.Elide(text, LGStyles.Tiny, fieldRect.width, tip), LGStyles.Tiny);
+            string tip = $"{HGReflect.ResultTypeName(row.ResultType)} 沒有常數保底可編，只能從接點拉線指定來源。";
+            GUI.Label(fieldRect, HGStyles.Elide(text, HGStyles.Tiny, fieldRect.width, tip), HGStyles.Tiny);
         }
         else
         {
-            var editType = LGReflect.DefaultEditType(slot, row.ResultType);
+            var editType = HGReflect.DefaultEditType(slot, row.ResultType);
 
             // 常數框永遠在。接了公式／資產／變數時它是解析失敗的保底值，只是視覺上轉灰；鎖住時整列不可編。
             // 替代型別的常數框（editType != ResultType）語意不同：它只在沒接線時採用，不是失敗保底。
             bool isSubstitute = editType != row.ResultType;
 
-            // 替代型別的 enum 一律畫成按鈕排：欄位上的 [LGEnum] 是為結果型別下的，替代型別借不到；
-            // 按鈕排才吃得到成員的 [LGLabel]，下拉選單只會顯示 CLR 成員名。
+            // 替代型別的 enum 一律畫成按鈕排：欄位上的 [HGEnum] 是為結果型別下的，替代型別借不到；
+            // 按鈕排才吃得到成員的 [HGLabel]，下拉選單只會顯示 CLR 成員名。
             bool enumButtons = row.IsEnum || (isSubstitute && editType.IsEnum);
             string tooltip = useType switch
             {
@@ -463,16 +463,16 @@ public partial class LogicGraphWindow
             };
             EditorGUI.BeginChangeCheck();
             var value = useType == 0
-                ? LGValueField.Draw(fieldRect, editType, LGReflect.GetDefault(slot), enumButtons)
-                : LGValueField.DrawMuted(fieldRect, editType, LGReflect.GetDefault(slot), tooltip, enumButtons);
-            if (EditorGUI.EndChangeCheck()) { LGReflect.SetDefault(slot, value); Invalidate(); }
+                ? HGValueField.Draw(fieldRect, editType, HGReflect.GetDefault(slot), enumButtons)
+                : HGValueField.DrawMuted(fieldRect, editType, HGReflect.GetDefault(slot), tooltip, enumButtons);
+            if (EditorGUI.EndChangeCheck()) { HGReflect.SetDefault(slot, value); Invalidate(); }
         }
 
         // 位置要和 UpdateRowGeometry 算的 PortPos、PortRectOf 畫的圓一致，三者對不上就會變成
         // 「看得到的圓」和「接得到的位置」不同一個地方。
         var portRect = new Rect(rowRect.xMax - PortReserve,
-            rowRect.y + rowRect.height * 0.5f - LGGraph.PortRadius,
-            LGGraph.PortDiameter, LGGraph.PortDiameter);
+            rowRect.y + rowRect.height * 0.5f - HGGraph.PortRadius,
+            HGGraph.PortDiameter, HGGraph.PortDiameter);
 
         EditorGUI.EndDisabledGroup();
 
@@ -501,7 +501,7 @@ public partial class LogicGraphWindow
         var e = Event.current;
         if (!ReferenceEquals(editingNameTarget, target) || editingNameSite != site)
         {
-            GUI.Label(rect, LGStyles.Elide(display, style, rect.width, tooltip), style);
+            GUI.Label(rect, HGStyles.Elide(display, style, rect.width, tooltip), style);
             if (e.type != EventType.MouseDown || e.button != 0 || e.clickCount != 2) return false;
             if (!rect.Contains(e.mousePosition)) return false;
 
@@ -573,32 +573,32 @@ public partial class LogicGraphWindow
     /// 動作列的標籤：雙擊就地改名，清空＝拿掉標籤改回顯示型別／資產名。
     /// 標籤是同型別動作之間的唯一區分（「主傷害」「濺射」），統一畫布之後這裡是唯一的改名入口。
     /// </summary>
-    private void DrawActionLabel(LGRow row, Rect labelRect, GUIStyle labelStyle)
+    private void DrawActionLabel(HGRow row, Rect labelRect, GUIStyle labelStyle)
     {
         object slot = row.Slot;
         if (row.Locked)
         {
-            GUI.Label(labelRect, LGStyles.Elide(row.Label, labelStyle, labelRect.width), labelStyle);
+            GUI.Label(labelRect, HGStyles.Elide(row.Label, labelStyle, labelRect.width), labelStyle);
             return;
         }
 
-        DrawInlineName(labelRect, slot, InlineSiteRow, row.Label, LGReflect.GetLabel(slot) ?? "", labelStyle,
+        DrawInlineName(labelRect, slot, InlineSiteRow, row.Label, HGReflect.GetLabel(slot) ?? "", labelStyle,
             "雙擊可改名；清空改回顯示型別／資產名", name =>
             {
                 BreakUndoMerge();
-                LGReflect.SetLabel(slot, name);
+                HGReflect.SetLabel(slot, name);
                 Invalidate();
                 return true;
             });
     }
 
-    private void DrawValueRow(LGRow row, Rect rowRect)
+    private void DrawValueRow(HGRow row, Rect rowRect)
     {
         float rightInset = 20f + ListRightInset(row);
         SplitRow(rowRect, row, rightInset, out var labelRect, out var fieldRect);
 
         if (!row.HideLabel)
-            GUI.Label(labelRect, LGStyles.Elide(row.Label, LGStyles.RowLabel, labelRect.width, LGReflect.FieldDescription(row.Field)), LGStyles.RowLabel);
+            GUI.Label(labelRect, HGStyles.Elide(row.Label, HGStyles.RowLabel, labelRect.width, HGReflect.FieldDescription(row.Field)), HGStyles.RowLabel);
         else
             fieldRect = new Rect(labelRect.x, rowRect.y + 1f,
                 Mathf.Max(20f, rowRect.xMax - labelRect.x - rightInset), rowRect.height - 3f);
@@ -606,7 +606,7 @@ public partial class LogicGraphWindow
         if (row.Field != null && row.Target != null)
         {
             EditorGUI.BeginChangeCheck();
-            var value = LGValueField.Draw(fieldRect, row.Field.FieldType, row.Field.GetValue(row.Target), row.IsEnum);
+            var value = HGValueField.Draw(fieldRect, row.Field.FieldType, row.Field.GetValue(row.Target), row.IsEnum);
             if (EditorGUI.EndChangeCheck()) { row.Field.SetValue(row.Target, value); Invalidate(); }
             return;
         }
@@ -617,49 +617,49 @@ public partial class LogicGraphWindow
         if (row.ListIndex < 0 || row.ListIndex >= owner.List.Count) return;
 
         EditorGUI.BeginChangeCheck();
-        var element = LGValueField.Draw(fieldRect, owner.ElementType, owner.List[row.ListIndex]);
+        var element = HGValueField.Draw(fieldRect, owner.ElementType, owner.List[row.ListIndex]);
         if (EditorGUI.EndChangeCheck()) { owner.List[row.ListIndex] = element; Invalidate(); }
     }
 
     /// <summary>清單標題：折疊箭頭 + 名稱 + 項數。箭頭與文字整塊都是開關，不必瞄準小三角。</summary>
-    private void DrawListHeader(LGRow row, Rect rowRect, int count)
+    private void DrawListHeader(HGRow row, Rect rowRect, int count)
     {
         var labelRect = Indent(rowRect, row);
         var arrow = new Rect(labelRect.x, labelRect.y, 12f, labelRect.height);
         var text = new Rect(arrow.xMax, labelRect.y, Mathf.Max(8f, labelRect.width - 12f), labelRect.height);
 
-        GUI.Label(arrow, row.Collapsed ? "▸" : "▾", LGStyles.Tiny);
+        GUI.Label(arrow, row.Collapsed ? "▸" : "▾", HGStyles.Tiny);
         string caption = count == 0
             ? $"{row.Label}（尚無項目）"
             : $"{row.Label}（{count} 項，序號即執行順序）";
-        var content = LGStyles.Elide(caption, LGStyles.RowLabel, text.width, "點一下摺疊／展開");
-        GUI.Label(text, content, LGStyles.RowLabel);
+        var content = HGStyles.Elide(caption, HGStyles.RowLabel, text.width, "點一下摺疊／展開");
+        GUI.Label(text, content, HGStyles.RowLabel);
 
         // 只有箭頭與文字本身是開關；標題列剩下的空白要留給拖曳節點。
         var toggle = new Rect(arrow.x, labelRect.y,
-            Mathf.Min(labelRect.width, 12f + LGStyles.RowLabel.CalcSize(content).x), labelRect.height);
+            Mathf.Min(labelRect.width, 12f + HGStyles.RowLabel.CalcSize(content).x), labelRect.height);
         var e = Event.current;
         if (e.type != EventType.MouseDown || e.button != 0 || !toggle.Contains(e.mousePosition)) return;
-        listCollapse[LGGraph.CollapseKey(CurrentNodeId(row), row)] = !row.Collapsed;
+        listCollapse[HGGraph.CollapseKey(CurrentNodeId(row), row)] = !row.Collapsed;
         graphDirty = true;
         Repaint();
         e.Use();
     }
 
     /// <summary>折疊狀態的鍵需要節點 Id；列本身不記得自己屬於哪個節點，這裡回頭找一次。</summary>
-    private string CurrentNodeId(LGRow row)
+    private string CurrentNodeId(HGRow row)
     {
         var owner = OwnerOfRow(row);
         return owner != null ? owner.Id : "";
     }
 
-    private void AddListItem(LGRow row)
+    private void AddListItem(HGRow row)
     {
         if (row.List == null || row.ElementType == null || row.List.IsFixedSize) return;
         // 基本型別沒有「空實例」的問題，用 default 值；其餘走無參數建構。
         var item = row.ElementType.IsValueType || row.ElementType == typeof(string)
             ? DefaultOf(row.ElementType)
-            : LGReflect.CreateInstance(row.ElementType);
+            : HGReflect.CreateInstance(row.ElementType);
         if (item == null && row.ElementType != typeof(string)) return;
         BreakUndoMerge();
         row.List.Add(item);

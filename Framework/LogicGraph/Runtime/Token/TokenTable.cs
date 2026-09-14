@@ -4,6 +4,7 @@ using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit;
 
 /// <summary>
 /// 一次求值期間的具名變數表：（族, 名稱）→ 端點的取值欄位。族＝<see cref="FormulaSlotBase.Kind"/>。

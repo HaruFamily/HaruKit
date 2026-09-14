@@ -1,7 +1,7 @@
-using HaruFamily.Framework.LogicGraph;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit;
 
 namespace HaruFamily.Tools.AssetPipeline
 {
@@ -28,7 +28,7 @@ namespace HaruFamily.Tools.AssetPipeline
     // Formula_AudioClip 繼承的是 Formula_Object<AudioClip>，靠 IAPFormula<AudioClip> 才接得上這一格。
     [Serializable]
     public abstract class APFormulaSlot<TResult, TFormula> : FormulaSlotBase
-        where TFormula : LogicGraphNode, IAPFormula<TResult>
+        where TFormula : GraphNodeContent, IAPFormula<TResult>
     {
         [SerializeField]
         protected TResult _default = default;
@@ -69,7 +69,7 @@ namespace HaruFamily.Tools.AssetPipeline
             }
         }
 
-        public override bool AcceptsBody(LogicGraphNode body) => body is TFormula;
+        public override bool AcceptsBody(GraphNodeContent body) => body is TFormula;
 
         public override bool AcceptsAsset(ScriptableObject asset) => false;
 
@@ -220,7 +220,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
         public override Type AssetBaseType => null;
 
-        public override bool AcceptsBody(LogicGraphNode body) => body is APActionBase;
+        public override bool AcceptsBody(GraphNodeContent body) => body is APActionBase;
 
         public override bool AcceptsAsset(ScriptableObject asset) => false;
 

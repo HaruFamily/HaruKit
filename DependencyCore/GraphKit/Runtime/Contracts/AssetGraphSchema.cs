@@ -1,11 +1,11 @@
-namespace HaruFamily.Framework.LogicGraph
+namespace HaruFamily.DependencyCore.GraphKit
 {
 using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>公式與動作資產共同提供的內部圖。資產的參數就是它自己的具名端點清單。</summary>
-public interface ILogicGraphAsset : IOrphanPool, IEndpointOwner, IGraphHead
+public interface IGraphAsset : IOrphanPool, IEndpointOwner, IGraphHead
 {
     object ContentObject { get; }
 
@@ -19,7 +19,7 @@ public interface ILogicGraphAsset : IOrphanPool, IEndpointOwner, IGraphHead
 /// <summary>動作資產的標記。</summary>
 // 非泛型才能在「型別層」分辨動作資產：資產索引刻意先看型別再決定要不要載入，
 // 全專案每個 SO 都載一次太慢，所以這個判斷不能依賴實例。
-public interface IActionGraphAsset : ILogicGraphAsset
+public interface IActionGraphAsset : IGraphAsset
 {
 }
 
@@ -63,7 +63,7 @@ public static class AssetGraphSchema
     {
         duplicates = new List<string>();
         var result = new List<AssetParameterDefinition>();
-        if (asset is not ILogicGraphAsset graph || graph.Endpoints == null) return result;
+        if (asset is not IGraphAsset graph || graph.Endpoints == null) return result;
 
         var seen = new HashSet<(Type, string)>();
         foreach (var endpoint in graph.Endpoints)

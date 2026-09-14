@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -9,7 +9,7 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 
 /// <summary>左欄清單用的一筆變數視圖。資料住在 <see cref="GraphEndpoint"/>，這裡只是查詢結果。</summary>
-public class LGToken
+public class HGToken
 {
     public GraphEndpoint Endpoint;
 
@@ -20,13 +20,13 @@ public class LGToken
     public Type Kind => Endpoint?.Kind;
 
     // 走端點自己的 Slot：同結果型別的不同族（String / Key）在清單裡才分得出來。
-    public string TypeName => LGReflect.SlotKindName(Endpoint?.Slot);
+    public string TypeName => HGReflect.SlotKindName(Endpoint?.Slot);
 }
 
 /// <summary>畫布上的一個 root：識別值與它底下的項目清單。</summary>
 // Timing 宣告成 object 而不是 Enum：編輯器只做相等比較與 ToString()，
 // 「識別值是什麼型別」由 IGraphDocument 的實作決定（LogicGraph 給的是時機 enum）。
-public class LGTimingGroup
+public class HGTimingGroup
 {
     public object Group;
     public object Timing;
@@ -37,7 +37,7 @@ public class LGTimingGroup
 /// 視覺化編輯器的資料模型：綁定 Owner SO，持有一份 LogicGraph 工作副本，所有編輯都改副本，存檔才寫回。
 /// </summary>
 // 「取消要能捨棄自上次存檔以來的所有修改」→ 只有工作副本能乾淨做到，順便讓 Undo 可以用整份快照實作。
-public class LGModel
+public class HGModel
 {
     // Owner 不限 ScriptableObject：Hierarchy 上掛 LogicGraph 的 MonoBehaviour 也能編。
     public UnityEngine.Object Owner { get; private set; }
@@ -69,7 +69,7 @@ public class LGModel
     public static FieldInfo FindSystemField(Type ownerType)
     {
         if (ownerType == null) return null;
-        foreach (var f in LGReflect.Fields(ownerType))
+        foreach (var f in HGReflect.Fields(ownerType))
             if (typeof(IGraphDocument).IsAssignableFrom(f.FieldType)) return f;
         return null;
     }
@@ -230,15 +230,15 @@ public class LGModel
     /// <summary>項目欄位的型別。空群組時也要建得出新項目，所以問契約而不是從現有內容推。</summary>
     public Type ActionSlotType => Doc?.ItemSlotType;
 
-    public List<LGTimingGroup> ReadGroups()
+    public List<HGTimingGroup> ReadGroups()
     {
-        var result = new List<LGTimingGroup>();
+        var result = new List<HGTimingGroup>();
         var doc = Doc;
         if (doc?.Roots == null) return result;
         foreach (var g in doc.Roots)
         {
             if (g == null) continue;
-            result.Add(new LGTimingGroup { Group = g, Timing = doc.KeyOf(g), Actions = doc.ItemsOf(g) });
+            result.Add(new HGTimingGroup { Group = g, Timing = doc.KeyOf(g), Actions = doc.ItemsOf(g) });
         }
         return result;
     }
@@ -252,22 +252,22 @@ public class LGModel
     }
 
     /// <summary>新增一個時機群組；已存在同一個識別值則回傳既有的。</summary>
-    public LGTimingGroup AddGroup(object timing)
+    public HGTimingGroup AddGroup(object timing)
     {
         var doc = Doc;
         var group = doc?.AddRoot(timing);
         if (group == null) return null;
 
-        return new LGTimingGroup { Group = group, Timing = doc.KeyOf(group), Actions = doc.ItemsOf(group) };
+        return new HGTimingGroup { Group = group, Timing = doc.KeyOf(group), Actions = doc.ItemsOf(group) };
     }
 
-    public void RemoveGroup(LGTimingGroup group)
+    public void RemoveGroup(HGTimingGroup group)
     {
         Groups?.Remove(group.Group);
     }
 
     /// <summary>建立空的動作欄位；可先加入清單，稍後再由空 Node 選擇動作型別。</summary>
-    public object NewActionSlot(IList actionList) => LGReflect.CreateInstance(ActionSlotType);
+    public object NewActionSlot(IList actionList) => HGReflect.CreateInstance(ActionSlotType);
 
     /// <summary>
     /// 本 pack 的所有公式族：(結果型別, 具體 Slot 型別)。掃專案裡所有具體 FormulaSlot 子類，
@@ -283,8 +283,8 @@ public class LGModel
         foreach (var t in UnityEditor.TypeCache.GetTypesDerivedFrom<FormulaSlotBase>())
         {
             if (t.IsAbstract || t.ContainsGenericParameters) continue;
-            if (LGReflect.FormulaSlotPack(t) != PackType) continue;
-            var rt = LGReflect.ResultType(t);
+            if (HGReflect.FormulaSlotPack(t) != PackType) continue;
+            var rt = HGReflect.ResultType(t);
             if (rt == null) continue;
             kinds.Add((rt, t));
         }
@@ -323,7 +323,7 @@ public class LGModel
             // 直接用參數自己那格的 Slot 型別，不要拿結果型別去反查族：同一個結果型別可能有多個族
             // （例：string 同時有 String 與 Key），反查會挑到錯的那個，參數列型別就跟資產對不上。
             Type slotType = parameter.Slot?.GetType();
-            if (LGReflect.CreateInstance(slotType) is FormulaSlotBase slot)
+            if (HGReflect.CreateInstance(slotType) is FormulaSlotBase slot)
             {
                 carrier.Bindings.Add(new NamedFormulaSlot(parameter.Name, slot));
                 changed = true;
@@ -334,7 +334,7 @@ public class LGModel
             string key = $"{carrier.AssetObject.name}/{parameter.Name}";
             if (loggedUnbindableParameters.Add(key))
                 Debug.LogWarning($"[GraphKit] 資產 '{carrier.AssetObject.name}' 的參數 '{parameter.Name}' " +
-                    $"找不到對應的 FormulaSlot 型別（結果 {LGReflect.ResultTypeName(parameter.ResultType)}），無法建立參數列。" +
+                    $"找不到對應的 FormulaSlot 型別（結果 {HGReflect.ResultTypeName(parameter.ResultType)}），無法建立參數列。" +
                     "請補上這個結果型別的 Formula / Asset / Slot 三件組。");
         }
         return changed;
@@ -350,7 +350,7 @@ public class LGModel
         var seen = new HashSet<GraphNode>();
         foreach (var slot in AllSlots())
         {
-            var node = LGReflect.GetNode(slot);
+            var node = HGReflect.GetNode(slot);
             if (node != null && seen.Add(node)) yield return node;
         }
         foreach (var node in AllOrphanNodes())
@@ -361,7 +361,7 @@ public class LGModel
     public IEnumerable<GraphNode> CarriersOf(IEnumerable<object> roots, IEnumerable<GraphNode> orphans)
     {
         var seen = new HashSet<GraphNode>();
-        var visited = new HashSet<object>(LGRefComparer.Instance);
+        var visited = new HashSet<object>(HGRefComparer.Instance);
         if (roots != null)
         {
             foreach (var root in roots)
@@ -378,15 +378,15 @@ public class LGModel
 
     /// <summary>Owner 工作副本的變數清單。資產焦點請改用焦點自己那份工作副本。</summary>
     public List<GraphEndpoint> OwnerEndpoints
-        => LGReflect.Endpoints(Data) ?? new List<GraphEndpoint>();
+        => HGReflect.Endpoints(Data) ?? new List<GraphEndpoint>();
 
     /// <summary>把一份端點清單讀成顯示用的視圖，依名稱排序。</summary>
-    public static List<LGToken> ReadTokens(IEnumerable<GraphEndpoint> endpoints)
+    public static List<HGToken> ReadTokens(IEnumerable<GraphEndpoint> endpoints)
     {
-        var result = new List<LGToken>();
+        var result = new List<HGToken>();
         if (endpoints == null) return result;
         foreach (var endpoint in endpoints)
-            if (endpoint != null) result.Add(new LGToken { Endpoint = endpoint });
+            if (endpoint != null) result.Add(new HGToken { Endpoint = endpoint });
         result.Sort((a, b) => string.CompareOrdinal(a.Key, b.Key));
         return result;
     }
@@ -396,9 +396,9 @@ public class LGModel
     {
         if (node == null) return null;
         if (node.Kind == NodeKind.Inline && node.BodyObject != null)
-            return LGReflect.FormulaResultType(node.BodyObject.GetType());
+            return HGReflect.FormulaResultType(node.BodyObject.GetType());
         if (node.Kind == NodeKind.Asset && node.AssetObject != null)
-            return LGReflect.AssetResultType(node.AssetObject);
+            return HGReflect.AssetResultType(node.AssetObject);
         if (node.Kind == NodeKind.Token) return node.Endpoint?.ResultType;
         return null;
     }
@@ -411,7 +411,7 @@ public class LGModel
     {
         error = null;
         if (scope == null) { error = "這張圖沒有變數清單。"; return null; }
-        if (LGReflect.CreateInstance(slotType) is not FormulaSlotBase slot)
+        if (HGReflect.CreateInstance(slotType) is not FormulaSlotBase slot)
         {
             error = "建不出這一族的取值欄位。";
             return null;
@@ -439,7 +439,7 @@ public class LGModel
         foreach (var other in scope)
             if (other != null && !ReferenceEquals(other, source)) shared.Add(other);
 
-        var copy = LogicGraphDeepCopy.Copy(source, shared);
+        var copy = GraphDeepCopy.Copy(source, shared);
         if (copy == null) { error = "複製這個變數失敗，詳見 Console。"; return null; }
 
         // 識別碼一定要換：頭端的 Id 決定焦點與座標，載體的 Id 決定節點座標與選取。
@@ -482,7 +482,7 @@ public class LGModel
             // 重名比對以族為準：TokenTable 的登記鍵就是（族, 名稱），
             // 所以同結果型別的不同族（String / Key）可以同名，各自查各自那格。
             if (other.Name != name || other.Kind != endpoint.Kind) continue;
-            error = $"已存在名為 '{name}' 的 {LGReflect.SlotKindName(other.Slot)} 變數。";
+            error = $"已存在名為 '{name}' 的 {HGReflect.SlotKindName(other.Slot)} 變數。";
             return false;
         }
 
@@ -525,7 +525,7 @@ public class LGModel
         if (endpoint == null || slots == null) return 0;
         int n = 0;
         foreach (var slot in slots)
-            if (ReferenceEquals(LGReflect.GetNode(slot)?.Endpoint, endpoint)) n++;
+            if (ReferenceEquals(HGReflect.GetNode(slot)?.Endpoint, endpoint)) n++;
         return n;
     }
 
@@ -535,7 +535,7 @@ public class LGModel
     /// <summary>目前焦點的頭端物件，由視窗切焦點時指定。</summary>
     public object OrphanHead { get; set; }
 
-    public List<GraphNode> Orphans => LGReflect.Orphans(OrphanHead);
+    public List<GraphNode> Orphans => HGReflect.Orphans(OrphanHead);
 
     public void AddOrphan(GraphNode node)
     {
@@ -553,7 +553,7 @@ public class LGModel
         {
             // 時機畫布合併前的候選掛在個別動作頭端上，不在目前頭端的池裡；不掃就會刪不掉。
             foreach (var head in Heads())
-                if (LGReflect.Orphans(head)?.Remove(node) == true) break;
+                if (HGReflect.Orphans(head)?.Remove(node) == true) break;
         }
         MarkDirty();
     }
@@ -586,7 +586,7 @@ public class LGModel
             pos = node.Pos;
             return true;
         }
-        return LGReflect.GetHeadPos(carrier, out pos);
+        return HGReflect.GetHeadPos(carrier, out pos);
     }
 
     public void SetPosition(string nodeId, Vector2 pos)
@@ -596,7 +596,7 @@ public class LGModel
         if (TryGetPosition(nodeId, out var current) && current == pos) return;
 
         if (carrier is GraphNode node) node.Pos = pos;
-        else LGReflect.SetHeadPos(carrier, pos);
+        else HGReflect.SetHeadPos(carrier, pos);
         MarkDirty();
     }
 
@@ -632,7 +632,7 @@ public class LGModel
         var carrier = Carrier(nodeId);
         if (carrier == null) return;
         if (carrier is GraphNode node) node.ClearPos();
-        else LGReflect.ClearHeadPos(carrier);
+        else HGReflect.ClearHeadPos(carrier);
         MarkDirty();
     }
 
@@ -641,7 +641,7 @@ public class LGModel
     /// <summary>走訪整份工作副本裡的所有 FormulaSlot（動作、Token、未連接節點）。不下沉到 Asset 內部。</summary>
     public IEnumerable<object> AllFormulaSlots()
     {
-        var visited = new HashSet<object>(LGRefComparer.Instance);
+        var visited = new HashSet<object>(HGRefComparer.Instance);
         foreach (var root in Roots())
             foreach (var slot in WalkSlots(root, visited))
                 if (slot is FormulaSlotBase) yield return slot;
@@ -650,7 +650,7 @@ public class LGModel
     /// <summary>走訪整份工作副本裡的所有 Slot（含 ActionSlot）。</summary>
     public IEnumerable<object> AllSlots()
     {
-        var visited = new HashSet<object>(LGRefComparer.Instance);
+        var visited = new HashSet<object>(HGRefComparer.Instance);
         foreach (var root in Roots())
             foreach (var slot in WalkSlots(root, visited))
                 yield return slot;
@@ -693,7 +693,7 @@ public class LGModel
     {
         foreach (var head in Heads())
         {
-            var list = LGReflect.Orphans(head);
+            var list = HGReflect.Orphans(head);
             if (list == null) continue;
             foreach (var node in list)
                 if (node != null) yield return node;
@@ -704,7 +704,7 @@ public class LGModel
     public static IEnumerable<object> SlotsOfSystem(object system)
     {
         if (system == null) yield break;
-        var visited = new HashSet<object>(LGRefComparer.Instance);
+        var visited = new HashSet<object>(HGRefComparer.Instance);
 
         var walkDoc = system as IGraphDocument;
         if (walkDoc?.Roots is IList groups)
@@ -722,7 +722,7 @@ public class LGModel
         }
 
         // 變數的子樹是正式資料（對外端點），資產引用要算它一份；候選池不算。
-        var endpoints = LGReflect.Endpoints(system);
+        var endpoints = HGReflect.Endpoints(system);
         if (endpoints == null) yield break;
         foreach (var e in endpoints)
         {
@@ -741,7 +741,7 @@ public class LGModel
     /// </summary>
     public static void ResetNodeIds(object root, IEnumerable<object> skip)
     {
-        var visited = new HashSet<object>(LGRefComparer.Instance);
+        var visited = new HashSet<object>(HGRefComparer.Instance);
         if (skip != null)
             foreach (var item in skip)
                 if (item != null) visited.Add(item);
@@ -752,9 +752,9 @@ public class LGModel
     {
         if (node == null || !visited.Add(node)) return;
         if (node is GraphNode carrier) carrier.ResetId();
-        else if (LGReflect.IsActionSlotType(node.GetType())) LGReflect.ResetSlotEditorId(node);
+        else if (HGReflect.IsActionSlotType(node.GetType())) HGReflect.ResetSlotEditorId(node);
 
-        foreach (var f in LGReflect.Fields(node.GetType()))
+        foreach (var f in HGReflect.Fields(node.GetType()))
         {
             if (f.IsStatic || f.IsNotSerialized) continue;
             var val = f.GetValue(node);
@@ -777,16 +777,16 @@ public class LGModel
         if (node == null || !visited.Add(node)) yield break;
 
         var type = node.GetType();
-        if (LGReflect.IsSlotType(type))
+        if (HGReflect.IsSlotType(type))
         {
             yield return node;
-            var carrier = LGReflect.GetNode(node);
+            var carrier = HGReflect.GetNode(node);
             if (carrier != null)
                 foreach (var s in WalkSlots(carrier, visited)) yield return s;
             yield break;
         }
 
-        foreach (var f in LGReflect.Fields(type))
+        foreach (var f in HGReflect.Fields(type))
         {
             var val = f.GetValue(node);
             if (val == null) continue;
@@ -816,7 +816,7 @@ public class LGModel
         var result = new HashSet<ScriptableObject>();
         if (system == null) return result;
 
-        var visited = new HashSet<object>(LGRefComparer.Instance);
+        var visited = new HashSet<object>(HGRefComparer.Instance);
         var assetDoc = system as IGraphDocument;
         if (assetDoc?.Roots is IList groups)
         {
@@ -827,7 +827,7 @@ public class LGModel
             }
         }
 
-        if (LGReflect.Endpoints(system) is List<GraphEndpoint> endpoints)
+        if (HGReflect.Endpoints(system) is List<GraphEndpoint> endpoints)
         {
             foreach (var e in endpoints)
                 if (e is GraphEndpoint endpoint && endpoint.Slot != null)
@@ -840,9 +840,9 @@ public class LGModel
     {
         if (node == null || !visited.Add(node)) return;
 
-        if (LGReflect.IsSlotType(node.GetType()))
+        if (HGReflect.IsSlotType(node.GetType()))
         {
-            CollectFormalAssets(LGReflect.GetNode(node), visited, result);
+            CollectFormalAssets(HGReflect.GetNode(node), visited, result);
             return;
         }
         if (node is GraphNode carrier)
@@ -863,7 +863,7 @@ public class LGModel
             return;
         }
 
-        foreach (var field in LGReflect.Fields(type))
+        foreach (var field in HGReflect.Fields(type))
         {
             if (field.IsStatic || field.IsNotSerialized) continue;
             CollectFormalAssets(field.GetValue(node), visited, result);
@@ -874,9 +874,9 @@ public class LGModel
     {
         if (node == null || !visited.Add(node)) yield break;
 
-        if (LGReflect.IsSlotType(node.GetType()))
+        if (HGReflect.IsSlotType(node.GetType()))
         {
-            var carrier = LGReflect.GetNode(node);
+            var carrier = HGReflect.GetNode(node);
             if (carrier != null)
                 foreach (var found in WalkCarriers(carrier, visited)) yield return found;
             yield break;
@@ -904,7 +904,7 @@ public class LGModel
             yield break;
         }
 
-        foreach (var field in LGReflect.Fields(type))
+        foreach (var field in HGReflect.Fields(type))
         {
             if (field.IsStatic || field.IsNotSerialized) continue;
             foreach (var found in WalkCarriers(field.GetValue(node), visited)) yield return found;
@@ -913,9 +913,9 @@ public class LGModel
 }
 
 /// <summary>依參考位址比對的集合比較器：走訪節點圖時避免值相等造成誤判。</summary>
-public sealed class LGRefComparer : IEqualityComparer<object>
+public sealed class HGRefComparer : IEqualityComparer<object>
 {
-    public static readonly LGRefComparer Instance = new();
+    public static readonly HGRefComparer Instance = new();
     public new bool Equals(object a, object b) => ReferenceEquals(a, b);
     public int GetHashCode(object o) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(o);
 }

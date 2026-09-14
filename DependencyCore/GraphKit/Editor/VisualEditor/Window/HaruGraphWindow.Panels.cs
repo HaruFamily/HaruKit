@@ -1,4 +1,4 @@
-﻿namespace HaruFamily.Framework.LogicGraph.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -9,7 +9,7 @@ using UnityEngine;
 /// <summary>
 /// 左欄變數庫／資產庫／引用清單三區，以及底部 Console。
 /// </summary>
-public partial class LogicGraphWindow
+public partial class HaruGraphWindow
 {
     // ===== 左欄：Token／Asset 庫 =====
 
@@ -21,12 +21,12 @@ public partial class LogicGraphWindow
     /// </summary>
     private void DrawLibraryPanel(Rect r)
     {
-        LGStyles.Fill(r, LGStyles.Panel);
-        LGStyles.Frame(r, LGStyles.NodeBorder);
+        HGStyles.Fill(r, HGStyles.Panel);
+        HGStyles.Frame(r, HGStyles.NodeBorder);
 
         // 面板標題直接當變數區的標題：上面已經沒有第三種東西，再加一條區段標題只是重複佔 20px。
         GUI.Label(new Rect(r.x + 4f, r.y + 2f, 160f, 18f),
-            new GUIContent("變數庫", "對外端點；點一筆進入它自己的畫布，沒接來源時它就是具名常數"), LGStyles.PanelHeader);
+            new GUIContent("變數庫", "對外端點；點一筆進入它自己的畫布，沒接來源時它就是具名常數"), HGStyles.PanelHeader);
 
         bool showRef = HasReferenceSection;
         float top = r.y + 22f;
@@ -56,11 +56,11 @@ public partial class LogicGraphWindow
 
         // 資產區標題跟面板標題同一種寫法，三區看起來才是同級的清單，不是主從。
         GUI.Label(new Rect(assetRect.x + 4f, assetRect.y + 2f, 160f, 18f),
-            new GUIContent("資產庫", "點一筆進去編它；拖到畫布上＝建一顆引用節點"), LGStyles.PanelHeader);
+            new GUIContent("資產庫", "點一筆進去編它；拖到畫布上＝建一顆引用節點"), HGStyles.PanelHeader);
 
         // 資產落點由使用端專案決定，套件不寫死路徑。這顆是**唯一**的決定點：抽出當下不再問，
-        // 沒設定就抽不出來（`LGAssetStore.TryGetUniquePath` 回 false）。所以未設定時標籤要自己喊。
-        string folder = LGAssetStore.Folder;
+        // 沒設定就抽不出來（`HGAssetStore.TryGetUniquePath` 回 false）。所以未設定時標籤要自己喊。
+        string folder = HGAssetStore.Folder;
         bool unset = string.IsNullOrEmpty(folder);
         var folderButton = new Rect(assetRect.xMax - 76f, assetRect.y + 2f, 72f, 16f);
         var folderLabel = new GUIContent(
@@ -68,9 +68,9 @@ public partial class LogicGraphWindow
             unset ? "尚未指定共用資產資料夾——指定前無法從節點抽出共用資產" : $"共用資產資料夾：{folder}（點此更換）");
 
         var prevColor = GUI.color;
-        if (unset) GUI.color = LGStyles.Warning;
-        if (GUI.Button(folderButton, folderLabel, EditorStyles.miniButton) && LGAssetStore.TryPickFolder(out _))
-            LGAssetIndex.Refresh();
+        if (unset) GUI.color = HGStyles.Warning;
+        if (GUI.Button(folderButton, folderLabel, EditorStyles.miniButton) && HGAssetStore.TryPickFolder(out _))
+            HGAssetIndex.Refresh();
         GUI.color = prevColor;
 
         DrawAssetLibrary(assetRect, assetRect.y + 24f);
@@ -152,8 +152,8 @@ public partial class LogicGraphWindow
 
         // r 已經是這一區的範圍，yMax 就是分隔線；高度夾 0 以上，視窗擠到極限時不會出現負高度的 ScrollView。
         var listRect = new Rect(r.x + 2f, top + 70f, r.width - 4f, Mathf.Max(0f, r.yMax - top - 72f));
-        var tokens = LGModel.ReadTokens(CurrentEndpoints());
-        var shown = new List<LGToken>();
+        var tokens = HGModel.ReadTokens(CurrentEndpoints());
+        var shown = new List<HGToken>();
         foreach (var t in tokens)
             if (string.IsNullOrWhiteSpace(tokenSearch)
                 || t.Key?.IndexOf(tokenSearch, StringComparison.OrdinalIgnoreCase) >= 0
@@ -168,13 +168,13 @@ public partial class LogicGraphWindow
             var row = new Rect(2f, i * TokenCellHeight + 2f, content.width - 4f, TokenCellHeight - 3f);
             bool isFocus = ReferenceEquals(focus.Endpoint, token.Endpoint);
             // 深綠→琥珀，和畫布上的變數節點同一條漸層。
-            DrawCellBackground(row, LGStyles.HeaderToken, LGStyles.HeaderFormula, i % 2 == 1, isFocus);
+            DrawCellBackground(row, HGStyles.HeaderToken, HGStyles.HeaderFormula, i % 2 == 1, isFocus);
 
             var endpoint = token.Endpoint;
             var nameRect = new Rect(row.x + 8f, row.y + 2f, row.width - 70f, 18f);
             bool renaming = DrawInlineName(nameRect, endpoint, InlineSiteTokenLib,
                 string.IsNullOrEmpty(token.Key) ? "（未命名）" : token.Key, token.Key ?? "",
-                LGStyles.RowLabel, "雙擊可改名；外部（Inspector）用這個名字查它的值", name =>
+                HGStyles.RowLabel, "雙擊可改名；外部（Inspector）用這個名字查它的值", name =>
                 {
                     if (model.RenameEndpoint(endpoint, name, CurrentEndpoints(), out string error))
                     {
@@ -185,13 +185,13 @@ public partial class LogicGraphWindow
                     return false;
                 });
             var typeRect = new Rect(row.xMax - 58f, row.y + 6f, 42f, 15f);
-            LGStyles.RoundedFill(typeRect, LGStyles.HeaderFormula, CellCornerRadius);
-            GUI.Label(typeRect, LGStyles.Elide(token.TypeName, LGStyles.NodeChip, typeRect.width), LGStyles.NodeChip);
+            HGStyles.RoundedFill(typeRect, HGStyles.HeaderFormula, CellCornerRadius);
+            GUI.Label(typeRect, HGStyles.Elide(token.TypeName, HGStyles.NodeChip, typeRect.width), HGStyles.NodeChip);
 
             if (HasTokenIssue(token, out string reason, out bool isError))
             {
                 var dot = new Rect(row.xMax - 10f, row.y + 10f, 7f, 7f);
-                LGStyles.Fill(dot, isError ? LGStyles.Error : LGStyles.Warning);
+                HGStyles.Fill(dot, isError ? HGStyles.Error : HGStyles.Warning);
                 GUI.Label(dot, new GUIContent("", reason));
             }
 
@@ -223,7 +223,7 @@ public partial class LogicGraphWindow
     }
 
     /// <summary>進入這個變數自己的畫布。</summary>
-    private void JumpToToken(LGToken token) => EnterVariable(token?.Endpoint);
+    private void JumpToToken(HGToken token) => EnterVariable(token?.Endpoint);
 
     /// <summary>新增變數：先選結果型別，因為它決定端點的取值欄位，之後不再更動。</summary>
     private void ShowCreateEndpointMenu()
@@ -236,7 +236,7 @@ public partial class LogicGraphWindow
         {
             var captured = slotType;
             // 用族名而非結果型別名：同結果型別的多個族（String / Key）否則會列出兩個一模一樣的項目。
-            menu.AddItem(new GUIContent(LGReflect.SlotKindName(slotType)), false, () =>
+            menu.AddItem(new GUIContent(HGReflect.SlotKindName(slotType)), false, () =>
             {
                 var endpoint = model.CreateEndpoint(scope, captured, out string error);
                 if (endpoint == null)
@@ -260,7 +260,7 @@ public partial class LogicGraphWindow
         bool dropping = dragEndpointActive && dragEndpoint != null;
         bool hover = rect.Contains(e.mousePosition);
 
-        if (dropping && hover) LGStyles.Fill(rect, new Color(0.24f, 0.50f, 0.34f, 0.75f));
+        if (dropping && hover) HGStyles.Fill(rect, new Color(0.24f, 0.50f, 0.34f, 0.75f));
 
         bool clicked = GUI.Button(rect, new GUIContent(
             dropping ? "複製變數" : "＋ 新增變數",
@@ -289,7 +289,7 @@ public partial class LogicGraphWindow
 
         // 拖曳中鋪一層紅底當落點：拖著變數在畫面上跑時，看得到「放這裡會刪掉」才敢放手。
         // 字只拿掉開頭的「－」，不改寫成一句話——按鈕上的字換來換去比底色還吵。
-        if (dropping && hover) LGStyles.Fill(rect, new Color(0.62f, 0.24f, 0.26f, 0.75f));
+        if (dropping && hover) HGStyles.Fill(rect, new Color(0.62f, 0.24f, 0.26f, 0.75f));
 
         bool hasFocusEndpoint = focus.Endpoint != null;
         bool wasEnabled = GUI.enabled;
@@ -327,7 +327,7 @@ public partial class LogicGraphWindow
     }
 
     /// <summary>
-    /// 移除一個變數：指著它的節點會一起清空（`LGModel.DeleteEndpoint`）。
+    /// 移除一個變數：指著它的節點會一起清空（`HGModel.DeleteEndpoint`）。
     /// 不問確認——Owner 焦點 Ctrl+Z 復原得回來，資產焦點按「取消」可整批捨棄，提示裡直接寫出來。
     /// </summary>
     private void RemoveEndpoint(GraphEndpoint endpoint)
@@ -336,7 +336,7 @@ public partial class LogicGraphWindow
         // scope 與引用數都要在 ExitVariable 之前取：退出變數焦點會換掉「現在在編誰」，清單也就跟著換了。
         var scope = CurrentEndpoints();
         if (scope == null) return;
-        int used = LGModel.CountReferences(endpoint, SlotsInCurrentGraph());
+        int used = HGModel.CountReferences(endpoint, SlotsInCurrentGraph());
         string name = string.IsNullOrEmpty(endpoint.Name) ? "（未命名）" : endpoint.Name;
 
         BreakUndoMerge();                   // 刪除自成一步，不跟前一個編輯合併成同一次復原
@@ -344,7 +344,7 @@ public partial class LogicGraphWindow
         model.DeleteEndpoint(endpoint, scope, CurrentCarrierScope());
         MarkGraphChanged();
 
-        string undoHint = focus.Kind == LGFocusKind.Asset ? "「取消」可整批捨棄" : "Ctrl+Z 可復原";
+        string undoHint = focus.Kind == HGFocusKind.Asset ? "「取消」可整批捨棄" : "Ctrl+Z 可復原";
         ShowNotification(new GUIContent(used > 0
             ? $"已移除 '{name}'：{used} 個欄位變成空節點（{undoHint}）"
             : $"已移除 '{name}'（{undoHint}）"));
@@ -354,7 +354,7 @@ public partial class LogicGraphWindow
     /// <summary>圖改了：資產焦點記在資產交易上，Owner 焦點記在工作副本上。</summary>
     private void MarkGraphChanged()
     {
-        if (focus.Kind == LGFocusKind.Asset) MarkAssetContentChanged();
+        if (focus.Kind == HGFocusKind.Asset) MarkAssetContentChanged();
         else reportStale = true;
         Invalidate();
         Repaint();
@@ -369,11 +369,11 @@ public partial class LogicGraphWindow
         assetSearch = EditorGUI.TextField(new Rect(searchRect.x + 20f, searchRect.y,
             searchRect.width - 20f, searchRect.height), assetSearch);
         if (GUI.Button(new Rect(r.xMax - 24f, top, 20f, 20f),
-            EditorGUIUtility.IconContent("Refresh", "重新掃描資產"))) LGAssetIndex.Refresh();
+            EditorGUIUtility.IconContent("Refresh", "重新掃描資產"))) HGAssetIndex.Refresh();
 
-        var shown = new List<(LGAssetEntry entry, Type slotType)>();
+        var shown = new List<(HGAssetEntry entry, Type slotType)>();
         var slotTypes = AssetSlotTypes();
-        foreach (var entry in LGAssetIndex.Entries)
+        foreach (var entry in HGAssetIndex.Entries)
         {
             Type slotType = SlotTypeForAsset(entry.Asset, slotTypes);
             if (slotType == null) continue;
@@ -381,7 +381,7 @@ public partial class LogicGraphWindow
                 && entry.Name.IndexOf(assetSearch, StringComparison.OrdinalIgnoreCase) < 0
                 && entry.TypeName.IndexOf(assetSearch, StringComparison.OrdinalIgnoreCase) < 0
                 && (entry.ResultType == null
-                    || LGReflect.ResultTypeName(entry.ResultType).IndexOf(assetSearch, StringComparison.OrdinalIgnoreCase) < 0)) continue;
+                    || HGReflect.ResultTypeName(entry.ResultType).IndexOf(assetSearch, StringComparison.OrdinalIgnoreCase) < 0)) continue;
             shown.Add((entry, slotType));
         }
 
@@ -393,19 +393,19 @@ public partial class LogicGraphWindow
             var entry = shown[i].entry;
             var asset = entry.Asset;
             var row = new Rect(2f, i * AssetCellHeight + 2f, content.width - 4f, AssetCellHeight - 3f);
-            bool isFocus = focus.Kind == LGFocusKind.Asset && focus.AssetObject == asset;
+            bool isFocus = focus.Kind == HGFocusKind.Asset && focus.AssetObject == asset;
             // 資產＝藍→內容型別，和畫布上的資產節點同一條漸層。
-            Color payload = entry.IsAction ? LGStyles.HeaderAction : LGStyles.HeaderFormula;
-            DrawCellBackground(row, LGStyles.HeaderAsset, payload, i % 2 == 1, isFocus);
+            Color payload = entry.IsAction ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
+            DrawCellBackground(row, HGStyles.HeaderAsset, payload, i % 2 == 1, isFocus);
 
             var nameRect = new Rect(row.x + 8f, row.y + 2f, row.width - 64f, 18f);
             bool renaming = DrawInlineName(nameRect, asset, InlineSiteAssetLib,
-                asset.name, asset.name, LGStyles.RowLabel, "雙擊可改名（改的是 .asset 檔名）",
+                asset.name, asset.name, HGStyles.RowLabel, "雙擊可改名（改的是 .asset 檔名）",
                 name => RenameAssetFile(asset, name));
-            string kind = entry.IsAction ? "ACT" : LGReflect.ResultTypeName(entry.ResultType);
+            string kind = entry.IsAction ? "ACT" : HGReflect.ResultTypeName(entry.ResultType);
             var typeRect = new Rect(row.xMax - 54f, row.y + 6f, 46f, 15f);
-            LGStyles.RoundedFill(typeRect, payload, CellCornerRadius);
-            GUI.Label(typeRect, LGStyles.Elide(kind, LGStyles.NodeChip, typeRect.width), LGStyles.NodeChip);
+            HGStyles.RoundedFill(typeRect, payload, CellCornerRadius);
+            GUI.Label(typeRect, HGStyles.Elide(kind, HGStyles.NodeChip, typeRect.width), HGStyles.NodeChip);
 
             if (renaming) continue;               // 正在改名的這一格不吃點擊
 
@@ -455,7 +455,7 @@ public partial class LogicGraphWindow
             return false;
         }
         AssetDatabase.SaveAssets();
-        LGAssetIndex.Refresh();
+        HGAssetIndex.Refresh();
         // 檔名已經寫進磁碟、圖的內容沒動，所以只重建圖（節點 Header 與清單要換字），
         // 不可走 Invalidate()——那會把資產或 Owner 標成未存檔，還會佔一格 Undo。
         graphDirty = true;
@@ -469,12 +469,12 @@ public partial class LogicGraphWindow
         var result = new List<(Type acceptedAssetType, Type slotType)>();
         foreach (var (_, slotType) in model.FormulaKinds())
         {
-            Type accepted = LGReflect.AssetType(slotType);
+            Type accepted = HGReflect.AssetType(slotType);
             if (accepted != null) result.Add((accepted, slotType));
         }
 
         Type actionSlotType = model.ActionSlotType;
-        Type actionAssetType = actionSlotType != null ? LGReflect.ActionAssetType(actionSlotType) : null;
+        Type actionAssetType = actionSlotType != null ? HGReflect.ActionAssetType(actionSlotType) : null;
         if (actionAssetType != null) result.Add((actionAssetType, actionSlotType));
         return result;
     }
@@ -487,8 +487,8 @@ public partial class LogicGraphWindow
         return null;
     }
 
-    /// <summary>這個標註有沒有問題。標註的問題掛在被標註節點的內容物件上（見 LGValidator）。</summary>
-    private bool HasTokenIssue(LGToken token, out string reason, out bool isError)
+    /// <summary>這個標註有沒有問題。標註的問題掛在被標註節點的內容物件上（見 HGValidator）。</summary>
+    private bool HasTokenIssue(HGToken token, out string reason, out bool isError)
     {
         reason = null; isError = false;
         object target = token?.Endpoint;
@@ -515,18 +515,18 @@ public partial class LogicGraphWindow
     /// </summary>
     private static void DrawCellBackground(Rect row, Color kind, Color payload, bool altRow, bool focused)
     {
-        LGStyles.GradientFill(row,
-            LGStyles.CellTint(kind, altRow, focused),
-            LGStyles.CellTint(payload, altRow, focused), CellCornerRadius);
-        LGStyles.RoundedFrame(row, focused ? LGStyles.Link : LGStyles.LibraryCellBorder, CellCornerRadius);
+        HGStyles.GradientFill(row,
+            HGStyles.CellTint(kind, altRow, focused),
+            HGStyles.CellTint(payload, altRow, focused), CellCornerRadius);
+        HGStyles.RoundedFrame(row, focused ? HGStyles.Link : HGStyles.LibraryCellBorder, CellCornerRadius);
     }
 
     /// <summary>Console 分頁沒有身分，走中性灰。</summary>
     /// <summary>Console 分頁：選中才給滿色。</summary>
     private bool DrawTab(Rect r, string label, bool active)
     {
-        LGStyles.RoundedFill(r, LGStyles.CellTint(LGStyles.NodeBody, false, active), CellCornerRadius);
-        GUI.Label(r, label, LGStyles.Tiny);
+        HGStyles.RoundedFill(r, HGStyles.CellTint(HGStyles.NodeBody, false, active), CellCornerRadius);
+        GUI.Label(r, label, HGStyles.Tiny);
         return GUI.Button(r, GUIContent.none, GUIStyle.none);
     }
 
@@ -535,8 +535,8 @@ public partial class LogicGraphWindow
         if (dragEndpoint == null) return;
         Vector2 p = Event.current.mousePosition;
         var r = new Rect(p.x + 8f, p.y + 8f, 160f, 18f);
-        LGStyles.GradientFill(r, LGStyles.HeaderToken, LGStyles.HeaderFormula, CellCornerRadius);
-        GUI.Label(r, dragEndpoint.Name ?? "（未命名）", LGStyles.Chip);
+        HGStyles.GradientFill(r, HGStyles.HeaderToken, HGStyles.HeaderFormula, CellCornerRadius);
+        GUI.Label(r, dragEndpoint.Name ?? "（未命名）", HGStyles.Chip);
     }
 
     /// <summary>
@@ -545,14 +545,14 @@ public partial class LogicGraphWindow
     /// </summary>
     private void DrawPlacingGhost()
     {
-        bool isAction = placingSlot != null && LGReflect.IsActionSlotType(placingSlot.GetType());
-        Color kind = isAction ? LGStyles.HeaderAction : LGStyles.HeaderFormula;
+        bool isAction = placingSlot != null && HGReflect.IsActionSlotType(placingSlot.GetType());
+        Color kind = isAction ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
 
         Vector2 p = Event.current.mousePosition;
         var r = new Rect(p.x + 8f, p.y + 8f, 160f, 18f);
-        LGStyles.RoundedFill(r, kind, CellCornerRadius);
-        GUI.Label(r, isAction ? "（選擇 Action）" : "（選擇 Formula）", LGStyles.Chip);
-        GUI.Label(new Rect(r.x, r.yMax + 2f, 200f, 16f), "點一下放置　Esc 取消", LGStyles.Tiny);
+        HGStyles.RoundedFill(r, kind, CellCornerRadius);
+        GUI.Label(r, isAction ? "（選擇 Action）" : "（選擇 Formula）", HGStyles.Chip);
+        GUI.Label(new Rect(r.x, r.yMax + 2f, 200f, 16f), "點一下放置　Esc 取消", HGStyles.Tiny);
     }
 
     private void DrawDragAssetGhost()
@@ -561,10 +561,10 @@ public partial class LogicGraphWindow
         Vector2 p = Event.current.mousePosition;
         var r = new Rect(p.x + 8f, p.y + 8f, 160f, 18f);
         // 沒有結果型別＝動作資產，和節點那邊同一條判定。
-        bool isActionAsset = LGReflect.AssetResultType(dragAsset) == null;
-        LGStyles.GradientFill(r, LGStyles.HeaderAsset,
-            isActionAsset ? LGStyles.HeaderAction : LGStyles.HeaderFormula, CellCornerRadius);
-        GUI.Label(r, dragAsset.name, LGStyles.Chip);
+        bool isActionAsset = HGReflect.AssetResultType(dragAsset) == null;
+        HGStyles.GradientFill(r, HGStyles.HeaderAsset,
+            isActionAsset ? HGStyles.HeaderAction : HGStyles.HeaderFormula, CellCornerRadius);
+        GUI.Label(r, dragAsset.name, HGStyles.Chip);
     }
 
     // ===== 時機選單 =====
@@ -579,7 +579,7 @@ public partial class LogicGraphWindow
 
         foreach (var timing in model.TimingValues)
         {
-            LGTimingGroup group = null;
+            HGTimingGroup group = null;
             foreach (var candidate in groups)
                 if (Equals(candidate.Timing, timing)) { group = candidate; break; }
 
@@ -600,15 +600,15 @@ public partial class LogicGraphWindow
         menu.ShowAsContext();
     }
 
-    private int ErrorsOfGroup(LGTimingGroup group)
+    private int ErrorsOfGroup(HGTimingGroup group)
     {
         if (group?.Actions == null) return 0;
         int errors = 0;
         for (int i = 0; i < group.Actions.Count; i++)
         {
-            var f = new LGFocus
+            var f = new HGFocus
             {
-                Kind = LGFocusKind.Action, Timing = group.Timing,
+                Kind = HGFocusKind.Action, Timing = group.Timing,
                 ActionList = group.Actions, ActionIndex = i, ActionSlot = group.Actions[i],
             };
             report.CountFor(f, out int e, out _);
@@ -655,10 +655,10 @@ public partial class LogicGraphWindow
         }
 
         // 建在使用者按下右鍵的位置，不要丟去自動排版的角落。
-        LGReflect.SetHeadPos(group.Group, SnapToGrid(pos));
-        if (focus.Kind != LGFocusKind.Timing) SetFocus(AllTimingsFocus());
+        HGReflect.SetHeadPos(group.Group, SnapToGrid(pos));
+        if (focus.Kind != HGFocusKind.Timing) SetFocus(AllTimingsFocus());
         selectedIds.Clear();
-        selectedIds.Add(LGGraph.GroupHeadId(model, group.Group));
+        selectedIds.Add(HGGraph.GroupHeadId(model, group.Group));
         Invalidate();
         Repaint();
     }
@@ -667,14 +667,14 @@ public partial class LogicGraphWindow
     /// 刪掉一顆時機節點＝刪掉那個群組與它底下的動作。底下還有動作時先問過；
     /// 確認框開在那顆節點的 Header 旁邊（`GraphToWindowRect`），不是螢幕中央。
     /// </summary>
-    private void RemoveTimingGroup(LGNodeView node)
+    private void RemoveTimingGroup(HGNodeView node)
     {
         if (node?.Obj == null) return;
 
         int count = model.Doc?.ItemsOf(node.Obj)?.Count ?? 0;
         if (count > 0)
         {
-            RequestConfirm(GraphToWindowRect(new Rect(node.Pos.x, node.Pos.y, node.Width, LGGraph.HeaderHeight)),
+            RequestConfirm(GraphToWindowRect(new Rect(node.Pos.x, node.Pos.y, node.Width, HGGraph.HeaderHeight)),
                 $"'{node.Title}' 底下還有 {count} 個動作，會一起刪掉。確定嗎？",
                 "刪除", () => ConfirmRemoveTimingGroup(node));
             return;
@@ -682,7 +682,7 @@ public partial class LogicGraphWindow
         ConfirmRemoveTimingGroup(node);
     }
 
-    private void ConfirmRemoveTimingGroup(LGNodeView node)
+    private void ConfirmRemoveTimingGroup(HGNodeView node)
     {
         if (node?.Obj == null) return;
 
@@ -702,7 +702,7 @@ public partial class LogicGraphWindow
     /// <summary>跳到某顆時機節點。同一張畫布，所以只是把視野移過去，不換焦點。</summary>
     private void JumpToTiming(object timing)
     {
-        if (focus.Kind != LGFocusKind.Timing) SetFocus(AllTimingsFocus());
+        if (focus.Kind != HGFocusKind.Timing) SetFocus(AllTimingsFocus());
         foreach (var g in model.ReadGroups())
         {
             if (!Equals(g.Timing, timing)) continue;
@@ -722,12 +722,12 @@ public partial class LogicGraphWindow
     private void DrawReferenceSection(Rect r)
     {
         var asset = focus.AssetObject;
-        var users = LGReferenceIndex.Users(asset as ScriptableObject);
+        var users = HGReferenceIndex.Users(asset as ScriptableObject);
         int count = users.Count;
 
         GUI.Label(new Rect(r.x + 4f, r.y + 2f, r.width - 74f, 18f),
             new GUIContent($"引用此資產 {count}", "專案裡已存檔、且引用這顆資產的對象；點一列切換過去編它"),
-            LGStyles.PanelHeader);
+            HGStyles.PanelHeader);
 
         // 重掃與重驗都是低頻維護動作，縮在標題列右側，不吃清單高度。
         if (GUI.Button(new Rect(r.xMax - 68f, r.y + 2f, 40f, 18f),
@@ -736,17 +736,17 @@ public partial class LogicGraphWindow
         if (GUI.Button(new Rect(r.xMax - 24f, r.y + 2f, 20f, 18f),
             EditorGUIUtility.IconContent("Refresh", "重新掃描專案的引用")))
         {
-            LGReferenceIndex.Refresh();
-            ShowNotification(new GUIContent($"找到 {LGReferenceIndex.Users(asset as ScriptableObject).Count} 個引用"));
+            HGReferenceIndex.Refresh();
+            ShowNotification(new GUIContent($"找到 {HGReferenceIndex.Users(asset as ScriptableObject).Count} 個引用"));
         }
 
         var listRect = new Rect(r.x + 2f, r.y + 22f, r.width - 4f, Mathf.Max(0f, r.yMax - r.y - 24f));
-        LGStyles.Fill(listRect, LGStyles.PanelList);
+        HGStyles.Fill(listRect, HGStyles.PanelList);
 
         if (count == 0)
         {
             GUI.Label(new Rect(listRect.x + 6f, listRect.y + 4f, listRect.width - 12f, 30f),
-                "專案裡沒有已存檔的對象引用它", LGStyles.Tiny);
+                "專案裡沒有已存檔的對象引用它", HGStyles.Tiny);
             return;
         }
 
@@ -756,20 +756,20 @@ public partial class LogicGraphWindow
         {
             var so = users[i];
             var row = new Rect(0f, i * RefRowHeight, content.width, RefRowHeight - 1f);
-            if (i % 2 == 1) LGStyles.Fill(row, LGStyles.RowAlt);
+            if (i % 2 == 1) HGStyles.Fill(row, HGStyles.RowAlt);
 
             if (so == null)
             {
-                GUI.Label(new Rect(row.x + 4f, row.y + 2f, row.width - 8f, 17f), "（已遺失的對象）", LGStyles.RowLabelError);
+                GUI.Label(new Rect(row.x + 4f, row.y + 2f, row.width - 8f, 17f), "（已遺失的對象）", HGStyles.RowLabelError);
                 continue;
             }
 
-            bool validated = so is ILogicGraphOwner o && o.IsLogicGraphValidated();
+            bool validated = so is IGraphOwner o && o.IsGraphValidated();
             GUI.Label(new Rect(row.x + 4f, row.y + 2f, row.width - 26f, 17f),
-                LGStyles.Elide(so.name, LGStyles.RowLabel, row.width - 26f), LGStyles.RowLabel);
+                HGStyles.Elide(so.name, HGStyles.RowLabel, row.width - 26f), HGStyles.RowLabel);
             GUI.Label(new Rect(row.xMax - 20f, row.y + 2f, 16f, 17f),
                 new GUIContent(validated ? "✓" : "✗", validated ? "已驗證" : "未驗證（多半是這顆資產改過，存檔它就會重驗）"),
-                validated ? LGStyles.Tiny : LGStyles.RowLabelError);
+                validated ? HGStyles.Tiny : HGStyles.RowLabelError);
 
             var e = Event.current;
             if (e.type != EventType.MouseDown || e.button != 0 || !row.Contains(e.mousePosition)) continue;
@@ -790,13 +790,13 @@ public partial class LogicGraphWindow
     private void VerifyAllUsers(UnityEngine.Object asset)
     {
         int ok = 0, fail = 0, touched = 0;
-        foreach (var so in LGReferenceIndex.Users(asset as ScriptableObject))
+        foreach (var so in HGReferenceIndex.Users(asset as ScriptableObject))
         {
-            if (so == null || so is not ILogicGraphOwner owner) continue;
+            if (so == null || so is not IGraphOwner owner) continue;
 
-            bool was = owner.IsLogicGraphValidated();
-            owner.VerifyLogicGraph();
-            bool now = owner.IsLogicGraphValidated();
+            bool was = owner.IsGraphValidated();
+            owner.VerifyGraph();
+            bool now = owner.IsGraphValidated();
 
             if (now) ok++; else fail++;
             if (was == now) continue;
@@ -812,8 +812,8 @@ public partial class LogicGraphWindow
 
     private void DrawConsole(Rect r)
     {
-        LGStyles.Fill(r, LGStyles.Console);
-        LGStyles.Frame(r, LGStyles.NodeBorder);
+        HGStyles.Fill(r, HGStyles.Console);
+        HGStyles.Frame(r, HGStyles.NodeBorder);
 
         var head = new Rect(r.x, r.y, r.width, MinConsole);
         if (GUI.Button(new Rect(head.x + 2f, head.y + 2f, 18f, 17f), consoleCollapsed ? "▸" : "▾", EditorStyles.miniButton))
@@ -830,21 +830,21 @@ public partial class LogicGraphWindow
 
         string verifyStatus = IsCurrentReportFresh
             ? $"完整驗證 {Rep.Time:HH:mm:ss}"
-            : (focus.Kind == LGFocusKind.Asset ? assetVerifiedOnce : verifiedOnce)
+            : (focus.Kind == HGFocusKind.Asset ? assetVerifiedOnce : verifiedOnce)
                 ? $"即時驗證 {Rep.Time:HH:mm:ss}"
                 : "尚未驗證";
-        GUI.Label(new Rect(head.xMax - 274f, head.y + 3f, 270f, 16f), verifyStatus, LGStyles.Tiny);
+        GUI.Label(new Rect(head.xMax - 274f, head.y + 3f, 270f, 16f), verifyStatus, HGStyles.Tiny);
 
         // Owner 的 Core 驗證狀態。未驗證的圖 runtime 直接擋下不執行，而這件事原本只有資產焦點的
         // 右欄（別人的清單）看得到，自己這張畫布反而看不出來。
-        if (focus.Kind != LGFocusKind.Asset && model?.Owner is ILogicGraphOwner owner && !owner.IsLogicGraphValidated())
+        if (focus.Kind != HGFocusKind.Asset && model?.Owner is IGraphOwner owner && !owner.IsGraphValidated())
             GUI.Label(new Rect(head.xMax - 470f, head.y + 3f, 192f, 16f),
-                "✗ 這份圖未驗證，存檔後才會執行", LGStyles.RowLabelError);
+                "✗ 這份圖未驗證，存檔後才會執行", HGStyles.RowLabelError);
 
         if (consoleCollapsed) return;
 
         var listRect = new Rect(r.x + 2f, r.y + MinConsole, r.width - 4f, r.height - MinConsole - 2f);
-        var shown = new List<LGIssue>();
+        var shown = new List<HGIssue>();
         foreach (var issue in Rep.Issues)
         {
             if (consoleTab == 1 && !issue.IsError) continue;
@@ -858,11 +858,11 @@ public partial class LogicGraphWindow
         {
             var issue = shown[i];
             var row = new Rect(0f, i * 20f, content.width, 19f);
-            if (i % 2 == 1) LGStyles.Fill(row, LGStyles.RowAlt);
+            if (i % 2 == 1) HGStyles.Fill(row, HGStyles.RowAlt);
 
             var icon = new Rect(row.x + 4f, row.y + 5f, 9f, 9f);
-            LGStyles.Fill(icon, issue.IsError ? LGStyles.Error : LGStyles.Warning);
-            GUI.Label(new Rect(row.x + 18f, row.y + 1f, row.width - 22f, 17f), issue.Line, LGStyles.ConsoleRow);
+            HGStyles.Fill(icon, issue.IsError ? HGStyles.Error : HGStyles.Warning);
+            GUI.Label(new Rect(row.x + 18f, row.y + 1f, row.width - 22f, 17f), issue.Line, HGStyles.ConsoleRow);
 
             if (Event.current.type == EventType.MouseDown && row.Contains(Event.current.mousePosition))
             {
@@ -897,13 +897,13 @@ public partial class LogicGraphWindow
         }
     }
 
-    private void JumpTo(LGIssue issue)
+    private void JumpTo(HGIssue issue)
     {
         // 動作的問題全部落在同一張時機畫布上，所以只要確定人在那張畫布，不必也不該切成單一動作焦點。
         if (issue.Focus == null) { }
-        else if (issue.Focus.Kind == LGFocusKind.Action)
+        else if (issue.Focus.Kind == HGFocusKind.Action)
         {
-            if (focus.Kind != LGFocusKind.Timing) SetFocus(AllTimingsFocus());
+            if (focus.Kind != HGFocusKind.Timing) SetFocus(AllTimingsFocus());
         }
         else if (!issue.Focus.SameAs(focus)) SetFocus(issue.Focus);
         pendingCenterTarget = issue.Slot ?? issue.Node;

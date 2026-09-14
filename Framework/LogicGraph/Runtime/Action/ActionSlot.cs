@@ -4,14 +4,13 @@ using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Scripting.APIUpdating;
+using HaruFamily.DependencyCore.GraphKit;
 
 /// <summary>
 /// 動作欄位，同時是節點圖的頭端（發出點）：自己是一個固定節點，只有一個「來源」接點。
 /// 具體 Action、Action 資產都是接在它右邊的 <see cref="GraphNode"/>，換來源不動頭端。
 /// </summary>
 [Serializable]
-[MovedFrom(true, sourceNamespace: "", sourceAssembly: "Assembly-CSharp", sourceClassName: "ActionSlot")]
 public class ActionSlot<TPack> : ActionSlotBase
 {
     // 停用用「反向旗標」：既有資產沒有這個欄位，反序列化後 false = 啟用，不會整批被關掉。
@@ -92,7 +91,7 @@ public class ActionSlot<TPack> : ActionSlotBase
     public override Type BodyBaseType => typeof(ActionBase<TPack>);
     public override Type AssetBaseType => typeof(ActionAssetBase<TPack>);
 
-    public override bool AcceptsBody(LogicGraphNode body) => body is ActionBase<TPack>;
+    public override bool AcceptsBody(GraphNodeContent body) => body is ActionBase<TPack>;
 
     public override bool AcceptsAsset(ScriptableObject asset) => asset is ActionAssetBase<TPack>;
 

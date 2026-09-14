@@ -2,13 +2,15 @@ using HaruFamily.Framework.LogicGraph;
 using NUnit.Framework;
 using System;
 using System.Collections.Generic;
+using HaruFamily.DependencyCore.GraphKit;
+using HaruFamily.DependencyCore.GraphKit.Editor;
 
 namespace HaruFamily.Tools.AssetPipeline.Tests
 {
     /// <summary>
     /// dynamic key 的時序規則：產出它的步驟必須排在讀取它的步驟之前。
     /// </summary>
-    // 這條是 AssetPipeline 獨有的，GraphKit 的具名變數沒有先後概念，所以測的是 APGraphVerifier 而不是 LGValidator。
+    // 這條是 AssetPipeline 獨有的，GraphKit 的具名變數沒有先後概念，所以測的是 APGraphVerifier 而不是 HGValidator。
     public sealed class APGraphVerifierTests
     {
         private APGraph graph;

@@ -2,6 +2,8 @@ namespace HaruFamily.Framework.LogicGraph.Editor
 {
 using UnityEditor;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit;
+using HaruFamily.DependencyCore.GraphKit.Editor;
 
 /// <summary>
 /// Inspector 上的 LogicGraph 欄位：畫成一張「節點圖入口」卡片，不展開圖的任何內容。
@@ -70,16 +72,16 @@ public class LogicGraphDrawer : PropertyDrawer
         {
             var open = new GUIContent("開啟節點圖編輯器",
                 "節點圖是唯一的編輯入口；Inspector 不展開圖的內容。");
-            if (GUI.Button(openRect, open)) LogicGraphWindow.OpenFor(target);
+            if (GUI.Button(openRect, open)) HaruGraphWindow.OpenFor(target);
         }
 
-        var owner = target as ILogicGraphOwner;
+        var owner = target as IGraphOwner;
         using (new EditorGUI.DisabledScope(multi || owner == null))
         {
             var verify = owner != null
                 ? new GUIContent("驗證", "跑一次完整驗證，結果輸出到 Console。")
                 : new GUIContent("驗證",
-                    $"'{(target != null ? target.name : "?")}' 沒有實作 ILogicGraphOwner，無法從 Inspector 驗證。");
+                    $"'{(target != null ? target.name : "?")}' 沒有實作 IGraphOwner，無法從 Inspector 驗證。");
             if (GUI.Button(verifyRect, verify)) Verify(property, owner);
         }
     }
@@ -139,12 +141,12 @@ public class LogicGraphDrawer : PropertyDrawer
     }
 
     // Verify() 改的是 C# 物件上的 _validated，不經 SerializedProperty，所以前後都要手動同步一次。
-    private static void Verify(SerializedProperty property, ILogicGraphOwner owner)
+    private static void Verify(SerializedProperty property, IGraphOwner owner)
     {
         if (owner == null) return;
 
         property.serializedObject.ApplyModifiedProperties();
-        owner.VerifyLogicGraph();
+        owner.VerifyGraph();
         EditorUtility.SetDirty(property.serializedObject.targetObject);
         property.serializedObject.Update();
     }

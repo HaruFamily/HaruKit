@@ -5,10 +5,10 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Scripting.APIUpdating;
 
 #if UNITY_EDITOR
 using UnityEditor;
+using HaruFamily.DependencyCore.GraphKit;
 #endif
 
 
@@ -34,7 +34,7 @@ where TTiming : Enum
     // 編輯器只拿得到 object，因此換成別種圖時不必動編輯器。
     IReadOnlyList<object> IGraphDocument.RootKeys(UnityEngine.Object owner)
     {
-        var allowed = (owner as ILogicGraphOwner)?.AllowedTimings;
+        var allowed = (owner as IGraphOwner)?.AllowedTimings;
         if (allowed != null)
         {
             var filtered = new List<object>(allowed.Count);
@@ -58,6 +58,8 @@ where TTiming : Enum
     string IGraphDocument.RootChip => "時機";
 
     string IGraphDocument.RootNoun => "時機";
+
+    string IGraphDocument.WindowTitle => "LogicGraph";
 
     IList IGraphDocument.ItemsOf(object root)
         => root is ActionTimingGroup<TTiming, TPack> g ? g.Actions : null;
@@ -114,7 +116,7 @@ where TTiming : Enum
     /// <summary>深層複製整套動作集（含 ActionGroups / Orphans / _validated 的 SerializeReference 多型樹）。Owner 建構期抄給實體用，免共用 SO 被 runtime 改動污染。</summary>
     public LogicGraph<TTiming, TPack> DeepCopy()
     {
-        var copy = LogicGraphDeepCopy.Copy(this);
+        var copy = GraphDeepCopy.Copy(this);
         if (copy == null)
         {
             Debug.LogError("[LogicGraph] DeepCopy 失敗，回傳空動作集。");
@@ -192,11 +194,10 @@ where TTiming : Enum
 }
 
 [Serializable]
-[MovedFrom(true, sourceNamespace: "", sourceAssembly: "Assembly-CSharp", sourceClassName: "ActionTimingGroup")]
 public class ActionTimingGroup<TTiming, TPack> : IGraphHead where TTiming : Enum
 {
     // 節點圖上不顯示：改下去會跟別的群組撞同一個時機。要換時機就刪掉這顆、重新建一顆。
-    [LGHide]
+    [HGHide]
     public TTiming Timing;
 
     [SerializeReference]

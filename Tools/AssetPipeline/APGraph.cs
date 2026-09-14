@@ -1,8 +1,8 @@
-using HaruFamily.Framework.LogicGraph;
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit;
 
 namespace HaruFamily.Tools.AssetPipeline
 {
@@ -38,7 +38,7 @@ namespace HaruFamily.Tools.AssetPipeline
     /// AssetPipeline 的節點圖。掛在 <see cref="AssetPipeline"/> 上當序列化欄位，
     /// 編輯器靠 <see cref="IGraphDocument"/> 找到它，不必認識 AssetPipeline 任何型別。
     /// </summary>
-    // 為什麼是欄位而不是讓 SO 自己實作 IGraphDocument：GraphKit 的 LGModel.FindSystemField
+    // 為什麼是欄位而不是讓 SO 自己實作 IGraphDocument：GraphKit 的 HGModel.FindSystemField
     // 找的是「型別實作 IGraphDocument 的欄位」，並對那個欄位 DeepCopy 出工作副本。
     // SO 本身是 UnityEngine.Object，深複製會原樣沿用，取消就救不回來了。
     [Serializable]
@@ -116,6 +116,8 @@ namespace HaruFamily.Tools.AssetPipeline
 
         string IGraphDocument.RootNoun => "管線";
 
+        string IGraphDocument.WindowTitle => "AssetPipelineGraph";
+
         IList IGraphDocument.ItemsOf(object root) => (root as APStepGroup)?.Steps;
 
         object IGraphDocument.AddRoot(object key)
@@ -130,7 +132,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
         void IGraphDocument.Verify() => Verify();
 
-        object IGraphDocument.DeepCopy() => LogicGraphDeepCopy.Copy(this);
+        object IGraphDocument.DeepCopy() => GraphDeepCopy.Copy(this);
 
         /// <summary>
         /// 驗證整張圖並更新 <see cref="IsValidated"/>。錯誤記進 Console，

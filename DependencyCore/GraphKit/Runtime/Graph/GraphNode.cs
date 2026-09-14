@@ -1,9 +1,8 @@
-namespace HaruFamily.Framework.LogicGraph
+namespace HaruFamily.DependencyCore.GraphKit
 {
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Scripting.APIUpdating;
 
 /// <summary>節點的內容種類。一個節點同時只會是其中一種，切換即清掉其他來源。</summary>
 public enum NodeKind
@@ -30,8 +29,6 @@ public enum NodeKind
 // 非泛型才能讓候選池、複製貼上、座標與編輯器走訪全部走同一條路徑；
 // 型別安全收斂在 Slot 的 GetBody<T>() / GetAsset<T>() 一處，不合型別由 Verify() 於編輯期擋下。
 [Serializable]
-// 載體層搬進 GraphKit 組件時，既有資產的 SerializeReference 記錄仍戳著舊組件名，沒有這行會整批變成 missing managed reference。
-[MovedFrom(true, sourceAssembly: "HaruFamily.Framework.LogicGraph")]
 public class GraphNode
 {
     [SerializeField, HideInInspector]
@@ -55,7 +52,7 @@ public class GraphNode
     private NodeKind _kind = NodeKind.Empty;
 
     [SerializeReference]
-    private LogicGraphNode _body;
+    private GraphNodeContent _body;
 
     [SerializeField]
     private ScriptableObject _asset;
@@ -71,7 +68,7 @@ public class GraphNode
     public GraphNode() { }
 
     /// <summary>程式建立內嵌節點（測試與程式組圖用）。</summary>
-    public GraphNode(LogicGraphNode body)
+    public GraphNode(GraphNodeContent body)
     {
         SetBody(body);
     }
@@ -121,19 +118,19 @@ public class GraphNode
     public void ResetId() => _id = null;
 
     /// <summary>取內嵌內容並檢查型別。型別不符回 null，由呼叫端 Log 後走保底值。</summary>
-    public TBody GetBody<TBody>() where TBody : LogicGraphNode => _body as TBody;
+    public TBody GetBody<TBody>() where TBody : GraphNodeContent => _body as TBody;
 
     /// <summary>取資產並檢查型別。型別不符回 null，由呼叫端 Log 後走保底值。</summary>
     public TAsset GetAsset<TAsset>() where TAsset : ScriptableObject => _asset as TAsset;
 
     /// <summary>不分型別取內嵌內容，給編輯器與驗證走訪用。</summary>
-    public LogicGraphNode BodyObject => _body;
+    public GraphNodeContent BodyObject => _body;
 
     /// <summary>不分型別取資產，給編輯器與驗證走訪用。</summary>
     public ScriptableObject AssetObject => _asset;
 
     /// <summary>換成內嵌 Action / Formula。Id、座標、備註與連入邊不變。</summary>
-    public void SetBody(LogicGraphNode body)
+    public void SetBody(GraphNodeContent body)
     {
         _body = body;
         _asset = null;

@@ -1,4 +1,4 @@
-﻿namespace HaruFamily.Framework.LogicGraph.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -9,9 +9,9 @@ using UnityEngine;
 /// <summary>
 /// LogicGraph 視覺化編輯器：左欄變數庫、中欄節點圖 + Console；所有時機畫在同一張畫布，右欄只在資產焦點出現。
 /// 所有編輯都改工作副本，按「存檔」才寫回 Owner 資產。
-/// 狀態欄位與主繪製流程在本檔，其餘責任見 LogicGraphWindow.*.cs。
+/// 狀態欄位與主繪製流程在本檔，其餘責任見 HaruGraphWindow.*.cs。
 /// </summary>
-public partial class LogicGraphWindow : EditorWindow
+public partial class HaruGraphWindow : EditorWindow
 {
     private const float ToolbarHeight = 22f;
     private const float DefaultLeftWidth = 220f;
@@ -34,21 +34,21 @@ public partial class LogicGraphWindow : EditorWindow
     private const float MinRefSection = 76f;
     private const float DefaultTokenSection = 240f;
     private const float DefaultRefSection = 140f;
-    private const string PrefConsoleHeight = "LogicGraph.ConsoleHeight";
-    private const string PrefConsoleCollapsed = "LogicGraph.ConsoleCollapsed";
-    private const string PrefLeftWidth = "LogicGraph.LeftWidth";
-    private const string PrefTokenSection = "LogicGraph.TokenSectionHeight";
-    private const string PrefRefSection = "LogicGraph.RefSectionHeight";
+    private const string PrefConsoleHeight = "HaruGraph.ConsoleHeight";
+    private const string PrefConsoleCollapsed = "HaruGraph.ConsoleCollapsed";
+    private const string PrefLeftWidth = "HaruGraph.LeftWidth";
+    private const string PrefTokenSection = "HaruGraph.TokenSectionHeight";
+    private const string PrefRefSection = "HaruGraph.RefSectionHeight";
 
-    private LGModel model;
-    private LGFocus focus = new();
+    private HGModel model;
+    private HGFocus focus = new();
 
     /// <summary>目前這張圖怎麼稱呼它的 root。選單、提示與 log 都用它組字，編輯器不寫死領域用詞。</summary>
-    private string RootNoun => LGGraph.RootNoun(model?.Doc);
+    private string RootNoun => HGGraph.RootNoun(model?.Doc);
 
-    private LGGraphView graph;
+    private HGGraphView graph;
     private bool graphDirty = true;
-    private LGReport report = new();
+    private HGReport report = new();
     private bool verifiedOnce;
     private bool reportStale;
     private bool assetVerifiedOnce;
@@ -85,7 +85,7 @@ public partial class LogicGraphWindow : EditorWindow
     private Func<string, bool> editingNameSubmit;
 
     // 互動
-    private LGNodeView dragNode;
+    private HGNodeView dragNode;
     private Vector2 dragOffset;
     private readonly Dictionary<string, Vector2> dragStartPositions = new();
 
@@ -94,30 +94,30 @@ public partial class LogicGraphWindow : EditorWindow
     private bool dragMoved;
 
     // Header 的 ▾ 落在拖曳抓取區裡，所以仍要分辨拖曳：按下時先記著，放開時沒移動超過門檻才算點擊。
-    private LGNodeView titleClickNode;
+    private HGNodeView titleClickNode;
     private Vector2 titleClickStart;
     private const float TitleClickSlop = 4f;
     /// <summary>Header 右端 ▾ 的寬度。放大到 18px 是因為 0.45 倍縮放下它只剩 8px，再小就按不到。</summary>
     private const float SourceArrowWidth = 18f;
 
     private bool linking;
-    private LGRow linkRow;
-    private LGNodeView linkNode;
+    private HGRow linkRow;
+    private HGNodeView linkNode;
 
     // 接點一個熱區兩種手勢：按下先記著，移動超過 PortClickSlop 才起拉線，原地放開就是收合這一段。
     // 判定跟 Header 的 ▾ 同一套。刻意不在 MouseDown 當下起拉線：想收合卻抖了一下的話，
     // 放開時那條線會落在畫布空白處，於是憑空多一顆空節點。
-    private LGRow portClickRow;
+    private HGRow portClickRow;
     private Vector2 portClickStart;
     private const float PortClickSlop = 4f;
 
     // 待開的就地確認框（見 RequestConfirm）。錨點是視窗座標。
-    private LGConfirmPopup pendingConfirm;
+    private HGConfirmPopup pendingConfirm;
     private Rect pendingConfirmAnchor;
 
     // 拉線期間的相容性：起手時對全圖判定一次，之後高亮與吸附都讀這份，不必每幀重算。
     private readonly HashSet<string> linkCompatibleNodeIds = new();
-    private readonly HashSet<LGRow> linkCompatibleRows = new();
+    private readonly HashSet<HGRow> linkCompatibleRows = new();
     private ScriptableObject dragAsset;
     private bool dragAssetActive;
     private ScriptableObject pendingAssetFocus;
@@ -141,13 +141,13 @@ public partial class LogicGraphWindow : EditorWindow
     private bool boxSelecting;
     private Vector2 boxStart;
     private Vector2 boxEnd;
-    private LGRow dragListRow;
+    private HGRow dragListRow;
     private int dragListIndex = -1;
     // 拖曳期間只算目標位置、畫插入線；MouseUp 才真的搬動。拖曳中改資料會讓整張圖重建、列在指標底下亂跳。
     private int dragListTarget = -1;
-    // 清單折疊只是視覺狀態，不進資料：key 見 LGGraph.CollapseKey，沒有記錄的清單依項數自動決定。
+    // 清單折疊只是視覺狀態，不進資料：key 見 HGGraph.CollapseKey，沒有記錄的清單依項數自動決定。
     private readonly Dictionary<string, bool> listCollapse = new();
-    // Slot 的分支收合狀態，key 同樣是 LGGraph.CollapseKey。只認手動切換過的記錄，沒記錄就是展開。
+    // Slot 的分支收合狀態，key 同樣是 HGGraph.CollapseKey。只認手動切換過的記錄，沒記錄就是展開。
     // 純視覺，切換只能設 graphDirty，不可以走 Invalidate。
     private readonly Dictionary<string, bool> slotHidden = new();
     // 上一次算出來的實際結果：開關要畫成什麼樣子直接查這裡，不必再重算一次自動規則。
@@ -162,23 +162,23 @@ public partial class LogicGraphWindow : EditorWindow
     private UnityEngine.Object pendingTarget;
 
     // 資產焦點（獨立存檔交易）
-    private LGFocus returnFocus;
+    private HGFocus returnFocus;
     private bool assetDirty;
 
     // 內容真的變了（接線、換型別、綁定、刪節點）才會是 true；只搬座標不算。
     // 只有它為 true 才需要擋存檔與通知 subscriber 重新驗證——搬個位置不該驚動任何引用者。
     private bool assetContentDirty;
-    private LGReport assetReport = new();
+    private HGReport assetReport = new();
     private Vector2 referenceScroll;
 
-    // 資產的復原歷程。資產不在 Owner 的工作副本裡，LGModel 那份 Undo 蓋不到，得自己記一份。
-    private readonly LGAssetHistory assetHistory = new();
+    // 資產的復原歷程。資產不在 Owner 的工作副本裡，HGModel 那份 Undo 蓋不到，得自己記一份。
+    private readonly HGAssetHistory assetHistory = new();
 
     private bool HasUnsavedWork => model?.Dirty == true || assetDirty;
 
     /// <summary>引用清單只在資產焦點有意義，作為左欄第三區出現（2026-08-20 由整條右欄改成分區）。</summary>
-    private bool HasReferenceSection => focus.Kind == LGFocusKind.Asset;
-    private bool IsCurrentReportFresh => focus.Kind == LGFocusKind.Asset
+    private bool HasReferenceSection => focus.Kind == HGFocusKind.Asset;
+    private bool IsCurrentReportFresh => focus.Kind == HGFocusKind.Asset
         ? assetVerifiedOnce && !assetReportStale
         : verifiedOnce && !reportStale;
 
@@ -245,7 +245,7 @@ public partial class LogicGraphWindow : EditorWindow
     private void RequestConfirm(Rect windowAnchor, string message, string confirmLabel, Action onConfirm)
     {
         pendingConfirmAnchor = windowAnchor;
-        pendingConfirm = new LGConfirmPopup(message, confirmLabel, onConfirm);
+        pendingConfirm = new HGConfirmPopup(message, confirmLabel, onConfirm);
         Repaint();
     }
 
@@ -309,22 +309,22 @@ public partial class LogicGraphWindow : EditorWindow
     private static void DrawResizeGrip(Rect handle, bool vertical, bool dragging)
     {
         bool hover = handle.Contains(Event.current.mousePosition);
-        var color = dragging || hover ? LGStyles.Link : new Color(0.34f, 0.36f, 0.40f, 0.65f);
+        var color = dragging || hover ? HGStyles.Link : new Color(0.34f, 0.36f, 0.40f, 0.65f);
         if (vertical)
         {
             float x = handle.center.x;
-            LGStyles.Fill(new Rect(x, handle.y, 1f, handle.height), color);
+            HGStyles.Fill(new Rect(x, handle.y, 1f, handle.height), color);
             float y = handle.center.y - 8f;
             for (int i = 0; i < 3; i++, y += 6f)
-                LGStyles.Fill(new Rect(x - 1f, y, 3f, 1f), color);
+                HGStyles.Fill(new Rect(x - 1f, y, 3f, 1f), color);
             return;
         }
 
         float lineY = handle.center.y;
-        LGStyles.Fill(new Rect(handle.x, lineY, handle.width, 1f), color);
+        HGStyles.Fill(new Rect(handle.x, lineY, handle.width, 1f), color);
         float xStart = handle.center.x - 8f;
         for (int i = 0; i < 3; i++, xStart += 6f)
-            LGStyles.Fill(new Rect(xStart, lineY - 1f, 1f, 3f), color);
+            HGStyles.Fill(new Rect(xStart, lineY - 1f, 1f, 3f), color);
     }
 
     /// <summary>
@@ -332,12 +332,12 @@ public partial class LogicGraphWindow : EditorWindow
     /// </summary>
     private void DrawIdle(Rect toolbar, Rect left, Rect center)
     {
-        LGStyles.Fill(toolbar, LGStyles.Toolbar);
+        HGStyles.Fill(toolbar, HGStyles.Toolbar);
 
         // Bind 不依賴既有狀態，閒置沒理由只留 Project 選取一條路；位置與綁定後的 DrawToolbar 一致。
         var ownerPickerRect = new Rect(toolbar.x + 4f, toolbar.y + 2f, 18f, 18f);
         if (GUI.Button(ownerPickerRect, new GUIContent("", "選擇編輯對象"), EditorStyles.popup))
-            LGOwnerIndex.ShowPicker(ownerPickerRect, PickOwner);
+            HGOwnerIndex.ShowPicker(ownerPickerRect, PickOwner);
 
         GUI.Label(new Rect(toolbar.x + 26f, toolbar.y + 2f, toolbar.width - 200f, 18f),
             "尚未選擇編輯對象", EditorStyles.boldLabel);
@@ -350,32 +350,32 @@ public partial class LogicGraphWindow : EditorWindow
 
         DrawIdlePanel(left, "變數庫");
 
-        LGStyles.Fill(center, LGStyles.Canvas);
+        HGStyles.Fill(center, HGStyles.Canvas);
         var header = new Rect(center.x, center.y, center.width, HeaderHeight);
-        LGStyles.Fill(header, LGStyles.PanelSection);
-        LGStyles.Frame(header, LGStyles.NodeBorder);
+        HGStyles.Fill(header, HGStyles.PanelSection);
+        HGStyles.Frame(header, HGStyles.NodeBorder);
         GUI.Label(new Rect(header.x + 6f, header.y + 3f, header.width - 12f, 18f), "（沒有編輯對象）", EditorStyles.boldLabel);
         GUI.Label(new Rect(header.x + 6f, header.y + 24f, header.width - 12f, 16f),
-            "按左上角的選擇器挑一個對象，或從 Project／Hierarchy 點選含 LogicGraph 的對象。", LGStyles.Tiny);
+            "按左上角的選擇器挑一個對象，或從 Project／Hierarchy 點選含節點圖的對象。", HGStyles.Tiny);
 
         var canvas = new Rect(center.x, center.y + HeaderHeight, center.width, center.height - HeaderHeight - MinConsole);
-        LGStyles.Fill(canvas, LGStyles.Canvas);
+        HGStyles.Fill(canvas, HGStyles.Canvas);
         DrawGrid(canvas);
 
         var console = new Rect(center.x, canvas.yMax, center.width, MinConsole);
-        LGStyles.Fill(console, LGStyles.Console);
-        LGStyles.Frame(console, LGStyles.NodeBorder);
-        GUI.Label(new Rect(console.x + 6f, console.y + 3f, console.width - 12f, 16f), "尚未驗證", LGStyles.Tiny);
+        HGStyles.Fill(console, HGStyles.Console);
+        HGStyles.Frame(console, HGStyles.NodeBorder);
+        GUI.Label(new Rect(console.x + 6f, console.y + 3f, console.width - 12f, 16f), "尚未驗證", HGStyles.Tiny);
     }
 
     private static void DrawIdlePanel(Rect r, string title)
     {
-        LGStyles.Fill(r, LGStyles.Panel);
-        LGStyles.Frame(r, LGStyles.NodeBorder);
-        GUI.Label(new Rect(r.x + 4f, r.y + 2f, r.width - 8f, 18f), title, LGStyles.PanelHeader);
+        HGStyles.Fill(r, HGStyles.Panel);
+        HGStyles.Frame(r, HGStyles.NodeBorder);
+        GUI.Label(new Rect(r.x + 4f, r.y + 2f, r.width - 8f, 18f), title, HGStyles.PanelHeader);
 
         var body = new Rect(r.x + 2f, r.y + 22f, r.width - 4f, r.height - 26f);
-        LGStyles.Fill(body, LGStyles.PanelList);
+        HGStyles.Fill(body, HGStyles.PanelList);
     }
 
 
@@ -391,16 +391,16 @@ public partial class LogicGraphWindow : EditorWindow
         bool bindingsChanged = false;
         foreach (var carrier in CurrentCarrierScope())
             if (model.EnsureAssetBindings(carrier)) bindingsChanged = true;
-        if (bindingsChanged && focus.Kind != LGFocusKind.Asset)
+        if (bindingsChanged && focus.Kind != HGFocusKind.Asset)
             reportStale = true;   // 參數列變了，驗證報告要重跑
 
         // 候選池掛在焦點的頭端上，不必再依 FocusId 過濾。
         model.OrphanHead = focus.Head;
 
         // 一顆 HEAD 都沒有也要建：時機畫布可能還沒有任何時機節點，但候選節點仍要畫出來。
-        graph = focus.Kind == LGFocusKind.None
-            ? new LGGraphView()
-            : LGGraph.Build(model, focus.Roots, OrphansOfCurrentFocus(), focus.Id, focus.HeadTitle,
+        graph = focus.Kind == HGFocusKind.None
+            ? new HGGraphView()
+            : HGGraph.Build(model, focus.Roots, OrphansOfCurrentFocus(), focus.Id, focus.HeadTitle,
                 listCollapse, noteOpenId, noteCollapsed, focus.HeadCarrier, orphanKindHints);
 
         ApplyVisibility();
@@ -428,17 +428,17 @@ public partial class LogicGraphWindow : EditorWindow
         // 收合的是**欄位**不是節點：先把所有「該收起來」的欄位挑出來。
         foreach (var n in graph.Nodes)
         {
-            foreach (var row in LGGraph.AllRows(n.Rows))
+            foreach (var row in HGGraph.AllRows(n.Rows))
             {
-                if (row.Kind != LGRowKind.Slot || row.Slot == null) continue;
-                if (IsSlotHidden(n, row)) effectiveHidden.Add(LGGraph.CollapseKey(n.Id, row));
+                if (row.Kind != HGRowKind.Slot || row.Slot == null) continue;
+                if (IsSlotHidden(n, row)) effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
             }
         }
 
         // 節點畫不畫，看它還有沒有一條「從 HEAD／候選出發、中途不經過任何收合欄位」的路徑。
         // 共用節點因此在最後一個還要求顯示它的欄位被收起來時才跟著消失。用可達性算而不是引用計數：
         // 計數擋不住「引用者自己也被收掉了」這種間接情況。
-        var visible = new HashSet<LGNodeView>();
+        var visible = new HashSet<HGNodeView>();
         foreach (var n in graph.Nodes)
             if (n.ParentRow == null) MarkVisibleFrom(n, visible);
 
@@ -471,8 +471,8 @@ public partial class LogicGraphWindow : EditorWindow
     /// 重開視窗會清空，於是自動規則整批重新套用，看起來就是「我沒收的也被收走了」。
     /// 效能真的成為問題時再處理，不要用會讓畫面自己變動的規則換。
     /// </summary>
-    private bool IsSlotHidden(LGNodeView owner, LGRow row)
-        => slotHidden.TryGetValue(LGGraph.CollapseKey(owner.Id, row), out bool stored) && stored;
+    private bool IsSlotHidden(HGNodeView owner, HGRow row)
+        => slotHidden.TryGetValue(HGGraph.CollapseKey(owner.Id, row), out bool stored) && stored;
 
     /// <summary>
     /// 把「目標已經被藏起來」的欄位補進 effectiveHidden，收合鈕才會畫成 +。
@@ -483,11 +483,11 @@ public partial class LogicGraphWindow : EditorWindow
         foreach (var n in graph.Nodes)
         {
             if (n.Hidden) continue;
-            foreach (var row in LGGraph.AllRows(n.Rows))
+            foreach (var row in HGGraph.AllRows(n.Rows))
             {
-                if (row.Kind != LGRowKind.Slot || row.Slot == null) continue;
+                if (row.Kind != HGRowKind.Slot || row.Slot == null) continue;
                 if (!graph.BySlot.TryGetValue(row.Slot, out var target) || !target.Hidden) continue;
-                effectiveHidden.Add(LGGraph.CollapseKey(n.Id, row));
+                effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
             }
         }
     }
@@ -495,7 +495,7 @@ public partial class LogicGraphWindow : EditorWindow
     /// <summary>solo：只留下這個 Slot 的子樹，以及持有它的節點與祖先。</summary>
     private void ApplySolo()
     {
-        var keep = new HashSet<LGNodeView>();
+        var keep = new HashSet<HGNodeView>();
         var row = FindSlotRow(soloSlotKey);
         if (row?.Slot != null && graph.BySlot.TryGetValue(row.Slot, out var target)) MarkSubtree(target, keep);
 
@@ -511,9 +511,9 @@ public partial class LogicGraphWindow : EditorWindow
     }
 
     /// <summary>從這顆節點沿 ParentRow 一路往上留到根。seen 獨立於 keep，避免資料成環時停不下來。</summary>
-    private void KeepAncestors(LGNodeView node, HashSet<LGNodeView> keep)
+    private void KeepAncestors(HGNodeView node, HashSet<HGNodeView> keep)
     {
-        var seen = new HashSet<LGNodeView>();
+        var seen = new HashSet<HGNodeView>();
         while (node != null && seen.Add(node))
         {
             keep.Add(node);
@@ -521,7 +521,7 @@ public partial class LogicGraphWindow : EditorWindow
         }
     }
 
-    private LGNodeView NodeById(string id)
+    private HGNodeView NodeById(string id)
     {
         if (string.IsNullOrEmpty(id)) return null;
         foreach (var n in graph.Nodes)
@@ -529,10 +529,10 @@ public partial class LogicGraphWindow : EditorWindow
         return null;
     }
 
-    private void MarkSubtree(LGNodeView node, HashSet<LGNodeView> into)
+    private void MarkSubtree(HGNodeView node, HashSet<HGNodeView> into)
     {
         if (node == null || !into.Add(node)) return;
-        foreach (var row in LGGraph.AllRows(node.Rows))
+        foreach (var row in HGGraph.AllRows(node.Rows))
         {
             if (row.Slot == null) continue;
             if (graph.BySlot.TryGetValue(row.Slot, out var child)) MarkSubtree(child, into);
@@ -543,33 +543,33 @@ public partial class LogicGraphWindow : EditorWindow
     /// 這條線畫不畫。三種都要擋：目標被收起來、起點節點被收起來、以及**起點那一列自己被收合**——
     /// 最後一種在目標被別的欄位撐著仍要顯示時才看得到差別，漏掉的話收合鈕畫成 + 卻還牽著一條線。
     /// </summary>
-    private bool IsLinkVisible(LGLink link)
+    private bool IsLinkVisible(HGLink link)
     {
         if (link?.ParentRow == null || link.Target == null || link.Target.Hidden) return false;
         if (link.Owner != null && link.Owner.Hidden) return false;
-        return !effectiveHidden.Contains(LGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow));
+        return !effectiveHidden.Contains(HGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow));
     }
 
     /// <summary>
     /// 從這顆節點沿「沒有收起來」的欄位往下走，走得到的節點都要畫。沒有父列的節點（HEAD 與候選）
     /// 是起點，永遠畫。visible 兼作環的護欄。
     /// </summary>
-    private void MarkVisibleFrom(LGNodeView node, HashSet<LGNodeView> visible)
+    private void MarkVisibleFrom(HGNodeView node, HashSet<HGNodeView> visible)
     {
         if (node == null || !visible.Add(node)) return;
-        foreach (var row in LGGraph.AllRows(node.Rows))
+        foreach (var row in HGGraph.AllRows(node.Rows))
         {
             if (row.Slot == null) continue;
-            if (effectiveHidden.Contains(LGGraph.CollapseKey(node.Id, row))) continue;
+            if (effectiveHidden.Contains(HGGraph.CollapseKey(node.Id, row))) continue;
             if (graph.BySlot.TryGetValue(row.Slot, out var child)) MarkVisibleFrom(child, visible);
         }
     }
 
-    private LGRow FindSlotRow(string key)
+    private HGRow FindSlotRow(string key)
     {
         foreach (var n in graph.Nodes)
-            foreach (var row in LGGraph.AllRows(n.Rows))
-                if (row.Kind == LGRowKind.Slot && LGGraph.CollapseKey(n.Id, row) == key) return row;
+            foreach (var row in HGGraph.AllRows(n.Rows))
+                if (row.Kind == HGRowKind.Slot && HGGraph.CollapseKey(n.Id, row) == key) return row;
         return null;
     }
 
@@ -615,14 +615,14 @@ public partial class LogicGraphWindow : EditorWindow
     /// </summary>
     private IList OrphansOfCurrentFocus()
     {
-        if (focus.Kind != LGFocusKind.Timing) return LGReflect.Orphans(focus.Head);
+        if (focus.Kind != HGFocusKind.Timing) return HGReflect.Orphans(focus.Head);
 
         var all = new List<object>();
-        Append(all, LGReflect.Orphans(model.Data));
+        Append(all, HGReflect.Orphans(model.Data));
         foreach (var g in model.ReadGroups())
         {
             if (g.Actions == null) continue;
-            foreach (var slot in g.Actions) Append(all, LGReflect.Orphans(slot));
+            foreach (var slot in g.Actions) Append(all, HGReflect.Orphans(slot));
         }
         return all;
     }
@@ -635,16 +635,16 @@ public partial class LogicGraphWindow : EditorWindow
     }
 
     /// <summary>目前畫面該用哪一份驗證結果：資產焦點只看資產自己的。</summary>
-    private LGReport Rep => focus.Kind == LGFocusKind.Asset ? assetReport : report;
+    private HGReport Rep => focus.Kind == HGFocusKind.Asset ? assetReport : report;
 
     /// <summary>
     /// 座標這種「寫進載體、但不動圖結構也不必重跑驗證」的修改。
-    /// Owner 焦點由 `LGModel.SetPosition` 內部的 `MarkDirty()` 記；**資產焦點的 `TrackChanges` 是關的**，
+    /// Owner 焦點由 `HGModel.SetPosition` 內部的 `MarkDirty()` 記；**資產焦點的 `TrackChanges` 是關的**，
     /// 那條路整個 early-return，所以要在這裡補記 `assetDirty`——否則搬完節點存檔鈕還是灰的，一離開位置就沒了。
     /// </summary>
     private void MarkPositionsChanged()
     {
-        if (focus.Kind != LGFocusKind.Asset) return;
+        if (focus.Kind != HGFocusKind.Asset) return;
         // 資產本體畫布的 HEAD 座標直接寫在資產 SO 上（不在工作副本裡），Unity 要 SetDirty 才會落檔。
         if (focus.Endpoint == null && focus.AssetObject != null) EditorUtility.SetDirty(focus.AssetObject);
         // 只設 assetDirty：座標不影響執行語意，存檔時不必重驗、也不必通知任何 subscriber。
@@ -667,23 +667,23 @@ public partial class LogicGraphWindow : EditorWindow
     /// 目前資產工作副本的快照。內容、候選與變數**同一次深複製**：分次抄會把同一顆端點抄成
     /// 幾份不相干的物件，變數節點指到的就不是清單裡那一顆（進出資產的交易也是同一條規則）。
     /// </summary>
-    private LGAssetSnapshot CaptureAssetState()
+    private HGAssetSnapshot CaptureAssetState()
     {
-        if (focus.Kind != LGFocusKind.Asset || focus.AssetHostSlot == null) return null;
+        if (focus.Kind != HGFocusKind.Asset || focus.AssetHostSlot == null) return null;
 
         var pack = new List<object>
         {
-            LGReflect.GetNode(focus.AssetHostSlot),
+            HGReflect.GetNode(focus.AssetHostSlot),
             focus.AssetOrphans ?? new List<GraphNode>(),
             focus.AssetEndpoints ?? new List<GraphEndpoint>(),
         };
-        var copy = LogicGraphDeepCopy.Copy(pack);
+        var copy = GraphDeepCopy.Copy(pack);
         if (copy == null)
         {
             Debug.LogError("[GraphKit] 無法建立資產快照，這一步不會進復原歷程。");
             return null;
         }
-        return new LGAssetSnapshot
+        return new HGAssetSnapshot
         {
             Root = copy[0] as GraphNode,
             Orphans = copy[1] as List<GraphNode> ?? new List<GraphNode>(),
@@ -695,11 +695,11 @@ public partial class LogicGraphWindow : EditorWindow
     /// 把快照換成活的工作副本。整批端點物件都被換掉，所以正在編的變數子畫布要**靠 Id 重指**；
     /// 那顆變數在這一步被刪掉的話就退回資產本體，畫面上不會停在一張查不到主人的空白圖。
     /// </summary>
-    private void ApplyAssetState(LGAssetSnapshot snapshot)
+    private void ApplyAssetState(HGAssetSnapshot snapshot)
     {
         if (snapshot == null || focus.AssetHostSlot == null) return;
 
-        LGReflect.SetNode(focus.AssetHostSlot, snapshot.Root);
+        HGReflect.SetNode(focus.AssetHostSlot, snapshot.Root);
         focus.AssetOrphans = snapshot.Orphans;
         focus.AssetEndpoints = snapshot.Endpoints;
 
@@ -722,12 +722,12 @@ public partial class LogicGraphWindow : EditorWindow
     }
 
     /// <summary>復原一步。資產焦點走自己的歷程，其餘走 Owner 工作副本那份。</summary>
-    private bool CanUndoNow => focus.Kind == LGFocusKind.Asset ? assetHistory.CanUndo : model?.CanUndo == true;
-    private bool CanRedoNow => focus.Kind == LGFocusKind.Asset ? assetHistory.CanRedo : model?.CanRedo == true;
+    private bool CanUndoNow => focus.Kind == HGFocusKind.Asset ? assetHistory.CanUndo : model?.CanUndo == true;
+    private bool CanRedoNow => focus.Kind == HGFocusKind.Asset ? assetHistory.CanRedo : model?.CanRedo == true;
 
     private bool DoUndo()
     {
-        if (focus.Kind != LGFocusKind.Asset)
+        if (focus.Kind != HGFocusKind.Asset)
         {
             if (!model.Undo()) return false;
             AfterHistorySwap();
@@ -741,7 +741,7 @@ public partial class LogicGraphWindow : EditorWindow
 
     private bool DoRedo()
     {
-        if (focus.Kind != LGFocusKind.Asset)
+        if (focus.Kind != HGFocusKind.Asset)
         {
             if (!model.Redo()) return false;
             AfterHistorySwap();
@@ -756,7 +756,7 @@ public partial class LogicGraphWindow : EditorWindow
     /// <summary>強制切一個復原記錄點。呼叫點不必知道現在是哪一種焦點，路由在這裡。</summary>
     private void BreakUndoMerge()
     {
-        if (focus.Kind == LGFocusKind.Asset) assetHistory.BreakMerge();
+        if (focus.Kind == HGFocusKind.Asset) assetHistory.BreakMerge();
         else model?.BreakUndoMerge();
     }
 
@@ -770,7 +770,7 @@ public partial class LogicGraphWindow : EditorWindow
     {
         graphDirty = true;
         // 資產是獨立存檔交易，改它不算改 Owner，也不進 Owner 的 Undo 堆疊。
-        if (focus.Kind == LGFocusKind.Asset)
+        if (focus.Kind == HGFocusKind.Asset)
         {
             MarkAssetContentChanged();
         }
@@ -792,15 +792,15 @@ public partial class LogicGraphWindow : EditorWindow
     {
         if (model?.Data == null) return;
 
-        if (focus.Kind == LGFocusKind.Asset)
+        if (focus.Kind == HGFocusKind.Asset)
         {
             if (focus.AssetHostSlot == null) return;
-            assetReport = LGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
+            assetReport = HGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
             assetVerifiedOnce = true;
             return;
         }
 
-        report = LGValidator.Run(model);
+        report = HGValidator.Run(model);
         verifiedOnce = true;
     }
 
@@ -833,7 +833,7 @@ public partial class LogicGraphWindow : EditorWindow
         }
         else if (e.keyCode == KeyCode.S)
         {
-            if (focus.Kind == LGFocusKind.Asset) SaveAsset(); else DoSave();
+            if (focus.Kind == HGFocusKind.Asset) SaveAsset(); else DoSave();
             e.Use();
         }
     }
@@ -844,7 +844,7 @@ public partial class LogicGraphWindow : EditorWindow
     /// </summary>
     private void AfterHistorySwap()
     {
-        focus = focus.Kind == LGFocusKind.Timing ? AllTimingsFocus() : new LGFocus();
+        focus = focus.Kind == HGFocusKind.Timing ? AllTimingsFocus() : new HGFocus();
 
         selectedIds.Clear();
         graphDirty = true;
@@ -857,18 +857,18 @@ public partial class LogicGraphWindow : EditorWindow
 
     private void DrawToolbar(Rect r)
     {
-        LGStyles.Fill(r, LGStyles.Toolbar);
+        HGStyles.Fill(r, HGStyles.Toolbar);
 
         // 麵包屑：資產是獨立一層，未儲存狀態與外層各記各的。
         var ownerPickerRect = new Rect(r.x + 4f, r.y + 2f, 18f, 18f);
-        GUI.enabled = focus.Kind != LGFocusKind.Asset;
+        GUI.enabled = focus.Kind != HGFocusKind.Asset;
         if (GUI.Button(ownerPickerRect, new GUIContent("", "換編輯對象"), EditorStyles.popup))
-            LGOwnerIndex.ShowPicker(ownerPickerRect, PickOwner);
+            HGOwnerIndex.ShowPicker(ownerPickerRect, PickOwner);
         GUI.enabled = true;
 
         string ownerPath = AssetDatabase.GetAssetPath(model.Owner);
         if (string.IsNullOrEmpty(ownerPath)) ownerPath = "Scene";
-        bool inAsset = focus.Kind == LGFocusKind.Asset;
+        bool inAsset = focus.Kind == HGFocusKind.Asset;
         string crumb = $"{model.Owner.name} ({model.Owner.GetType().Name})({ownerPath})";
         GUI.Label(new Rect(ownerPickerRect.xMax + 4f, r.y + 2f, r.width - 440f, 18f), crumb, EditorStyles.boldLabel);
 
@@ -878,7 +878,7 @@ public partial class LogicGraphWindow : EditorWindow
         if (inAsset && !assetContentDirty) blocked = false;
         // 共用資產存檔會把引用它的 Owner 標成未驗證，但工作副本一個字都沒改（Dirty=false）。
         // 存檔是唯一會重跑 Core Verify 並寫回 Owner 的入口，這時候不開它就沒有任何路可以把圖救回已驗證。
-        bool needsRevalidate = !inAsset && model.Owner is ILogicGraphOwner asOwner && !asOwner.IsLogicGraphValidated();
+        bool needsRevalidate = !inAsset && model.Owner is IGraphOwner asOwner && !asOwner.IsGraphValidated();
         bool hasChanges = inAsset ? assetDirty : (model.Dirty || needsRevalidate);
         bool canSave = hasChanges && !blocked;
 
@@ -912,7 +912,7 @@ public partial class LogicGraphWindow : EditorWindow
             if (inAsset) LeaveAsset(); else DoCancel();
         }
 
-        // 資產焦點也有復原：它走自己的歷程（LGAssetHistory），與 Owner 那份互不干擾。
+        // 資產焦點也有復原：它走自己的歷程（HGAssetHistory），與 Owner 那份互不干擾。
         x -= 48f;
         GUI.enabled = CanRedoNow;
         if (GUI.Button(new Rect(x, r.y + 1f, 46f, 19f), new GUIContent("重做", "Ctrl+Y / Ctrl+Shift+Z"))) DoRedo();

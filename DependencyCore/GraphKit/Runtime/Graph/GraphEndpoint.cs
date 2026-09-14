@@ -1,9 +1,8 @@
-namespace HaruFamily.Framework.LogicGraph
+namespace HaruFamily.DependencyCore.GraphKit
 {
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Scripting.APIUpdating;
 
 /// <summary>
 /// 具名變數的頭端（發出點）：自己是一個固定節點，只有一個「來源」接點，並擁有獨立畫布與候選池。
@@ -14,7 +13,6 @@ using UnityEngine.Scripting.APIUpdating;
 // 不再 per result kind 各繼承一次：Slot 用 [SerializeReference] 存既有的 IntSlot / FloatSlot…，
 // 型別資訊由 Slot.ResultType / PackType 提供，Core 不必知道專案有哪幾種 kind。
 [Serializable]
-[MovedFrom(true, sourceAssembly: "HaruFamily.Framework.LogicGraph")]
 public class GraphEndpoint : IGraphHead, IOrphanPool
 {
     [SerializeField]

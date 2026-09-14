@@ -1,6 +1,6 @@
 {
   "name": "HaruFamily.DependencyCore.GraphKit",
-  "rootNamespace": "HaruFamily.Framework.LogicGraph",
+  "rootNamespace": "HaruFamily.DependencyCore.GraphKit",
   "references": [],
   "includePlatforms": [],
   "excludePlatforms": [],

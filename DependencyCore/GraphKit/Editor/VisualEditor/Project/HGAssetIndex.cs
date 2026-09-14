@@ -1,11 +1,11 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
-public class LGAssetEntry
+public class HGAssetEntry
 {
     public ScriptableObject Asset;
     public string Name;
@@ -15,51 +15,51 @@ public class LGAssetEntry
     public Type ResultType;
 }
 
-/// <summary>固定資產資料夾內的 LogicGraph 共用公式／動作資產快取。</summary>
+/// <summary>固定資產資料夾內的共用公式／動作資產快取。</summary>
 [InitializeOnLoad]
-public static class LGAssetIndex
+public static class HGAssetIndex
 {
-    private static List<LGAssetEntry> cache;
+    private static List<HGAssetEntry> cache;
 
-    static LGAssetIndex() => EditorApplication.projectChanged += Invalidate;
+    static HGAssetIndex() => EditorApplication.projectChanged += Invalidate;
 
-    public static List<LGAssetEntry> Entries => cache ??= Scan();
+    public static List<HGAssetEntry> Entries => cache ??= Scan();
 
     public static void Refresh() => cache = Scan();
 
     private static void Invalidate() => cache = null;
 
-    private static List<LGAssetEntry> Scan()
+    private static List<HGAssetEntry> Scan()
     {
-        var result = new List<LGAssetEntry>();
-        if (!AssetDatabase.IsValidFolder(LGAssetStore.Folder)) return result;
+        var result = new List<HGAssetEntry>();
+        if (!AssetDatabase.IsValidFolder(HGAssetStore.Folder)) return result;
 
-        var guids = AssetDatabase.FindAssets("t:ScriptableObject", new[] { LGAssetStore.Folder });
+        var guids = AssetDatabase.FindAssets("t:ScriptableObject", new[] { HGAssetStore.Folder });
         try
         {
             for (int i = 0; i < guids.Length; i++)
             {
                 if (guids.Length > 400 && i % 64 == 0 && EditorUtility.DisplayCancelableProgressBar(
-                        "掃描 LogicGraph 資產", $"{i + 1}/{guids.Length}", (float)i / Mathf.Max(1, guids.Length)))
+                        "掃描共用資產", $"{i + 1}/{guids.Length}", (float)i / Mathf.Max(1, guids.Length)))
                     break;
 
                 string path = AssetDatabase.GUIDToAssetPath(guids[i]);
                 Type type = AssetDatabase.GetMainAssetTypeAtPath(path);
                 // 判定只走 Contracts 的兩個介面，不認任何具體資產基底：編輯器不知道使用端有哪幾種圖資產。
-                bool isGraphAsset = type != null && typeof(ILogicGraphAsset).IsAssignableFrom(type);
+                bool isGraphAsset = type != null && typeof(IGraphAsset).IsAssignableFrom(type);
                 bool isAction = isGraphAsset && typeof(IActionGraphAsset).IsAssignableFrom(type);
                 if (!isGraphAsset) continue;
 
                 var asset = AssetDatabase.LoadAssetAtPath<ScriptableObject>(path);
                 if (asset == null) continue;
-                result.Add(new LGAssetEntry
+                result.Add(new HGAssetEntry
                 {
                     Asset = asset,
                     Name = asset.name,
                     TypeName = type.Name,
                     Path = path,
                     IsAction = isAction,
-                    ResultType = LGReflect.AssetResultType(asset),
+                    ResultType = HGReflect.AssetResultType(asset),
                 });
             }
         }

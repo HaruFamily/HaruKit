@@ -4,6 +4,7 @@ using System.IO;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Serialization;
+using HaruFamily.DependencyCore.GraphKit;
 
 namespace HaruFamily.Tools.AssetPipeline
 {

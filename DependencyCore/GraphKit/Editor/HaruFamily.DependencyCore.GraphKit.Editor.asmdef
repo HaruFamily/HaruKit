@@ -1,6 +1,6 @@
 {
   "name": "HaruFamily.DependencyCore.GraphKit.Editor",
-  "rootNamespace": "HaruFamily.Framework.LogicGraph.Editor",
+  "rootNamespace": "HaruFamily.DependencyCore.GraphKit.Editor",
   "references": [
     "HaruFamily.DependencyCore.GraphKit"
   ],

@@ -1,6 +1,7 @@
 namespace HaruFamily.Framework.LogicGraph
 {
 using Cysharp.Threading.Tasks;
+using HaruFamily.DependencyCore.GraphKit;
 
 public abstract class ActionBase<TPack> : ActionNodeBase<TPack>
 {

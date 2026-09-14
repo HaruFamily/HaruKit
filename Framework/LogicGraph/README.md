@@ -78,13 +78,13 @@ Define the types that give the framework its domain meaning:
 4. For each formula family, provide a `FormulaAsset<TResult, TPack>` subtype
    and a `FormulaSlot<TResult, TAsset, TFormula, TPack>` subtype.
 5. Store `LogicGraph<TTiming, TPack>` on a serializable owner. Implement
-   `ILogicGraphOwner` on that owner to enable Inspector validation.
+   `IGraphOwner` on that owner to enable Inspector validation.
 
 ```csharp
 using Cysharp.Threading.Tasks;
 using HaruFamily.Framework.LogicGraph;
 
-[LGNode("Write message")]
+[HGNode("Write message")]
 public sealed class WriteMessageAction : ActionBase<MyContext>
 {
     protected override UniTask OnExecute(MyContext context, TokenTable<MyContext> tokens)
@@ -94,7 +94,7 @@ public sealed class WriteMessageAction : ActionBase<MyContext>
     }
 }
 
-[LGNode("Current value")]
+[HGNode("Current value")]
 public sealed class CurrentValueFormula : FormulaBase<int, MyContext>
 {
     protected override UniTask<int> OnEvaluate(MyContext context, TokenTable<MyContext> tokens)
@@ -104,10 +104,10 @@ public sealed class CurrentValueFormula : FormulaBase<int, MyContext>
 }
 ```
 
-`[LGNode]` supplies the graph display name, description, group, and ordering.
+`[HGNode]` supplies the graph display name, description, group, and ordering.
 The package also provides graph-only presentation attributes such as
-`[LGHide]`, `[LGShowIf]`, `[LGLabel]`, `[LGDescription]`, `[LGEnum]`, and
-`[LGKind]`.
+`[HGHide]`, `[HGShowIf]`, `[HGLabel]`, `[HGDescription]`, `[HGEnum]`, and
+`[HGKind]`.
 
 ## Graph Model
 
@@ -137,7 +137,7 @@ binding for each endpoint.
 
 The custom Inspector drawer is the entry point to the graph editor for any
 serialized `LogicGraph<,>` field. It can open the graph and, when its owner
-implements `ILogicGraphOwner`, run validation.
+implements `IGraphOwner`, run validation.
 
 Call `MarkDirty()` after changing a graph through code. In the Editor, call
 `Verify()` after authoring changes. A successful validation marks the graph as
@@ -145,7 +145,7 @@ executable; `TriggerAction` and `CreateTokenTable` refuse to run an unvalidated
 graph. Empty formula slots are valid constant values. Empty enabled action
 slots and incompatible or cyclic graph links are validation errors.
 
-The editor also revalidates `ILogicGraphOwner` ScriptableObjects when leaving
+The editor also revalidates `IGraphOwner` ScriptableObjects when leaving
 Edit Mode. Failures are reported in the Console, and invalid graphs remain
 blocked from runtime execution.
 
@@ -187,5 +187,5 @@ as action execution.
 - `Runtime/Engine`: dispatch, validation, and compilation
 - `Editor`: Inspector drawer, validation sweep, and formula family scaffolding
 
-The graph carrier, the editor contracts, the `[LG*]` attributes, deep copy, and
+The graph carrier, the editor contracts, the `[HG*]` attributes, deep copy, and
 the node editor window all live in GraphKit.

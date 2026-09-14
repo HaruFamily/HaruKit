@@ -4,9 +4,10 @@ using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit;
 
 // 非泛型 base：給 Editor walker 不必反射就能取根節點與候選池。
-public abstract class FormulaAssetBase : ScriptableObject, ILogicGraphAsset
+public abstract class FormulaAssetBase : ScriptableObject, IGraphAsset
 {
     /// <summary>本資產的候選節點清單。僅視覺化編輯器使用。</summary>
     public abstract List<GraphNode> Orphans { get; }
@@ -107,7 +108,7 @@ public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
     internal FormulaBase<T, TPack> EditorGetTarget() => Root?.GetBody<FormulaBase<T, TPack>>();
     internal override object EditorGetTargetObject() => Root?.BodyObject;
 
-    // 「誰引用我」不存在資產身上：那是衍生資料，存了就會過期。編輯器要用時從 LGReferenceIndex 現算。
+    // 「誰引用我」不存在資產身上：那是衍生資料，存了就會過期。編輯器要用時從 HGReferenceIndex 現算。
 #endif
 }
 

@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -9,7 +9,7 @@ using UnityEngine;
 /// <summary>
 /// 畫布滑鼠與鍵盤互動：拖曳、框選、複製貼上、刪除，以及視圖與焦點切換。
 /// </summary>
-public partial class LogicGraphWindow
+public partial class HaruGraphWindow
 {
     // ===== 畫布互動 =====
 
@@ -28,7 +28,7 @@ public partial class LogicGraphWindow
                 portClickRow = null;
                 // 這一下多半會被下面 e.Use() 掉，左欄與焦點標題列的改名欄就再也收不到它——先替它們收尾。
                 CommitInlineName();
-                if (e.button == 0 && OutputNodeAt(graphMouse) is LGNodeView outputNode)
+                if (e.button == 0 && OutputNodeAt(graphMouse) is HGNodeView outputNode)
                 {
                     BeginLinkFromNode(outputNode);
                     e.Use();
@@ -79,7 +79,7 @@ public partial class LogicGraphWindow
                         selectedIds.Add(hit.Id);
                     }
 
-                    if (new Rect(hit.Pos.x, hit.Pos.y, hit.Width, LGGraph.HeaderHeight).Contains(graphMouse))
+                    if (new Rect(hit.Pos.x, hit.Pos.y, hit.Width, HGGraph.HeaderHeight).Contains(graphMouse))
                     {
                         dragNode = hit;
                         dragOffset = graphMouse - hit.Pos;
@@ -141,9 +141,9 @@ public partial class LogicGraphWindow
                 {
                     var pressed = portClickRow;
                     portClickRow = null;
-                    if (LGReflect.GetNode(pressed.Slot) != null)
+                    if (HGReflect.GetNode(pressed.Slot) != null)
                     {
-                        ToggleSlotVisibility(LGGraph.CollapseKey(pressed.OwnerNodeId, pressed), e.alt);
+                        ToggleSlotVisibility(HGGraph.CollapseKey(pressed.OwnerNodeId, pressed), e.alt);
                         e.Use();
                         break;
                     }
@@ -239,7 +239,7 @@ public partial class LogicGraphWindow
 
     // ===== 選取、複製、刪除 =====
 
-    private IEnumerable<LGNodeView> SelectedNodes()
+    private IEnumerable<HGNodeView> SelectedNodes()
     {
         if (graph == null) yield break;
         foreach (var n in graph.Nodes)
@@ -248,7 +248,7 @@ public partial class LogicGraphWindow
 
     private void DeleteSelection()
     {
-        var targets = new List<LGNodeView>(SelectedNodes());
+        var targets = new List<HGNodeView>(SelectedNodes());
         if (targets.Count == 0) return;
         BreakUndoMerge();
         foreach (var n in targets) DeleteNode(n, false);
@@ -262,10 +262,10 @@ public partial class LogicGraphWindow
         clipboard.Clear();
         foreach (var n in SelectedNodes())
         {
-            if (n.Obj is not LogicGraphNode node) continue;
+            if (n.Obj is not GraphNodeContent node) continue;
             var clone = node.EditorClone();
             if (clone == null) continue;
-            LGModel.ResetNodeIds(clone);
+            HGModel.ResetNodeIds(clone);
             clipboard.Add(clone);
         }
         ShowNotification(new GUIContent(clipboard.Count > 0 ? $"已複製 {clipboard.Count} 個節點" : "沒有可複製的節點"));
@@ -280,10 +280,10 @@ public partial class LogicGraphWindow
         float offset = 0f;
         foreach (var item in clipboard)
         {
-            if (item is not LogicGraphNode source) continue;
+            if (item is not GraphNodeContent source) continue;
             var clone = source.EditorClone();
             if (clone == null) continue;
-            LGModel.ResetNodeIds(clone);
+            HGModel.ResetNodeIds(clone);
 
             // 貼上＝新載體包新內容，落在目前焦點的候選池。
             var carrier = new GraphNode(clone);
@@ -297,7 +297,7 @@ public partial class LogicGraphWindow
         Repaint();
     }
 
-    private LGNodeView NodeAt(Vector2 graphPoint)
+    private HGNodeView NodeAt(Vector2 graphPoint)
     {
         if (graph == null) return null;
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
@@ -305,15 +305,15 @@ public partial class LogicGraphWindow
         return null;
     }
 
-    private LGNodeView OutputNodeAt(Vector2 graphPoint)
+    private HGNodeView OutputNodeAt(Vector2 graphPoint)
     {
         if (graph == null) return null;
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
         {
             var node = graph.Nodes[i];
             if (node.IsRoot || node.Hidden) continue;
-            var port = new Rect(node.OutputPort - Vector2.one * LGGraph.PortRadius,
-                Vector2.one * LGGraph.PortDiameter);
+            var port = new Rect(node.OutputPort - Vector2.one * HGGraph.PortRadius,
+                Vector2.one * HGGraph.PortDiameter);
             if (port.Contains(graphPoint)) return node;
         }
         return null;
@@ -352,7 +352,7 @@ public partial class LogicGraphWindow
         {
             bool match = ReferenceEquals(node.Obj, slotOrNode);
             if (!match)
-                foreach (var row in LGGraph.AllRows(node.Rows))
+                foreach (var row in HGGraph.AllRows(node.Rows))
                     if (ReferenceEquals(row.Slot, slotOrNode)) { match = true; break; }
             if (!match) continue;
 
@@ -364,13 +364,13 @@ public partial class LogicGraphWindow
         }
     }
 
-    private void SetFocus(LGFocus next)
+    private void SetFocus(HGFocus next)
     {
         if (next == null) return;
         EnsureHeadIds(next);
 
         focus = next;
-        if (model != null) model.TrackChanges = next.Kind != LGFocusKind.Asset;
+        if (model != null) model.TrackChanges = next.Kind != HGFocusKind.Asset;
         CancelInlineName();
         selectedIds.Clear();
         graphDirty = true;
@@ -380,13 +380,13 @@ public partial class LogicGraphWindow
     /// <summary>頭端第一次被聚焦時補一個穩定識別碼；焦點與座標都靠它。</summary>
     // 補完不標髒：id 只是編輯期識別碼，沒落盤下次重生即可。真正需要它落盤的是記座標，
     // 而 SetPosition 自己就會 MarkDirty，會把這個 id 一起帶走——純瀏覽因此不再要求存檔。
-    private void EnsureHeadIds(LGFocus next)
+    private void EnsureHeadIds(HGFocus next)
     {
         object head = next.Head;
-        if (next.Kind == LGFocusKind.Action && head != null
-            && string.IsNullOrEmpty(LGReflect.SlotEditorId(head)))
+        if (next.Kind == HGFocusKind.Action && head != null
+            && string.IsNullOrEmpty(HGReflect.SlotEditorId(head)))
         {
-            LGReflect.EnsureSlotEditorId(head);
+            HGReflect.EnsureSlotEditorId(head);
         }
     }
 
@@ -394,10 +394,10 @@ public partial class LogicGraphWindow
     /// 時機畫布：所有時機群組畫在同一張圖上，一個時機一顆節點。一顆群組都還沒有也照樣成立——
     /// 畫布會顯示「新增時機節點」的佔位，不在這裡偷偷建資料。
     /// </summary>
-    private LGFocus AllTimingsFocus()
+    private HGFocus AllTimingsFocus()
         => model?.Data == null
-            ? new LGFocus()
-            : new LGFocus { Kind = LGFocusKind.Timing, Data = model.Data };
+            ? new HGFocus()
+            : new HGFocus { Kind = HGFocusKind.Timing, Data = model.Data };
 }
 
 }

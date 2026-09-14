@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -9,9 +9,9 @@ using UnityEngine;
 /// <summary>
 /// 拉線：相容性快取、命中測試、連接與中斷。
 /// </summary>
-public partial class LogicGraphWindow
+public partial class HaruGraphWindow
 {
-    private void BeginLinkFromRow(LGRow row)
+    private void BeginLinkFromRow(HGRow row)
     {
         linking = true;
         linkRow = row;
@@ -19,7 +19,7 @@ public partial class LogicGraphWindow
         RebuildLinkCompatibility();
     }
 
-    private void BeginLinkFromNode(LGNodeView node)
+    private void BeginLinkFromNode(HGNodeView node)
     {
         linking = true;
         linkRow = null;
@@ -55,22 +55,22 @@ public partial class LogicGraphWindow
 
         if (linkNode == null) return;
         foreach (var node in graph.Nodes)
-            foreach (var row in LGGraph.AllRows(node.Rows))
+            foreach (var row in HGGraph.AllRows(node.Rows))
                 if (row.IsLinkable && CanConnectLink(row, linkNode)) linkCompatibleRows.Add(row);
     }
 
     /// <summary>本次拉線中直接查快取；不在拉線中（例如放開瞬間的重算）才實算。</summary>
-    private bool CanLinkTo(LGRow row, LGNodeView node)
+    private bool CanLinkTo(HGRow row, HGNodeView node)
         => linking && ReferenceEquals(row, linkRow)
             ? linkCompatibleNodeIds.Contains(node.Id)
             : CanConnectLink(row, node);
 
-    private bool CanLinkFrom(LGRow row, LGNodeView node)
+    private bool CanLinkFrom(HGRow row, HGNodeView node)
         => linking && ReferenceEquals(node, linkNode)
             ? linkCompatibleRows.Contains(row)
             : CanConnectLink(row, node);
 
-    private LGNodeView LinkTargetNode(Vector2 graphMouse)
+    private HGNodeView LinkTargetNode(Vector2 graphMouse)
     {
         if (!linking) return null;
         if (linkRow != null) return SnappedOutputNode(graphMouse, linkRow);
@@ -89,7 +89,7 @@ public partial class LogicGraphWindow
         return row != null ? row.PortPos : graphMouse;
     }
 
-    private LGNodeView SnappedOutputNode(Vector2 graphMouse, LGRow row)
+    private HGNodeView SnappedOutputNode(Vector2 graphMouse, HGRow row)
     {
         if (graph == null || row == null) return null;
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
@@ -101,7 +101,7 @@ public partial class LogicGraphWindow
 
         float maxDistanceSqr = LinkSnapDistance * LinkSnapDistance / (zoom * zoom);
         float nearestDistanceSqr = maxDistanceSqr;
-        LGNodeView nearest = null;
+        HGNodeView nearest = null;
         foreach (var node in graph.Nodes)
         {
             if (node.IsRoot || node.Hidden || !CanLinkTo(row, node)) continue;
@@ -113,7 +113,7 @@ public partial class LogicGraphWindow
         return nearest;
     }
 
-    private LGRow SnappedInputRow(Vector2 graphMouse, LGNodeView node)
+    private HGRow SnappedInputRow(Vector2 graphMouse, HGNodeView node)
     {
         if (graph == null || node == null) return null;
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
@@ -121,9 +121,9 @@ public partial class LogicGraphWindow
             var owner = graph.Nodes[i];
             if (!owner.Rect.Contains(graphMouse)) continue;
 
-            LGRow nearestInNode = null;
+            HGRow nearestInNode = null;
             float nearestY = float.MaxValue;
-            foreach (var row in LGGraph.AllRows(owner.Rows))
+            foreach (var row in HGGraph.AllRows(owner.Rows))
             {
                 if (!row.IsLinkable || !CanLinkFrom(row, node)) continue;
                 float distanceY = Mathf.Abs(row.ScreenRect.center.y - graphMouse.y);
@@ -136,10 +136,10 @@ public partial class LogicGraphWindow
 
         float maxDistanceSqr = LinkSnapDistance * LinkSnapDistance / (zoom * zoom);
         float nearestDistanceSqr = maxDistanceSqr;
-        LGRow nearest = null;
+        HGRow nearest = null;
         foreach (var owner in graph.Nodes)
         {
-            foreach (var row in LGGraph.AllRows(owner.Rows))
+            foreach (var row in HGGraph.AllRows(owner.Rows))
             {
                 if (!row.IsLinkable || !CanLinkFrom(row, node)) continue;
                 float distanceSqr = (row.PortPos - graphMouse).sqrMagnitude;
@@ -151,30 +151,30 @@ public partial class LogicGraphWindow
         return nearest;
     }
 
-    private LGNodeView OwnerOfRow(LGRow target)
+    private HGNodeView OwnerOfRow(HGRow target)
     {
         if (graph == null || target == null) return null;
         foreach (var node in graph.Nodes)
-            foreach (var row in LGGraph.AllRows(node.Rows))
+            foreach (var row in HGGraph.AllRows(node.Rows))
                 if (ReferenceEquals(row, target)) return node;
         return null;
     }
 
-    private LGRow RowAt(Vector2 graphPoint, out LGNodeView owner)
+    private HGRow RowAt(Vector2 graphPoint, out HGNodeView owner)
     {
         owner = null;
         if (graph == null) return null;
         foreach (var node in graph.Nodes)
         {
             if (!node.Rect.Contains(graphPoint)) continue;
-            foreach (var row in LGGraph.AllRows(node.Rows))
+            foreach (var row in HGGraph.AllRows(node.Rows))
                 if (row.IsLinkable && row.ScreenRect.Contains(graphPoint)) { owner = node; return row; }
         }
         return null;
     }
 
     /// <summary>找滑鼠附近的直線連線。</summary>
-    private LGLink LinkAt(Vector2 graphPoint)
+    private HGLink LinkAt(Vector2 graphPoint)
     {
         if (graph == null) return null;
         foreach (var link in graph.Links)
@@ -197,7 +197,7 @@ public partial class LogicGraphWindow
     }
 
     /// <summary>切線：父欄位改回常數／空槽，被切下來的來源留成候選。</summary>
-    private void CutLink(LGLink link)
+    private void CutLink(HGLink link)
     {
         CutLink(link?.ParentRow?.Slot);
     }
@@ -216,10 +216,10 @@ public partial class LogicGraphWindow
     private void AttachSource(object slot, GraphNode next)
     {
         if (slot == null) return;
-        var old = LGReflect.GetNode(slot);
+        var old = HGReflect.GetNode(slot);
         if (ReferenceEquals(old, next)) return;
 
-        LGReflect.SetNode(slot, next);
+        HGReflect.SetNode(slot, next);
         if (old != null && !IsCarrierUsed(old))
         {
             model.AddOrphan(old);
@@ -238,9 +238,9 @@ public partial class LogicGraphWindow
     {
         if (carrier == null) return false;
         foreach (var slot in SlotsInCurrentGraph())
-            if (ReferenceEquals(LGReflect.GetNode(slot), carrier)) return true;
-        if (focus.Kind == LGFocusKind.Asset && focus.AssetHostSlot != null)
-            return ReferenceEquals(LGReflect.GetNode(focus.AssetHostSlot), carrier);
+            if (ReferenceEquals(HGReflect.GetNode(slot), carrier)) return true;
+        if (focus.Kind == HGFocusKind.Asset && focus.AssetHostSlot != null)
+            return ReferenceEquals(HGReflect.GetNode(focus.AssetHostSlot), carrier);
         return false;
     }
 
@@ -282,7 +282,7 @@ public partial class LogicGraphWindow
     }
 
     /// <summary>接線＝欄位指到那個節點的載體。Token／資產節點因此天然可以被多個欄位共用。</summary>
-    private bool TryConnectLink(LGRow row, LGNodeView target)
+    private bool TryConnectLink(HGRow row, HGNodeView target)
     {
         if (row?.Slot == null || target?.Carrier == null) return false;
 
@@ -300,7 +300,7 @@ public partial class LogicGraphWindow
     }
 
     // 不是 static：空節點的族要靠 RepresentativeSlotType 推（連入邊、資產、建立當下的族提示都在視窗狀態裡）。
-    private bool CanConnectLink(LGRow row, LGNodeView target)
+    private bool CanConnectLink(HGRow row, HGNodeView target)
     {
         if (row?.Slot == null || target?.Carrier == null) return false;
         if (row.Locked) return false;             // 沒勾覆蓋的參數不收來源：接上去也不會被採用
@@ -308,7 +308,7 @@ public partial class LogicGraphWindow
             return CanAssignAsset(row, target.Asset) && !WouldCreateCycle(row.Slot, target.Carrier);
         // 變數節點沒有內容，型別由端點的取值欄位決定；環偵測要走進端點的子樹。
         if (target.IsVariableNode)
-            return LGReflect.AcceptsEndpoint(row.Slot, target.Endpoint)
+            return HGReflect.AcceptsEndpoint(row.Slot, target.Endpoint)
                 && !WouldCreateCycle(row.Slot, target.Endpoint?.Slot);
 
         // 空節點沒有內容，但**可能已經有族**：右鍵「建立公式/X」選的、或從欄位切下來時記的。
@@ -325,15 +325,15 @@ public partial class LogicGraphWindow
 
         object slot = row.Slot;
         Type accepted = row.IsActionSlot
-            ? LGReflect.ActionBaseType(slot.GetType())
-            : LGReflect.FormulaBaseType(slot.GetType());
+            ? HGReflect.ActionBaseType(slot.GetType())
+            : HGReflect.FormulaBaseType(slot.GetType());
         if (accepted == null || !accepted.IsInstanceOfType(target.Obj)) return false;
         return !WouldCreateCycle(slot, target.Carrier);
     }
 
     private static bool WouldCreateCycle(object slot, object node)
     {
-        foreach (var childSlot in LGModel.WalkSlots(node, new HashSet<object>(LGRefComparer.Instance)))
+        foreach (var childSlot in HGModel.WalkSlots(node, new HashSet<object>(HGRefComparer.Instance)))
             if (ReferenceEquals(childSlot, slot)) return true;
         return false;
     }
@@ -341,7 +341,7 @@ public partial class LogicGraphWindow
     /// <summary>把一個新建立的具體 Action／Formula 接到欄位（右鍵「指定公式」等入口）。</summary>
     private void Connect(object slot, object node)
     {
-        if (node is not LogicGraphNode body) return;
+        if (node is not GraphNodeContent body) return;
         PreserveVisibleNodePositions();
         NewSource(slot).SetBody(body);
         Invalidate();

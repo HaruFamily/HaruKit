@@ -1,6 +1,7 @@
 namespace HaruFamily.Framework.LogicGraph
 {
 using Cysharp.Threading.Tasks;
+using HaruFamily.DependencyCore.GraphKit;
 
 public interface IFormulaSlot<T, TPack>
 {
