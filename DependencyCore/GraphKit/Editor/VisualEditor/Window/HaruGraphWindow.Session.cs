@@ -204,6 +204,9 @@ public partial class HaruGraphWindow
     /// <summary>離開目前編輯交易並回到無選取版型；任一存檔失敗或取消都留在原畫面。</summary>
     private bool TryReturnToIdle()
     {
+        // Owner 被刪除或重載後會成為 Unity 的偽 null，不能再讀取其名稱或嘗試存檔。
+        if (model?.Owner == null) return true;
+
         if (focus.Kind == HGFocusKind.Asset && assetDirty)
         {
             int choice = EditorUtility.DisplayDialogComplex("資產未儲存",
