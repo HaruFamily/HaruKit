@@ -16,22 +16,61 @@ namespace HaruFamily.Tools.AssetPipeline
         Prototype = 1,
     }
 
-    /// <summary>
-    /// 目錄的一格：把母目錄的整包篩成自己這一族的結果，供下游欄位直接接。
-    /// </summary>
-    // 每一格都是獨立的公式族（List&lt;AudioClip&gt;、int、bool…），一個類別只繼承得了一個族基底，
-    // 所以「我屬於哪一包」只能走介面。Owner 由 AssetCatalog.SyncCells 指派。
-    public interface ICatalogCell
+    /// <summary>目錄篩選公式的非泛型入口，讓 CatalogCell 可依實際結果型別轉交資料。</summary>
+    public interface ICatalogFormula
     {
-        AssetCatalog Owner { get; set; }
+        Type ResultType { get; }
+        object EvaluateObject(List<Object> catalog);
     }
 
-    /// <summary>目錄格取整包內容的唯一入口。</summary>
-    public static class CatalogCell
+    /// <summary>
+    /// 目錄的 ListCell。左側由它的載體輸出結果，右側 <see cref="filter"/> 接收以完整目錄資料為輸入的篩選公式。
+    /// </summary>
+    [Serializable]
+    public class CatalogCell : GraphNodeContent, IGraphInlineNode
     {
-        /// <summary>母目錄這一刻的整包內容。沒有母目錄時回空清單，讓格子走保底值而不是炸掉。</summary>
-        public static IReadOnlyList<Object> Source(ICatalogCell cell)
-            => cell?.Owner?.Items ?? Array.Empty<Object>();
+        [SerializeReference, HGLabel("篩選")]
+        private CatalogFormulaSlot filter = new CatalogFormulaSlot();
+
+        [NonSerialized]
+        private AssetCatalog owner;
+
+        public FormulaSlotBase InputSlot => filter;
+        public Type ResultType => filter.ResultType;
+        public AssetCatalog Owner => owner;
+
+        public void SetOwner(AssetCatalog value) => owner = value;
+
+        public object EvaluateObject() => filter.Evaluate(owner?.Items ?? new List<Object>());
+    }
+
+    /// <summary>ListCell 右側的輸入欄位。未接篩選公式時直接回目錄完整資料。</summary>
+    [Serializable]
+    public class CatalogFormulaSlot : FormulaSlotBase
+    {
+        [SerializeReference]
+        private GraphNode node;
+
+        public override GraphNode Node => node;
+        public override void SetNode(GraphNode value) => node = value;
+        public override Type ResultType => node?.BodyObject is ICatalogFormula formula
+            ? formula.ResultType
+            : typeof(List<Object>);
+        public override Type PackType => typeof(List<Object>);
+        public override Type BodyBaseType => typeof(ICatalogFormula);
+        public override Type AssetBaseType => null;
+        public override object DefaultObject { get => null; set { } }
+        public override bool AcceptsBody(GraphNodeContent body) => body is ICatalogFormula;
+        public override bool AcceptsAsset(ScriptableObject asset) => false;
+        public override bool AcceptsToken(GraphToken endpoint) => false;
+
+        public object Evaluate(List<Object> catalog)
+        {
+            if (node == null || node.Disabled) return catalog;
+            return node.BodyObject is ICatalogFormula formula
+                ? formula.EvaluateObject(catalog)
+                : catalog;
+        }
     }
 
     /// <summary>
@@ -43,7 +82,7 @@ namespace HaruFamily.Tools.AssetPipeline
     // 上一次執行留下的內容在這一次一律當空的，不必在管線開頭走訪整張圖先清一遍。
     [HGNode("目錄", "一包資產；底下每一格各自篩出一種結果", "目錄")]
     [Serializable]
-    public class AssetCatalog : GraphNodeContent, IGraphPack, IGraphNodeOwner
+    public class AssetCatalog : GraphNodeContent, IGraphPack, IGraphInlineNodeOwner
     {
         public CatalogSource source = CatalogSource.Dynamic;
 
@@ -56,7 +95,7 @@ namespace HaruFamily.Tools.AssetPipeline
         /// <summary>原型來源時才顯示目錄下拉。</summary>
         public bool IsPrototype => source == CatalogSource.Prototype;
 
-        // 不畫成參數列：格子各自是畫布上的一顆節點，本體只留「幾格＋新增」那一列。
+        // 不畫成一般參數列：GraphKit 將格子畫成 Catalog 節點內的 ListCell。
         [HGHide]
         [SerializeReference]
         private List<GraphNode> cells = new List<GraphNode>();
@@ -77,7 +116,7 @@ namespace HaruFamily.Tools.AssetPipeline
         public bool AcceptsWrite => source == CatalogSource.Dynamic;
 
         /// <summary>這一包現在有什麼。格子靠它取內容，這是唯一的讀取入口。</summary>
-        public IReadOnlyList<Object> Items
+        public List<Object> Items
             => source == CatalogSource.Prototype ? ReadPrototype() : ReadWritten();
 
         /// <summary>這一次執行已經收到幾個。不是這一次寫的內容一律當 0。</summary>
@@ -85,11 +124,12 @@ namespace HaruFamily.Tools.AssetPipeline
 
         List<GraphNode> IGraphNodeOwner.ChildNodes => Cells;
 
-        /// <summary>新增一格：先是空節點，由使用者在節點上選要哪一族的篩選公式。</summary>
+        /// <summary>新增一個 ListCell：未接篩選公式時左側輸出完整目錄資料。</summary>
         GraphNode IGraphNodeOwner.CreateChild()
         {
             var cell = new GraphNode();
             cell.EnsureId();
+            cell.SetBody(new CatalogCell());
             Cells.Add(cell);
             return cell;
         }
@@ -132,8 +172,7 @@ namespace HaruFamily.Tools.AssetPipeline
         {
             foreach (GraphNode node in Cells)
             {
-                if (node?.BodyObject is not ICatalogCell cell) continue;
-                cell.Owner = this;
+                if (node?.BodyObject is CatalogCell inlineCell) inlineCell.SetOwner(this);
             }
         }
 

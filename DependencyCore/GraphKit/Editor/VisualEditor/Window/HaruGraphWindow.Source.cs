@@ -186,6 +186,7 @@ public partial class HaruGraphWindow
     private void ShowNodeSourceSelector(HGNodeView node, Rect selector)
     {
         if (node == null) return;
+
         var options = new List<HGSourceOption>();
         object slot = SourceSlot(node);
 
@@ -475,7 +476,7 @@ public partial class HaruGraphWindow
         if (graph?.Nodes == null) return;
         foreach (var node in graph.Nodes)
         {
-            if (node == null || string.IsNullOrEmpty(node.Id)) continue;
+            if (node == null || node.IsInlineChild || string.IsNullOrEmpty(node.Id)) continue;
             model.SetPosition(node.Id, node.Pos);
         }
     }

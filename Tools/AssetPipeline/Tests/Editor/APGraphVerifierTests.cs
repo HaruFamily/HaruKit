@@ -40,7 +40,6 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             node.SetPack(catalog);
 
             cell = ((IGraphNodeOwner)catalog).CreateChild();
-            cell.SetBody(new TestCell());
             catalog.SyncCells();
             return node;
         }
@@ -148,19 +147,6 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             List<string> errors = APGraphVerifier.Collect(graph);
 
             Assert.That(errors, Is.Empty);
-        }
-
-        /// <summary>最小的目錄格：原樣回傳母目錄的整包。</summary>
-        // 測試自備格子而不是借用專案端那幾種：具體篩選公式住在使用端專案，測試組件看不到它們。
-        [Serializable]
-        private sealed class TestCell : Formula_ObjectList, ICatalogCell
-        {
-            [NonSerialized]
-            private AssetCatalog owner;
-
-            public AssetCatalog Owner { get => owner; set => owner = value; }
-
-            public override List<Object> Evaluate() => new List<Object>(CatalogCell.Source(this));
         }
 
         /// <summary>只宣告「我把產出寫進這顆目錄」的假步驟，不做任何事。</summary>

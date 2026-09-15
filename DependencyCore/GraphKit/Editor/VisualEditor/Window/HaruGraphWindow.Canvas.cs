@@ -157,6 +157,8 @@ public partial class HaruGraphWindow
 
         if (graph != null)
         {
+            foreach (var node in graph.Nodes)
+                if (!node.IsInlineChild) UpdateInlineCellLayout(node);
             foreach (var node in graph.Nodes) UpdateRowGeometry(node, node.Rows);
             DrawLinks(graphMouse);
         }
@@ -169,7 +171,7 @@ public partial class HaruGraphWindow
                 HGNodeView linkTarget = LinkTargetNode(graphMouse);
                 foreach (var node in graph.Nodes)
                 {
-                    if (node.Hidden) continue;
+                    if (node.Hidden || node.IsInlineChild) continue;
                     DrawNode(node, ReferenceEquals(node, linkTarget));
                 }
                 DrawEmptyTimingHint();
@@ -620,8 +622,10 @@ public partial class HaruGraphWindow
             }
             else if (node.Obj is IGraphNodeOwner nodeOwner)
             {
-                DrawChildNodeRow(node, nodeOwner, rect);
                 DrawRows(node, node.Rows, rect);
+                if (nodeOwner is IGraphInlineNodeOwner inlineOwner)
+                    DrawInlineCells(node, inlineOwner, rect);
+                else DrawChildNodeRow(node, nodeOwner, rect);
             }
             else if (!node.IsPlaceholder) DrawRows(node, node.Rows, rect);
         }
@@ -700,8 +704,7 @@ public partial class HaruGraphWindow
     /// <summary>
     /// 子節點擁有者的本體第一列：顯示現在有幾格，右邊一顆「＋」加一格。
     /// </summary>
-    // 格子本身畫在畫布上各自是一顆節點（沒有連入線，跟候選同一種樣子），所以這一列只管數量與新增；
-    // 刪除走那顆格子自己的右鍵刪除，與其他節點一致。
+    // 非內嵌的 owner 維持「數量＋新增」列；ListCell owner 改由 DrawInlineCells 繪製自己的子列。
     private void DrawChildNodeRow(HGNodeView node, IGraphNodeOwner owner, Rect nodeRect)
     {
         var row = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight, nodeRect.width, HGGraph.RowHeight);
@@ -723,6 +726,89 @@ public partial class HaruGraphWindow
         Invalidate();
         MarkGraphChanged();
     }
+
+    /// <summary>內嵌格保留完整載體供其他欄位連線，但只在容器內畫成一條雙 port 列。</summary>
+    private void DrawInlineCells(HGNodeView node, IGraphInlineNodeOwner owner, Rect nodeRect)
+    {
+        for (int i = 0; i < node.InlineChildren.Count; i++)
+        {
+            HGNodeView child = node.InlineChildren[i];
+            if (child.Obj is not IGraphInlineNode inline) continue;
+
+            var row = new Rect(nodeRect.x, nodeRect.y + child.InlineLocalY, nodeRect.width, HGGraph.RowHeight);
+            HGStyles.Fill(row, i % 2 == 0 ? HGStyles.ListStripeEven : HGStyles.ListStripeOdd);
+
+            var output = new Rect(row.x, row.y + row.height * 0.5f - HGGraph.PortRadius,
+                HGGraph.PortDiameter, HGGraph.PortDiameter);
+            HGStyles.Port(output, HGStyles.LinkOutput);
+
+            HGRow input = InlineInputRow(child, inline.InputSlot);
+            var inputPort = new Rect(row.xMax - HGGraph.PortDiameter, row.y + row.height * 0.5f - HGGraph.PortRadius,
+                HGGraph.PortDiameter, HGGraph.PortDiameter);
+            if (input != null)
+            {
+                HGStyles.Port(inputPort, SlotPortColor(input));
+                DrawPortGlyph(input, inputPort);
+                HandleInlineInputPort(input, inputPort);
+            }
+
+            var remove = new Rect(inputPort.x - HGGraph.ListDeleteWidth, row.y + 3f, 14f, row.height - 6f);
+            if (GUI.Button(remove, new GUIContent("✕", "刪除這一格"), HGStyles.ListAdd))
+            {
+                BreakUndoMerge();
+                owner.RemoveChild(child.Carrier);
+                Invalidate();
+                return;
+            }
+
+            var type = new Rect(output.xMax + 5f, row.y + 1f, remove.xMin - output.xMax - 10f, row.height - 2f);
+            string text = HGReflect.ResultTypeName(inline.ResultType);
+            GUI.Label(type, HGStyles.Elide(text, HGStyles.RowLabel, type.width, "這一格的輸出結果型別"), HGStyles.RowLabel);
+        }
+
+        var addRow = new Rect(nodeRect.x, nodeRect.y + node.InlineAddRowY, nodeRect.width, HGGraph.RowHeight);
+        var add = new Rect(addRow.x + 4f, addRow.y + 2f, addRow.width - 8f, addRow.height - 4f);
+        HGStyles.RoundedFrame(add, HGStyles.ListRule, 3f);
+        string label = node.InlineChildren.Count == 0 ? "＋ 新增第一格" : "＋ 新增";
+        if (!GUI.Button(add, new GUIContent(label, "新增一個未接篩選 Formula 的 ListCell"), HGStyles.ListAdd)) return;
+
+        BreakUndoMerge();
+        owner.CreateChild();
+        Invalidate();
+        MarkGraphChanged();
+    }
+
+    private static HGRow InlineInputRow(HGNodeView node, FormulaSlotBase slot)
+    {
+        foreach (var row in HGGraph.AllRows(node.Rows))
+            if (ReferenceEquals(row.Slot, slot)) return row;
+        return null;
+    }
+
+    private void HandleInlineInputPort(HGRow row, Rect port)
+    {
+        var e = Event.current;
+        if (e.type != EventType.MouseDown || e.button != 0 || !port.Contains(e.mousePosition)) return;
+        portClickRow = row;
+        portClickStart = e.mousePosition - pan;
+        e.Use();
+    }
+
+    private static void UpdateInlineCellLayout(HGNodeView node)
+    {
+        foreach (var child in node.InlineChildren)
+        {
+            child.Pos = new Vector2(node.Pos.x, node.Pos.y + child.InlineLocalY);
+            child.Width = node.Width;
+            child.Height = HGGraph.RowHeight;
+            if (child.Obj is not IGraphInlineNode inline) continue;
+            HGRow input = InlineInputRow(child, inline.InputSlot);
+            if (input == null) continue;
+            input.LocalY = 0f;
+            input.Height = HGGraph.RowHeight;
+        }
+    }
+
 
     private void DrawReferencePickerRow(HGNodeView node, Rect nodeRect)
     {

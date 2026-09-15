@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using HaruFamily.DependencyCore.GraphKit;
+using Object = UnityEngine.Object;
 
 namespace HaruFamily.Tools.AssetPipeline
 {
@@ -34,6 +35,15 @@ namespace HaruFamily.Tools.AssetPipeline
     {
         /// <summary>求值。失敗不丟例外，回 default 並由呼叫端走保底值。</summary>
         public abstract T Evaluate();
+    }
+
+    /// <summary>以目錄完整資料為輸入的公式。結果型別由外層 CatalogCell 轉交給下游欄位。</summary>
+    [Serializable]
+    public abstract class CatalogFormulaBase<TResult> : FormulaNodeBase<TResult, List<Object>>, ICatalogFormula
+    {
+        public Type ResultType => typeof(TResult);
+        public object EvaluateObject(List<Object> catalog) => Evaluate(catalog);
+        public abstract TResult Evaluate(List<Object> catalog);
     }
 
     /// <summary>管線步驟節點：有副作用、沒有結果型別。</summary>

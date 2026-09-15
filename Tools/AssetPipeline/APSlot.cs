@@ -69,7 +69,8 @@ namespace HaruFamily.Tools.AssetPipeline
             }
         }
 
-        public override bool AcceptsBody(GraphNodeContent body) => body is TFormula;
+        public override bool AcceptsBody(GraphNodeContent body)
+            => body is CatalogCell cell ? cell.ResultType == typeof(TResult) : body is TFormula;
 
         public override bool AcceptsAsset(ScriptableObject asset) => false;
 
@@ -95,6 +96,19 @@ namespace HaruFamily.Tools.AssetPipeline
             {
                 case NodeKind.Inline:
                 {
+                    if (_node.BodyObject is CatalogCell cell)
+                    {
+                        try
+                        {
+                            object value = cell.EvaluateObject();
+                            return value is TResult typed ? typed : Mismatch("目錄格");
+                        }
+                        catch (Exception e)
+                        {
+                            AssetPipeline.ReportFormulaWarning($"目錄格求值失敗：{e.Message}，改用預設值。");
+                            return Fallback();
+                        }
+                    }
                     var formula = _node.GetBody<TFormula>();
                     if (formula == null) return Mismatch("公式");
                     try

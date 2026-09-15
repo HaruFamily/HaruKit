@@ -338,12 +338,7 @@ public partial class HaruGraphWindow
 
         if (target.Obj == null) return false;
 
-        object slot = row.Slot;
-        Type accepted = row.IsActionSlot
-            ? HGReflect.ActionBaseType(slot.GetType())
-            : HGReflect.FormulaBaseType(slot.GetType());
-        if (accepted == null || !accepted.IsInstanceOfType(target.Obj)) return false;
-        return !WouldCreateCycle(slot, target.Carrier);
+        return HGReflect.AcceptsBody(row.Slot, target.Obj) && !WouldCreateCycle(row.Slot, target.Carrier);
     }
 
     private static bool WouldCreateCycle(object slot, object node)

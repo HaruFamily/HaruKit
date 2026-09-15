@@ -81,15 +81,17 @@ public partial class HaruGraphWindow
 
                     if (new Rect(hit.Pos.x, hit.Pos.y, hit.Width, HGGraph.HeaderHeight).Contains(graphMouse))
                     {
-                        dragNode = hit;
-                        dragOffset = graphMouse - hit.Pos;
-                        dragMoved = false;
-                        dragStartPositions.Clear();
-                        foreach (var n in graph.Nodes)
-                            if (selectedIds.Contains(n.Id)) dragStartPositions[n.Id] = n.Pos;
-
                         titleClickNode = hit.HasSourceSelector && hit.SourceMenuRect.Contains(graphMouse) ? hit : null;
                         titleClickStart = graphMouse;
+                        if (!hit.IsInlineChild)
+                        {
+                            dragNode = hit;
+                            dragOffset = graphMouse - hit.Pos;
+                            dragMoved = false;
+                            dragStartPositions.Clear();
+                            foreach (var n in graph.Nodes)
+                                if (selectedIds.Contains(n.Id) && !n.IsInlineChild) dragStartPositions[n.Id] = n.Pos;
+                        }
                     }
                     e.Use();
                 }
@@ -185,7 +187,7 @@ public partial class HaruGraphWindow
                 {
                     var box = BoxRect();
                     foreach (var n in graph.Nodes)
-                        if (!n.Hidden && box.Overlaps(n.Rect)) selectedIds.Add(n.Id);
+                        if (!n.IsInlineChild && !n.Hidden && box.Overlaps(n.Rect)) selectedIds.Add(n.Id);
                     boxSelecting = false;
                     e.Use();
                 }
@@ -441,7 +443,7 @@ public partial class HaruGraphWindow
     {
         if (graph == null) return null;
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
-            if (!graph.Nodes[i].Hidden && graph.Nodes[i].Rect.Contains(graphPoint)) return graph.Nodes[i];
+            if (!graph.Nodes[i].IsInlineChild && !graph.Nodes[i].Hidden && graph.Nodes[i].Rect.Contains(graphPoint)) return graph.Nodes[i];
         return null;
     }
 
@@ -462,7 +464,8 @@ public partial class HaruGraphWindow
     private void ResetLayout()
     {
         if (graph == null) return;
-        foreach (var node in graph.Nodes) model.ClearPosition(node.Id);
+        foreach (var node in graph.Nodes)
+            if (!node.IsInlineChild) model.ClearPosition(node.Id);
         MarkPositionsChanged();
         graphDirty = true;
         Repaint();

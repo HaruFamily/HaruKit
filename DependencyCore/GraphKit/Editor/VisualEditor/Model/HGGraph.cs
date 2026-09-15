@@ -106,6 +106,12 @@ public class HGNodeView
     public bool IsTimingGroup;
     public bool IsPlaceholder;            // Slot 尚未指定具體 Action／Formula
     public bool IsActionNode;
+    /// <summary>內嵌在容器節點中的子節點；保留完整載體與連線，只是不獨立排版。</summary>
+    public HGNodeView InlineParent;
+    public List<HGNodeView> InlineChildren = new();
+    public float InlineLocalY;
+    public float InlineAddRowY;
+    public bool IsInlineChild => InlineParent != null;
     /// <summary>自己或某個祖先被停用：整段不會求值，畫布上要一起壓暗。多路徑共用時只要有一條啟用就是 false。</summary>
     public bool InDisabledSubtree;
     /// <summary>
@@ -136,11 +142,12 @@ public class HGNodeView
     public float TipsHeight;
     // 換來源的入口是 Header 右端的 ▾；Root HEAD 的來源走它自己的「來源」參數列接點，所以不畫。
     // 包沒有「換來源」：一格只收一種包，換不出第二個選項，畫一顆點不出東西的 ▾ 只會讓人以為壞了。
-    public bool HasSourceSelector => !IsRoot && !IsPackNode
+    public bool HasSourceSelector => !IsRoot && !IsPackNode && !IsInlineChild
         && (IsPlaceholder || Obj != null || IsAssetNode || IsTokenNode);
 
     public Rect Rect => new Rect(Pos.x, Pos.y, Width, Height);
-    public Vector2 OutputPort => new Vector2(Pos.x + HGGraph.PortRadius, Pos.y + HGGraph.HeaderHeight * 0.5f);
+    public Vector2 OutputPort => new Vector2(Pos.x + HGGraph.PortRadius,
+        Pos.y + (IsInlineChild ? Height * 0.5f : HGGraph.HeaderHeight * 0.5f));
 }
 
 /// <summary>一次焦點的完整節點圖。每次資料變動就整份重建，不做增量。</summary>
@@ -458,7 +465,9 @@ public static class HGGraph
     private static HGNodeView MakeNodeForObject(object obj, object parentSlot, HGRow parentRow, Type slotResultType)
     {
         bool isAction = HGReflect.IsActionNodeType(obj.GetType());
-        Type resultType = !isAction && slotResultType != null
+        Type resultType = obj is IGraphInlineNode inline
+            ? inline.ResultType
+            : !isAction && slotResultType != null
             ? slotResultType
             : HGReflect.FormulaResultType(obj.GetType());
         var node = new HGNodeView
@@ -488,13 +497,19 @@ public static class HGGraph
         if (node.ParentSlot != null) view.BySlot[node.ParentSlot] = node;
 
         // 子節點各自是一顆完整節點：沒有 ParentSlot，所以不從擁有者畫一條線過去——
-        // 它們的連入線來自真正指著它們的那些欄位。
+        // 它們的連入線來自真正指著它們的那些欄位。內嵌容器只改版面，不改這條資料關係。
         if (node.Obj is IGraphNodeOwner owner)
         {
+            bool inlineChildren = owner is IGraphInlineNodeOwner;
             foreach (var child in owner.ChildNodes)
             {
                 if (child == null || view.ByCarrier.ContainsKey(child)) continue;
                 var childNode = MakeNodeForCarrier(model, child, null, null, null);
+                if (inlineChildren && childNode.Obj is IGraphInlineNode)
+                {
+                    childNode.InlineParent = node;
+                    node.InlineChildren.Add(childNode);
+                }
                 Collect(model, childNode, view, depth + 1, listCollapse, node.InDisabledSubtree, locked);
             }
         }
@@ -554,6 +569,7 @@ public static class HGGraph
         if (node.Carrier != null && node.Carrier.Disabled) return;
         node.InDisabledSubtree = false;
 
+        foreach (var inlineChild in node.InlineChildren) ClearDisabledSubtree(inlineChild, view);
         foreach (var row in AllRows(node.Rows))
         {
             if (row.Slot == null) continue;
@@ -567,6 +583,7 @@ public static class HGGraph
         if (node == null || !node.InLockedSubtree) return;
         node.InLockedSubtree = false;
 
+        foreach (var inlineChild in node.InlineChildren) ClearLockedSubtree(inlineChild, view);
         foreach (var row in AllRows(node.Rows))
         {
             row.Locked = row.AssetBinding != null && !row.AssetBinding.OverrideEnabled;
@@ -830,7 +847,7 @@ public static class HGGraph
 
     public static void MeasureNode(HGNodeView node)
     {
-        node.Width = WidthOf(node);
+        if (!node.IsInlineChild) node.Width = WidthOf(node);
         // 節點上不畫型別說明（它是型別常數，重複出現只是噪音），改由畫布左上角的說明面板顯示選取節點的 Desc。
         // 註解則是「這一顆節點」的資訊，任何節點（含Token／資產葉節點）都能加。
         node.TipsHeight = !node.NoteOpen
@@ -848,10 +865,23 @@ public static class HGGraph
             node.Height = leafY + NodeBottomPad;
             return;
         }
-        // 資產與Token的本體第一列是「選哪一個」的下拉，子節點擁有者的第一列是「幾格＋新增」，
-        // 兩者都不在 Rows 裡，高度要另外加。
-        float refRows = node.IsAssetNode || node.IsTokenNode || node.Obj is IGraphNodeOwner ? RowHeight : 0f;
+        // 資產與Token的本體第一列是「選哪一個」的下拉；一般子節點擁有者則是「幾格＋新增」。
+        // 內嵌容器的子節點與新增列接在自己的 Rows 後面，不另外加頂端列。
+        bool inlineOwner = node.Obj is IGraphInlineNodeOwner;
+        float refRows = node.IsAssetNode || node.IsTokenNode || (node.Obj is IGraphNodeOwner && !inlineOwner) ? RowHeight : 0f;
         float y = MeasureRows(node.Rows, HeaderHeight + refRows);
+        if (inlineOwner)
+        {
+            foreach (var child in node.InlineChildren)
+            {
+                child.Width = node.Width;
+                child.Height = RowHeight;
+                child.InlineLocalY = y;
+                y += RowHeight;
+            }
+            node.InlineAddRowY = y;
+            y += RowHeight;
+        }
         if (node.TipsHeight > 0f) y += node.TipsHeight + 10f;
         node.ContentHeight = Mathf.Max(y, HeaderHeight + 8f);
         node.Height = node.ContentHeight + NodeBottomPad;
@@ -923,11 +953,13 @@ public static class HGGraph
     private static void AutoLayout(HGModel model, HGGraphView view)
     {
         var children = new Dictionary<HGNodeView, List<HGNodeView>>();
-        foreach (var n in view.Nodes) children[n] = new List<HGNodeView>();
+        foreach (var n in view.Nodes)
+            if (!n.IsInlineChild) children[n] = new List<HGNodeView>();
 
         var roots = new List<HGNodeView>();
         foreach (var n in view.Nodes)
         {
+            if (n.IsInlineChild) continue;
             HGNodeView parent = null;
             if (n.ParentRow != null)
             {
@@ -939,6 +971,8 @@ public static class HGGraph
                     if (parent != null) break;
                 }
             }
+            // ListCell 本身不參與獨立排版；接在它右側的 Formula 仍要排在 Catalog 的右邊。
+            if (parent?.IsInlineChild == true) parent = parent.InlineParent;
             if (parent != null) children[parent].Add(n);
             else roots.Add(n);
         }
@@ -955,6 +989,7 @@ public static class HGGraph
 
         foreach (var n in view.Nodes)
         {
+            if (n.IsInlineChild) continue;
             if (model.TryGetPosition(n.Id, out var pos)) n.Pos = pos;
         }
     }

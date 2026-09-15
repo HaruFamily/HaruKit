@@ -463,7 +463,7 @@ public partial class HaruGraphWindow : EditorWindow
         // 計數擋不住「引用者自己也被收掉了」這種間接情況。
         var visible = new HashSet<HGNodeView>();
         foreach (var n in graph.Nodes)
-            if (n.ParentRow == null) MarkVisibleFrom(n, visible);
+            if (n.ParentRow == null && !n.IsInlineChild) MarkVisibleFrom(n, visible);
 
         foreach (var n in graph.Nodes) n.Hidden = !visible.Contains(n);
 
@@ -540,7 +540,7 @@ public partial class HaruGraphWindow : EditorWindow
         while (node != null && seen.Add(node))
         {
             keep.Add(node);
-            node = node.ParentRow != null ? NodeById(node.ParentRow.OwnerNodeId) : null;
+            node = node.InlineParent ?? (node.ParentRow != null ? NodeById(node.ParentRow.OwnerNodeId) : null);
         }
     }
 
@@ -555,6 +555,8 @@ public partial class HaruGraphWindow : EditorWindow
     private void MarkSubtree(HGNodeView node, HashSet<HGNodeView> into)
     {
         if (node == null || !into.Add(node)) return;
+        if (node.InlineParent != null) MarkSubtree(node.InlineParent, into);
+        foreach (var inlineChild in node.InlineChildren) MarkSubtree(inlineChild, into);
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
             if (row.Slot == null) continue;
@@ -580,6 +582,7 @@ public partial class HaruGraphWindow : EditorWindow
     private void MarkVisibleFrom(HGNodeView node, HashSet<HGNodeView> visible)
     {
         if (node == null || !visible.Add(node)) return;
+        foreach (var inlineChild in node.InlineChildren) MarkVisibleFrom(inlineChild, visible);
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
             if (row.Slot == null) continue;

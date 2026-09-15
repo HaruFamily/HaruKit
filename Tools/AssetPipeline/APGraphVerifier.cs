@@ -201,7 +201,7 @@ namespace HaruFamily.Tools.AssetPipeline
                     if (!slot.AcceptsBody(body)) { errors.Add($"{path} 接的 {body.GetType().Name} 型別不相容。"); return; }
 
                     // 接到某一格＝讀它母目錄的內容。目錄本身接不到一般欄位上，所以讀取一律從這裡登記。
-                    if (body is ICatalogCell cell)
+                    if (body is CatalogCell cell)
                     {
                         if (cell.Owner == null) errors.Add($"{path} 的目錄格沒有母目錄。");
                         else if (!reads.CatalogReads.Contains(cell.Owner))

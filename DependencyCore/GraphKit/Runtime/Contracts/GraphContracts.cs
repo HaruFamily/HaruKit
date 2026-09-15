@@ -59,6 +59,18 @@ public interface IGraphNodeOwner
     void RemoveChild(GraphNode child);
 }
 
+/// <summary>子節點由容器本體繪製成一列，而不是各自成為畫布節點的容器。</summary>
+public interface IGraphInlineNodeOwner : IGraphNodeOwner
+{
+}
+
+/// <summary>內嵌列的資料來源：左側輸出由載體提供，右側輸入走 <see cref="InputSlot"/>。</summary>
+public interface IGraphInlineNode
+{
+    FormulaSlotBase InputSlot { get; }
+    Type ResultType { get; }
+}
+
 /// <summary>
 /// 擁有候選節點池的畫布主人。候選節點只供編輯，不執行、不參與驗證。
 /// </summary>
