@@ -221,6 +221,7 @@ public partial class HaruGraphWindow
                 else if (e.keyCode == KeyCode.F && !e.control) { FrameAll(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.C) { CopySelection(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.V) { PasteClipboard(graphMouse); e.Use(); }
+                else if (e.control && e.keyCode == KeyCode.D) { DuplicateSelection(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.A)
                 {
                     selectedIds.Clear();
@@ -258,45 +259,182 @@ public partial class HaruGraphWindow
         Invalidate();
     }
 
-    /// <summary>複製選取節點的子樹。資產／Token節點只是引用，不列入。</summary>
+    /// <summary>選取中可以複製的節點。</summary>
+    // 判定是「有沒有載體」而不是「Obj 是不是 GraphNodeContent」：資產、Token、目錄節點的 Obj 本來就是 null，
+    // 用 Obj 判等於把這三種永遠擋在門外。HEAD 與時機節點沒有 GraphNode 載體（Carrier 天生 null），
+    // 所以不必另外判它們。空節點排除——內容都還沒選，複製出來推不出族，也接不上任何欄位。
+    private List<HGNodeView> CopyableSelection()
+    {
+        var result = new List<HGNodeView>();
+        foreach (var n in SelectedNodes())
+            if (n.Carrier != null && !n.IsPlaceholder) result.Add(n);
+        return result;
+    }
+
+    /// <summary>
+    /// 從一組載體往下掃出走得到的所有載體，以及被指到的所有 Token。
+    /// Token 是葉：它的內容住在自己的畫布，跟進去會把整張圖都算成這棵子樹。
+    /// </summary>
+    // 形狀刻意比照 HGModel.ResetNodeIdsInternal——同一種走訪規則散成兩套遲早會不一致。
+    private static void ScanSubgraph(object node, HashSet<object> visited, HashSet<object> carriers, HashSet<object> tokens)
+    {
+        if (node == null || !visited.Add(node)) return;
+        if (node is GraphToken token) { tokens.Add(token); return; }
+        if (node is GraphNode carrier) carriers.Add(carrier);
+
+        foreach (var f in HGReflect.Fields(node.GetType()))
+        {
+            if (f.IsStatic || f.IsNotSerialized) continue;
+            var val = f.GetValue(node);
+            if (val == null) continue;
+            var t = val.GetType();
+            if (t.IsPrimitive || t.IsEnum || val is string || val is UnityEngine.Object) continue;
+
+            if (val is IList list)
+            {
+                foreach (var item in list) ScanSubgraph(item, visited, carriers, tokens);
+                continue;
+            }
+            ScanSubgraph(val, visited, carriers, tokens);
+        }
+    }
+
+    /// <summary>
+    /// 把一組載體複製成一片獨立的子圖：這組節點**彼此之間**的線保留成共用，指到組外的線一律清成空槽。
+    /// 所以單顆複製＝所有子邊都是組外邊＝完全沒有連線；多顆複製＝只有這些節點之間的線活下來。
+    /// </summary>
+    // shared 同時擋兩件事，理由不同：
+    //   組外載體——跟著抄會憑空多出一份沒有人看得到的分身，使用者以為只複製了選取的那幾顆。
+    //   GraphToken——跟著抄會變成不在清單裡的孤兒端點，參照得到卻永遠查不到值，只有存檔時
+    //   HGValidator.InScope 那一關才看得出來。
+    // 兩者都先原樣沿用（shared 的語意就是「不複製、沿用同一個」），抄完再把指向**組外載體**的槽清掉；
+    // Token 刻意留著不清，那才是「複本引用同一個 Token」該有的結果。
+    // copies 與 sources 依索引對齊：GraphDeepCopy 複製 IList 時逐項 Add，順序不變，呼叫端靠它配對座標。
+    private static List<GraphNode> CloneSubgraph(IReadOnlyList<GraphNode> sources, out List<GraphNode> roots)
+    {
+        roots = new List<GraphNode>();
+        if (sources == null || sources.Count == 0) return null;
+
+        var selection = new HashSet<object>(HGRefComparer.Instance);
+        foreach (var c in sources) if (c != null) selection.Add(c);
+
+        var carriers = new HashSet<object>(HGRefComparer.Instance);
+        var tokens = new HashSet<object>(HGRefComparer.Instance);
+        var scanned = new HashSet<object>(HGRefComparer.Instance);
+        foreach (var c in sources) ScanSubgraph(c, scanned, carriers, tokens);
+
+        var boundary = new HashSet<object>(HGRefComparer.Instance);
+        foreach (var c in carriers) if (!selection.Contains(c)) boundary.Add(c);
+
+        var shared = new List<object>(tokens);
+        shared.AddRange(boundary);
+
+        var copies = GraphDeepCopy.Copy(new List<GraphNode>(sources), shared);
+        if (copies == null) return null;
+
+        // 走複本一遍做兩件事：指到組外載體的槽清成空槽，順便記下誰是別人的子節點。
+        // 清成空槽不是錯誤狀態——公式欄位退回 _default、動作欄位變空槽，驗證不會有話說。
+        // walked 先塞 Token 與組外載體：它們是**原件**，走進去等於在原圖上亂剪線。
+        var children = new HashSet<object>(HGRefComparer.Instance);
+        var walked = new HashSet<object>(HGRefComparer.Instance);
+        foreach (var t in tokens) walked.Add(t);
+        foreach (var b in boundary) walked.Add(b);
+        foreach (var copy in copies)
+            foreach (var slot in HGModel.WalkSlots(copy, walked))
+            {
+                if (HGReflect.GetNode(slot) is not GraphNode child) continue;
+                if (boundary.Contains(child)) HGReflect.ClearNode(slot);
+                else children.Add(child);
+            }
+
+        // 這時複本已經不指著任何組外載體，走訪跑不回原圖；Token 仍是沿用的，所以要當成走過了。
+        foreach (var copy in copies) HGModel.ResetNodeIds(copy, tokens);
+        foreach (var copy in copies) if (!children.Contains(copy)) roots.Add(copy);
+        return copies;
+    }
+
+    /// <summary>把複本放進圖裡：只有沒有父節點的那幾顆進候選池，其餘由父節點牽著就畫得出來。</summary>
+    // 全部塞進候選池也畫得出來（HGGraph.Build 依載體去重），但刪掉父節點之後子節點會無端留在畫布上。
+    // 之後若使用者自己剪斷那條線，AttachSource 本來就會把它補進候選池，不必在這裡先放。
+    private void PlaceCopies(List<GraphNode> copies, List<GraphNode> roots, string verb)
+    {
+        BreakUndoMerge();
+        selectedIds.Clear();
+        foreach (var root in roots) model.AddOrphan(root);
+        foreach (var copy in copies) selectedIds.Add(copy.EnsureId());
+        Invalidate();
+        Repaint();
+        ShowNotification(new GUIContent($"{verb} {copies.Count} 個節點"));
+    }
+
+    /// <summary>剪貼簿裡有沒有指向目前作用域以外的 Token。</summary>
+    private bool HasForeignToken(IReadOnlyList<GraphNode> nodes)
+    {
+        var known = new HashSet<object>(HGRefComparer.Instance);
+        foreach (var t in CurrentTokens() ?? new List<GraphToken>()) if (t != null) known.Add(t);
+
+        var carriers = new HashSet<object>(HGRefComparer.Instance);
+        var tokens = new HashSet<object>(HGRefComparer.Instance);
+        var visited = new HashSet<object>(HGRefComparer.Instance);
+        foreach (var n in nodes) ScanSubgraph(n, visited, carriers, tokens);
+
+        foreach (var t in tokens) if (!known.Contains(t)) return true;
+        return false;
+    }
+
     private void CopySelection()
     {
+        var picked = CopyableSelection();
+        if (picked.Count == 0) { ShowNotification(new GUIContent("沒有可複製的節點")); return; }
+
+        var sources = new List<GraphNode>();
+        foreach (var n in picked) sources.Add(n.Carrier);
+        var copies = CloneSubgraph(sources, out _);
+        if (copies == null) { ShowNotification(new GUIContent("複製失敗")); return; }
+
+        // 剪貼簿存相對座標，貼上時整團平移到滑鼠：多選複製的版面關係才留得住。
+        var origin = picked[0].Pos;
+        foreach (var n in picked) origin = Vector2.Min(origin, n.Pos);
+        for (int i = 0; i < copies.Count; i++) copies[i].Pos = picked[i].Pos - origin;
+
         clipboard.Clear();
-        foreach (var n in SelectedNodes())
-        {
-            if (n.Obj is not GraphNodeContent node) continue;
-            var clone = node.EditorClone();
-            if (clone == null) continue;
-            HGModel.ResetNodeIds(clone);
-            clipboard.Add(clone);
-        }
-        ShowNotification(new GUIContent(clipboard.Count > 0 ? $"已複製 {clipboard.Count} 個節點" : "沒有可複製的節點"));
+        clipboard.AddRange(copies);
+        ShowNotification(new GUIContent($"已複製 {clipboard.Count} 個節點"));
     }
 
     private void PasteClipboard(Vector2 graphMouse)
     {
         if (clipboard.Count == 0) { ShowNotification(new GUIContent("剪貼簿是空的")); return; }
-        BreakUndoMerge();
-        selectedIds.Clear();
 
-        float offset = 0f;
-        foreach (var item in clipboard)
-        {
-            if (item is not GraphNodeContent source) continue;
-            var clone = source.EditorClone();
-            if (clone == null) continue;
-            HGModel.ResetNodeIds(clone);
+        // 再抄一份：剪貼簿要能貼很多次，直接把它放進圖裡會讓每一份共用同一批物件。
+        var copies = CloneSubgraph(clipboard, out var roots);
+        if (copies == null) { ShowNotification(new GUIContent("貼上失敗")); return; }
 
-            // 貼上＝新載體包新內容，落在目前焦點的候選池。
-            var carrier = new GraphNode(clone);
-            carrier.EnsureId();
-            carrier.Pos = graphMouse + new Vector2(offset, offset);
-            model.AddOrphan(carrier);
-            selectedIds.Add(carrier.Id);
-            offset += 24f;
-        }
-        Invalidate();
-        Repaint();
+        var origin = SnapToGrid(graphMouse);
+        for (int i = 0; i < copies.Count; i++) copies[i].Pos = origin + clipboard[i].Pos;
+
+        // 剪貼簿是 static，可能來自別張圖或別個資產：那裡的 Token 在這個作用域查不到值。
+        // 不擋（跨圖搬節點是合理的需求），但提示要換掉，否則只會在存檔時看到一條 InScope 錯誤。
+        bool foreign = HasForeignToken(copies);
+        PlaceCopies(copies, roots, "已貼上");
+        if (foreign)
+            ShowNotification(new GUIContent("貼上的節點引用了這張圖沒有的 Token，請重新指定"));
+    }
+
+    /// <summary>就地複製（Ctrl+D）：等同複製後貼在原件旁邊，不經過也不覆蓋剪貼簿。</summary>
+    private void DuplicateSelection()
+    {
+        var picked = CopyableSelection();
+        if (picked.Count == 0) { ShowNotification(new GUIContent("沒有可複製的節點")); return; }
+
+        var sources = new List<GraphNode>();
+        foreach (var n in picked) sources.Add(n.Carrier);
+        var copies = CloneSubgraph(sources, out var roots);
+        if (copies == null) { ShowNotification(new GUIContent("複製失敗")); return; }
+
+        var offset = new Vector2(DuplicateOffset, DuplicateOffset);
+        for (int i = 0; i < copies.Count; i++) copies[i].Pos = picked[i].Pos + offset;
+        PlaceCopies(copies, roots, "已複製");
     }
 
     private HGNodeView NodeAt(Vector2 graphPoint)

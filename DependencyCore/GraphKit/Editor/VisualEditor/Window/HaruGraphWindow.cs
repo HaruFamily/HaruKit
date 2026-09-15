@@ -22,12 +22,15 @@ public partial class HaruGraphWindow : EditorWindow
     private const float NodeCornerRadius = 6f;
     private const float LinkSnapDistance = 24f;
     private const float LinkThickness = 4f;
+    // 就地複製（Ctrl+D）的位移：看得出是新的一份，又還留在原件旁邊。不吸附格線——
+    // 吸附會讓複本疊回原件的格子上，正好看不出來多了一顆。
+    private const float DuplicateOffset = 28f;
     /// <summary>引用列比清單格矮：它只有名稱與驗證狀態，沒有 chip 也沒有第二行。</summary>
     /// <summary>左欄Token區的最小高度：三顆固定控制項 + 一列，再小就有東西被切掉（標題由面板標題兼任）。</summary>
+    private const float MinCatalogSection = 120f;
     private const float MinTokenSection = 106f;
     private const float MinAssetSection = 80f;
     /// <summary>目錄庫與其他區並存時的固定高度：新增鈕 + 搜尋列 + 三列，再小就只剩控制項沒有內容。</summary>
-    private const float MinCatalogSection = 120f;
     /// <summary>引用區的最小高度：標題列 + 一筆引用。它只在資產焦點出現，另外兩區跟著讓出高度。</summary>
     private const float MinRefSection = 76f;
     private const float DefaultTokenSection = 240f;
@@ -69,12 +72,13 @@ public partial class HaruGraphWindow : EditorWindow
     // 左欄第三區（引用此資產）：只在資產焦點出現，存自己的高度，資產區吃剩下的。
     private float refSectionHeight = DefaultRefSection;
     private bool resizingRefSplit;
-    private const string PrefLocked = "HaruGraph.Locked";
 
     /// <summary>
     /// 鎖定中：`OnSelectionChange` 整個不動作，在 Project／Hierarchy 點別的東西不會把視窗切走。
     /// </summary>
-    // 跨編譯與重開視窗都留著（EditorPrefs），與 Inspector 的鎖同一種期待。
+    // **只活在這一次 Domain 裡**：欄位沒有 [SerializeField]，編譯或進 Play Mode 之後就是未鎖。
+    // 刻意不存 EditorPrefs——編譯會把工作副本一起丟掉，視窗變成閒置版型，這時鎖還在就只剩「點什麼都
+    // 回不去」這一種效果，而使用者多半已經忘了自己鎖過。
     // 狀態寫在工具列的鈕上，所以「為什麼不跟著選取了」看得見，不會變成找不到原因的怪現象。
     private bool locked;
 
@@ -93,8 +97,9 @@ public partial class HaruGraphWindow : EditorWindow
     /// <summary>左欄資產庫。搜尋字與捲動在面板裡，拖曳與改名向框架借。</summary>
     private readonly HGAssetLibraryPanel assetLibrary = new();
 
-    /// <summary>左欄目錄庫。內容住 Owner，每個命令都是立即寫檔，不跟著存檔交易走。</summary>
     private readonly HGCatalogLibraryPanel catalogLibrary = new();
+
+    /// <summary>左欄目錄庫。內容住 Owner，每個命令都是立即寫檔，不跟著存檔交易走。</summary>
 
     // 互動
     private HGNodeView dragNode;
@@ -162,7 +167,9 @@ public partial class HaruGraphWindow : EditorWindow
     private string soloSlotKey;
     private readonly Dictionary<string, bool> soloRestore = new();
     private object pendingCenterTarget;
-    private static readonly List<object> clipboard = new();
+    // 剪貼簿存的是**載體**複本，不是內容本體：資產、Token、目錄節點的內容是引用不是 body，
+    // 只抄 GraphNodeContent 就等於這三種永遠複製不了。座標存相對值，貼上時整團平移到滑鼠。
+    private static readonly List<GraphNode> clipboard = new();
 
     // 有未儲存變更時不硬切對象，先記在這裡等使用者按確認
     private UnityEngine.Object pendingTarget;
@@ -745,8 +752,9 @@ public partial class HaruGraphWindow : EditorWindow
     {
         if (focus.Kind != HGFocusKind.Asset)
         {
-            if (!model.Undo()) return false;
-            AfterHistorySwap();
+            var step = model.Undo();
+            if (step == HGStepKind.None) return false;
+            AfterHistorySwap(step);
             return true;
         }
         var snapshot = assetHistory.Undo(CaptureAssetState());
@@ -759,8 +767,9 @@ public partial class HaruGraphWindow : EditorWindow
     {
         if (focus.Kind != HGFocusKind.Asset)
         {
-            if (!model.Redo()) return false;
-            AfterHistorySwap();
+            var step = model.Redo();
+            if (step == HGStepKind.None) return false;
+            AfterHistorySwap(step);
             return true;
         }
         var snapshot = assetHistory.Redo(CaptureAssetState());
@@ -858,11 +867,15 @@ public partial class HaruGraphWindow : EditorWindow
     /// Undo/Redo 換掉整份資料後，焦點抓的是舊圖的參考。時機畫布只認工作副本本身、群組清單是現讀的，
     /// 所以重指一次就好；標註節點也住在同一張畫布上，不需要另外解析。
     /// </summary>
-    private void AfterHistorySwap()
+    private void AfterHistorySwap(HGStepKind step)
     {
-        focus = focus.Kind == HGFocusKind.Timing ? AllTimingsFocus() : new HGFocus();
+        // 只退回目錄的那一步不換圖，焦點與選取要留著——那一步在使用者眼裡只是左欄的一列變回來。
+        if (step != HGStepKind.Catalogs)
+        {
+            focus = focus.Kind == HGFocusKind.Timing ? AllTimingsFocus() : new HGFocus();
+            selectedIds.Clear();
+        }
 
-        selectedIds.Clear();
         graphDirty = true;
         DoVerify(true);
         UpdateUnsavedState();
@@ -926,7 +939,6 @@ public partial class HaruGraphWindow : EditorWindow
     private void ToggleLock()
     {
         locked = !locked;
-        EditorPrefs.SetBool(PrefLocked, locked);
         // 鎖住時清掉待切換提示：那顆鈕的意思是「剛才選了別的，要不要過去」，鎖住之後這句話不成立。
         if (locked) pendingTarget = null;
         Repaint();

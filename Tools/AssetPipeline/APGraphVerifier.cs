@@ -10,7 +10,7 @@ namespace HaruFamily.Tools.AssetPipeline
 {
     /// <summary>
     /// 節點圖的走訪與驗證。把舊 PipelineGraphAnalyzer 的兩條檢查
-    /// （prototype key 缺漏、dynamic key 在 producer 前被讀取）接到節點圖上。
+    /// （prototype key 缺漏、動態目錄在寫入者之前被讀取）接到節點圖上。
     /// </summary>
     // 時序是 AssetPipeline 獨有的概念，所以住在這裡而不是 GraphKit 的 HGValidator：
     // 具名Token沒有先後，步驟清單才有。
@@ -62,13 +62,14 @@ namespace HaruFamily.Tools.AssetPipeline
         }
 
         /// <summary>
-        /// 依步驟順序檢查每一步：內容完不完整，以及讀到的 dynamic key 有沒有產出者排在前面。
+        /// 依步驟順序檢查每一步：內容完不完整，以及讀到的目錄有沒有產出者排在前面。
         /// </summary>
         // prototype key 存不存在是「資產群組」層面的事，需要 AssetPipeline 上的群組清單，
         // 所以留在 ValidatePipelinePrototypeSources；這裡只看圖自己答得出來的東西。
         private static void CheckSteps(APGraph graph, List<string> errors)
         {
-            var producedDynamicKeys = new HashSet<string>(StringComparer.Ordinal);
+            // 目錄比參照，不比名稱：名稱只是顯示用，同名的兩顆仍然是兩顆。
+            var producedCatalogs = new HashSet<AssetCatalog>();
 
             List<APActionSlot> steps = graph.Steps;
             for (int i = 0; i < steps.Count; i++)
@@ -79,14 +80,18 @@ namespace HaruFamily.Tools.AssetPipeline
                 var reads = new StepReads();
                 CheckActionSlot(slot, path, errors, reads);
 
-                // dynamic 群組是前面的步驟跑完才存在的，所以只比對「到目前為止已產出」的集合。
-                foreach (string key in reads.Dynamic)
-                    if (!producedDynamicKeys.Contains(key))
-                        errors.Add($"{path} 讀取 dynamic key [{key}]，但產出它的步驟不在前面。");
+                // 動態來源的目錄是前面的步驟跑完才有內容的，所以只比對「到目前為止已產出」的集合。
+                // 原型來源隨時都有值，不受步驟順序影響。
+                foreach (AssetCatalog catalog in reads.CatalogReads)
+                {
+                    if (!catalog.AcceptsWrite) continue;
+                    if (!producedCatalogs.Contains(catalog))
+                        errors.Add($"{path} 讀取動態目錄，但寫入它的步驟不在前面。");
+                }
 
                 // 產出登記放在檢查之後：同一步讀自己的產出，仍然是「還沒跑完就讀」。
-                if (slot != null && slot.TryGetDynamicOutputKey(out string outputKey) && !string.IsNullOrWhiteSpace(outputKey))
-                    producedDynamicKeys.Add(outputKey.Trim());
+                foreach (AssetCatalog catalog in reads.CatalogOutputs)
+                    producedCatalogs.Add(catalog);
             }
         }
 
@@ -150,6 +155,27 @@ namespace HaruFamily.Tools.AssetPipeline
                     errors.Add($"{path} 接了共用資產，但 AssetPipeline 不支援資產節點。");
                     return;
 
+                // 包不求值，只有宣告 AcceptsPack 的欄位（目前只有產出格）指得到它。
+                case NodeKind.Pack:
+                {
+                    if (!slot.AcceptsPack) { errors.Add($"{path} 收不下包：這一格不是產出格。"); return; }
+                    if (node.PackObject is not AssetCatalog catalog)
+                    {
+                        errors.Add($"{path} 接的包不是目錄。");
+                        return;
+                    }
+
+                    catalog.SyncCells();
+                    if (slot.IsOutput && !catalog.AcceptsWrite)
+                        errors.Add($"{path} 是產出格，但接到的目錄設為原型來源，寫不進去。");
+
+                    CheckCatalog(catalog, path, errors);
+
+                    List<AssetCatalog> bucket = slot.IsOutput ? reads.CatalogOutputs : reads.CatalogReads;
+                    if (!bucket.Contains(catalog)) bucket.Add(catalog);
+                    return;
+                }
+
                 case NodeKind.Token:
                 {
                     GraphToken endpoint = node.Token;
@@ -174,6 +200,17 @@ namespace HaruFamily.Tools.AssetPipeline
                     if (body == null) { errors.Add($"{path} 的節點是空的。"); return; }
                     if (!slot.AcceptsBody(body)) { errors.Add($"{path} 接的 {body.GetType().Name} 型別不相容。"); return; }
 
+                    // 接到某一格＝讀它母目錄的內容。目錄本身接不到一般欄位上，所以讀取一律從這裡登記。
+                    if (body is ICatalogCell cell)
+                    {
+                        if (cell.Owner == null) errors.Add($"{path} 的目錄格沒有母目錄。");
+                        else if (!reads.CatalogReads.Contains(cell.Owner))
+                        {
+                            reads.CatalogReads.Add(cell.Owner);
+                            CheckCatalog(cell.Owner, path, errors);
+                        }
+                    }
+
                     if (!visiting.Add(node))
                     {
                         errors.Add($"{path} 形成節點循環。");
@@ -191,13 +228,21 @@ namespace HaruFamily.Tools.AssetPipeline
             }
         }
 
+        /// <summary>目錄自己的設定對不對。同一顆在同一步只報一次，由呼叫端以 reads 去重。</summary>
+        private static void CheckCatalog(AssetCatalog catalog, string path, List<string> errors)
+        {
+            if (catalog.source != CatalogSource.Prototype) return;
+            if (string.IsNullOrWhiteSpace(catalog.prototypeCatalogId))
+                errors.Add($"{path} 的目錄設為原型來源，但沒有指定目錄。");
+            else if (AssetPipeline.current != null
+                     && AssetPipeline.current.FindCatalogById(catalog.prototypeCatalogId.Trim()) == null)
+                errors.Add($"{path} 指到的目錄已不存在。");
+        }
+
         private static void CollectKeys(object body, StepReads reads)
         {
             if (body is IPrototypeKeyReader prototypeReader)
                 AddKeys(prototypeReader.PrototypeInputKeys, reads.Prototype);
-
-            if (body is IDynamicKeyReader dynamicReader)
-                AddKeys(dynamicReader.DynamicInputKeys, reads.Dynamic);
         }
 
         private static void AddKeys(IEnumerable<string> source, List<string> target)
@@ -250,11 +295,12 @@ namespace HaruFamily.Tools.AssetPipeline
                 }
         }
 
-        /// <summary>一個步驟讀到的 key，分 prototype 與 dynamic 兩類。</summary>
+        /// <summary>一個步驟碰到的東西：讀到的 prototype key、讀到的目錄，以及它自己寫入的目錄。</summary>
         private sealed class StepReads
         {
             public readonly List<string> Prototype = new List<string>();
-            public readonly List<string> Dynamic = new List<string>();
+            public readonly List<AssetCatalog> CatalogReads = new List<AssetCatalog>();
+            public readonly List<AssetCatalog> CatalogOutputs = new List<AssetCatalog>();
         }
     }
 }

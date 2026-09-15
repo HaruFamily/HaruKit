@@ -33,6 +33,19 @@ public class HGTimingGroup
     public IList Actions;
 }
 
+/// <summary>一步 Undo／Redo 實際換掉了什麼。呼叫端靠它決定要不要重建畫布與焦點。</summary>
+public enum HGStepKind
+{
+    /// <summary>沒得退／沒得進，什麼都沒換。</summary>
+    None,
+
+    /// <summary>圖的工作副本整份被換掉。</summary>
+    Graph,
+
+    /// <summary>只換了 Owner 上的目錄，圖沒動。</summary>
+    Catalogs,
+}
+
 /// <summary>
 /// 視覺化編輯器的資料模型：綁定 Owner SO，持有一份 LogicGraph 工作副本，所有編輯都改副本，存檔才寫回。
 /// </summary>
@@ -126,17 +139,31 @@ public class HGModel
     // ===== Undo / Redo（整份工作副本快照）=====
     // 圖是 SerializeReference 多型樹，逐項記錄變更比整份快照還難維護；節點數是幾十個等級，快照最直接。
     // 快照掛在 MarkDirty：每個修改點本來就要呼叫它，不會有「忘了記錄 Undo」的漏洞。
+    //
+    // 目錄與圖共用這一個堆疊，但**一步只記變動的那一半**（見 <see cref="HGStep"/>）：目錄住在 Owner 上，
+    // 視窗外還有 Inspector 那個入口會改它，每一步都連目錄一起抄的話，退一步圖的編輯會把視窗外改的目錄
+    // 一起還原掉。反過來也一樣——退一步目錄不該把圖整份換掉、清掉選取。
 
     private const int UndoLimit = 40;
     private const double MergeWindow = 0.4;          // 連續輸入合併成一步
 
-    private readonly List<object> undoStack = new();
-    private readonly List<object> redoStack = new();
-    private object baseline;                          // 上一次記錄點的狀態（＝本次修改前的狀態）
+    /// <summary>一步復原的內容。兩個欄位只有一個有值，另一個是 null＝這一步沒動它。</summary>
+    private sealed class HGStep
+    {
+        public object Graph;                          // 圖的工作副本快照
+        public object Catalogs;                       // Owner 上的目錄快照（型別由 ICatalogOwner 自己決定）
+    }
+
+    private readonly List<HGStep> undoStack = new();
+    private readonly List<HGStep> redoStack = new();
+    private object baseline;                          // 圖在上一次記錄點的狀態（＝本次修改前的狀態）
     private double lastPushTime;
+    private double lastCatalogPush;                   // 上一個目錄步的時間，只給目錄步之間的合併用
 
     public bool CanUndo => undoStack.Count > 0;
     public bool CanRedo => redoStack.Count > 0;
+
+    private ICatalogOwner CatalogOwner => Owner as ICatalogOwner;
 
     public void MarkDirty()
     {
@@ -146,9 +173,7 @@ public class HGModel
 
         if (baseline != null && now - lastPushTime >= MergeWindow)
         {
-            undoStack.Add(baseline);
-            if (undoStack.Count > UndoLimit) undoStack.RemoveAt(0);
-            redoStack.Clear();
+            Push(new HGStep { Graph = baseline });
             lastPushTime = now;
         }
         else if (baseline == null)
@@ -163,28 +188,84 @@ public class HGModel
     /// <summary>強制切一個 Undo 記錄點，讓下一次修改不會跟前一次合併。</summary>
     public void BreakUndoMerge() => lastPushTime = 0d;
 
-    public bool Undo()
+    /// <summary>抄一份目前的目錄，給 <see cref="PushCatalogStep"/> 當「修改前」。Owner 沒有目錄時回 null。</summary>
+    public object CaptureCatalogs() => CatalogOwner?.CaptureCatalogs();
+
+    /// <summary>
+    /// 把一次目錄修改記成一步。<paramref name="before"/> 是修改**之前**抄的快照。
+    /// </summary>
+    // 目錄是先抄再改，圖是改完才抄 baseline：目錄直接寫在 Owner 上、沒有工作副本，記著的 baseline 會被
+    // 視窗外的入口改掉，只有當場抄的那份一定對得上。
+    public void PushCatalogStep(object before)
     {
-        if (undoStack.Count == 0) return false;
-        redoStack.Add(DeepCopy(Data));
-        Data = undoStack[undoStack.Count - 1];
-        undoStack.RemoveAt(undoStack.Count - 1);
-        baseline = DeepCopy(Data);
-        lastPushTime = 0d;
-        Dirty = true;
-        return true;
+        if (!TrackChanges || before == null) return;
+        double now = EditorApplication.timeSinceStartup;
+
+        // 只跟「緊接著的上一個目錄步」合併：把資產拖到「＋ 新增目錄」上是一次手勢，卻會跑 Create 與
+        // Add 兩條命令，分成兩步就得按兩次 Ctrl+Z 才回得到原狀。併進前一步記的是更早的狀態，退回去仍正確。
+        bool merge = undoStack.Count > 0
+                     && undoStack[undoStack.Count - 1].Catalogs != null
+                     && now - lastCatalogPush < MergeWindow;
+
+        if (merge) redoStack.Clear();
+        else Push(new HGStep { Catalogs = before });
+
+        lastCatalogPush = now;
+        lastPushTime = 0d;                            // 下一次圖的修改不跟這一步合併
     }
 
-    public bool Redo()
+    public HGStepKind Undo()
     {
-        if (redoStack.Count == 0) return false;
-        undoStack.Add(DeepCopy(Data));
-        Data = redoStack[redoStack.Count - 1];
+        if (undoStack.Count == 0) return HGStepKind.None;
+
+        var step = undoStack[undoStack.Count - 1];
+        undoStack.RemoveAt(undoStack.Count - 1);
+        redoStack.Add(Capture(step));
+        return Apply(step);
+    }
+
+    public HGStepKind Redo()
+    {
+        if (redoStack.Count == 0) return HGStepKind.None;
+
+        var step = redoStack[redoStack.Count - 1];
         redoStack.RemoveAt(redoStack.Count - 1);
-        baseline = DeepCopy(Data);
+        undoStack.Add(Capture(step));
+        return Apply(step);
+    }
+
+    private void Push(HGStep step)
+    {
+        undoStack.Add(step);
+        if (undoStack.Count > UndoLimit) undoStack.RemoveAt(0);
+        redoStack.Clear();
+    }
+
+    /// <summary>抄一份現在的狀態進另一個堆疊。範圍跟著 step 走：它沒動過的那一半不記，也就不會被退回。</summary>
+    private HGStep Capture(HGStep step) => new()
+    {
+        Graph = step.Graph != null ? DeepCopy(Data) : null,
+        Catalogs = step.Catalogs != null ? CatalogOwner?.CaptureCatalogs() : null,
+    };
+
+    private HGStepKind Apply(HGStep step)
+    {
+        lastCatalogPush = 0d;                         // 剛退回來的那一步不再吃合併
+
+        if (step.Graph != null)
+        {
+            Data = step.Graph;
+            baseline = DeepCopy(Data);
+            lastPushTime = 0d;
+            Dirty = true;
+            return HGStepKind.Graph;
+        }
+
+        // 目錄不走存檔交易，退回去就是立刻寫回 Owner，所以這裡不碰 Dirty，直接 SetDirty。
+        CatalogOwner?.RestoreCatalogs(step.Catalogs);
+        if (Owner != null) EditorUtility.SetDirty(Owner);
         lastPushTime = 0d;
-        Dirty = true;
-        return true;
+        return HGStepKind.Catalogs;
     }
 
     private void ClearHistory()
@@ -193,6 +274,7 @@ public class HGModel
         redoStack.Clear();
         baseline = Data != null ? DeepCopy(Data) : null;
         lastPushTime = 0d;
+        lastCatalogPush = 0d;
     }
 
     /// <summary>先以 Core 規則驗證副本；通過後才寫回 Owner。</summary>

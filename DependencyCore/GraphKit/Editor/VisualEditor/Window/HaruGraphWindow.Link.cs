@@ -269,7 +269,14 @@ public partial class HaruGraphWindow
         // 真正的空白處放開：先建立空 Node，讓使用者在 Node 上決定具體型別。
         BreakUndoMerge();
         PreserveVisibleNodePositions();
-        NewSource(linkRow.Slot).Pos = SnapToGrid(graphMouse);
+        GraphNode carrier = NewSource(linkRow.Slot);
+        // 欄位可以自己指定「拉出來就是這個」（FormulaSlotBase.CreateDefaultBody）。預設沒有，
+        // 所以這裡對絕大多數欄位仍然是空節點——會用它的欄位自己知道為什麼。
+        var linkSlot = linkRow.Slot as FormulaSlotBase;
+        // 包要走 SetPack，不能當 body 塞進去——兩者的節點種類不同。
+        if (linkSlot?.CreateDefaultPack() is GraphNodeContent pack) carrier.SetPack(pack);
+        else if (linkSlot?.CreateDefaultBody() is GraphNodeContent body) carrier.SetBody(body);
+        carrier.Pos = SnapToGrid(graphMouse);
         Invalidate();
         Repaint();
     }
@@ -314,9 +321,10 @@ public partial class HaruGraphWindow
         // 目錄節點沒有內容也沒有子欄位，所以不可能成環，只比結果型別。
         // List<> 是不變的：型別選「全部」（List<Object>）的節點接不進 List<AudioClip> 欄位，
         // 要先在節點上把型別縮到對得上為止。這是刻意的——靜默放行會在求值時得到空清單。
-        if (target.IsCatalogNode)
-            return row.ResultType != null && target.ResultType != null
-                && row.ResultType.IsAssignableFrom(target.ResultType);
+        //
+        // 包不求值，所以結果型別與族對它都沒有意義：收不收得下只看這一格有沒有宣告 AcceptsPack。
+        if (target.IsPackNode)
+            return (row.Slot as FormulaSlotBase)?.AcceptsPack == true;
 
         // 空節點沒有內容，但**可能已經有族**：右鍵「建立公式/X」選的、或從欄位切下來時記的。
         // 有族就必須同族——不擋的話 String 空節點接得進 Key 欄位，接上去當場被改寫成 Key 節點，族形同虛設。

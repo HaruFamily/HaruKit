@@ -44,26 +44,6 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     /// <summary>
-    /// 會產出 dynamic key 的步驟。
-    /// </summary>
-    // dynamic key 是「這個步驟跑完才存在」的東西，不是具名Token：Token是公式來源，步驟沒有回傳值寫不進端點。
-    // 所以時序（產出者必須排在讀取者之前）由 APGraph.Verify 依步驟順序檢查，GraphKit 不認識這個概念。
-    public interface IDynamicKeyProducer
-    {
-        bool TryGetDynamicOutputKey(out string key);
-    }
-
-    /// <summary>
-    /// 會讀 dynamic key 的公式。
-    /// </summary>
-    // 驗證器靠這個介面問「你讀了哪些 key」，不去認識任何具體公式型別——
-    // 具體公式住在使用端專案，框架看不到它們。
-    public interface IDynamicKeyReader
-    {
-        IEnumerable<string> DynamicInputKeys { get; }
-    }
-
-    /// <summary>
     /// 會讀 prototype key 的公式。驗證器據此檢查 key 有沒有對應的資產群組。
     /// </summary>
     public interface IPrototypeKeyReader

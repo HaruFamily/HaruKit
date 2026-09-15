@@ -425,6 +425,15 @@ public partial class HaruGraphWindow
             };
             GUI.Label(fieldRect, HGStyles.Elide(text, HGStyles.Tiny, fieldRect.width), HGStyles.Tiny);
         }
+        // 輸出格沒有常數模式：沒接線就是沒人收，畫一格可編的保底值只會讓人以為那個值會被用到。
+        else if (row.IsOutput)
+        {
+            string text = useType == 1 && HGReflect.GetFormula(slot) is object target
+                ? $"→ {HGReflect.TypeName(target.GetType())}"
+                : "（未接，產出不會被收走）";
+            string tip = "這一格是產出：執行時由這個步驟寫進接上的節點，不是從它取值。";
+            GUI.Label(fieldRect, HGStyles.Elide(text, HGStyles.Tiny, fieldRect.width, tip), HGStyles.Tiny);
+        }
         // 常數框畫的型別可以不等於結果型別（見 FormulaSlotBase.DefaultEditType）：清單這種畫不出輸入框的
         // 結果型別，可以改用一格 enum 表示「沒接線時取什麼」。拉線相容性仍然只看 row.ResultType。
         else if (!HGValueField.CanDraw(HGReflect.DefaultEditType(slot, row.ResultType)))
@@ -527,6 +536,9 @@ public partial class HaruGraphWindow
 
         if (row.Field != null && row.Target != null)
         {
+            // 目錄欄位存的是 id，畫成下拉才看得到名字；手打 id 沒有任何可讀性。
+            if (HGReflect.IsCatalogField(row.Field)) { DrawCatalogIdField(row, fieldRect); return; }
+
             EditorGUI.BeginChangeCheck();
             var value = HGValueField.Draw(fieldRect, row.Field.FieldType, row.Field.GetValue(row.Target), row.IsEnum);
             if (EditorGUI.EndChangeCheck()) { row.Field.SetValue(row.Target, value); Invalidate(); }
@@ -541,6 +553,45 @@ public partial class HaruGraphWindow
         EditorGUI.BeginChangeCheck();
         var element = HGValueField.Draw(fieldRect, owner.ElementType, owner.List[row.ListIndex]);
         if (EditorGUI.EndChangeCheck()) { owner.List[row.ListIndex] = element; Invalidate(); }
+    }
+
+    /// <summary>
+    /// 目錄欄位：顯示目錄名稱，點開是目錄庫裡的全部目錄。欄位本身存的是 id。
+    /// </summary>
+    // 目錄被刪掉時欄位還留著 id：畫成「（已刪除）」而不是空白，否則看起來像還沒選。
+    private void DrawCatalogIdField(HGRow row, Rect fieldRect)
+    {
+        var field = row.Field;
+        var target = row.Target;
+        string current = field.GetValue(target) as string;
+        var catalog = FindCatalog(current);
+        string label = catalog?.Name ?? (string.IsNullOrEmpty(current) ? "（未指定）" : "（已刪除）");
+
+        if (!EditorGUI.DropdownButton(fieldRect,
+                HGStyles.Elide(label, EditorStyles.miniPullDown, fieldRect.width - 20f), FocusType.Keyboard))
+            return;
+
+        var owner = CatalogOwner;
+        if (owner?.Catalogs == null || owner.Catalogs.Count == 0)
+        {
+            ShowNotification(new GUIContent("左欄還沒有任何目錄"));
+            return;
+        }
+
+        var menu = new GenericMenu();
+        foreach (var candidate in owner.Catalogs)
+        {
+            if (candidate == null) continue;
+            var captured = candidate;
+            menu.AddItem(new GUIContent(candidate.Name), candidate.Id == current, () =>
+            {
+                BreakUndoMerge();
+                field.SetValue(target, captured.Id);
+                MarkGraphChanged();
+                Invalidate();
+            });
+        }
+        menu.DropDown(fieldRect);
     }
 
     /// <summary>清單標題：折疊箭頭 + 名稱 + 項數。箭頭與文字整塊都是開關，不必瞄準小三角。</summary>

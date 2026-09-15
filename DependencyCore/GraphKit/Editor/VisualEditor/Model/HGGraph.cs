@@ -30,6 +30,9 @@ public class HGRow
     public object Slot;              // Kind == Slot
     public Type ResultType;          // Slot 的結果型別；ActionSlot 為 null
     public bool IsActionSlot;
+
+    /// <summary>這一列是輸出（<see cref="FormulaSlotBase.IsOutput"/>）：接點與線改用輸出色，不畫常數框。</summary>
+    public bool IsOutput;
     public NamedFormulaSlot AssetBinding;
 
     public object Target;            // Kind == Value：欄位所屬物件
@@ -91,10 +94,8 @@ public class HGNodeView
     /// <summary>這顆節點指到的具名Token（不是Token節點就是 null）。內容住在Token自己的畫布。</summary>
     public GraphToken Token;
     public bool IsTokenNode;           // Token節點（不論有沒有指定Token）
-    /// <summary>目錄節點（不論有沒有指定目錄）。內容住在 Owner 的目錄裡，不在圖上。</summary>
-    public bool IsCatalogNode;
-    /// <summary>這顆節點指到的目錄 Id；不是目錄節點就是 null。顯示名要向 Owner 查，這裡不存名字。</summary>
-    public string CatalogId;
+    /// <summary>包節點：內容住在節點自己身上，但它不求值，值要從底下的子節點取。</summary>
+    public bool IsPackNode;
     public Type ResultType;               // 資產／Token節點的結果型別
     public string Id;
     public string Title;                  // Header 主文字＝具體型別／Token／資產名稱，節點靠它辨識
@@ -134,7 +135,9 @@ public class HGNodeView
     public float ContentHeight;
     public float TipsHeight;
     // 換來源的入口是 Header 右端的 ▾；Root HEAD 的來源走它自己的「來源」參數列接點，所以不畫。
-    public bool HasSourceSelector => !IsRoot && (IsPlaceholder || Obj != null || IsAssetNode || IsTokenNode || IsCatalogNode);
+    // 包沒有「換來源」：一格只收一種包，換不出第二個選項，畫一顆點不出東西的 ▾ 只會讓人以為壞了。
+    public bool HasSourceSelector => !IsRoot && !IsPackNode
+        && (IsPlaceholder || Obj != null || IsAssetNode || IsTokenNode);
 
     public Rect Rect => new Rect(Pos.x, Pos.y, Width, Height);
     public Vector2 OutputPort => new Vector2(Pos.x + HGGraph.PortRadius, Pos.y + HGGraph.HeaderHeight * 0.5f);
@@ -367,6 +370,15 @@ public static class HGGraph
                 node = MakeNodeForObject(carrier.BodyObject, parentSlot, parentRow, slotResultType);
                 break;
 
+            // 包與 Inline 走同一條建法（Header 標籤、參數列都來自內容物），差別只在它不求值：
+            // 結果型別一律 null，相容判定改看 FormulaSlotBase.AcceptsPack。
+            case NodeKind.Pack when carrier.PackObject != null:
+                node = MakeNodeForObject(carrier.PackObject, parentSlot, parentRow, null);
+                node.IsPackNode = true;
+                node.ResultType = null;
+                node.Chip = null;
+                break;
+
             case NodeKind.Asset:
             {
                 Type assetResult = slotResultType ?? HGReflect.AssetResultType(carrier.AssetObject);
@@ -407,22 +419,6 @@ public static class HGGraph
                 break;
             }
 
-            case NodeKind.Catalog:
-            {
-                // 唯一一種結果型別要看節點自己的欄位才知道的節點：選了什麼型別，結果就是 List<那個型別>。
-                Type catalogResult = HGReflect.CatalogResultType(carrier.CatalogType);
-                node = new HGNodeView
-                {
-                    IsCatalogNode = true,
-                    CatalogId = carrier.CatalogId,
-                    ResultType = catalogResult,
-                    // 與資產／Token 節點同一種版型：Header 只表明身分，選哪一個目錄由本體那兩列在做。
-                    Title = "Catalog",
-                    Chip = ChipText(null, catalogResult, false),
-                };
-                break;
-            }
-
             default:
             {
                 node = new HGNodeView
@@ -449,9 +445,12 @@ public static class HGGraph
     /// Header 右側的契約標籤：知道是哪一族就標族名（String 與 Key 才分得開），
     /// 推不出族才退回結果型別短名；動作沒有結果型別，一律標 Action。
     /// </summary>
-    private static string ChipText(Type slotType, Type resultType, bool isAction)
+    // 候選節點沒有父欄位可問，但節點型別自己就屬於某一族，所以再問一次 NodeKindName——
+    // 否則同一顆節點接上去叫「動態資產」、落到候選池卻變成 List<Object>。
+    private static string ChipText(Type slotType, Type resultType, bool isAction, Type bodyType = null)
     {
         if (!isAction && slotType != null) return HGReflect.SlotKindName(slotType);
+        if (!isAction && HGReflect.NodeKindName(bodyType) is string kind) return kind;
         if (resultType != null) return HGReflect.ResultTypeName(resultType);
         return isAction ? "Action" : null;
     }
@@ -468,7 +467,7 @@ public static class HGGraph
             ParentSlot = parentSlot,
             ParentRow = parentRow,
             Title = HGReflect.TypeName(obj.GetType()),
-            Chip = ChipText(isAction ? null : parentSlot?.GetType(), resultType, isAction),
+            Chip = ChipText(isAction ? null : parentSlot?.GetType(), resultType, isAction, obj.GetType()),
             Desc = HGReflect.TypeDescription(obj.GetType()),
             IsActionNode = isAction,
             ResultType = resultType,
@@ -487,6 +486,18 @@ public static class HGGraph
         view.Nodes.Add(node);
         if (node.Carrier != null) view.ByCarrier[node.Carrier] = node;
         if (node.ParentSlot != null) view.BySlot[node.ParentSlot] = node;
+
+        // 子節點各自是一顆完整節點：沒有 ParentSlot，所以不從擁有者畫一條線過去——
+        // 它們的連入線來自真正指著它們的那些欄位。
+        if (node.Obj is IGraphNodeOwner owner)
+        {
+            foreach (var child in owner.ChildNodes)
+            {
+                if (child == null || view.ByCarrier.ContainsKey(child)) continue;
+                var childNode = MakeNodeForCarrier(model, child, null, null, null);
+                Collect(model, childNode, view, depth + 1, listCollapse, node.InDisabledSubtree, locked);
+            }
+        }
         // 節點 Id 到這裡才確定，所以列的歸屬也在這裡補；折疊與分支收合都靠它組 key。
         // 鎖定＝這一段不會被採用：整顆節點在鎖定子樹裡，或這一列自己是沒勾覆蓋的資產參數。
         foreach (var row in AllRows(node.Rows))
@@ -747,6 +758,7 @@ public static class HGGraph
             Depth = depth,
             Slot = slot,
             IsActionSlot = isAction,
+            IsOutput = slot is FormulaSlotBase formula && formula.IsOutput,
             ResultType = isAction ? null : HGReflect.ResultType(slot.GetType()),
         };
     }
@@ -836,11 +848,9 @@ public static class HGGraph
             node.Height = leafY + NodeBottomPad;
             return;
         }
-        // 資產與Token的本體第一列是「選哪一個」的下拉，它不在 Rows 裡，高度要另外加。
-        // 目錄節點有兩列（選目錄、選型別），所以加兩倍。
-        float refRows = node.IsCatalogNode ? RowHeight * 2f
-            : node.IsAssetNode || node.IsTokenNode ? RowHeight
-            : 0f;
+        // 資產與Token的本體第一列是「選哪一個」的下拉，子節點擁有者的第一列是「幾格＋新增」，
+        // 兩者都不在 Rows 裡，高度要另外加。
+        float refRows = node.IsAssetNode || node.IsTokenNode || node.Obj is IGraphNodeOwner ? RowHeight : 0f;
         float y = MeasureRows(node.Rows, HeaderHeight + refRows);
         if (node.TipsHeight > 0f) y += node.TipsHeight + 10f;
         node.ContentHeight = Mathf.Max(y, HeaderHeight + 8f);

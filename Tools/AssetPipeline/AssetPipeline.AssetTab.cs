@@ -117,10 +117,7 @@ namespace HaruFamily.Tools.AssetPipeline
             foreach (AssetPipelineAssetGroup group in prototypeAssets)
                 RefreshGroupInfo(group);
 
-            foreach (AssetPipelineAssetGroup group in dynamicAssets)
-                RefreshGroupInfo(group);
-
-            assetLog = $"刷新完成：原型 {prototypeAssets.Count} 個 Key，動態 {dynamicAssets.Count} 個 Key。";
+            assetLog = $"刷新完成：原型 {prototypeAssets.Count} 個 Key。";
             MarkDirty();
         }
 
@@ -134,10 +131,7 @@ namespace HaruFamily.Tools.AssetPipeline
             foreach (AssetPipelineAssetGroup group in prototypeAssets)
                 errorCount += ValidateGroup(group, sb, "原型");
 
-            foreach (AssetPipelineAssetGroup group in dynamicAssets)
-                errorCount += ValidateGroup(group, sb, "動態");
-
-            int totalGroupCount = prototypeAssets.Count + dynamicAssets.Count;
+            int totalGroupCount = prototypeAssets.Count;
             assetLog = errorCount == 0
                 ? $"驗證通過：{totalGroupCount} 個 Key。"
                 : $"驗證失敗：{errorCount} 個問題。\n{sb}";
@@ -248,71 +242,12 @@ namespace HaruFamily.Tools.AssetPipeline
             MarkDirty();
         }
 
-        internal void ClearDynamicAssets()
-        {
-            dynamicAssets.Clear();
-            assetLog = "已清空動態資產。";
-            MarkDirty();
-        }
-
-        internal void MergeDynamicAssetsToPrototypeAssets()
-        {
-            int addedCount = 0;
-
-            foreach (AssetPipelineAssetGroup dynamicGroup in dynamicAssets)
-            {
-                if (dynamicGroup == null) continue;
-
-                string key = GetValidKey(dynamicGroup.key);
-                AssetPipelineAssetGroup prototypeGroup = GetOrCreateGroup(prototypeAssets, key);
-
-                foreach (Object asset in dynamicGroup.assets)
-                {
-                    if (asset == null) continue;
-
-                    string path = AssetDatabase.GetAssetPath(asset);
-                    if (HasAssetPath(prototypeGroup, path)) continue;
-
-                    prototypeGroup.assets.Add(asset);
-                    addedCount++;
-                }
-
-                RefreshGroupInfo(prototypeGroup);
-            }
-
-            assetLog = $"動態資產整合完成：新增 {addedCount} 個到原型資產。";
-            MarkDirty();
-        }
-
         internal void ClearOperationKey()
         {
             clearKey = GetValidKey(clearKey);
             string key = clearKey;
             int removedCount = prototypeAssets.RemoveAll(group => group.key == key);
             assetLog = removedCount > 0 ? $"已清除原型 Key [{key}]。" : $"找不到原型 Key [{key}]。";
-            MarkDirty();
-        }
-
-        /// <summary>將資產註冊進動態資產指定 Key（去重、刷新資訊）。供管線資產（如 PipelineAsset_CreatePrefabCopies）呼叫。</summary>
-        /// <summary>步驟把產出的資產登記成 dynamic 群組，供後面的步驟讀取。</summary>
-        public void RegisterDynamicAssets(string key, IEnumerable<Object> assets)
-        {
-            if (assets == null) return;
-
-            key = key == null ? string.Empty : key.Trim();
-            AssetPipelineAssetGroup group = GetOrCreateGroup(dynamicAssets, key);
-
-            foreach (Object asset in assets)
-            {
-                if (asset == null) continue;
-
-                string path = AssetDatabase.GetAssetPath(asset);
-                if (HasAssetPath(group, path)) continue;
-
-                group.assets.Add(asset);
-            }
-
-            RefreshGroupInfo(group);
             MarkDirty();
         }
 

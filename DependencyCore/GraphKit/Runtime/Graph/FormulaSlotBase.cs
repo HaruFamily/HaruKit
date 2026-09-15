@@ -35,6 +35,33 @@ public abstract class FormulaSlotBase
     /// </summary>
     public virtual Type DefaultEditType => ResultType;
 
+    /// <summary>
+    /// 這一格是「寫出去」而不是「讀進來」：擁有者執行時把結果交給接上的節點，不向它取值。
+    /// </summary>
+    // 只影響畫法（接點與線改用輸出色、不畫常數框）。相容判定、求值與驗證一律照舊走
+    // Kind／AcceptsBody／Evaluate，不因為方向而分岔——資料上它仍然是一般的「欄位指著節點」。
+    public virtual bool IsOutput => false;
+
+    /// <summary>
+    /// 這個欄位收不收得下包節點（<see cref="IGraphPack"/>）。預設不收。
+    /// </summary>
+    // 包不求值，所以結果型別與族對它都沒有意義，只剩「這一格是不是就要收包」這個宣告。
+    // 目前唯一會打開它的是把產出寫進包的那種欄位。
+    public virtual bool AcceptsPack => false;
+
+    /// <summary>
+    /// 從這一格拉到空白處時要直接建好的內容；回 null（預設）＝長一顆空節點，由使用者選。
+    /// </summary>
+    // 空節點代表「還沒決定要接什麼」，那對一般欄位是有意義的狀態，所以這不是通則也不是依族推導，
+    // 而是個別欄位自己宣告：只有「拉出來必定是某一種」的欄位才覆寫它。
+    public virtual GraphNodeContent CreateDefaultBody() => null;
+
+    /// <summary>
+    /// 從這一格拉到空白處時要直接建好的<b>包</b>；回 null（預設）＝這一格不收包。
+    /// </summary>
+    // 與 CreateDefaultBody 分開：包不是 body，落地要走 GraphNode.SetPack。
+    public virtual GraphNodeContent CreateDefaultPack() => null;
+
     /// <summary>這個欄位收得下的內嵌公式基底型別（TFormula）。型別選單用它過濾。</summary>
     public abstract Type BodyBaseType { get; }
 

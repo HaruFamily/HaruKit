@@ -1,18 +1,19 @@
-using HaruFamily.Framework.LogicGraph;
 using NUnit.Framework;
 using System;
 using System.Collections.Generic;
 using HaruFamily.DependencyCore.GraphKit;
-using HaruFamily.DependencyCore.GraphKit.Editor;
+using Object = UnityEngine.Object;
 
 namespace HaruFamily.Tools.AssetPipeline.Tests
 {
     /// <summary>
-    /// dynamic key 的時序規則：產出它的步驟必須排在讀取它的步驟之前。
+    /// 動態目錄的時序規則：寫入它的步驟必須排在讀取它的步驟之前。
     /// </summary>
     // 這條是 AssetPipeline 獨有的，GraphKit 的具名Token沒有先後概念，所以測的是 APGraphVerifier 而不是 HGValidator。
     public sealed class APGraphVerifierTests
     {
+        private const string OrderError = "寫入它的步驟不在前面";
+
         private APGraph graph;
         private APStepGroup root;
 
@@ -28,36 +29,103 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             root.Steps.Add(new APActionSlot(step));
         }
 
-        [Test]
-        public void Verify_FailsWhenDynamicKeyIsReadBeforeProduce()
+        /// <summary>建一顆目錄節點，並在底下開一格。寫入端接目錄，讀取端接那一格。</summary>
+        // 目錄是包，一般欄位接不上它；讀取一律走格子，所以測試要把兩顆節點都建出來。
+        private static GraphNode CatalogNode(out GraphNode cell, CatalogSource source = CatalogSource.Dynamic)
         {
-            AddStep(new ReadStep("Generated"));
+            var node = new GraphNode();
+            node.EnsureId();
 
-            List<string> errors = APGraphVerifier.Collect(graph);
+            var catalog = new AssetCatalog { source = source };
+            node.SetPack(catalog);
 
-            Assert.That(errors, Has.Some.Contains("產出它的步驟不在前面"));
+            cell = ((IGraphNodeOwner)catalog).CreateChild();
+            cell.SetBody(new TestCell());
+            catalog.SyncCells();
+            return node;
         }
 
         [Test]
-        public void Verify_PassesWhenDynamicKeyIsProducedInOrder()
+        public void Verify_FailsWhenCatalogIsReadBeforeWrite()
         {
-            AddStep(new ProduceStep("Generated"));
-            AddStep(new ReadStep("Generated"));
+            CatalogNode(out GraphNode cell);
+            AddStep(new ReadStep(cell));
 
             List<string> errors = APGraphVerifier.Collect(graph);
 
-            Assert.That(errors, Has.None.Contains("產出它的步驟不在前面"));
+            Assert.That(errors, Has.Some.Contains(OrderError));
         }
 
         [Test]
-        public void Verify_FailsWhenProducerComesAfterReader()
+        public void Verify_PassesWhenCatalogIsWrittenInOrder()
         {
-            AddStep(new ReadStep("Generated"));
-            AddStep(new ProduceStep("Generated"));
+            GraphNode catalog = CatalogNode(out GraphNode cell);
+            AddStep(new WriteStep(catalog));
+            AddStep(new ReadStep(cell));
 
             List<string> errors = APGraphVerifier.Collect(graph);
 
-            Assert.That(errors, Has.Some.Contains("產出它的步驟不在前面"));
+            Assert.That(errors, Has.None.Contains(OrderError));
+        }
+
+        [Test]
+        public void Verify_FailsWhenWriterComesAfterReader()
+        {
+            GraphNode catalog = CatalogNode(out GraphNode cell);
+            AddStep(new ReadStep(cell));
+            AddStep(new WriteStep(catalog));
+
+            List<string> errors = APGraphVerifier.Collect(graph);
+
+            Assert.That(errors, Has.Some.Contains(OrderError));
+        }
+
+        /// <summary>原型來源隨時都有內容，不受步驟順序影響。</summary>
+        [Test]
+        public void Verify_IgnoresOrderForPrototypeCatalog()
+        {
+            GraphNode catalog = CatalogNode(out GraphNode cell, CatalogSource.Prototype);
+            ((AssetCatalog)catalog.PackObject).prototypeCatalogId = "any-id";
+            AddStep(new ReadStep(cell));
+
+            List<string> errors = APGraphVerifier.Collect(graph);
+
+            Assert.That(errors, Has.None.Contains(OrderError));
+        }
+
+        [Test]
+        public void Verify_FailsWhenOutputSlotTakesPrototypeCatalog()
+        {
+            GraphNode catalog = CatalogNode(out _, CatalogSource.Prototype);
+            ((AssetCatalog)catalog.PackObject).prototypeCatalogId = "any-id";
+            AddStep(new WriteStep(catalog));
+
+            List<string> errors = APGraphVerifier.Collect(graph);
+
+            Assert.That(errors, Has.Some.Contains("設為原型來源"));
+        }
+
+        [Test]
+        public void Verify_FailsWhenPrototypeCatalogHasNoKey()
+        {
+            CatalogNode(out GraphNode cell, CatalogSource.Prototype);
+            AddStep(new ReadStep(cell));
+
+            List<string> errors = APGraphVerifier.Collect(graph);
+
+            Assert.That(errors, Has.Some.Contains("沒有指定目錄"));
+        }
+
+        /// <summary>目錄是包，一般清單欄位接不上它——只有格子才是取值端點。</summary>
+        [Test]
+        public void Verify_FailsWhenOrdinaryFieldTakesTheCatalog()
+        {
+            GraphNode catalog = CatalogNode(out _);
+            AddStep(new ReadStep(catalog));
+
+            List<string> errors = APGraphVerifier.Collect(graph);
+
+            Assert.That(errors, Has.Some.Contains("收不下包"));
         }
 
         [Test]
@@ -82,22 +150,28 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(errors, Is.Empty);
         }
 
-        /// <summary>只宣告「我產出這個 dynamic key」的假步驟，不做任何事。</summary>
-        // 測試自備 producer 而不是借用真實步驟：具體步驟住在使用端專案，測試組件看不到它們。
+        /// <summary>最小的目錄格：原樣回傳母目錄的整包。</summary>
+        // 測試自備格子而不是借用專案端那幾種：具體篩選公式住在使用端專案，測試組件看不到它們。
         [Serializable]
-        private sealed class ProduceStep : APActionBase, IDynamicKeyProducer
+        private sealed class TestCell : Formula_ObjectList, ICatalogCell
         {
-            private readonly string key;
+            [NonSerialized]
+            private AssetCatalog owner;
 
-            public ProduceStep(string key)
-            {
-                this.key = key;
-            }
+            public AssetCatalog Owner { get => owner; set => owner = value; }
 
-            public bool TryGetDynamicOutputKey(out string outputKey)
+            public override List<Object> Evaluate() => new List<Object>(CatalogCell.Source(this));
+        }
+
+        /// <summary>只宣告「我把產出寫進這顆目錄」的假步驟，不做任何事。</summary>
+        [Serializable]
+        private sealed class WriteStep : APActionBase
+        {
+            public APCatalogOutputSlot output = new APCatalogOutputSlot();
+
+            public WriteStep(GraphNode catalog)
             {
-                outputKey = key;
-                return !string.IsNullOrWhiteSpace(key);
+                output.SetNode(catalog);
             }
 
             public override void Execute()
@@ -105,26 +179,16 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             }
         }
 
-        /// <summary>只宣告「我讀這個 dynamic key」的假步驟，不做任何事。</summary>
+        /// <summary>只宣告「我讀這顆節點」的假步驟，不做任何事。</summary>
         [Serializable]
-        private sealed class ReadStep : APActionBase, IDynamicKeyReader
+        private sealed class ReadStep : APActionBase
         {
-            public AssetPipelineSource source;
+            public FormulaAsset_ObjectList objects = new FormulaAsset_ObjectList();
 
-            public ReadStep()
+            public ReadStep(GraphNode node)
             {
+                objects.SetNode(node);
             }
-
-            public ReadStep(string key)
-            {
-                source = new AssetPipelineSource
-                {
-                    sourceFlags = AssetPipelineSourceFlags.Dynamic,
-                    keys = new List<string> { key },
-                };
-            }
-
-            public IEnumerable<string> DynamicInputKeys => source.ReadKeys(AssetPipelineSourceFlags.Dynamic);
 
             public override void Execute()
             {

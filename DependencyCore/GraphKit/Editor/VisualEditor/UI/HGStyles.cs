@@ -58,6 +58,10 @@ public static class HGStyles
     public static readonly Color PortEmpty = new(0.42f, 0.42f, 0.43f);
     public static readonly Color PortLive = new(0.80f, 0.80f, 0.82f);
 
+    // 輸出是唯一方向與其他線相反的連線（擁有者寫進去，不是取值），所以它是明度分層的第二個例外：
+    // 借目錄的青藍，一眼看得出「這條不是取值」。停用與選取仍蓋得過它。
+    public static readonly Color LinkOutput = new(0.42f, 0.72f, 0.74f);
+
     public static readonly Color Muted = new(0.74f, 0.74f, 0.75f);
     public static readonly Color RowAlt = new(1f, 1f, 1f, 0.04f);
     public static readonly Color LibraryCellBorder = new(0.11f, 0.11f, 0.11f);

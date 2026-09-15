@@ -103,50 +103,55 @@ namespace HaruFamily.Tools.AssetPipeline
             RefreshGroupInfo(group);
         }
 
-        /// <summary>
-        /// 執行期依 id 取目錄內容。找不到目錄回 null，呼叫端走保底值。
-        /// </summary>
-        // 用 AssetPipeline.current 而不是實例方法：求值發生在步驟執行中，那時候只有 current 拿得到，
-        // 與 AssetPipelineSource.GetAssets 同一條路。current 為空代表不在管線執行流程裡。
-        public static IReadOnlyList<Object> ResolveCatalog(string catalogId)
+        object ICatalogOwner.CaptureCatalogs()
         {
-            var pipeline = current;
-            if (pipeline == null || string.IsNullOrEmpty(catalogId)) return null;
-            var group = pipeline.FindCatalog(catalogId);
-            return group?.assets;
+            EnsureCatalogIds();
+            return CopyGroups(prototypeAssets);
         }
 
-        /// <summary>
-        /// 把目錄內容裝成欄位要的 `List&lt;T&gt;`，順便做型別過濾。
-        /// <typeparamref name="TResult"/> 不是 `List&lt;&gt;` 就回 false，呼叫端走保底值並回報。
-        /// </summary>
-        // 節點存的型別過濾是 AssemblyQualifiedName：目錄裡放什麼由專案決定，短名同名不同 namespace 撞得到。
-        // 解不回 Type 時當作不過濾——那多半是型別所在的組件被移掉，讓它退回「整個目錄」比整條回空好。
-        public static bool TryBuildCatalogResult<TResult>(IReadOnlyList<Object> items, string typeName,
-            out TResult result)
+        void ICatalogOwner.RestoreCatalogs(object snapshot)
         {
-            result = default;
-            Type target = typeof(TResult);
-            if (!target.IsGenericType || target.GetGenericTypeDefinition() != typeof(List<>)) return false;
+            if (snapshot is not List<AssetPipelineAssetGroup> groups) return;
 
-            Type element = target.GetGenericArguments()[0];
-            Type filter = string.IsNullOrEmpty(typeName) ? null : Type.GetType(typeName);
+            // 再抄一次而不是直接接上：快照留在編輯器的復原堆疊裡，接上去等於下一次收集就把它一起改掉。
+            prototypeAssets.Clear();
+            prototypeAssets.AddRange(CopyGroups(groups));
+        }
 
-            var list = (IList)Activator.CreateInstance(target);
-            if (items != null)
+        /// <summary>抄一份群組清單：所有 List 容器都是新的，內容物（資產引用與衍生資訊）共用。</summary>
+        // 容器一定要抄：收集與移除都是就地改同一個 List。內容物不必抄：AssetPipelineItem 與
+        // AssetPipelineTypeGroup 每次 RefreshGroupInfo 都整批重建，不會被就地改。
+        private static List<AssetPipelineAssetGroup> CopyGroups(List<AssetPipelineAssetGroup> source)
+        {
+            var copy = new List<AssetPipelineAssetGroup>(source.Count);
+            foreach (var group in source)
             {
-                foreach (Object obj in items)
+                if (group == null) { copy.Add(null); continue; }   // 空洞照抄，復原要還原成當時的樣子
+                copy.Add(new AssetPipelineAssetGroup
                 {
-                    if (obj == null) continue;
-                    if (!element.IsInstanceOfType(obj)) continue;
-                    if (filter != null && !filter.IsInstanceOfType(obj)) continue;
-                    list.Add(obj);
-                }
+                    key = group.key,
+                    id = group.id,
+                    assets = new List<Object>(group.assets),
+                    assetInfos = new List<AssetPipelineItem>(group.assetInfos),
+                    typeGroups = new List<AssetPipelineTypeGroup>(group.typeGroups),
+                });
             }
-
-            result = (TResult)list;
-            return true;
+            return copy;
         }
+
+        GraphNodeContent ICatalogOwner.CreateCatalogNode(IGraphCatalog catalog)
+        {
+            if (catalog == null) return null;
+            EnsureCatalogIds();
+            return new AssetCatalog
+            {
+                source = CatalogSource.Prototype,
+                prototypeCatalogId = catalog.Id,
+            };
+        }
+
+        /// <summary>依 id 取目錄群組。找不到回 null——目錄可能已經被刪掉，節點還留著 id。</summary>
+        public AssetPipelineAssetGroup FindCatalogById(string id) => FindCatalog(id);
 
         private AssetPipelineAssetGroup FindCatalog(string id)
         {

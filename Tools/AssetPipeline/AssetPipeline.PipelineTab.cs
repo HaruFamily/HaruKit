@@ -7,17 +7,6 @@ namespace HaruFamily.Tools.AssetPipeline
 {
     public partial class AssetPipeline
     {
-        /// <summary>管線執行前後清除動態資產的時機。</summary>
-        public enum DynamicClearTiming
-        {
-            None,
-            Before,
-            After,
-            Both
-        }
-
-        public DynamicClearTiming dynamicClearTiming = DynamicClearTiming.None;
-
         // 管線資產執行期的回報緩衝；透過 current 讓 Execute() 寫入 pipelineLog
         internal StringBuilder pipelineReport;
 
@@ -66,18 +55,17 @@ namespace HaruFamily.Tools.AssetPipeline
             Action<string> previousFormulaWarningHandler = formulaWarningHandler;
             AssetPipeline previousCurrent = current;
             current = this;
+            // 換一個執行號：動態目錄節點靠它把上一次留下的內容當成空的，不必先走訪整張圖清一遍。
+            BeginRun();
+            // 格子的 owner 不序列化，Domain Reload 之後是 null。走一次驗證的走訪把它們接回母目錄，
+            // 順便確保這次執行用的是最新的圖；錯誤這裡不處理，執行與否由 IsValidated 決定。
+            APGraphVerifier.Collect(graph);
             pipelineReport = new StringBuilder();
             formulaWarningHandler = message =>
             {
                 formulaWarningCount++;
                 formulaWarnings.AppendLine(message);
             };
-
-            if (dynamicClearTiming == DynamicClearTiming.Before || dynamicClearTiming == DynamicClearTiming.Both)
-            {
-                dynamicAssets.Clear();
-                pipelineReport.AppendLine("執行前已清除動態資產。");
-            }
 
             try
             {
@@ -111,12 +99,6 @@ namespace HaruFamily.Tools.AssetPipeline
             {
                 formulaWarningHandler = previousFormulaWarningHandler;
                 current = previousCurrent;
-            }
-
-            if (dynamicClearTiming == DynamicClearTiming.After || dynamicClearTiming == DynamicClearTiming.Both)
-            {
-                dynamicAssets.Clear();
-                pipelineReport.AppendLine("執行後已清除動態資產。");
             }
 
             pipelineLog = $"管線{actionName}完成：成功 {successCount}，錯誤 {errorCount}，公式警告 {formulaWarningCount}。";

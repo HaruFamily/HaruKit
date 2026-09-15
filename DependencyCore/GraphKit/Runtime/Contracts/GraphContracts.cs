@@ -24,6 +24,42 @@ public interface IGraphHead
 }
 
 /// <summary>
+/// 內容是被寫進來的節點：值由執行期的某個擁有者交給它，不是自己算出來的。
+/// </summary>
+// 純標記，只給編輯器換 Header 身分色用——一顆「等別人寫進來」的節點跟一般公式長一樣的話，
+// 圖上就分不出資料往哪個方向流。求值仍走它自己的公式介面，框架不介入內容怎麼來。
+public interface IGraphSink
+{
+}
+
+/// <summary>
+/// 包：內容住在節點自己身上的容器。它<b>不是公式</b>——沒有結果型別，也求不出值。
+/// </summary>
+// 純標記。泛型層只需要知道「這顆節點不參與求值」，內容是什麼、怎麼裝滿由使用端決定。
+// 值要從它底下的子節點取（見 IGraphNodeOwner），欄位收不收得下包由 FormulaSlotBase.AcceptsPack 決定。
+public interface IGraphPack
+{
+}
+
+/// <summary>
+/// 內容底下自己帶一串子節點的節點。子節點是完整的 <see cref="GraphNode"/>——
+/// 有自己的 Id 與座標，所以任何欄位都指得到它，畫布上也各自是一顆節點。
+/// </summary>
+// 「一列可以被別人指」在資料上就等於「那一列是一顆節點」：連線只存節點參照，沒有列位址。
+// 編輯器靠這個介面走訪與增刪，不認識任何具體的擁有者型別。
+public interface IGraphNodeOwner
+{
+    /// <summary>底下的子節點。順序即顯示順序。</summary>
+    List<GraphNode> ChildNodes { get; }
+
+    /// <summary>新增一個子節點並回傳它。內容由實作決定，通常是空節點交給使用者選。</summary>
+    GraphNode CreateChild();
+
+    /// <summary>移除一個子節點。不存在就什麼都不做。</summary>
+    void RemoveChild(GraphNode child);
+}
+
+/// <summary>
 /// 擁有候選節點池的畫布主人。候選節點只供編輯，不執行、不參與驗證。
 /// </summary>
 // 不併進 IGraphHead：ActionTimingGroup 是頭端但沒有候選池，合併會逼它長出一個假的空清單。
@@ -83,6 +119,7 @@ public interface IGraphCatalog
 /// </summary>
 // 目錄的內容是「專案資產的分組」，不是圖的內容：它不進編輯器的工作副本，改了就直接寫 Owner，
 // 和共用資產庫同一個模式。掛在圖的契約上會讓它跟著存檔交易走，語意反而不對。
+// 復原是另一件事：編輯器靠 CaptureCatalogs／RestoreCatalogs 把每次修改記進與圖同一個 Undo 堆疊。
 public interface ICatalogOwner
 {
     /// <summary>全部目錄。</summary>
@@ -102,6 +139,20 @@ public interface ICatalogOwner
 
     /// <summary>移除單一資產。</summary>
     void RemoveFromCatalog(string id, UnityEngine.Object asset);
+
+    /// <summary>
+    /// 把一份目錄做成畫布上的節點內容（包）。回 null＝這個領域不支援把目錄拉進畫布。
+    /// </summary>
+    // 由 Owner 建而不是編輯器建：包的具體型別住在使用端，泛型層只負責把它塞進 GraphNode.SetPack。
+    GraphNodeContent CreateCatalogNode(IGraphCatalog catalog);
+
+    /// <summary>抄一份目前的全部目錄，交給編輯器的復原歷程保管。</summary>
+    // 回傳 object：目錄的實體型別由實作決定，編輯器只負責保管與交還，不讀裡面的內容。
+    // 抄的時候清單容器必須是新的——就地增刪的容器共用出去，快照會跟著被改掉。
+    object CaptureCatalogs();
+
+    /// <summary>用 <see cref="CaptureCatalogs"/> 的快照覆寫全部目錄。認不得的快照直接忽略。</summary>
+    void RestoreCatalogs(object snapshot);
 }
 
 /// <summary>

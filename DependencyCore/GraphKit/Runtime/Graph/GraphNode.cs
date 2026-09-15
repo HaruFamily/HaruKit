@@ -16,13 +16,15 @@ public enum NodeKind
     /// <summary>共用資產（FormulaAssetBase / ActionAssetBase）。</summary>
     Asset = 2,
 
-    /// <summary>Owner 上的資產目錄（<see cref="IGraphCatalog"/>）。節點只是引用，內容住在 Owner。</summary>
-    // 3 曾經是更舊的 Token 引用節點（以字串 key 指向頭端），早已淘汰。
-    // 2026-09-14 清查全專案序列化資料，`_kind` 只剩 1 與 4，沒有任何一筆 3，所以把編號收回來用。
-    Catalog = 3,
-
     /// <summary>本圖的具名Token（<see cref="GraphToken"/>）。節點只是引用，內容住在端點自己的畫布。</summary>
     Token = 4,
+
+    /// <summary>
+    /// 包（<see cref="IGraphPack"/>）：內容住在節點自己身上，但它不是公式——沒有結果型別、求不出值。
+    /// </summary>
+    // 與 Inline 的差別只在「會不會被求值」：包是容器，值要從它底下的子節點取。
+    // 因此相容判定走 FormulaSlotBase.AcceptsPack，不走 AcceptsBody——族對包沒有意義。
+    Pack = 5,
 }
 
 /// <summary>
@@ -64,15 +66,10 @@ public class GraphNode
     [SerializeReference]
     private GraphToken _endpoint;
 
-    // 資產目錄引用：存目錄的穩定 Id，不存顯示名。改名不該讓引用失聯——
-    // 早年那個「以字串 key 指向頭端」的節點種類就是因此淘汰的，差別在這裡存的是 id 不是使用者會改的名字。
-    [SerializeField]
-    private string _catalogId;
-
-    // 目錄裡要取哪一種型別，存 AssemblyQualifiedName；空＝不過濾，整個目錄都取。
-    // 不存型別短名：目錄裡放什麼由專案決定，同名不同 namespace 撞得到，短名解不回唯一的 Type。
-    [SerializeField]
-    private string _catalogType;
+    // 包的內容。與 _body 分開存：BodyObject 的語意是「這顆節點求值時用的公式」，
+    // 包求不出值，混用同一個欄位會讓所有「有 body 就是 Inline」的判斷靜默出錯。
+    [SerializeReference]
+    private GraphNodeContent _pack;
 
     // 資產呼叫點的參數綁定。它屬於這次引用，不屬於共用資產。
     [SerializeField]
@@ -115,11 +112,8 @@ public class GraphNode
     /// <summary>Token 模式指向的具名Token頭端；其他模式為 null。</summary>
     public GraphToken Token => _kind == NodeKind.Token ? _endpoint : null;
 
-    /// <summary>Catalog 模式指向的目錄 Id；其他模式為 null。查不到對應目錄是編輯期的錯，不是這裡的事。</summary>
-    public string CatalogId => _kind == NodeKind.Catalog ? _catalogId : null;
-
-    /// <summary>Catalog 模式的型別過濾（AssemblyQualifiedName）。null／空＝不過濾。</summary>
-    public string CatalogType => _kind == NodeKind.Catalog ? _catalogType : null;
+    /// <summary>Pack 模式的內容；其他模式為 null。</summary>
+    public GraphNodeContent PackObject => _kind == NodeKind.Pack ? _pack : null;
 
     public List<NamedFormulaSlot> Bindings
     {
@@ -154,8 +148,7 @@ public class GraphNode
         _body = body;
         _asset = null;
         _endpoint = null;
-        _catalogId = null;
-        _catalogType = null;
+        _pack = null;
         Bindings.Clear();
         _kind = body != null ? NodeKind.Inline : NodeKind.Empty;
     }
@@ -170,8 +163,7 @@ public class GraphNode
         _endpoint = endpoint;
         _body = null;
         _asset = null;
-        _catalogId = null;
-        _catalogType = null;
+        _pack = null;
         Bindings.Clear();
         _kind = NodeKind.Token;
     }
@@ -184,32 +176,22 @@ public class GraphNode
         _asset = asset;
         _body = null;
         _endpoint = null;
-        _catalogId = null;
-        _catalogType = null;
+        _pack = null;
         _kind = NodeKind.Asset;
     }
 
-    /// <summary>換成資產目錄引用。型別過濾可以是 null＝整個目錄都取。</summary>
-    // 目錄 id 為空時退成空節點，理由與 SetToken 相同：「沒有目錄的目錄節點」畫得出來也存得下去，
-    // 卻永遠求不出值，只會變成畫布上一顆看不懂的節點。
-    public void SetCatalog(string catalogId, string typeName = null)
+    /// <summary>換成包。內容住在節點自己身上，但它不求值——值要從包底下的子節點取。</summary>
+    // 內容為 null 時退成空節點，理由與 SetToken 相同：畫得出來也存得下去，卻永遠沒有內容。
+    public void SetPack(GraphNodeContent pack)
     {
-        if (string.IsNullOrEmpty(catalogId)) { Clear(); return; }
+        if (pack == null) { Clear(); return; }
 
-        _catalogId = catalogId;
-        _catalogType = typeName;
+        _pack = pack;
         _body = null;
         _asset = null;
         _endpoint = null;
         Bindings.Clear();
-        _kind = NodeKind.Catalog;
-    }
-
-    /// <summary>只換型別過濾，不動指到哪一個目錄。</summary>
-    public void SetCatalogType(string typeName)
-    {
-        if (_kind != NodeKind.Catalog) return;
-        _catalogType = typeName;
+        _kind = NodeKind.Pack;
     }
 
     /// <summary>清成空節點（編輯中狀態）。</summary>
@@ -218,8 +200,7 @@ public class GraphNode
         _body = null;
         _asset = null;
         _endpoint = null;
-        _catalogId = null;
-        _catalogType = null;
+        _pack = null;
         Bindings.Clear();
         _kind = NodeKind.Empty;
     }

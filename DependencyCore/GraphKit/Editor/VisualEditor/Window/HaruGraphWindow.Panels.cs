@@ -134,6 +134,8 @@ public partial class HaruGraphWindow
     // ===== 目錄庫 =====
     // 目錄住在 Owner，不在 model.Data 的工作副本裡，所以這些命令都不走 MarkGraphChanged／Undo，
     // 每一條都是直接改 Owner 再 SetDirty。取消編輯不會還原目錄——這與共用資產庫一致。
+    // 復原是另一件事：改之前先抄一份，真的有改到才 PushCatalogStep，記進與圖同一個 Undo 堆疊。
+    // 命令失敗或沒動到東西時不記，否則堆疊裡會留下退回去什麼都看不出來的空步。
 
     private ICatalogOwner CatalogOwner => model?.Owner as ICatalogOwner;
 
@@ -155,8 +157,12 @@ public partial class HaruGraphWindow
     {
         var owner = CatalogOwner;
         if (owner == null) return null;
+
+        object before = model.CaptureCatalogs();
         var catalog = owner.CreateCatalog();
         if (catalog == null) return null;
+
+        model.PushCatalogStep(before);
         MarkOwnerDirty();
         return catalog.Id;
     }
@@ -165,11 +171,17 @@ public partial class HaruGraphWindow
     {
         var owner = CatalogOwner;
         if (owner == null) return false;
+
+        string oldName = HGReflect.FindCatalog(owner.Catalogs, id)?.Name;
+        object before = model.CaptureCatalogs();
         if (!owner.RenameCatalog(id, name, out string error))
         {
             ShowNotification(new GUIContent(error));
             return false;
         }
+
+        // 改成同一個名字也會回 true，那一步不必記。
+        if (HGReflect.FindCatalog(owner.Catalogs, id)?.Name != oldName) model.PushCatalogStep(before);
         MarkOwnerDirty();
         return true;
     }
@@ -178,7 +190,11 @@ public partial class HaruGraphWindow
     {
         var owner = CatalogOwner;
         if (owner == null) return;
+        if (HGReflect.FindCatalog(owner.Catalogs, id) == null) return;
+
+        object before = model.CaptureCatalogs();
         owner.DeleteCatalog(id);
+        model.PushCatalogStep(before);
         MarkOwnerDirty();
     }
 
@@ -186,9 +202,12 @@ public partial class HaruGraphWindow
     {
         var owner = CatalogOwner;
         if (owner == null) return;
+
+        object before = model.CaptureCatalogs();
         int added = owner.AddToCatalog(id, assets);
         // 一個都沒加進去只有一種原因：拖進來的全都已經在裡面。不說一聲會看起來像拖放壞掉。
         if (added == 0) ShowNotification(new GUIContent("這些資產已經在目錄裡了"));
+        else model.PushCatalogStep(before);
         MarkOwnerDirty();
     }
 
@@ -196,7 +215,12 @@ public partial class HaruGraphWindow
     {
         var owner = CatalogOwner;
         if (owner == null) return;
+
+        int oldCount = HGReflect.FindCatalog(owner.Catalogs, id)?.Items?.Count ?? 0;
+        object before = model.CaptureCatalogs();
         owner.RemoveFromCatalog(id, asset);
+
+        if ((HGReflect.FindCatalog(owner.Catalogs, id)?.Items?.Count ?? 0) != oldCount) model.PushCatalogStep(before);
         MarkOwnerDirty();
     }
 

@@ -10,8 +10,6 @@ namespace HaruFamily.Tools.AssetPipeline
     {
         None = 0,
         Prototype = 1,
-        Dynamic = 2,
-        Both = Prototype | Dynamic
     }
 
     [Serializable]
@@ -51,9 +49,6 @@ namespace HaruFamily.Tools.AssetPipeline
 
             if ((sourceFlags & AssetPipelineSourceFlags.Prototype) != 0)
                 AddAssetsFromGroups(targetPipeline.prototypeAssets, results, addedAssets);
-
-            if ((sourceFlags & AssetPipelineSourceFlags.Dynamic) != 0)
-                AddAssetsFromGroups(targetPipeline.dynamicAssets, results, addedAssets);
 
             return results;
         }

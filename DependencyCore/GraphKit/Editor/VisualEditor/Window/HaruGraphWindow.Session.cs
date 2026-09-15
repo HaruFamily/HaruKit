@@ -297,7 +297,6 @@ public partial class HaruGraphWindow
         leftWidth = EditorPrefs.GetFloat(PrefLeftWidth, DefaultLeftWidth);
         tokenSectionHeight = EditorPrefs.GetFloat(PrefTokenSection, DefaultTokenSection);
         refSectionHeight = EditorPrefs.GetFloat(PrefRefSection, DefaultRefSection);
-        locked = EditorPrefs.GetBool(PrefLocked, false);
         UpdateUnsavedState();
     }
 

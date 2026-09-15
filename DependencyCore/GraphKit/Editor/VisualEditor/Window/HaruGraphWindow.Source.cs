@@ -46,7 +46,11 @@ public partial class HaruGraphWindow
         AssignToken(row.Slot, endpoint);
     }
 
-    /// <summary>目錄落到畫布上：落在參數列就直接接上，空白處就建立候選節點。與Token那條同一種形狀。</summary>
+    /// <summary>
+    /// 目錄落到畫布上：落在收得下包的欄位就直接接上，空白處就建立候選節點。與Token那條同一種形狀。
+    /// </summary>
+    // 拉進來的是一顆「原型來源、已指向這份目錄」的目錄節點，不是引用節點——
+    // 目錄的內容仍住在 Owner，節點只記 id，差別在於它同時能開格子。
     private void DropCatalogOn(IGraphCatalog catalog, Vector2 graphMouse)
     {
         if (catalog == null) return;
@@ -56,32 +60,23 @@ public partial class HaruGraphWindow
             AddCatalogReferenceNode(catalog, graphMouse);
             return;
         }
-        // 目錄求出來的是 List<T>，所以只有結果型別是清單的公式欄位接得住。
-        // 判準與換來源選單共用 CatalogElementType，不在落點另寫一套規則。
-        Type element = row.IsActionSlot ? null : CatalogElementType(row.ResultType);
-        if (element == null)
+        if (row.IsActionSlot || (row.Slot as FormulaSlotBase)?.AcceptsPack != true)
         {
-            ShowNotification(new GUIContent("這個欄位收不下目錄：目錄求出來的是一份清單"));
+            ShowNotification(new GUIContent("這個欄位收不下目錄"));
             return;
         }
+
+        GraphNodeContent pack = CatalogOwner?.CreateCatalogNode(catalog);
+        if (pack == null) return;
+
         BreakUndoMerge();
-        AssignCatalog(row.Slot, catalog.Id, element);
-    }
-
-    /// <summary>把欄位接到某個目錄。與 <see cref="AssignToken"/> 同一條路徑。</summary>
-    // 型別過濾跟著欄位走，理由同 ChangeNodeToCatalog：接上去當場就對得上結果型別。
-    private void AssignCatalog(object slot, string catalogId, Type element)
-    {
-        string filter = element == null || element == typeof(UnityEngine.Object)
-            ? null
-            : element.AssemblyQualifiedName;
-
         PreserveVisibleNodePositions();
-        SoloSource(slot).SetCatalog(catalogId, filter);
+        SoloSource(row.Slot).SetPack(pack);
         Invalidate();
+        MarkGraphChanged();
     }
 
-    /// <summary>把目錄拖到空白畫布：建立一個沒有連線的候選載體。型別過濾預設「全部」，之後在節點上選。</summary>
+    /// <summary>把目錄拖到空白畫布：建立一個沒有連線的候選載體。</summary>
     private void AddCatalogReferenceNode(IGraphCatalog catalog, Vector2 graphMouse)
     {
         if (!CanCreateReferenceNode())
@@ -89,15 +84,18 @@ public partial class HaruGraphWindow
             ShowNotification(new GUIContent("先指定根公式或動作，才能放入參照節點"));
             return;
         }
-        if (catalog == null) return;
+
+        GraphNodeContent pack = CatalogOwner?.CreateCatalogNode(catalog);
+        if (pack == null) return;
 
         BreakUndoMerge();
         var carrier = new GraphNode();
         carrier.EnsureId();
-        carrier.SetCatalog(catalog.Id);
+        carrier.SetPack(pack);
         carrier.Pos = SnapToGrid(graphMouse);
         model.AddOrphan(carrier);
         Invalidate();
+        MarkGraphChanged();
     }
 
     /// <summary>把Token拖到空白畫布：建立一個沒有連線的候選載體。</summary>
@@ -185,38 +183,6 @@ public partial class HaruGraphWindow
         return accepted != null && accepted.IsInstanceOfType(asset);
     }
 
-    /// <summary>
-    /// 這個結果型別收不收得下目錄。收得下就回它的元素型別（`List&lt;AudioClip&gt;` → `AudioClip`），否則 null。
-    /// </summary>
-    // 只認 List<>：目錄求值就是裝一份 List<T> 回去（見 AssetPipeline.TryBuildCatalogResult），
-    // 元素型別必須是 UnityEngine.Object 的子型別，目錄裡放的本來就是專案資產。
-    private static Type CatalogElementType(Type resultType)
-    {
-        if (resultType == null || !resultType.IsGenericType) return null;
-        if (resultType.GetGenericTypeDefinition() != typeof(List<>)) return null;
-        Type element = resultType.GetGenericArguments()[0];
-        return typeof(UnityEngine.Object).IsAssignableFrom(element) ? element : null;
-    }
-
-    /// <summary>把這顆節點換成某個目錄。</summary>
-    // 型別過濾跟著欄位走：欄位要 List<AudioClip>，過濾就設成 AudioClip，結果型別當場對上。
-    // 欄位只要 List<Object> 時不設過濾——那等於「整個目錄都要」，之後仍可在節點上自己縮。
-    private void ChangeNodeToCatalog(HGNodeView node, IGraphCatalog catalog, Type element)
-    {
-        var carrier = node?.Carrier;
-        if (carrier == null || catalog == null) return;
-
-        string filter = element == null || element == typeof(UnityEngine.Object)
-            ? null
-            : element.AssemblyQualifiedName;
-
-        BreakUndoMerge();
-        PreserveVisibleNodePositions();
-        carrier.SetCatalog(catalog.Id, filter);
-        Invalidate();
-        MarkGraphChanged();
-    }
-
     private void ShowNodeSourceSelector(HGNodeView node, Rect selector)
     {
         if (node == null) return;
@@ -256,31 +222,6 @@ public partial class HaruGraphWindow
         // 可比。這是近似：真的接到欄位時 AcceptsToken 仍會擋掉別族。
         Type resultType = isAction || slotKind != null ? null : node.ResultType;
 
-        // 目錄只填得下結果型別是 List<T> 的公式欄位——它求出來的就是一份清單。
-        // 判準因此不看族看結果型別：目錄沒有族的概念，它是 Owner 上的一批資產，不是某一族的求值端點。
-        // 有父欄位就用欄位的結果型別；候選池裡沒有父欄位的節點退回它自己目前的結果型別。
-        Type catalogSlotResult = isAction ? null
-            : (slotType != null ? HGReflect.ResultType(slotType) : null) ?? node.ResultType;
-        Type catalogElement = CatalogElementType(catalogSlotResult);
-        if (HasCatalogSection && catalogElement != null)
-        {
-            var catalogs = CatalogOwner?.Catalogs;
-            if (catalogs != null)
-            {
-                foreach (var catalog in catalogs)
-                {
-                    if (catalog == null) continue;
-                    var captured = catalog;
-                    options.Add(new HGSourceOption
-                    {
-                        Group = "Catalog",
-                        Name = catalog.Name,
-                        IsCurrent = node.IsCatalogNode && node.CatalogId == catalog.Id,
-                        Apply = () => ChangeNodeToCatalog(node, captured, catalogElement),
-                    });
-                }
-            }
-        }
 
         // 不支援共用資產的圖直接跳過：CanReplaceAssetNode 本來就會全部擋掉，
         // 但 Entries 會觸發一次全專案 ScriptableObject 掃描，那個代價不該白付。
@@ -560,9 +501,19 @@ public partial class HaruGraphWindow
             && ReferenceEquals(HGReflect.GetNode(focus.AssetHostSlot), node.Carrier))
             HGReflect.SetNode(focus.AssetHostSlot, null);
         model.RemoveOrphan(node.Carrier);
+        RemoveFromNodeOwners(node.Carrier);
 
         selectedIds.Remove(node.Id);
         Invalidate();
+    }
+
+    /// <summary>把載體從任何「帶子節點」的擁有者身上摘掉。</summary>
+    // 子節點不在候選池裡，RemoveOrphan 摘不到它；漏掉這一步，刪過的格子下次重建圖時又會冒出來。
+    private void RemoveFromNodeOwners(GraphNode carrier)
+    {
+        if (carrier == null || graph == null) return;
+        foreach (var other in graph.Nodes)
+            if (other?.Obj is IGraphNodeOwner owner) owner.RemoveChild(carrier);
     }
 
     // ===== 右鍵選單 =====

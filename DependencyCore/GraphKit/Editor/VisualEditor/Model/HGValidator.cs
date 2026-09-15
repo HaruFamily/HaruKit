@@ -323,49 +323,7 @@ public static class HGValidator
                     "改接本圖 Token 清單裡的 Token；求值是用名字在本圖的 Token 表查的，跨圖引用永遠查不到，會靜默取預設值。",
                     slot, HGReflect.GetNode(slot));
         }
-        else if (useType == 4)
-        {
-            ValidateCatalog(report, model, focus, slot, where, disabled);
-        }
     }
-
-    /// <summary>
-    /// 目錄節點的三種問題：指到的目錄不存在、選定型別已經不在目錄裡、目錄是空的。
-    /// </summary>
-    // 目錄住在 Owner，不在圖的工作副本裡，所以它隨時可能被左欄或資產分頁改掉，
-    // 而圖上的節點只存一個 id。這三條是「圖以外的東西變了」在圖上唯一看得見的地方。
-    // 空目錄只是警告：先建目錄再放資產是正常的編輯順序，存檔當下還沒放完不該擋住。
-    private static void ValidateCatalog(HGReport report, HGModel model, HGFocus focus, object slot,
-        string where, bool disabled)
-    {
-        var carrier = HGReflect.GetNode(slot);
-        string id = carrier?.CatalogId;
-        if (string.IsNullOrEmpty(id))
-        {
-            Issue(report, disabled, focus, where, "欄位設為目錄，但沒有指定目錄",
-                "在節點上選一個目錄，或把模式改回常數。", slot, carrier);
-            return;
-        }
-
-        var catalog = FindCatalog(model, id);
-        if (catalog == null)
-        {
-            Err(report, focus, where, "接的目錄已不存在",
-                "目錄可能在左欄被刪掉了。重新選一個目錄，或改用別的來源。", slot, carrier);
-            return;
-        }
-
-        Type filter = HGReflect.CatalogFilterType(carrier.CatalogType);
-        if (filter != null && !HGReflect.CatalogHasType(catalog, filter))
-            Err(report, focus, where, $"目錄 '{catalog.Name}' 裡已經沒有 {filter.Name}",
-                "把型別改回「全部」，或把那種資產補回目錄裡；現在求值會得到空清單。", slot, carrier);
-        else if (catalog.Items == null || catalog.Items.Count == 0)
-            Warn(report, focus, where, $"目錄 '{catalog.Name}' 是空的",
-                "把資產拖進左欄那個目錄；現在求值會得到空清單。", slot, carrier);
-    }
-
-    private static IGraphCatalog FindCatalog(HGModel model, string id)
-        => HGReflect.FindCatalog((model?.Owner as ICatalogOwner)?.Catalogs, id);
 
     /// <summary>
     /// 這個端點在不在當前這張圖的Token清單裡。資產焦點看資產自己的清單，其餘看 Owner 的。

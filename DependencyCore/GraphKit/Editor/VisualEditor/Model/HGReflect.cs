@@ -164,7 +164,7 @@ public static class HGReflect
         {
             NodeKind.Asset => 2,
             NodeKind.Token => 3,
-            NodeKind.Catalog => 4,
+            NodeKind.Pack => 5,
             _ => 1,   // Inline 與 Empty 都畫成來源節點，Empty 由驗證擋存檔
         };
     }
@@ -534,19 +534,9 @@ public static class HGReflect
     }
 
     /// <summary>結果型別的短名，給節點 chip、Token 分頁與型別檢查提示用。族的 Slot 標了 [HGKind] 就用它。</summary>
-    /// <summary>目錄節點的型別過濾：AssemblyQualifiedName → Type。解不出來回 null＝不過濾。</summary>
-    // 解不出來多半是那個型別所在的組件被移掉或改名了。回 null 讓節點退回「整個目錄」，
-    // 比當場拋例外好：圖還是編得動，錯誤由驗證器報。
-    public static Type CatalogFilterType(string assemblyQualifiedName)
-        => string.IsNullOrEmpty(assemblyQualifiedName) ? null : Type.GetType(assemblyQualifiedName);
-
-    /// <summary>
-    /// 目錄節點的結果型別：`List&lt;選定型別&gt;`，沒選（或解不出來）就是 `List&lt;Object&gt;`。
-    /// </summary>
-    // 這是編輯器裡唯一一種「結果型別要看節點自己的欄位才知道」的節點。Token 與 Asset 都是靜態的，
-    // 相容判定仍沿用 IsAssignableFrom，不為它另立一條規則。
-    public static Type CatalogResultType(string assemblyQualifiedName)
-        => typeof(List<>).MakeGenericType(CatalogFilterType(assemblyQualifiedName) ?? typeof(UnityEngine.Object));
+    /// <summary>這個欄位要不要畫成「選一個目錄」的下拉（<see cref="HGCatalogAttribute"/>）。</summary>
+    public static bool IsCatalogField(FieldInfo field)
+        => field != null && field.FieldType == typeof(string) && field.IsDefined(typeof(HGCatalogAttribute), false);
 
     /// <summary>依 Id 找目錄。找不到回 null——目錄住在 Owner，隨時可能被刪掉，節點只留著 id。</summary>
     public static IGraphCatalog FindCatalog(IReadOnlyList<IGraphCatalog> catalogs, string id)
@@ -555,31 +545,6 @@ public static class HGReflect
         foreach (var catalog in catalogs)
             if (catalog != null && catalog.Id == id) return catalog;
         return null;
-    }
-
-    /// <summary>目錄裡還有沒有這種型別的資產。型別過濾失效與否靠它判。</summary>
-    public static bool CatalogHasType(IGraphCatalog catalog, Type type)
-    {
-        if (catalog?.Items == null || type == null) return false;
-        foreach (var item in catalog.Items)
-            if (item != null && type.IsInstanceOfType(item)) return true;
-        return false;
-    }
-
-    /// <summary>目錄裡現有的相異型別，依名稱排序。型別下拉的候選就是它。</summary>
-    // 現算不快取：目錄內容可能從左欄或資產分頁被改，任何預先整理好的清單都會過期。
-    public static List<Type> CatalogTypes(IGraphCatalog catalog)
-    {
-        var result = new List<Type>();
-        if (catalog?.Items == null) return result;
-        foreach (var item in catalog.Items)
-        {
-            if (item == null) continue;
-            Type t = item.GetType();
-            if (!result.Contains(t)) result.Add(t);
-        }
-        result.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
-        return result;
     }
 
     public static string ResultTypeName(Type t)
@@ -627,6 +592,21 @@ public static class HGReflect
     // 所以同一結果型別有多個族時該項會留空，寧可退回 "string" 也不要顯示錯的族名。
     private static Dictionary<Type, string> kindNamesBySlot;
     private static Dictionary<Type, string> kindNamesByResult;
+    private static Dictionary<Type, string> kindNamesByBody;
+
+    /// <summary>
+    /// 節點自己所屬族的 [HGKind] 名；問不出來回 null。候選節點沒有父欄位時用它。
+    /// </summary>
+    public static string NodeKindName(Type bodyType)
+    {
+        if (bodyType == null) return null;
+        BuildKindNames();
+
+        // 往上找最近的族基底：具體節點型別本身不會在表裡，表記的是 Slot 收的那個基底。
+        for (Type t = bodyType; t != null && t != typeof(object); t = t.BaseType)
+            if (kindNamesByBody.TryGetValue(t, out var name)) return name;
+        return null;
+    }
 
     private static string KindName(Type resultType)
     {
@@ -640,6 +620,7 @@ public static class HGReflect
 
         kindNamesBySlot = new Dictionary<Type, string>();
         kindNamesByResult = new Dictionary<Type, string>();
+        kindNamesByBody = new Dictionary<Type, string>();
         var familyCount = new Dictionary<Type, int>();
 
         // 先數每個結果型別有幾個族。判歧義要數族，不能數 [HGKind]：只有一個族標了名字的情況
@@ -654,7 +635,17 @@ public static class HGReflect
             familyCount[resultType] = n + 1;
 
             var attr = slotType.GetCustomAttribute<HGKindAttribute>(false);
-            if (attr != null && !string.IsNullOrEmpty(attr.Name)) kindNamesBySlot[slotType] = attr.Name;
+            if (attr == null || string.IsNullOrEmpty(attr.Name)) continue;
+
+            kindNamesBySlot[slotType] = attr.Name;
+
+            // 族基底 → 族名：候選節點沒有欄位可問，只剩節點型別問得出自己屬於哪一族。
+            // 同一個基底被兩個族標成不同名字時記 null（例：產出端與讀取端若哪天名字不一致），
+            // 寧可退回結果型別短名，也不要掛上另一族的名字。
+            Type bodyBase = FormulaBaseType(slotType);
+            if (bodyBase == null) continue;
+            if (!kindNamesByBody.TryGetValue(bodyBase, out var existing)) kindNamesByBody[bodyBase] = attr.Name;
+            else if (existing != attr.Name) kindNamesByBody[bodyBase] = null;
         }
 
         // byResult 只代表獨佔該結果型別的族；多族共用時留空，讓呼叫端退回結果型別短名。

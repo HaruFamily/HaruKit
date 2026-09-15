@@ -272,13 +272,14 @@ public partial class HaruGraphWindow
                 if (IsTracedLink(link) != tracedPass) continue;
                 // 停用子樹的線一起壓暗，才看得出整段路徑都不會被求值。
                 DrawGraphLine(link.ParentRow.PortPos, link.Target.OutputPort,
-                    link.Target.InDisabledSubtree || link.Target.InLockedSubtree, tracedPass);
+                    link.Target.InDisabledSubtree || link.Target.InLockedSubtree, tracedPass,
+                    link.ParentRow.IsOutput);
             }
         }
         if (linking && (linkRow != null || linkNode != null))
         {
             Vector2 from = linkRow != null ? linkRow.PortPos : linkNode.OutputPort;
-            DrawGraphLine(from, LinkPreviewEnd(graphMouse));
+            DrawGraphLine(from, LinkPreviewEnd(graphMouse), false, false, linkRow != null && linkRow.IsOutput);
         }
         Handles.EndGUI();
     }
@@ -368,14 +369,16 @@ public partial class HaruGraphWindow
     private Rect GraphToWindowRect(Rect graphRect)
         => new Rect(canvasRect.position + (graphRect.position + pan) * zoom, graphRect.size * zoom);
 
-    private void DrawGraphLine(Vector2 graphFrom, Vector2 graphTo, bool dim = false, bool traced = false)
+    private void DrawGraphLine(Vector2 graphFrom, Vector2 graphTo, bool dim = false, bool traced = false,
+        bool output = false)
     {
         Vector2 from = canvasRect.position + (graphFrom + pan) * zoom;
         Vector2 to = canvasRect.position + (graphTo + pan) * zoom;
         if (!ClipLine(canvasRect, ref from, ref to)) return;
 
-        // 顏色只表達「這條線接的是選取中的節點」，透明度仍歸停用管——兩件事互不覆蓋。
-        Color color = traced ? HGStyles.NodeBorderSelected : Color.white;
+        // 顏色表達「這條線接的是選取中的節點」，其次是「這條是輸出不是取值」；
+        // 透明度仍歸停用管——三件事互不覆蓋，選取最優先。
+        Color color = traced ? HGStyles.NodeBorderSelected : output ? HGStyles.LinkOutput : Color.white;
         if (dim) color.a *= HGStyles.LinkDisabled.a;
 
         Color oldColor = Handles.color;
@@ -484,17 +487,25 @@ public partial class HaruGraphWindow
             to = HGStyles.HeaderFormula;
             return;
         }
-        if (node.IsCatalogNode)
+        // 包是單色目錄青藍：它與目錄庫的目錄同樣裝一批資產，但內容住在自己身上，不是引用，
+        // 所以不畫成「引用 → 內容」的漸層。
+        if (node.IsPackNode)
         {
-            // 目錄承載的是一批資產，所以走「目錄色 → 資產色」，與容器型節點同一條規則。
-            from = HGStyles.HeaderCatalog;
-            to = HGStyles.HeaderAsset;
+            from = to = HGStyles.HeaderCatalog;
             return;
         }
         if (node.IsAssetNode)
         {
             from = HGStyles.HeaderAsset;
             to = node.ResultType == null ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
+            return;
+        }
+        // 被寫入的節點（IGraphSink）走「目錄色 → 公式色」：內容是別人交進來的一批東西，
+        // 但它仍然是求值得出結果的公式，兩種身分都要看得出來。
+        if (node.Obj is IGraphSink)
+        {
+            from = HGStyles.HeaderCatalog;
+            to = HGStyles.HeaderFormula;
             return;
         }
         from = to = node.IsActionNode ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
@@ -602,14 +613,14 @@ public partial class HaruGraphWindow
         // 掛在未勾覆蓋的參數底下＝這一段不會被採用，整顆節點鎖住：控制項灰掉、拉線與清單編輯都擋掉。
         using (new EditorGUI.DisabledScope(node.InLockedSubtree))
         {
-            if (node.IsCatalogNode)
-            {
-                DrawCatalogPickerRows(node, rect);
-                DrawRows(node, node.Rows, rect);
-            }
-            else if (node.IsAssetNode || node.IsTokenNode)
+            if (node.IsAssetNode || node.IsTokenNode)
             {
                 DrawReferencePickerRow(node, rect);
+                DrawRows(node, node.Rows, rect);
+            }
+            else if (node.Obj is IGraphNodeOwner nodeOwner)
+            {
+                DrawChildNodeRow(node, nodeOwner, rect);
                 DrawRows(node, node.Rows, rect);
             }
             else if (!node.IsPlaceholder) DrawRows(node, node.Rows, rect);
@@ -683,110 +694,35 @@ public partial class HaruGraphWindow
     /// 資產節點本體唯一的一列：像一般參數列那樣「標籤 + 下拉」，選的是「指到哪一個資產」。
     /// 換身分（Formula／Asset）是 Header 那顆 ▾ 的事，這裡只換對象。
     /// </summary>
-    /// <summary>
-    /// 目錄節點的本體：兩列下拉——上面選哪一個目錄，下面選要取哪一種型別。
-    /// 型別的候選由目前選中的目錄**現算**，所以換目錄時下面那列跟著變。
-    /// </summary>
-    // 型別候選不從契約拿，而是從 IGraphCatalog.Items 現場算 distinct type：
-    // 目錄內容隨時可能被別的入口改，任何預先整理好的型別清單都會過期。
-    private void DrawCatalogPickerRows(HGNodeView node, Rect nodeRect)
-    {
-        var catalog = FindCatalog(node.CatalogId);
-        float labelWidth = nodeRect.width * 0.34f;
-
-        var row1 = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight, nodeRect.width, HGGraph.RowHeight);
-        GUI.Label(new Rect(row1.x + 6f, row1.y + 1f, labelWidth - 8f, row1.height - 2f), "目錄", HGStyles.RowLabel);
-        var pick1 = new Rect(row1.x + labelWidth, row1.y + 1f, row1.width - labelWidth - 8f, row1.height - 3f);
-        // 目錄被刪掉時節點還留著 id：畫成「（已刪除）」而不是空白，否則看起來像還沒選。
-        string catalogLabel = catalog?.Name
-            ?? (string.IsNullOrEmpty(node.CatalogId) ? "（未指定）" : "（已刪除）");
-        if (EditorGUI.DropdownButton(pick1,
-                HGStyles.Elide(catalogLabel, EditorStyles.miniPullDown, pick1.width - 20f), FocusType.Keyboard))
-            ShowCatalogPicker(node, pick1);
-
-        var row2 = new Rect(nodeRect.x, row1.yMax, nodeRect.width, HGGraph.RowHeight);
-        GUI.Label(new Rect(row2.x + 6f, row2.y + 1f, labelWidth - 8f, row2.height - 2f), "型別", HGStyles.RowLabel);
-        var pick2 = new Rect(row2.x + labelWidth, row2.y + 1f, row2.width - labelWidth - 8f, row2.height - 3f);
-        Type filter = HGReflect.CatalogFilterType(node.Carrier?.CatalogType);
-        string typeLabel = filter != null ? filter.Name : "全部";
-        using (new EditorGUI.DisabledScope(catalog == null))
-        {
-            if (EditorGUI.DropdownButton(pick2,
-                    HGStyles.Elide(typeLabel, EditorStyles.miniPullDown, pick2.width - 20f), FocusType.Keyboard))
-                ShowCatalogTypePicker(node, catalog, pick2);
-        }
-    }
-
-    /// <summary>換這顆節點指到的目錄。</summary>
-    // 換完要重算型別：新目錄裡可能根本沒有原本那個型別，留著會變成「選了一個永遠取不到東西的過濾」。
-    // 不靜默清掉，當場跳一則提示——使用者要知道是換目錄造成的，不是自己改壞的。
-    // 走 ShowNotification 不走 Console：Console 的內容是驗證報告，每次 Verify 整份重建，臨時訊息放不住。
-    private void ShowCatalogPicker(HGNodeView node, Rect anchor)
-    {
-        var owner = CatalogOwner;
-        if (owner?.Catalogs == null || owner.Catalogs.Count == 0)
-        {
-            ShowNotification(new GUIContent("左欄還沒有任何目錄"));
-            return;
-        }
-
-        var menu = new GenericMenu();
-        foreach (var catalog in owner.Catalogs)
-        {
-            if (catalog == null) continue;
-            var captured = catalog;
-            menu.AddItem(new GUIContent(catalog.Name), captured.Id == node.CatalogId,
-                () => ChangeNodeCatalog(node, captured));
-        }
-        menu.DropDown(anchor);
-    }
-
-    private void ChangeNodeCatalog(HGNodeView node, IGraphCatalog catalog)
-    {
-        var carrier = node?.Carrier;
-        if (carrier == null || catalog == null) return;
-
-        Type filter = HGReflect.CatalogFilterType(carrier.CatalogType);
-        bool keep = filter != null && HGReflect.CatalogHasType(catalog, filter);
-        if (filter != null && !keep)
-            ShowNotification(new GUIContent(
-                $"[{catalog.Name}] 裡沒有 {filter.Name}，型別過濾已改回「全部」"));
-
-        BreakUndoMerge();
-        carrier.SetCatalog(catalog.Id, keep ? carrier.CatalogType : null);
-        MarkGraphChanged();
-    }
-
-    private void ShowCatalogTypePicker(HGNodeView node, IGraphCatalog catalog, Rect anchor)
-    {
-        var carrier = node?.Carrier;
-        if (carrier == null || catalog == null) return;
-
-        var menu = new GenericMenu();
-        string current = carrier.CatalogType;
-        menu.AddItem(new GUIContent("全部"), string.IsNullOrEmpty(current), () =>
-        {
-            BreakUndoMerge();
-            carrier.SetCatalogType(null);
-            MarkGraphChanged();
-        });
-
-        foreach (var type in HGReflect.CatalogTypes(catalog))
-        {
-            var captured = type;
-            string aqn = captured.AssemblyQualifiedName;
-            menu.AddItem(new GUIContent(captured.Name), aqn == current, () =>
-            {
-                BreakUndoMerge();
-                carrier.SetCatalogType(aqn);
-                MarkGraphChanged();
-            });
-        }
-        menu.DropDown(anchor);
-    }
-
     /// <summary>依 Id 找目錄。找不到回 null——目錄可能已經被刪掉，節點還留著 id。</summary>
     private IGraphCatalog FindCatalog(string id) => HGReflect.FindCatalog(CatalogOwner?.Catalogs, id);
+
+    /// <summary>
+    /// 子節點擁有者的本體第一列：顯示現在有幾格，右邊一顆「＋」加一格。
+    /// </summary>
+    // 格子本身畫在畫布上各自是一顆節點（沒有連入線，跟候選同一種樣子），所以這一列只管數量與新增；
+    // 刪除走那顆格子自己的右鍵刪除，與其他節點一致。
+    private void DrawChildNodeRow(HGNodeView node, IGraphNodeOwner owner, Rect nodeRect)
+    {
+        var row = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight, nodeRect.width, HGGraph.RowHeight);
+        float addWidth = 24f;
+
+        int count = 0;
+        foreach (var child in owner.ChildNodes)
+            if (child != null) count++;
+
+        GUI.Label(new Rect(row.x + 6f, row.y + 1f, row.width - addWidth - 14f, row.height - 2f),
+            count == 0 ? "還沒有任何一格" : $"{count} 格", HGStyles.RowLabel);
+
+        var addRect = new Rect(row.xMax - addWidth - 6f, row.y + 1f, addWidth, row.height - 3f);
+        if (!GUI.Button(addRect, new GUIContent("＋", "新增一格"), EditorStyles.miniButton)) return;
+
+        BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        owner.CreateChild();
+        Invalidate();
+        MarkGraphChanged();
+    }
 
     private void DrawReferencePickerRow(HGNodeView node, Rect nodeRect)
     {
@@ -900,9 +836,10 @@ public partial class HaruGraphWindow
 
         bool hasIssue = Rep.HasIssue(row.Slot, out bool isError);
         int useType = HGReflect.UseType(row.Slot);
-        return hasIssue && isError ? HGStyles.PortError
-            : useType == 1 || useType == 2 ? HGStyles.PortLive
-            : HGStyles.PortEmpty;
+        if (hasIssue && isError) return HGStyles.PortError;
+        // 輸出接點不分空／接：它的顏色是在講方向，接上與否看得到線。
+        if (row.IsOutput) return HGStyles.LinkOutput;
+        return useType == 1 || useType == 2 ? HGStyles.PortLive : HGStyles.PortEmpty;
     }
 
     /// <summary>把每一列的圖面座標（命中測試與接點）更新成目前的節點位置。</summary>

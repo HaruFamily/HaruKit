@@ -128,17 +128,6 @@ namespace HaruFamily.Tools.AssetPipeline
                         APTokenGuard.Exit(endpoint);
                     }
                 }
-                case NodeKind.Catalog:
-                {
-                    // 目錄不像公式會遞迴：它的內容是一份靜態資產清單，所以沒有 TokenGuard 那一層。
-                    var items = AssetPipeline.ResolveCatalog(_node.CatalogId);
-                    if (items == null) return Mismatch("目錄");
-                    if (AssetPipeline.TryBuildCatalogResult(items, _node.CatalogType, out TResult typed))
-                        return typed;
-
-                    // 走到這裡代表欄位的結果型別不是 List<>，接目錄本來就不合理。
-                    return Mismatch("目錄");
-                }
                 default:
                     return Fallback();   // Empty：編輯中的空節點，Verify 會擋，求值走保底值續跑。
             }
@@ -271,14 +260,6 @@ namespace HaruFamily.Tools.AssetPipeline
                 if (!string.IsNullOrWhiteSpace(_label)) return _label;
                 return _node?.BodyObject?.GetType().Name ?? "(空步驟)";
             }
-        }
-
-        /// <summary>這個步驟產出的 dynamic key；沒有就回 false。停用的步驟不算產出。</summary>
-        public bool TryGetDynamicOutputKey(out string key)
-        {
-            key = null;
-            if (_disabled || _node == null || _node.Disabled) return false;
-            return _node.GetBody<APActionBase>() is IDynamicKeyProducer producer && producer.TryGetDynamicOutputKey(out key);
         }
     }
 }

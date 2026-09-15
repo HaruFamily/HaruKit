@@ -20,6 +20,11 @@ namespace HaruFamily.Tools.AssetPipeline
         // 步驟的具體實作住在使用端專案，所以這幾個給步驟用的成員必須是 public，不是 internal。
         public static AssetPipeline current;
 
+        /// <summary>每執行一次管線加一。動態目錄節點靠它分辨「這一次的產出」與上一次的殘留。</summary>
+        public static int RunToken { get; private set; }
+
+        internal static void BeginRun() => RunToken++;
+
         [MenuItem("HaruFamily/Asset Pipeline/Open")]
         private static void OpenTool()
         {
@@ -53,8 +58,6 @@ namespace HaruFamily.Tools.AssetPipeline
 
         [FormerlySerializedAs("groups")]
         public List<AssetPipelineAssetGroup> prototypeAssets = new List<AssetPipelineAssetGroup>();
-
-        public List<AssetPipelineAssetGroup> dynamicAssets = new List<AssetPipelineAssetGroup>();
 
         [NonSerialized]
         private string assetLog = string.Empty;
