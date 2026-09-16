@@ -69,6 +69,13 @@ public partial class HaruGraphWindow
         GraphNodeContent pack = CatalogOwner?.CreateCatalogNode(catalog);
         if (pack == null) return;
 
+        // 目錄庫的目錄是「內容由目錄庫供應」的那一種：往裡面寫的欄位接上去什麼都不會發生。
+        if (!((FormulaSlotBase)row.Slot).AcceptsPackObject(pack))
+        {
+            ShowNotification(new GUIContent("這個欄位收不下目錄庫的目錄"));
+            return;
+        }
+
         BreakUndoMerge();
         PreserveVisibleNodePositions();
         SoloSource(row.Slot).SetPack(pack);

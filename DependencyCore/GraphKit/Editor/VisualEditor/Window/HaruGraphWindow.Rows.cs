@@ -541,7 +541,7 @@ public partial class HaruGraphWindow
 
             EditorGUI.BeginChangeCheck();
             var value = HGValueField.Draw(fieldRect, row.Field.FieldType, row.Field.GetValue(row.Target), row.IsEnum);
-            if (EditorGUI.EndChangeCheck()) { row.Field.SetValue(row.Target, value); Invalidate(); }
+            if (EditorGUI.EndChangeCheck()) { row.Field.SetValue(row.Target, value); AfterValueEdit(); }
             return;
         }
 
@@ -552,7 +552,16 @@ public partial class HaruGraphWindow
 
         EditorGUI.BeginChangeCheck();
         var element = HGValueField.Draw(fieldRect, owner.ElementType, owner.List[row.ListIndex]);
-        if (EditorGUI.EndChangeCheck()) { owner.List[row.ListIndex] = element; Invalidate(); }
+        if (EditorGUI.EndChangeCheck()) { owner.List[row.ListIndex] = element; AfterValueEdit(); }
+    }
+
+    /// <summary>值欄位改完的收尾。</summary>
+    // 改掉的值可能是某顆包「收不收得下」的依據，那條線當場就不再成立；
+    // 留到驗證才報，使用者要自己回來拆一條看起來仍然正常的線。斷線會動到資料，所以要讓人知道。
+    private void AfterValueEdit()
+    {
+        if (BreakInvalidPackLinks() > 0) ShowNotification(new GUIContent("已斷開接不上的連線"));
+        Invalidate();
     }
 
     /// <summary>

@@ -24,9 +24,34 @@ namespace HaruFamily.Tools.AssetPipeline
             var errors = new List<string>();
             if (graph == null) return errors;
 
+            SyncCatalogs(graph);
             CheckTokens(graph, errors);
             CheckSteps(graph, errors);
             return errors;
+        }
+
+        /// <summary>正式驗證前先把每一格接回它的母目錄。</summary>
+        // 格子的 Owner 不序列化，接回去是驗證與執行的前提，不是驗證結果的一部分，所以先走一整趟：
+        // 一、驗證是依步驟順序走的，讀取排在產出之前時，格子在被檢查的當下還沒有母目錄，
+        //     報出來的會是「沒有母目錄」而不是真正的時序錯誤。
+        // 二、只有產出格指得到目錄，原型目錄沒有任何步驟寫得進去，它的節點只存在候選池裡，
+        //     光走步驟永遠碰不到它——那一整條路的格子會全部取不到內容。
+        // 候選節點本身不參與驗證，所以這一趟的錯誤一律丟掉，真正的錯誤由後面兩段負責。
+        private static void SyncCatalogs(APGraph graph)
+        {
+            var ignored = new List<string>();
+
+            List<APActionSlot> steps = graph.Steps;
+            for (int i = 0; i < steps.Count; i++)
+                CheckActionSlot(steps[i], $"步驟[{i}]", ignored, new StepReads());
+
+            foreach (GraphNode node in graph.Orphans)
+            {
+                if (node == null) continue;
+                if (node.PackObject is AssetCatalog catalog) catalog.SyncCells();
+                WalkSlots(node.BodyObject, "候選節點", ignored, new StepReads(),
+                    new HashSet<object>(ReferenceComparer.Instance));
+            }
         }
 
         /// <summary>

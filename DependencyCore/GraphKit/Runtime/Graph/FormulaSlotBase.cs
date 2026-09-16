@@ -49,6 +49,12 @@ public abstract class FormulaSlotBase
     // 目前唯一會打開它的是把產出寫進包的那種欄位。
     public virtual bool AcceptsPack => false;
 
+    /// <summary>這個欄位能不能接<b>這一顆</b>包。預設只看 <see cref="AcceptsPack"/> 的宣告。</summary>
+    // 包的設定會在編輯中改變（例如改成由外部供應內容，就沒有東西可以往裡面寫），
+    // 宣告層答不出「這一顆現在還收不收得下」，所以分開問。
+    // 覆寫它的欄位要能接受 null：拉線與落點判定會在載體還沒裝好內容時先問一次。
+    public virtual bool AcceptsPackObject(GraphNodeContent pack) => AcceptsPack;
+
     /// <summary>
     /// 從這一格拉到空白處時要直接建好的內容；回 null（預設）＝長一顆空節點，由使用者選。
     /// </summary>

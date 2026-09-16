@@ -53,9 +53,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
         public override GraphNode Node => node;
         public override void SetNode(GraphNode value) => node = value;
-        public override Type ResultType => node?.BodyObject is ICatalogFormula formula
-            ? formula.ResultType
-            : typeof(List<Object>);
+        public override Type ResultType => ActiveFilter?.ResultType ?? typeof(List<Object>);
         public override Type PackType => typeof(List<Object>);
         public override Type BodyBaseType => typeof(ICatalogFormula);
         public override Type AssetBaseType => null;
@@ -64,13 +62,14 @@ namespace HaruFamily.Tools.AssetPipeline
         public override bool AcceptsAsset(ScriptableObject asset) => false;
         public override bool AcceptsToken(GraphToken endpoint) => false;
 
-        public object Evaluate(List<Object> catalog)
-        {
-            if (node == null || node.Disabled) return catalog;
-            return node.BodyObject is ICatalogFormula formula
-                ? formula.EvaluateObject(catalog)
-                : catalog;
-        }
+        public object Evaluate(List<Object> catalog) => ActiveFilter?.EvaluateObject(catalog) ?? catalog;
+
+        /// <summary>目前生效的篩選公式，沒有就是 null。</summary>
+        // 空槽與停用走同一條路（同 APFormulaSlot.Evaluate）：都當作沒有篩選。
+        // ResultType 與 Evaluate 必須看同一個判定，否則停用一顆公式會讓格子對外宣稱的型別
+        // 與實際回傳值對不上，下游只能在求值當下退保底值。
+        private ICatalogFormula ActiveFilter
+            => node != null && !node.Disabled ? node.BodyObject as ICatalogFormula : null;
     }
 
     /// <summary>
@@ -168,6 +167,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
         /// <summary>把每一格的 Owner 指回自己。加格、載入與深複製之後都要呼叫。</summary>
         // 格子的 Owner 不序列化（存成回頭指向母目錄的欄位會讓資料成環），由目錄統一指派。
+        // 驗證與執行前由 APGraphVerifier.Collect 對整張圖走一趟，呼叫端不必自己記得補。
         public void SyncCells()
         {
             foreach (GraphNode node in Cells)
@@ -243,8 +243,14 @@ namespace HaruFamily.Tools.AssetPipeline
         /// <summary>方向是反的：步驟寫進去，不向它取值。編輯器據此換接點與線的顏色，也不畫常數框。</summary>
         public override bool IsOutput => true;
 
-        /// <summary>只收包。公式、資產、Token 與目錄庫的目錄一律接不上。</summary>
+        /// <summary>只收包。公式、資產、Token 一律接不上。</summary>
         public override bool AcceptsPack => true;
+
+        /// <summary>原型來源的目錄接不上：它的內容由目錄庫供應，步驟寫不進去。</summary>
+        // 擋在拉線與落點，不是擋在執行：接得上卻什麼都不會發生是最難查的一種錯。
+        // 目錄改成原型來源時，已經接上的這條線由編輯器當場斷開。
+        public override bool AcceptsPackObject(GraphNodeContent pack)
+            => pack is AssetCatalog catalog && catalog.AcceptsWrite;
 
         public override bool AcceptsBody(GraphNodeContent body) => false;
 

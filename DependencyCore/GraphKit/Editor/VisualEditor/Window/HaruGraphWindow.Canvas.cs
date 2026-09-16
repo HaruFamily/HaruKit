@@ -753,11 +753,11 @@ public partial class HaruGraphWindow
             }
 
             var remove = new Rect(inputPort.x - HGGraph.ListDeleteWidth, row.y + 3f, 14f, row.height - 6f);
+            // 走一般的刪節點路徑：還指著這一格的欄位要一起斷開，否則它只是離開容器，
+            // 繼續掛在下游欄位上變成一顆沒有母容器的孤兒節點。摘出容器由 RemoveFromNodeOwners 負責。
             if (GUI.Button(remove, new GUIContent("✕", "刪除這一格"), HGStyles.ListAdd))
             {
-                BreakUndoMerge();
-                owner.RemoveChild(child.Carrier);
-                Invalidate();
+                DeleteNode(child);
                 return;
             }
 
@@ -773,6 +773,7 @@ public partial class HaruGraphWindow
         if (!GUI.Button(add, new GUIContent(label, "新增一個未接篩選 Formula 的 ListCell"), HGStyles.ListAdd)) return;
 
         BreakUndoMerge();
+        PreserveVisibleNodePositions();
         owner.CreateChild();
         Invalidate();
         MarkGraphChanged();
@@ -874,7 +875,7 @@ public partial class HaruGraphWindow
             DrawPortGlyph(row, portRect);
         }
 
-        if (node.IsRoot) return;
+        if (node.IsRoot || !node.HasOutputPort) return;
         HGStyles.Port(new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight * 0.5f - HGGraph.PortRadius,
             HGGraph.PortDiameter, HGGraph.PortDiameter), HGStyles.PortLive);
     }

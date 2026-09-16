@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
@@ -58,8 +59,21 @@ namespace HaruFamily.Tools.AssetPipeline
             // 換一個執行號：動態目錄節點靠它把上一次留下的內容當成空的，不必先走訪整張圖清一遍。
             BeginRun();
             // 格子的 owner 不序列化，Domain Reload 之後是 null。走一次驗證的走訪把它們接回母目錄，
-            // 順便確保這次執行用的是最新的圖；錯誤這裡不處理，執行與否由 IsValidated 決定。
-            APGraphVerifier.Collect(graph);
+            // 順便確保這次執行用的是最新的圖。
+            List<string> graphErrors = APGraphVerifier.Collect(graph);
+            if (graphErrors.Count > 0)
+            {
+                // 擋執行看這一趟算出來的結果，不看圖上存下來的 IsValidated：那個旗標跟著資料序列化，
+                // 換一版程式、外部改過資產之後仍然是「已驗證」，而它從來沒有擋在執行路徑上。
+                current = previousCurrent;
+                var report = new StringBuilder($"{actionName}已鎖定：節點圖驗證未通過：");
+                foreach (string error in graphErrors) report.Append('\n').Append("  • ").Append(error);
+
+                pipelineLog = report.ToString();
+                Debug.LogError($"[AssetPipeline] {pipelineLog}");
+                return pipelineLog;
+            }
+
             pipelineReport = new StringBuilder();
             formulaWarningHandler = message =>
             {

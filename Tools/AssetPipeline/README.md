@@ -46,8 +46,10 @@ node editor.
 排在讀取者之前**；資產群組層看 prototype key 有沒有對應群組、群組是不是空的。
 通過後建立目前序列化資料的驗證快照。
 
-當前：「執行管線」僅在快照仍有效時啟用；確認 dialog 通過後，嚴格依節點圖 root
-底下的步驟順序執行。
+當前：「執行管線」僅在快照仍有效時啟用；確認 dialog 通過後，**執行當下會再跑一次
+`APGraphVerifier`**，有錯就不執行並把原因列進 Console 與 log，通過才嚴格依節點圖
+root 底下的步驟順序執行。圖上序列化的驗證旗標不是執行閘門——它跟著資料存檔，
+換一版程式或在編輯器外改過資產之後不代表現在仍然通過。
 
 下一步：步驟可讀 Prototype／Dynamic key；產出 dynamic key 的步驟實作
 `IDynamicKeyProducer`，讀取的公式實作 `IDynamicKeyReader`。

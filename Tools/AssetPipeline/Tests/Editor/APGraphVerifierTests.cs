@@ -31,16 +31,33 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
 
         /// <summary>建一顆目錄節點，並在底下開一格。寫入端接目錄，讀取端接那一格。</summary>
         // 目錄是包，一般欄位接不上它；讀取一律走格子，所以測試要把兩顆節點都建出來。
-        private static GraphNode CatalogNode(out GraphNode cell, CatalogSource source = CatalogSource.Dynamic)
+        // 節點放進候選池、不手動 SyncCells：格子的 Owner 該由驗證器自己接回去，那正是要測的路。
+        private GraphNode CatalogNode(out GraphNode cell, CatalogSource source = CatalogSource.Dynamic)
         {
             var node = new GraphNode();
             node.EnsureId();
 
             var catalog = new AssetCatalog { source = source };
             node.SetPack(catalog);
+            graph.Orphans.Add(node);
 
             cell = ((IGraphNodeOwner)catalog).CreateChild();
-            catalog.SyncCells();
+            return node;
+        }
+
+        /// <summary>把目錄接到一個寫入步驟上。被欄位指到的節點會離開候選池，與編輯器一致。</summary>
+        private void AddWriteStep(GraphNode catalog)
+        {
+            graph.Orphans.Remove(catalog);
+            AddStep(new WriteStep(catalog));
+        }
+
+        /// <summary>給格子接上一顆篩選公式，回傳那顆公式的節點。</summary>
+        private static GraphNode SetFilter(GraphNode cell, GraphNodeContent filter)
+        {
+            var node = new GraphNode(filter);
+            node.EnsureId();
+            ((CatalogCell)cell.BodyObject).InputSlot.SetNode(node);
             return node;
         }
 
@@ -59,7 +76,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         public void Verify_PassesWhenCatalogIsWrittenInOrder()
         {
             GraphNode catalog = CatalogNode(out GraphNode cell);
-            AddStep(new WriteStep(catalog));
+            AddWriteStep(catalog);
             AddStep(new ReadStep(cell));
 
             List<string> errors = APGraphVerifier.Collect(graph);
@@ -72,7 +89,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         {
             GraphNode catalog = CatalogNode(out GraphNode cell);
             AddStep(new ReadStep(cell));
-            AddStep(new WriteStep(catalog));
+            AddWriteStep(catalog);
 
             List<string> errors = APGraphVerifier.Collect(graph);
 
@@ -80,6 +97,8 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         }
 
         /// <summary>原型來源隨時都有內容，不受步驟順序影響。</summary>
+        // 這顆目錄沒有任何步驟寫得進去，節點只在候選池裡：驗證器得自己走到那裡把格子接回母目錄，
+        // 否則整條原型路徑會停在「沒有母目錄」，執行期也取不到內容。所以這裡斷言的是整份無錯。
         [Test]
         public void Verify_IgnoresOrderForPrototypeCatalog()
         {
@@ -89,7 +108,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
 
             List<string> errors = APGraphVerifier.Collect(graph);
 
-            Assert.That(errors, Has.None.Contains(OrderError));
+            Assert.That(errors, Is.Empty);
         }
 
         [Test]
@@ -97,7 +116,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         {
             GraphNode catalog = CatalogNode(out _, CatalogSource.Prototype);
             ((AssetCatalog)catalog.PackObject).prototypeCatalogId = "any-id";
-            AddStep(new WriteStep(catalog));
+            AddWriteStep(catalog);
 
             List<string> errors = APGraphVerifier.Collect(graph);
 
@@ -147,6 +166,68 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             List<string> errors = APGraphVerifier.Collect(graph);
 
             Assert.That(errors, Is.Empty);
+        }
+
+        /// <summary>格子的結果型別跟著它接的篩選公式走，不再是整包目錄。</summary>
+        [Test]
+        public void Verify_FailsWhenFilteredCellDoesNotMatchTheField()
+        {
+            GraphNode catalog = CatalogNode(out GraphNode cell);
+            SetFilter(cell, new CountFilter());
+            AddWriteStep(catalog);
+            AddStep(new ReadStep(cell));
+
+            List<string> errors = APGraphVerifier.Collect(graph);
+
+            Assert.That(errors, Has.Some.Contains("型別不相容"));
+        }
+
+        /// <summary>停用篩選公式＝沒有篩選：格子回到整包目錄的型別，原本的欄位又接得上。</summary>
+        [Test]
+        public void Verify_PassesWhenFilterIsDisabled()
+        {
+            GraphNode catalog = CatalogNode(out GraphNode cell);
+            SetFilter(cell, new CountFilter()).Disabled = true;
+            AddWriteStep(catalog);
+            AddStep(new ReadStep(cell));
+
+            List<string> errors = APGraphVerifier.Collect(graph);
+
+            Assert.That(errors, Is.Empty);
+        }
+
+        /// <summary>母目錄已經被刪掉、只剩格子還被欄位指著：取不到內容，要當場擋下來。</summary>
+        [Test]
+        public void Verify_FailsWhenCellHasNoCatalog()
+        {
+            GraphNode catalog = CatalogNode(out GraphNode cell);
+            graph.Orphans.Remove(catalog);
+            AddStep(new ReadStep(cell));
+
+            List<string> errors = APGraphVerifier.Collect(graph);
+
+            Assert.That(errors, Has.Some.Contains("沒有母目錄"));
+        }
+
+        /// <summary>原型來源的目錄接不上產出格：拉線與落點都靠這一條擋在編輯當下。</summary>
+        [Test]
+        public void OutputSlot_RejectsPrototypeCatalog()
+        {
+            GraphNode written = CatalogNode(out _);
+            GraphNode prototype = CatalogNode(out _, CatalogSource.Prototype);
+            var slot = new APCatalogOutputSlot();
+
+            Assert.That(slot.AcceptsPackObject(written.PackObject), Is.True);
+            Assert.That(slot.AcceptsPackObject(prototype.PackObject), Is.False);
+            Assert.That(slot.AcceptsPackObject(null), Is.False);
+        }
+
+        /// <summary>最小的篩選公式：整包有幾個。</summary>
+        // 測試自備一顆而不是借用專案端那幾種：具體篩法住在使用端專案，測試組件看不到它們。
+        [Serializable]
+        private sealed class CountFilter : CatalogFormulaBase<int>
+        {
+            public override int Evaluate(List<Object> catalog) => catalog.Count;
         }
 
         /// <summary>只宣告「我把產出寫進這顆目錄」的假步驟，不做任何事。</summary>

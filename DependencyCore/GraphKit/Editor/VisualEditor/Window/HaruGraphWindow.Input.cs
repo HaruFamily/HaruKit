@@ -453,7 +453,8 @@ public partial class HaruGraphWindow
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
         {
             var node = graph.Nodes[i];
-            if (node.IsRoot || node.Hidden) continue;
+            // 沒畫接點的節點也不能從那裡起拉線：命中區與圓一起消失，才不會有看不見的熱區。
+            if (node.IsRoot || node.Hidden || !node.HasOutputPort) continue;
             var port = new Rect(node.OutputPort - Vector2.one * HGGraph.PortRadius,
                 Vector2.one * HGGraph.PortDiameter);
             if (port.Contains(graphPoint)) return node;

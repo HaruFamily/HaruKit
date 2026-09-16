@@ -322,9 +322,10 @@ public partial class HaruGraphWindow
         // List<> 是不變的：型別選「全部」（List<Object>）的節點接不進 List<AudioClip> 欄位，
         // 要先在節點上把型別縮到對得上為止。這是刻意的——靜默放行會在求值時得到空清單。
         //
-        // 包不求值，所以結果型別與族對它都沒有意義：收不收得下只看這一格有沒有宣告 AcceptsPack。
+        // 包不求值，所以結果型別與族對它都沒有意義：收不收得下只看這一格收不收包，
+        // 以及這一顆包現在的設定還收不收得下（例：內容由外部供應的包，往裡面寫的欄位接不上）。
         if (target.IsPackNode)
-            return (row.Slot as FormulaSlotBase)?.AcceptsPack == true;
+            return (row.Slot as FormulaSlotBase)?.AcceptsPackObject(target.Carrier.PackObject) == true;
 
         // 空節點沒有內容，但**可能已經有族**：右鍵「建立公式/X」選的、或從欄位切下來時記的。
         // 有族就必須同族——不擋的話 String 空節點接得進 Key 欄位，接上去當場被改寫成 Key 節點，族形同虛設。
@@ -339,6 +340,58 @@ public partial class HaruGraphWindow
         if (target.Obj == null) return false;
 
         return HGReflect.AcceptsBody(row.Slot, target.Obj) && !WouldCreateCycle(row.Slot, target.Carrier);
+    }
+
+    /// <summary>把已經失效的包連線就地斷開，回傳斷了幾條。</summary>
+    // 包的設定改了之後，原本收得下它的欄位可能不再收得下（例：包改成內容由外部供應，
+    // 往裡面寫的欄位就沒有東西可寫）。留著一條接得上卻什麼都不會發生的線是最難查的一種錯。
+    // 先收集再清空：清空會改變走訪走得到的範圍，邊走邊改會漏掉後面的欄位。
+    private int BreakInvalidPackLinks()
+    {
+        var stale = new List<FormulaSlotBase>();
+        foreach (var slot in SlotsInCurrentGraph())
+        {
+            if (slot is not FormulaSlotBase formula) continue;
+            GraphNodeContent pack = formula.Node?.PackObject;
+            if (pack == null || formula.AcceptsPackObject(pack)) continue;
+            stale.Add(formula);
+        }
+        if (stale.Count == 0) return 0;
+
+        PreserveVisibleNodePositions();
+        foreach (var formula in stale)
+        {
+            // 斷線不是刪節點：載體要移進候選池，節點才留得下來。
+            // 少了這一步，圖上就沒有任何東西指得到它，重建時整顆連同底下的子節點一起消失。
+            GraphNode carrier = formula.Node;
+            formula.SetNode(null);
+            model.AddOrphan(carrier);
+        }
+        return stale.Count;
+    }
+
+    /// <summary>標出哪些包節點還有 Header 接點：沒有任何欄位指得到的包不畫那顆圓。</summary>
+    // 判定與拉線共用 AcceptsPackObject，所以「看得到的圓」與「接得上的位置」不會分岔。
+    // 已經有欄位指著它時一律要畫：舊資料可能留著一條現在接不上的線，線總得有個端點。
+    private void MarkPackPorts()
+    {
+        foreach (var node in graph.Nodes)
+        {
+            if (!node.IsPackNode) continue;
+            GraphNodeContent pack = node.Carrier?.PackObject;
+            node.HasOutputPort = pack == null || AnySlotTakesPack(pack, node.Carrier);
+        }
+    }
+
+    private bool AnySlotTakesPack(GraphNodeContent pack, GraphNode carrier)
+    {
+        foreach (var slot in SlotsInCurrentGraph())
+        {
+            if (slot is not FormulaSlotBase formula) continue;
+            if (formula.AcceptsPackObject(pack)) return true;
+            if (ReferenceEquals(formula.Node, carrier)) return true;
+        }
+        return false;
     }
 
     private static bool WouldCreateCycle(object slot, object node)

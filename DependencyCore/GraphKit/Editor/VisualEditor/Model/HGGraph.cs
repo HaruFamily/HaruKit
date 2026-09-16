@@ -96,6 +96,8 @@ public class HGNodeView
     public bool IsTokenNode;           // Token節點（不論有沒有指定Token）
     /// <summary>包節點：內容住在節點自己身上，但它不求值，值要從底下的子節點取。</summary>
     public bool IsPackNode;
+    /// <summary>Header 左緣那顆接點畫不畫。沒有任何欄位指得到的包節點沒有它：接不上就不該看得到圓。</summary>
+    public bool HasOutputPort = true;
     public Type ResultType;               // 資產／Token節點的結果型別
     public string Id;
     public string Title;                  // Header 主文字＝具體型別／Token／資產名稱，節點靠它辨識
@@ -503,13 +505,18 @@ public static class HGGraph
             bool inlineChildren = owner is IGraphInlineNodeOwner;
             foreach (var child in owner.ChildNodes)
             {
-                if (child == null || view.ByCarrier.ContainsKey(child)) continue;
-                var childNode = MakeNodeForCarrier(model, child, null, null, null);
-                if (inlineChildren && childNode.Obj is IGraphInlineNode)
+                if (child == null) continue;
+
+                // 內嵌歸屬由資料決定，不由誰先走到決定：某個下游欄位先指到這一格時節點已經建好了，
+                // 這裡仍要把它認回容器，否則容器畫成空的、格子飄在畫布上另外排一顆。
+                if (view.ByCarrier.TryGetValue(child, out var built))
                 {
-                    childNode.InlineParent = node;
-                    node.InlineChildren.Add(childNode);
+                    AttachInline(node, built, inlineChildren);
+                    continue;
                 }
+
+                var childNode = MakeNodeForCarrier(model, child, null, null, null);
+                AttachInline(node, childNode, inlineChildren);
                 Collect(model, childNode, view, depth + 1, listCollapse, node.InDisabledSubtree, locked);
             }
         }
@@ -557,6 +564,17 @@ public static class HGGraph
             if (view.ByCarrier.TryGetValue(carrier, out var placed) && ReferenceEquals(placed, child))
                 view.Links.Add(new HGLink { ParentRow = row, Target = child, Owner = node });
         }
+    }
+
+    /// <summary>把子節點認成容器自己畫的一列。非內嵌容器、非內嵌子節點都不改動。</summary>
+    // 一顆載體只屬於一個容器：已經被認過就不再認第二次，否則同一顆會出現在兩個容器的列裡。
+    private static void AttachInline(HGNodeView owner, HGNodeView child, bool inlineChildren)
+    {
+        if (!inlineChildren || child == null || child.Obj is not IGraphInlineNode) return;
+        if (child.InlineParent != null) return;
+
+        child.InlineParent = owner;
+        owner.InlineChildren.Add(child);
     }
 
     /// <summary>
