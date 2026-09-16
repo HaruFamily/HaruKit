@@ -272,10 +272,9 @@ public partial class HaruGraphWindow
         GraphNode carrier = NewSource(linkRow.Slot);
         // 欄位可以自己指定「拉出來就是這個」（FormulaSlotBase.CreateDefaultBody）。預設沒有，
         // 所以這裡對絕大多數欄位仍然是空節點——會用它的欄位自己知道為什麼。
-        var linkSlot = linkRow.Slot as FormulaSlotBase;
-        // 包要走 SetPack，不能當 body 塞進去——兩者的節點種類不同。
-        if (linkSlot?.CreateDefaultPack() is GraphNodeContent pack) carrier.SetPack(pack);
-        else if (linkSlot?.CreateDefaultBody() is GraphNodeContent body) carrier.SetBody(body);
+        // 包要走 SetCatalog，不能當 body 塞進去——兩者的節點種類不同，欄位種類也不同。
+        if ((linkRow.Slot as CatalogSlotBase)?.CreateDefaultCatalog() is GraphNodeContent pack) carrier.SetCatalog(pack);
+        else if ((linkRow.Slot as FormulaSlotBase)?.CreateDefaultBody() is GraphNodeContent body) carrier.SetBody(body);
         carrier.Pos = SnapToGrid(graphMouse);
         Invalidate();
         Repaint();
@@ -324,8 +323,8 @@ public partial class HaruGraphWindow
         //
         // 包不求值，所以結果型別與族對它都沒有意義：收不收得下只看這一格收不收包，
         // 以及這一顆包現在的設定還收不收得下（例：內容由外部供應的包，往裡面寫的欄位接不上）。
-        if (target.IsPackNode)
-            return (row.Slot as FormulaSlotBase)?.AcceptsPackObject(target.Carrier.PackObject) == true;
+        if (target.IsCatalogNode)
+            return (row.Slot as CatalogSlotBase)?.AcceptsCatalogObject(target.Carrier.CatalogObject) == true;
 
         // 空節點沒有內容，但**可能已經有族**：右鍵「建立公式/X」選的、或從欄位切下來時記的。
         // 有族就必須同族——不擋的話 String 空節點接得進 Key 欄位，接上去當場被改寫成 Key 節點，族形同虛設。
@@ -348,13 +347,13 @@ public partial class HaruGraphWindow
     // 先收集再清空：清空會改變走訪走得到的範圍，邊走邊改會漏掉後面的欄位。
     private int BreakInvalidPackLinks()
     {
-        var stale = new List<FormulaSlotBase>();
+        var stale = new List<CatalogSlotBase>();
         foreach (var slot in SlotsInCurrentGraph())
         {
-            if (slot is not FormulaSlotBase formula) continue;
-            GraphNodeContent pack = formula.Node?.PackObject;
-            if (pack == null || formula.AcceptsPackObject(pack)) continue;
-            stale.Add(formula);
+            if (slot is not CatalogSlotBase catalogSlot) continue;
+            GraphNodeContent pack = catalogSlot.Node?.CatalogObject;
+            if (pack == null || catalogSlot.AcceptsCatalogObject(pack)) continue;
+            stale.Add(catalogSlot);
         }
         if (stale.Count == 0) return 0;
 
@@ -371,14 +370,14 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>標出哪些包節點還有 Header 接點：沒有任何欄位指得到的包不畫那顆圓。</summary>
-    // 判定與拉線共用 AcceptsPackObject，所以「看得到的圓」與「接得上的位置」不會分岔。
+    // 判定與拉線共用 AcceptsCatalogObject，所以「看得到的圓」與「接得上的位置」不會分岔。
     // 已經有欄位指著它時一律要畫：舊資料可能留著一條現在接不上的線，線總得有個端點。
-    private void MarkPackPorts()
+    private void MarkCatalogPorts()
     {
         foreach (var node in graph.Nodes)
         {
-            if (!node.IsPackNode) continue;
-            GraphNodeContent pack = node.Carrier?.PackObject;
+            if (!node.IsCatalogNode) continue;
+            GraphNodeContent pack = node.Carrier?.CatalogObject;
             node.HasOutputPort = pack == null || AnySlotTakesPack(pack, node.Carrier);
         }
     }
@@ -387,9 +386,9 @@ public partial class HaruGraphWindow
     {
         foreach (var slot in SlotsInCurrentGraph())
         {
-            if (slot is not FormulaSlotBase formula) continue;
-            if (formula.AcceptsPackObject(pack)) return true;
-            if (ReferenceEquals(formula.Node, carrier)) return true;
+            if (slot is not CatalogSlotBase catalogSlot) continue;
+            if (catalogSlot.AcceptsCatalogObject(pack)) return true;
+            if (ReferenceEquals(catalogSlot.Node, carrier)) return true;
         }
         return false;
     }

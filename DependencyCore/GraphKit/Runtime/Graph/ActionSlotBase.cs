@@ -9,7 +9,8 @@ using UnityEngine;
 /// </summary>
 // 刻意不放任何序列化欄位——欄位全留在 ActionSlot<TPack>，序列化格式與既有資料不變。
 // 形狀比照 FormulaSlotBase：非泛型契約在上、資料與求值在泛型子類。
-public abstract class ActionSlotBase : IGraphHead, IOrphanPool
+// Node／SetNode／三個 Accepts 在 GraphSlotBase，與公式、目錄欄位共用。
+public abstract class ActionSlotBase : GraphSlotBase, IGraphHead, IOrphanPool
 {
     /// <summary>停用中的動作不執行，但設定完整保留。</summary>
     public abstract bool Disabled { get; set; }
@@ -32,11 +33,6 @@ public abstract class ActionSlotBase : IGraphHead, IOrphanPool
 
     public abstract void ClearPos();
 
-    /// <summary>目前接的來源節點。null＝空槽。</summary>
-    public abstract GraphNode Node { get; }
-
-    public abstract void SetNode(GraphNode node);
-
     /// <summary>本頭端的候選節點池。僅視覺化編輯器使用。</summary>
     public abstract List<GraphNode> Orphans { get; }
 
@@ -48,15 +44,6 @@ public abstract class ActionSlotBase : IGraphHead, IOrphanPool
 
     /// <summary>這個欄位收得下的動作資產型別。</summary>
     public abstract Type AssetBaseType { get; }
-
-    /// <summary>這個欄位能不能接這個內嵌內容。</summary>
-    public abstract bool AcceptsBody(GraphNodeContent body);
-
-    /// <summary>這個欄位能不能接這個資產。</summary>
-    public abstract bool AcceptsAsset(ScriptableObject asset);
-
-    /// <summary>這個欄位能不能接這個具名Token。</summary>
-    public abstract bool AcceptsToken(GraphToken endpoint);
 }
 
 }

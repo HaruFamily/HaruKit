@@ -142,6 +142,8 @@ public partial class HaruGraphWindow
     private HGCatalogLibraryView CatalogLibraryView() => new()
     {
         Catalogs = CatalogOwner?.Catalogs,
+        // 畫法與拖放由編輯對象自己提供；沒實作就走面板的通用畫法，並且不接受拖放。
+        Renderer = model?.Owner as IHGCatalogRenderer,
     };
 
     private HGCatalogLibraryCommands CatalogLibraryCommands() => new()
@@ -198,27 +200,27 @@ public partial class HaruGraphWindow
         MarkOwnerDirty();
     }
 
-    private void AddToCatalog(string id, IReadOnlyList<UnityEngine.Object> assets)
+    private void AddToCatalog(string id, IReadOnlyList<object> items)
     {
         var owner = CatalogOwner;
         if (owner == null) return;
 
         object before = model.CaptureCatalogs();
-        int added = owner.AddToCatalog(id, assets);
-        // 一個都沒加進去只有一種原因：拖進來的全都已經在裡面。不說一聲會看起來像拖放壞掉。
-        if (added == 0) ShowNotification(new GUIContent("這些資產已經在目錄裡了"));
+        int added = owner.AddToCatalog(id, items);
+        // 一個都沒加進去通常是因為全都已經在裡面（型別不符由庫自己擋）。不說一聲會看起來像拖放壞掉。
+        if (added == 0) ShowNotification(new GUIContent("這些項目已經在目錄裡了"));
         else model.PushCatalogStep(before);
         MarkOwnerDirty();
     }
 
-    private void RemoveFromCatalog(string id, UnityEngine.Object asset)
+    private void RemoveFromCatalog(string id, object item)
     {
         var owner = CatalogOwner;
         if (owner == null) return;
 
         int oldCount = HGReflect.FindCatalog(owner.Catalogs, id)?.Items?.Count ?? 0;
         object before = model.CaptureCatalogs();
-        owner.RemoveFromCatalog(id, asset);
+        owner.RemoveFromCatalog(id, item);
 
         if ((HGReflect.FindCatalog(owner.Catalogs, id)?.Items?.Count ?? 0) != oldCount) model.PushCatalogStep(before);
         MarkOwnerDirty();

@@ -47,6 +47,22 @@ public static class HGTypeCatalog
         return list;
     }
 
+    /// <summary>
+    /// 同上，再依公式的 pack 型別收窄。<paramref name="packFilter"/> 為 null 時等同不過濾。
+    /// </summary>
+    // 不進 Concrete 的快取：key 會變成兩個型別的組合，而過濾本身只是走一次繼承鏈，比維護第二層快取便宜。
+    // 非公式型別（Action、包）的 pack 是 null，因此一律被排除——這正是想要的，帶 packFilter 的欄位只收公式。
+    public static List<Type> Concrete(Type baseType, Type packFilter)
+    {
+        var all = Concrete(baseType);
+        if (packFilter == null) return all;
+
+        var list = new List<Type>();
+        foreach (var t in all)
+            if (HGReflect.FormulaPackType(t) == packFilter) list.Add(t);
+        return list;
+    }
+
     private static bool Usable(Type t, Type baseType)
     {
         if (t == null || t.IsAbstract || t.IsGenericTypeDefinition) return false;

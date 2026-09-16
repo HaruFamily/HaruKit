@@ -491,7 +491,7 @@ public partial class HaruGraphWindow
         }
         // 包是單色目錄青藍：它與目錄庫的目錄同樣裝一批資產，但內容住在自己身上，不是引用，
         // 所以不畫成「引用 → 內容」的漸層。
-        if (node.IsPackNode)
+        if (node.IsCatalogNode)
         {
             from = to = HGStyles.HeaderCatalog;
             return;
@@ -699,7 +699,7 @@ public partial class HaruGraphWindow
     /// 換身分（Formula／Asset）是 Header 那顆 ▾ 的事，這裡只換對象。
     /// </summary>
     /// <summary>依 Id 找目錄。找不到回 null——目錄可能已經被刪掉，節點還留著 id。</summary>
-    private IGraphCatalog FindCatalog(string id) => HGReflect.FindCatalog(CatalogOwner?.Catalogs, id);
+    private IGraphCatalogLibrary FindCatalog(string id) => HGReflect.FindCatalog(CatalogOwner?.Catalogs, id);
 
     /// <summary>
     /// 子節點擁有者的本體第一列：顯示現在有幾格，右邊一顆「＋」加一格。

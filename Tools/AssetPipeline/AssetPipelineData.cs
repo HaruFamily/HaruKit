@@ -11,7 +11,7 @@ namespace HaruFamily.Tools.AssetPipeline
     // 兩種指法並存：舊的目錄節點以 id 引用（改名不斷），新的目錄節點以 key 指定原型來源，
     // 與 AssetPipelineSource、資產分頁一致。
     [Serializable]
-    public class AssetPipelineAssetGroup : IGraphCatalog
+    public class AssetPipelineAssetGroup : IGraphCatalogLibrary
     {
         public string key;
 
@@ -28,11 +28,15 @@ namespace HaruFamily.Tools.AssetPipeline
 
         public List<AssetPipelineTypeGroup> typeGroups = new List<AssetPipelineTypeGroup>();
 
-        string IGraphCatalog.Id => id;
+        string IGraphCatalogLibrary.Id => id;
 
-        string IGraphCatalog.Name => key;
+        string IGraphCatalogLibrary.Name => key;
 
-        IReadOnlyList<Object> IGraphCatalog.Items => assets;
+        /// <summary>這個庫裝的是 Project 資產。空的庫也要答得出來，所以寫死而不是從 assets 推。</summary>
+        Type IGraphCatalogLibrary.ItemType => typeof(Object);
+
+        // IReadOnlyList<out T> 是協變的，List<Object> 直接就是 IReadOnlyList<object>，不必另抄一份。
+        IReadOnlyList<object> IGraphCatalogLibrary.Items => assets;
     }
 
     /// <summary>

@@ -51,7 +51,7 @@ public partial class HaruGraphWindow
     /// </summary>
     // 拉進來的是一顆「原型來源、已指向這份目錄」的目錄節點，不是引用節點——
     // 目錄的內容仍住在 Owner，節點只記 id，差別在於它同時能開格子。
-    private void DropCatalogOn(IGraphCatalog catalog, Vector2 graphMouse)
+    private void DropCatalogOn(IGraphCatalogLibrary catalog, Vector2 graphMouse)
     {
         if (catalog == null) return;
         var row = RowAt(graphMouse, out _);
@@ -60,7 +60,7 @@ public partial class HaruGraphWindow
             AddCatalogReferenceNode(catalog, graphMouse);
             return;
         }
-        if (row.IsActionSlot || (row.Slot as FormulaSlotBase)?.AcceptsPack != true)
+        if (row.Slot is not CatalogSlotBase catalogSlot)
         {
             ShowNotification(new GUIContent("這個欄位收不下目錄"));
             return;
@@ -70,7 +70,7 @@ public partial class HaruGraphWindow
         if (pack == null) return;
 
         // 目錄庫的目錄是「內容由目錄庫供應」的那一種：往裡面寫的欄位接上去什麼都不會發生。
-        if (!((FormulaSlotBase)row.Slot).AcceptsPackObject(pack))
+        if (!catalogSlot.AcceptsCatalogObject(pack))
         {
             ShowNotification(new GUIContent("這個欄位收不下目錄庫的目錄"));
             return;
@@ -78,13 +78,13 @@ public partial class HaruGraphWindow
 
         BreakUndoMerge();
         PreserveVisibleNodePositions();
-        SoloSource(row.Slot).SetPack(pack);
+        SoloSource(row.Slot).SetCatalog(pack);
         Invalidate();
         MarkGraphChanged();
     }
 
     /// <summary>把目錄拖到空白畫布：建立一個沒有連線的候選載體。</summary>
-    private void AddCatalogReferenceNode(IGraphCatalog catalog, Vector2 graphMouse)
+    private void AddCatalogReferenceNode(IGraphCatalogLibrary catalog, Vector2 graphMouse)
     {
         if (!CanCreateReferenceNode())
         {
@@ -98,7 +98,7 @@ public partial class HaruGraphWindow
         BreakUndoMerge();
         var carrier = new GraphNode();
         carrier.EnsureId();
-        carrier.SetPack(pack);
+        carrier.SetCatalog(pack);
         carrier.Pos = SnapToGrid(graphMouse);
         model.AddOrphan(carrier);
         Invalidate();
@@ -206,10 +206,13 @@ public partial class HaruGraphWindow
         Type baseType = slotType != null
             ? (isAction ? HGReflect.ActionBaseType(slotType) : HGReflect.FormulaBaseType(slotType))
             : HGReflect.NodeBaseType(node.Obj?.GetType());
+        // 有些欄位的族是「pack 固定、結果型別任意」（例如目錄格子的篩選欄），
+        // 那個條件 BodyBaseType 表達不出來，由 Slot 另外宣告 CandidatePackType 收窄。
+        Type packFilter = !isAction && slotType != null ? HGReflect.CandidatePackType(slotType) : null;
         if (baseType != null)
         {
             string kind = isAction ? "Action" : "Formula";
-            foreach (var type in HGTypeCatalog.Concrete(baseType))
+            foreach (var type in HGTypeCatalog.Concrete(baseType, packFilter))
             {
                 Type captured = type;
                 options.Add(new HGSourceOption

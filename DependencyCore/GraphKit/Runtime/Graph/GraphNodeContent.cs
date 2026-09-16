@@ -31,4 +31,10 @@ public abstract class ActionNodeBase<TPack> : GraphNodeContent { }
 [Serializable]
 public abstract class FormulaNodeBase<TResult, TPack> : GraphNodeContent { }
 
+/// <summary>目錄節點的形狀基底：裝一包 T，自己不求值。寫入與讀取在 <see cref="CatalogBase{T}"/>。</summary>
+// 與另外兩個形狀基底同樣零欄位：編輯器要的是「這顆是目錄、裝的是哪種 T」這種型別關係。
+// 目錄不參與求值（值從底下的格子取），所以沒有結果型別，也沒有 pack 參數。
+[Serializable]
+public abstract class CatalogNodeBase<T> : GraphNodeContent { }
+
 }

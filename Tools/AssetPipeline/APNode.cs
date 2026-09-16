@@ -37,13 +37,30 @@ namespace HaruFamily.Tools.AssetPipeline
         public abstract T Evaluate();
     }
 
-    /// <summary>以目錄完整資料為輸入的公式。結果型別由外層 CatalogCell 轉交給下游欄位。</summary>
+    /// <summary>
+    /// 需要外部餵一包資料才求得出值的公式，非泛型入口。
+    /// </summary>
+    // 與 IAPFormula<T> 分開：那一族從自己的欄位遞迴取值、不吃參數；這一族的輸入來自容器（目前是目錄）。
+    // 它只管「怎麼呼叫」，不代表身分：一顆公式屬不屬於某個容器由 PackType 決定，
+    // 候選收窄（CandidatePackType）與相容判定都比 PackType，不看有沒有實作這個介面。
+    // 型別由物件自己答，不從外面反射泛型參數。
+    // 型別自述那一半在 GraphKit 的 ITypedFormulaNode，框架靠它做候選過濾與相容判定；
+    // 這裡只加「怎麼呼叫」，而那正是 GraphKit 刻意不宣告的部分。
+    public interface IAPPackedFormula : ITypedFormulaNode
+    {
+        object EvaluateObject(object pack);
+    }
+
+    /// <summary>吃一包 <typeparamref name="TPack"/>、回一個 <typeparamref name="TResult"/> 的同步公式。</summary>
+    // 這一層只吃掉非泛型入口的轉型樣板，不是「某種容器專屬的公式族」——
+    // 換一種 TPack 就是換一族，兩族互不相容，而那是 pack 型別本來就帶的性質，不必額外標記。
     [Serializable]
-    public abstract class CatalogFormulaBase<TResult> : FormulaNodeBase<TResult, List<Object>>, ICatalogFormula
+    public abstract class APPackedFormulaBase<TResult, TPack> : FormulaNodeBase<TResult, TPack>, IAPPackedFormula
     {
         public Type ResultType => typeof(TResult);
-        public object EvaluateObject(List<Object> catalog) => Evaluate(catalog);
-        public abstract TResult Evaluate(List<Object> catalog);
+        public Type PackType => typeof(TPack);
+        object IAPPackedFormula.EvaluateObject(object pack) => Evaluate((TPack)pack);
+        public abstract TResult Evaluate(TPack pack);
     }
 
     /// <summary>管線步驟節點：有副作用、沒有結果型別。</summary>

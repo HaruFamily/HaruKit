@@ -73,7 +73,7 @@ public static class HGReflect
 
     public static bool IsActionSlotType(Type t) => t != null && typeof(ActionSlotBase).IsAssignableFrom(t);
 
-    public static bool IsSlotType(Type t) => IsFormulaSlotType(t) || IsActionSlotType(t);
+    public static bool IsSlotType(Type t) => t != null && typeof(GraphSlotBase).IsAssignableFrom(t);
 
     // Slot 的型別關係（結果／公式／資產／pack）住在 Slot 自己身上，但呼叫端手上多半只有 Type。
     // 所以建一顆該型別的實例去問：答案對同一個型別是常數，建完就快取。Slot 都是無參數的純資料類別，
@@ -103,6 +103,9 @@ public static class HGReflect
     /// <summary>FormulaSlot 的 TPack；不是 FormulaSlot 回 null。列舉公式族時用它排除別的 pack。</summary>
     public static Type FormulaSlotPack(Type slotType) => FormulaProbe(slotType)?.PackType;
 
+    /// <summary>Slot 宣告的候選 pack 收窄條件；沒宣告或不是 FormulaSlot 回 null。</summary>
+    public static Type CandidatePackType(Type slotType) => FormulaProbe(slotType)?.CandidatePackType;
+
     /// <summary>Slot 可接的 Formula Asset 型別（例如 IntAsset）。</summary>
     public static Type AssetType(Type slotType) => FormulaProbe(slotType)?.AssetBaseType;
 
@@ -129,19 +132,10 @@ public static class HGReflect
     // Slot 只有「有沒有接節點」一種狀態；來源種類、內容與座標全在 GraphNode 上。
     // 兩種 Slot 各有非泛型基底（FormulaSlotBase / ActionSlotBase），所以這裡一律走型別，不走成員名。
 
-    /// <summary>Slot 目前接的節點；null 代表常數（公式）或空槽（動作）。</summary>
-    public static GraphNode GetNode(object slot)
-    {
-        if (slot is FormulaSlotBase fsb) return fsb.Node;
-        if (slot is ActionSlotBase asb) return asb.Node;
-        return null;
-    }
+    /// <summary>Slot 目前接的節點；null 代表常數（公式）、空槽（動作）或未接（目錄）。</summary>
+    public static GraphNode GetNode(object slot) => (slot as GraphSlotBase)?.Node;
 
-    public static void SetNode(object slot, GraphNode node)
-    {
-        if (slot is FormulaSlotBase fsb) { fsb.SetNode(node); return; }
-        if (slot is ActionSlotBase asb) asb.SetNode(node);
-    }
+    public static void SetNode(object slot, GraphNode node) => (slot as GraphSlotBase)?.SetNode(node);
 
     /// <summary>沒接節點時就地建立一個空節點（＝使用者從接點拉線出來的編輯中狀態）。</summary>
     public static GraphNode EnsureNode(object slot)
@@ -164,7 +158,7 @@ public static class HGReflect
         {
             NodeKind.Asset => 2,
             NodeKind.Token => 3,
-            NodeKind.Pack => 5,
+            NodeKind.Catalog => 5,
             _ => 1,   // Inline 與 Empty 都畫成來源節點，Empty 由驗證擋存檔
         };
     }
@@ -203,26 +197,14 @@ public static class HGReflect
 
     /// <summary>這個欄位能不能接這個內嵌內容 / 資產。跨 pack 或跨結果型別在這裡擋下。</summary>
     public static bool AcceptsBody(object slot, object body)
-    {
-        if (body is not GraphNodeContent node) return false;
-        if (slot is FormulaSlotBase fsb) return fsb.AcceptsBody(node);
-        return slot is ActionSlotBase asb && asb.AcceptsBody(node);
-    }
+        => body is GraphNodeContent node && (slot as GraphSlotBase)?.AcceptsBody(node) == true;
 
     public static bool AcceptsAsset(object slot, UnityEngine.Object asset)
-    {
-        var so = asset as UnityEngine.ScriptableObject;
-        if (slot is FormulaSlotBase fsb) return fsb.AcceptsAsset(so);
-        return slot is ActionSlotBase asb && asb.AcceptsAsset(so);
-    }
+        => (slot as GraphSlotBase)?.AcceptsAsset(asset as UnityEngine.ScriptableObject) == true;
 
-    /// <summary>這個欄位能不能接這個具名Token。動作欄位一律不能。</summary>
+    /// <summary>這個欄位能不能接這個具名Token。動作與目錄欄位一律不能。</summary>
     public static bool AcceptsToken(object slot, GraphToken endpoint)
-    {
-        if (endpoint == null) return false;
-        if (slot is FormulaSlotBase fsb) return fsb.AcceptsToken(endpoint);
-        return slot is ActionSlotBase asb && asb.AcceptsToken(endpoint);
-    }
+        => endpoint != null && (slot as GraphSlotBase)?.AcceptsToken(endpoint) == true;
 
     public static object GetDefault(object slot) => (slot as FormulaSlotBase)?.DefaultObject;
 
@@ -338,6 +320,11 @@ public static class HGReflect
 
     /// <summary>從具體 Formula 型別取得結果型別；Action 回 null。</summary>
     public static Type FormulaResultType(Type type) => Closed(type, typeof(FormulaNodeBase<,>))?.GetGenericArguments()[0];
+
+    /// <summary>從具體 Formula 型別取得 pack 型別；Action 回 null。</summary>
+    // 與 FormulaSlotPack 不同：那個問的是 Slot，這個問的是公式本體。
+    // 候選以 pack 收窄時比的是這一個——欄位不一定有 Slot（候選池裡的節點就沒有）。
+    public static Type FormulaPackType(Type type) => Closed(type, typeof(FormulaNodeBase<,>))?.GetGenericArguments()[1];
 
     // 沿繼承鏈找出指定泛型定義的封閉型別；找不到回 null。
     private static Type Closed(Type type, Type definition)
@@ -539,7 +526,7 @@ public static class HGReflect
         => field != null && field.FieldType == typeof(string) && field.IsDefined(typeof(HGCatalogAttribute), false);
 
     /// <summary>依 Id 找目錄。找不到回 null——目錄住在 Owner，隨時可能被刪掉，節點只留著 id。</summary>
-    public static IGraphCatalog FindCatalog(IReadOnlyList<IGraphCatalog> catalogs, string id)
+    public static IGraphCatalogLibrary FindCatalog(IReadOnlyList<IGraphCatalogLibrary> catalogs, string id)
     {
         if (catalogs == null || string.IsNullOrEmpty(id)) return null;
         foreach (var catalog in catalogs)

@@ -427,7 +427,7 @@ public partial class HaruGraphWindow : EditorWindow
                 listCollapse, noteOpenId, noteCollapsed, focus.HeadCarrier, orphanKindHints);
 
         ApplyVisibility();
-        MarkPackPorts();
+        MarkCatalogPorts();
         if (pendingCenterTarget != null) { CenterOn(pendingCenterTarget); pendingCenterTarget = null; }
     }
 

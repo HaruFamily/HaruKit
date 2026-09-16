@@ -31,7 +31,7 @@ public class HGRow
     public Type ResultType;          // Slot 的結果型別；ActionSlot 為 null
     public bool IsActionSlot;
 
-    /// <summary>這一列是輸出（<see cref="FormulaSlotBase.IsOutput"/>）：接點與線改用輸出色，不畫常數框。</summary>
+    /// <summary>這一列是輸出（<see cref="CatalogSlotBase.IsOutput"/>）：接點與線改用輸出色，不畫常數框。</summary>
     public bool IsOutput;
     public NamedFormulaSlot AssetBinding;
 
@@ -95,7 +95,7 @@ public class HGNodeView
     public GraphToken Token;
     public bool IsTokenNode;           // Token節點（不論有沒有指定Token）
     /// <summary>包節點：內容住在節點自己身上，但它不求值，值要從底下的子節點取。</summary>
-    public bool IsPackNode;
+    public bool IsCatalogNode;
     /// <summary>Header 左緣那顆接點畫不畫。沒有任何欄位指得到的包節點沒有它：接不上就不該看得到圓。</summary>
     public bool HasOutputPort = true;
     public Type ResultType;               // 資產／Token節點的結果型別
@@ -144,7 +144,7 @@ public class HGNodeView
     public float TipsHeight;
     // 換來源的入口是 Header 右端的 ▾；Root HEAD 的來源走它自己的「來源」參數列接點，所以不畫。
     // 包沒有「換來源」：一格只收一種包，換不出第二個選項，畫一顆點不出東西的 ▾ 只會讓人以為壞了。
-    public bool HasSourceSelector => !IsRoot && !IsPackNode && !IsInlineChild
+    public bool HasSourceSelector => !IsRoot && !IsCatalogNode && !IsInlineChild
         && (IsPlaceholder || Obj != null || IsAssetNode || IsTokenNode);
 
     public Rect Rect => new Rect(Pos.x, Pos.y, Width, Height);
@@ -380,10 +380,10 @@ public static class HGGraph
                 break;
 
             // 包與 Inline 走同一條建法（Header 標籤、參數列都來自內容物），差別只在它不求值：
-            // 結果型別一律 null，相容判定改看 FormulaSlotBase.AcceptsPack。
-            case NodeKind.Pack when carrier.PackObject != null:
-                node = MakeNodeForObject(carrier.PackObject, parentSlot, parentRow, null);
-                node.IsPackNode = true;
+            // 結果型別一律 null，相容判定改看 CatalogSlotBase.AcceptsCatalogObject。
+            case NodeKind.Catalog when carrier.CatalogObject != null:
+                node = MakeNodeForObject(carrier.CatalogObject, parentSlot, parentRow, null);
+                node.IsCatalogNode = true;
                 node.ResultType = null;
                 node.Chip = null;
                 break;
@@ -793,7 +793,7 @@ public static class HGGraph
             Depth = depth,
             Slot = slot,
             IsActionSlot = isAction,
-            IsOutput = slot is FormulaSlotBase formula && formula.IsOutput,
+            IsOutput = slot is CatalogSlotBase catalogSlot && catalogSlot.IsOutput,
             ResultType = isAction ? null : HGReflect.ResultType(slot.GetType()),
         };
     }

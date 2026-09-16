@@ -20,11 +20,12 @@ public enum NodeKind
     Token = 4,
 
     /// <summary>
-    /// 包（<see cref="IGraphPack"/>）：內容住在節點自己身上，但它不是公式——沒有結果型別、求不出值。
+    /// 目錄（<see cref="IGraphCatalog"/>）：內容住在節點自己身上，但它不是公式——沒有結果型別、求不出值。
     /// </summary>
-    // 與 Inline 的差別只在「會不會被求值」：包是容器，值要從它底下的子節點取。
-    // 因此相容判定走 FormulaSlotBase.AcceptsPack，不走 AcceptsBody——族對包沒有意義。
-    Pack = 5,
+    // 與 Inline 的差別只在「會不會被求值」：目錄是容器，值要從它底下的子節點取。
+    // 因此相容判定走 CatalogSlotBase.AcceptsCatalogObject，不走 AcceptsBody——族對容器沒有意義。
+    // 值是 5 不是 3：3 是這個列舉更早一版留下的空號，補號會讓既有資產的數字對到別的種類。
+    Catalog = 5,
 }
 
 /// <summary>
@@ -66,10 +67,10 @@ public class GraphNode
     [SerializeReference]
     private GraphToken _endpoint;
 
-    // 包的內容。與 _body 分開存：BodyObject 的語意是「這顆節點求值時用的公式」，
-    // 包求不出值，混用同一個欄位會讓所有「有 body 就是 Inline」的判斷靜默出錯。
+    // 目錄的內容。與 _body 分開存：BodyObject 的語意是「這顆節點求值時用的公式」，
+    // 目錄求不出值，混用同一個欄位會讓所有「有 body 就是 Inline」的判斷靜默出錯。
     [SerializeReference]
-    private GraphNodeContent _pack;
+    private GraphNodeContent _catalog;
 
     // 資產呼叫點的參數綁定。它屬於這次引用，不屬於共用資產。
     [SerializeField]
@@ -112,8 +113,8 @@ public class GraphNode
     /// <summary>Token 模式指向的具名Token頭端；其他模式為 null。</summary>
     public GraphToken Token => _kind == NodeKind.Token ? _endpoint : null;
 
-    /// <summary>Pack 模式的內容；其他模式為 null。</summary>
-    public GraphNodeContent PackObject => _kind == NodeKind.Pack ? _pack : null;
+    /// <summary>目錄模式的內容；其他模式為 null。</summary>
+    public GraphNodeContent CatalogObject => _kind == NodeKind.Catalog ? _catalog : null;
 
     public List<NamedFormulaSlot> Bindings
     {
@@ -148,7 +149,7 @@ public class GraphNode
         _body = body;
         _asset = null;
         _endpoint = null;
-        _pack = null;
+        _catalog = null;
         Bindings.Clear();
         _kind = body != null ? NodeKind.Inline : NodeKind.Empty;
     }
@@ -163,7 +164,7 @@ public class GraphNode
         _endpoint = endpoint;
         _body = null;
         _asset = null;
-        _pack = null;
+        _catalog = null;
         Bindings.Clear();
         _kind = NodeKind.Token;
     }
@@ -176,22 +177,22 @@ public class GraphNode
         _asset = asset;
         _body = null;
         _endpoint = null;
-        _pack = null;
+        _catalog = null;
         _kind = NodeKind.Asset;
     }
 
-    /// <summary>換成包。內容住在節點自己身上，但它不求值——值要從包底下的子節點取。</summary>
+    /// <summary>換成目錄。內容住在節點自己身上，但它不求值——值要從底下的子節點取。</summary>
     // 內容為 null 時退成空節點，理由與 SetToken 相同：畫得出來也存得下去，卻永遠沒有內容。
-    public void SetPack(GraphNodeContent pack)
+    public void SetCatalog(GraphNodeContent catalog)
     {
-        if (pack == null) { Clear(); return; }
+        if (catalog == null) { Clear(); return; }
 
-        _pack = pack;
+        _catalog = catalog;
         _body = null;
         _asset = null;
         _endpoint = null;
         Bindings.Clear();
-        _kind = NodeKind.Pack;
+        _kind = NodeKind.Catalog;
     }
 
     /// <summary>清成空節點（編輯中狀態）。</summary>
@@ -200,7 +201,7 @@ public class GraphNode
         _body = null;
         _asset = null;
         _endpoint = null;
-        _pack = null;
+        _catalog = null;
         Bindings.Clear();
         _kind = NodeKind.Empty;
     }

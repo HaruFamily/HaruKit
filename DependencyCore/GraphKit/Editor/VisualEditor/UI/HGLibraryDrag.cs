@@ -22,7 +22,7 @@ public sealed class HGLibraryDrag
     /// <summary>正在拖的目錄。null＝這次拖的不是目錄。</summary>
     // 存介面不存 id：拖曳只活在這一次互動裡，期間目錄物件不會被換掉；
     // 真正寫進節點的才是 Id（改名不斷），那是落下時的事。
-    public IGraphCatalog Catalog { get; private set; }
+    public IGraphCatalogLibrary Catalog { get; private set; }
 
     /// <summary>按下之後真的移動過。沒移動過就還是一次點擊，不是拖曳。</summary>
     public bool AssetActive { get; private set; }
@@ -45,7 +45,7 @@ public sealed class HGLibraryDrag
 
     private ScriptableObject pendingAssetClick;
     private GraphToken pendingTokenClick;
-    private IGraphCatalog pendingCatalogClick;
+    private IGraphCatalogLibrary pendingCatalogClick;
 
     public void BeginAsset(ScriptableObject asset)
     {
@@ -59,7 +59,7 @@ public sealed class HGLibraryDrag
         pendingTokenClick = endpoint;
     }
 
-    public void BeginCatalog(IGraphCatalog catalog)
+    public void BeginCatalog(IGraphCatalogLibrary catalog)
     {
         Catalog = catalog;
         pendingCatalogClick = catalog;
@@ -92,9 +92,9 @@ public sealed class HGLibraryDrag
         pendingAssetClick = null;
     }
 
-    public bool IsSource(IGraphCatalog catalog) => catalog != null && ReferenceEquals(Catalog, catalog);
+    public bool IsSource(IGraphCatalogLibrary catalog) => catalog != null && ReferenceEquals(Catalog, catalog);
 
-    public bool IsPendingClick(IGraphCatalog catalog)
+    public bool IsPendingClick(IGraphCatalogLibrary catalog)
         => !CatalogActive && catalog != null && ReferenceEquals(pendingCatalogClick, catalog);
 
     public void ClearToken()

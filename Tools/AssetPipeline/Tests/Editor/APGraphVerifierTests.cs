@@ -38,7 +38,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             node.EnsureId();
 
             var catalog = new AssetCatalog { source = source };
-            node.SetPack(catalog);
+            node.SetCatalog(catalog);
             graph.Orphans.Add(node);
 
             cell = ((IGraphNodeOwner)catalog).CreateChild();
@@ -103,7 +103,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         public void Verify_IgnoresOrderForPrototypeCatalog()
         {
             GraphNode catalog = CatalogNode(out GraphNode cell, CatalogSource.Prototype);
-            ((AssetCatalog)catalog.PackObject).prototypeCatalogId = "any-id";
+            ((AssetCatalog)catalog.CatalogObject).prototypeCatalogId = "any-id";
             AddStep(new ReadStep(cell));
 
             List<string> errors = APGraphVerifier.Collect(graph);
@@ -115,7 +115,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         public void Verify_FailsWhenOutputSlotTakesPrototypeCatalog()
         {
             GraphNode catalog = CatalogNode(out _, CatalogSource.Prototype);
-            ((AssetCatalog)catalog.PackObject).prototypeCatalogId = "any-id";
+            ((AssetCatalog)catalog.CatalogObject).prototypeCatalogId = "any-id";
             AddWriteStep(catalog);
 
             List<string> errors = APGraphVerifier.Collect(graph);
@@ -217,15 +217,15 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             GraphNode prototype = CatalogNode(out _, CatalogSource.Prototype);
             var slot = new APCatalogOutputSlot();
 
-            Assert.That(slot.AcceptsPackObject(written.PackObject), Is.True);
-            Assert.That(slot.AcceptsPackObject(prototype.PackObject), Is.False);
-            Assert.That(slot.AcceptsPackObject(null), Is.False);
+            Assert.That(slot.AcceptsCatalogObject(written.CatalogObject), Is.True);
+            Assert.That(slot.AcceptsCatalogObject(prototype.CatalogObject), Is.False);
+            Assert.That(slot.AcceptsCatalogObject(null), Is.False);
         }
 
         /// <summary>最小的篩選公式：整包有幾個。</summary>
         // 測試自備一顆而不是借用專案端那幾種：具體篩法住在使用端專案，測試組件看不到它們。
         [Serializable]
-        private sealed class CountFilter : CatalogFormulaBase<int>
+        private sealed class CountFilter : APPackedFormulaBase<int, List<Object>>
         {
             public override int Evaluate(List<Object> catalog) => catalog.Count;
         }

@@ -9,7 +9,10 @@ using UnityEngine;
 public struct HGCatalogLibraryView
 {
     /// <summary>Owner 上的全部目錄。Owner 沒實作 <see cref="ICatalogOwner"/> 時為 null。</summary>
-    public IReadOnlyList<IGraphCatalog> Catalogs;
+    public IReadOnlyList<IGraphCatalogLibrary> Catalogs;
+
+    /// <summary>項目的畫法與拖放判定。Owner 沒實作 <see cref="IHGCatalogRenderer"/> 時為 null，走通用畫法。</summary>
+    public IHGCatalogRenderer Renderer;
 }
 
 /// <summary>目錄庫要用到的命令。超過兩條就收成結構，不排成一長串位置參數。</summary>
@@ -25,11 +28,11 @@ public struct HGCatalogLibraryCommands
     /// <summary>刪掉整個目錄。</summary>
     public Action<string> Remove;
 
-    /// <summary>把 Project 拖進來的資產加進這個目錄。</summary>
-    public Action<string, IReadOnlyList<UnityEngine.Object>> Add;
+    /// <summary>把拖進來的東西加進這個目錄。收不收、收哪些由 <see cref="IHGCatalogRenderer"/> 決定。</summary>
+    public Action<string, IReadOnlyList<object>> Add;
 
-    /// <summary>從目錄移除單一資產。</summary>
-    public Action<string, UnityEngine.Object> RemoveItem;
+    /// <summary>從目錄移除單一項目。</summary>
+    public Action<string, object> RemoveItem;
 }
 
 /// <summary>
@@ -81,9 +84,9 @@ public sealed class HGCatalogLibraryPanel
         HGInlineRename inlineName, HGLibraryDrag drag, HGCatalogLibraryCommands cmd)
     {
         LoadPrefs();
-        TrackProjectDrag();
+        TrackProjectDrag(view.Renderer);
 
-        DrawCreateButton(new Rect(r.x + 4f, top, r.width - 8f, 20f), cmd);
+        DrawCreateButton(new Rect(r.x + 4f, top, r.width - 8f, 20f), view.Renderer, cmd);
 
         var searchRect = new Rect(r.x + 4f, top + 22f, r.width - 8f, 20f);
         GUI.Label(new Rect(searchRect.x + 4f, searchRect.y + 2f, 16f, 16f),
@@ -101,7 +104,7 @@ public sealed class HGCatalogLibraryPanel
             return;
         }
 
-        var shown = new List<IGraphCatalog>();
+        var shown = new List<IGraphCatalogLibrary>();
         foreach (var catalog in view.Catalogs)
         {
             if (catalog == null) continue;
@@ -133,7 +136,7 @@ public sealed class HGCatalogLibraryPanel
 
             float inset = open ? 2f : 0f;
             var row = new Rect(2f + inset, y + inset, content.width - 4f - inset * 2f, RowHeight - 3f);
-            DrawCatalogRow(row, catalog, open, i % 2 == 1, inlineName, drag, cmd);
+            DrawCatalogRow(row, catalog, open, i % 2 == 1, inlineName, drag, view.Renderer, cmd);
 
             if (!open)
             {
@@ -153,13 +156,14 @@ public sealed class HGCatalogLibraryPanel
             {
                 var item = new Rect(ItemIndent, itemTop + k * ItemHeight,
                     content.width - ItemIndent - 6f, ItemHeight - 2f);
-                DrawItemRow(item, catalog, catalog.Items[k], cmd);
+                DrawItemRow(item, catalog, catalog.Items[k], view.Renderer, cmd);
             }
 
             // 空目錄要說出下一步，不然展開後只看到一個空框，看起來像壞掉。
+            // 下一步是領域行為，所以句子由使用端給；沒給就退回不假設內容種類的說法。
             if (count == 0)
                 GUI.Label(new Rect(ItemIndent, itemTop, content.width - ItemIndent - 6f, ItemHeight - 2f),
-                    "還是空的——把 Project 的資產拖到上面那一列", HGStyles.Tiny);
+                    view.Renderer?.CatalogEmptyHint(catalog) ?? "還是空的", HGStyles.Tiny);
 
             y += height + 2f;
         }
@@ -170,12 +174,12 @@ public sealed class HGCatalogLibraryPanel
     /// <summary>更新「現在有沒有一輪 Project 拖曳在進行」。每次 Draw 最前面跑一次。</summary>
     // **清除只認 DragExited**，那是拖曳結束（放開、取消、離開視窗）之後 Unity 一定會補的事件。
     // 不在 DragPerform 清：落點的判斷跑在本函式後面，同一幀就清掉的話放開時什麼都不會發生。
-    private void TrackProjectDrag()
+    private void TrackProjectDrag(IHGCatalogRenderer renderer)
     {
         switch (Event.current.type)
         {
             case EventType.DragUpdated:
-                projectDrag = Collect().Count > 0;
+                projectDrag = (renderer?.AcceptCatalogDrag(null)?.Count ?? 0) > 0;
                 break;
             case EventType.DragExited:
                 projectDrag = false;
@@ -188,7 +192,7 @@ public sealed class HGCatalogLibraryPanel
     /// </summary>
     // 拖到按鈕上建立，是為了少掉「先建空目錄、再拖一次」這個多餘的來回。
     // 與Token庫的「＋ 新增」同一種手勢：那顆鈕也同時是落點（拖Token到它上面＝複製）。
-    private void DrawCreateButton(Rect rect, HGCatalogLibraryCommands cmd)
+    private void DrawCreateButton(Rect rect, IHGCatalogRenderer renderer, HGCatalogLibraryCommands cmd)
     {
         var e = Event.current;
         bool hover = rect.Contains(e.mousePosition);
@@ -202,15 +206,16 @@ public sealed class HGCatalogLibraryPanel
 
         if (projectDrag && hover)
         {
-            var incoming = Collect();
-            DragAndDrop.visualMode = incoming.Count > 0
+            IReadOnlyList<object> incoming = renderer?.AcceptCatalogDrag(null);
+            int count = incoming?.Count ?? 0;
+            DragAndDrop.visualMode = count > 0
                 ? DragAndDropVisualMode.Copy
                 : DragAndDropVisualMode.Rejected;
 
             if (e.type == EventType.DragPerform)
             {
                 DragAndDrop.AcceptDrag();
-                if (incoming.Count > 0) CreateWith(cmd, incoming);
+                if (count > 0) CreateWith(cmd, incoming);
                 e.Use();
             }
             else if (e.type == EventType.DragUpdated)
@@ -224,13 +229,13 @@ public sealed class HGCatalogLibraryPanel
         if (clicked) CreateWith(cmd, null);
     }
 
-    /// <summary>建一個新目錄，順手把這批資產放進去，然後展開它。</summary>
+    /// <summary>建一個新目錄，順手把這批項目放進去，然後展開它。</summary>
     // 建完就展開：接下來一定是看裡面有什麼，不該還要多點一下。
-    private void CreateWith(HGCatalogLibraryCommands cmd, IReadOnlyList<UnityEngine.Object> assets)
+    private void CreateWith(HGCatalogLibraryCommands cmd, IReadOnlyList<object> items)
     {
         string id = cmd.Create?.Invoke();
         if (string.IsNullOrEmpty(id)) return;
-        if (assets != null && assets.Count > 0) cmd.Add?.Invoke(id, assets);
+        if (items != null && items.Count > 0) cmd.Add?.Invoke(id, items);
         SetExpanded(id);
     }
 
@@ -238,8 +243,8 @@ public sealed class HGCatalogLibraryPanel
     /// 一列目錄：折疊箭頭、名稱（可就地改名）、項目數、刪除鈕。
     /// 這一列同時是兩個方向的拖曳端點——收 Project 拖進來的資產，也能被拖到畫布上變成節點。
     /// </summary>
-    private void DrawCatalogRow(Rect row, IGraphCatalog catalog, bool open, bool altRow,
-        HGInlineRename inlineName, HGLibraryDrag drag, HGCatalogLibraryCommands cmd)
+    private void DrawCatalogRow(Rect row, IGraphCatalogLibrary catalog, bool open, bool altRow,
+        HGInlineRename inlineName, HGLibraryDrag drag, IHGCatalogRenderer renderer, HGCatalogLibraryCommands cmd)
     {
         var e = Event.current;
         bool hoverDrop = projectDrag && row.Contains(e.mousePosition);
@@ -264,7 +269,7 @@ public sealed class HGCatalogLibraryPanel
         if (GUI.Button(delRect, new GUIContent("×", "刪掉整個目錄"), HGStyles.Chip))
             cmd.Remove?.Invoke(catalog.Id);
 
-        HandleProjectDrop(row, catalog, cmd);
+        HandleProjectDrop(row, catalog, renderer, cmd);
 
         // 往畫布拖：面板只宣告「這一格開始拖了」，是不是來源、算點擊還是落下都在服務裡。
         // 折疊鈕、名稱格與刪除鈕已經先吃掉自己的點擊，所以這裡收到的一定是列身。
@@ -277,37 +282,52 @@ public sealed class HGCatalogLibraryPanel
         if (e.type == EventType.MouseUp && drag.IsPendingClick(catalog)) drag.ClearCatalog();
     }
 
-    /// <summary>目錄裡的一筆資產：圖示、名字、移除鈕。點名字 ping 到 Project。</summary>
-    private static void DrawItemRow(Rect row, IGraphCatalog catalog, UnityEngine.Object item,
-        HGCatalogLibraryCommands cmd)
+    /// <summary>目錄裡的一個項目。怎麼畫由使用端決定，沒提供就走通用畫法。</summary>
+    // 移除鈕由框架畫而不是交給 renderer：移除要進復原堆疊，那是框架的責任。
+    // renderer 只負責「這一列長什麼樣」，並可自己回報使用者要移除（例如它畫了自己的按鈕）。
+    private static void DrawItemRow(Rect row, IGraphCatalogLibrary catalog, object item,
+        IHGCatalogRenderer renderer, HGCatalogLibraryCommands cmd)
     {
         if (item == null)
         {
-            GUI.Label(row, "（資產已遺失）", HGStyles.RowLabelError);
+            GUI.Label(row, "（項目已遺失）", HGStyles.RowLabelError);
             return;
         }
 
-        var icon = EditorGUIUtility.ObjectContent(item, item.GetType()).image;
-        if (icon != null) GUI.DrawTexture(new Rect(row.x, row.y + 2f, 14f, 14f), icon);
-
-        var nameRect = new Rect(row.x + 18f, row.y, row.width - 40f, row.height);
-        if (GUI.Button(nameRect, HGStyles.Elide(item.name, HGStyles.RowLabel, nameRect.width), HGStyles.RowLabel))
-            EditorGUIUtility.PingObject(item);
+        var bodyRect = new Rect(row.x, row.y, row.width - 22f, row.height);
+        bool wantsRemove = renderer != null
+            ? renderer.DrawCatalogItem(bodyRect, catalog, item)
+            : DrawItemFallback(bodyRect, item);
 
         var delRect = new Rect(row.xMax - 18f, row.y + 1f, 16f, 15f);
-        if (GUI.Button(delRect, new GUIContent("－", "從這個目錄移除（不動 Project 裡的檔案）"), HGStyles.Chip))
-            cmd.RemoveItem?.Invoke(catalog.Id, item);
+        if (GUI.Button(delRect, new GUIContent("－", "從這個目錄移除（不動來源本身）"), HGStyles.Chip))
+            wantsRemove = true;
+
+        if (wantsRemove) cmd.RemoveItem?.Invoke(catalog.Id, item);
     }
 
-    /// <summary>從 Project 拖資產進這一列。只收專案裡的資產，場景物件不收。</summary>
-    private static void HandleProjectDrop(Rect row, IGraphCatalog catalog, HGCatalogLibraryCommands cmd)
+    /// <summary>沒有使用端畫法時的通用一列：只印得出名字。</summary>
+    // 刻意樸素：框架不知道這個項目是什麼，猜一個像資產的樣子反而會誤導。
+    private static bool DrawItemFallback(Rect rect, object item)
+    {
+        GUI.Label(rect, HGStyles.Elide(item.ToString(), HGStyles.RowLabel, rect.width), HGStyles.RowLabel);
+        return false;
+    }
+
+    /// <summary>拖東西進這一列。收不收、收哪些一律問使用端；沒提供畫法的庫不接受拖放。</summary>
+    // 框架不自己讀 DragAndDrop 的內容：能拖進來的是什麼、哪些算數，是領域知識。
+    // 沒有 renderer 時連 visualMode 都不設——讓游標維持「不能放」，而不是收下去再靜默丟掉。
+    private static void HandleProjectDrop(Rect row, IGraphCatalogLibrary catalog,
+        IHGCatalogRenderer renderer, HGCatalogLibraryCommands cmd)
     {
         var e = Event.current;
         if (e.type != EventType.DragUpdated && e.type != EventType.DragPerform) return;
         if (!row.Contains(e.mousePosition)) return;
+        if (renderer == null) return;
 
-        var accepted = Collect();
-        DragAndDrop.visualMode = accepted.Count > 0
+        IReadOnlyList<object> accepted = renderer.AcceptCatalogDrag(catalog);
+        int count = accepted?.Count ?? 0;
+        DragAndDrop.visualMode = count > 0
             ? DragAndDropVisualMode.Copy
             : DragAndDropVisualMode.Rejected;
 
@@ -318,41 +338,26 @@ public sealed class HGCatalogLibraryPanel
         }
 
         DragAndDrop.AcceptDrag();
-        if (accepted.Count > 0) cmd.Add?.Invoke(catalog.Id, accepted);
+        if (count > 0) cmd.Add?.Invoke(catalog.Id, accepted);
         e.Use();
     }
 
-    /// <summary>這次拖曳裡真的能收的東西。Hierarchy 上的物件沒有資產路徑，一律排除。</summary>
-    private static List<UnityEngine.Object> Collect()
-    {
-        var result = new List<UnityEngine.Object>();
-        var refs = DragAndDrop.objectReferences;
-        if (refs == null) return result;
-        foreach (var obj in refs)
-        {
-            if (obj == null) continue;
-            if (!AssetDatabase.Contains(obj)) continue;
-            result.Add(obj);
-        }
-        return result;
-    }
-
     /// <summary>一個目錄在清單上佔的高度。收合＝一列；展開＝群組列＋項目＋上下內距，空目錄留一列放提示。</summary>
-    private float BlockHeight(IGraphCatalog catalog)
+    private float BlockHeight(IGraphCatalogLibrary catalog)
     {
         if (!IsExpanded(catalog)) return RowHeight - 3f;
         int rows = Mathf.Max(1, catalog.Items?.Count ?? 0);
         return RowHeight + rows * ItemHeight + BlockPad;
     }
 
-    private bool Matches(IGraphCatalog catalog)
+    private bool Matches(IGraphCatalogLibrary catalog)
     {
         if (string.IsNullOrWhiteSpace(search)) return true;
         return !string.IsNullOrEmpty(catalog.Name)
             && catalog.Name.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
-    private bool IsExpanded(IGraphCatalog catalog) => expanded == catalog.Id;
+    private bool IsExpanded(IGraphCatalogLibrary catalog) => expanded == catalog.Id;
 
     private void SetExpanded(string id)
     {

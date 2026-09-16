@@ -587,10 +587,15 @@ public partial class HaruGraphWindow
             return;
         }
 
+        // 只列型別接得上的庫：接得上卻取不到內容是最難查的一種錯，擋在選單比擋在求值好。
+        // 節點沒宣告要哪一種（沒實作 ICatalogLibraryConsumer）就不過濾，維持舊行為。
+        Type wantedItemType = (target as ICatalogLibraryConsumer)?.CatalogItemType;
+
         var menu = new GenericMenu();
         foreach (var candidate in owner.Catalogs)
         {
             if (candidate == null) continue;
+            if (wantedItemType != null && candidate.ItemType != wantedItemType) continue;
             var captured = candidate;
             menu.AddItem(new GUIContent(candidate.Name), candidate.Id == current, () =>
             {

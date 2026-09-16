@@ -4,14 +4,9 @@ using System;
 using UnityEngine;
 
 // 非泛型 base：Verify 與編輯器不必帶泛型參數就能取節點、結果型別與型別相容判定。
-public abstract class FormulaSlotBase
+// Node／SetNode／三個 Accepts 在 GraphSlotBase，與動作、目錄欄位共用。
+public abstract class FormulaSlotBase : GraphSlotBase
 {
-    /// <summary>目前接的節點。null＝常數模式，直接用預設值。</summary>
-    public abstract GraphNode Node { get; }
-
-    /// <summary>接上或斷開節點。斷開傳 null 即回常數模式。</summary>
-    public abstract void SetNode(GraphNode node);
-
     /// <summary>求值結果型別（TResult）。</summary>
     public abstract Type ResultType { get; }
 
@@ -36,52 +31,25 @@ public abstract class FormulaSlotBase
     public virtual Type DefaultEditType => ResultType;
 
     /// <summary>
-    /// 這一格是「寫出去」而不是「讀進來」：擁有者執行時把結果交給接上的節點，不向它取值。
-    /// </summary>
-    // 只影響畫法（接點與線改用輸出色、不畫常數框）。相容判定、求值與驗證一律照舊走
-    // Kind／AcceptsBody／Evaluate，不因為方向而分岔——資料上它仍然是一般的「欄位指著節點」。
-    public virtual bool IsOutput => false;
-
-    /// <summary>
-    /// 這個欄位收不收得下包節點（<see cref="IGraphPack"/>）。預設不收。
-    /// </summary>
-    // 包不求值，所以結果型別與族對它都沒有意義，只剩「這一格是不是就要收包」這個宣告。
-    // 目前唯一會打開它的是把產出寫進包的那種欄位。
-    public virtual bool AcceptsPack => false;
-
-    /// <summary>這個欄位能不能接<b>這一顆</b>包。預設只看 <see cref="AcceptsPack"/> 的宣告。</summary>
-    // 包的設定會在編輯中改變（例如改成由外部供應內容，就沒有東西可以往裡面寫），
-    // 宣告層答不出「這一顆現在還收不收得下」，所以分開問。
-    // 覆寫它的欄位要能接受 null：拉線與落點判定會在載體還沒裝好內容時先問一次。
-    public virtual bool AcceptsPackObject(GraphNodeContent pack) => AcceptsPack;
-
-    /// <summary>
     /// 從這一格拉到空白處時要直接建好的內容；回 null（預設）＝長一顆空節點，由使用者選。
     /// </summary>
     // 空節點代表「還沒決定要接什麼」，那對一般欄位是有意義的狀態，所以這不是通則也不是依族推導，
     // 而是個別欄位自己宣告：只有「拉出來必定是某一種」的欄位才覆寫它。
     public virtual GraphNodeContent CreateDefaultBody() => null;
 
-    /// <summary>
-    /// 從這一格拉到空白處時要直接建好的<b>包</b>；回 null（預設）＝這一格不收包。
-    /// </summary>
-    // 與 CreateDefaultBody 分開：包不是 body，落地要走 GraphNode.SetPack。
-    public virtual GraphNodeContent CreateDefaultPack() => null;
-
     /// <summary>這個欄位收得下的內嵌公式基底型別（TFormula）。型別選單用它過濾。</summary>
     public abstract Type BodyBaseType { get; }
 
+    /// <summary>
+    /// 候選再依公式的 pack 型別收窄；回 null（預設）＝只看 <see cref="BodyBaseType"/>。
+    /// </summary>
+    // 為「pack 固定、結果型別任意」的欄位而生：那是個述詞，不是一個型別，BodyBaseType 表達不出來
+    // （FormulaNodeBase<,> 是開放泛型收不了，FormulaNodeBase<int,T> 又把結果鎖死）。
+    // 不併進 BodyBaseType：兩者是「繼承自誰」與「裝的是哪種包」兩個獨立條件，合併會讓其中一邊失去表達力。
+    public virtual Type CandidatePackType => null;
+
     /// <summary>這個欄位收得下的公式資產型別（TAsset）。</summary>
     public abstract Type AssetBaseType { get; }
-
-    /// <summary>這個欄位能不能接這個內嵌內容。</summary>
-    public abstract bool AcceptsBody(GraphNodeContent body);
-
-    /// <summary>這個欄位能不能接這個資產。</summary>
-    public abstract bool AcceptsAsset(ScriptableObject asset);
-
-    /// <summary>這個欄位能不能接這個具名Token。必須是同一族（<see cref="Kind"/>）。</summary>
-    public abstract bool AcceptsToken(GraphToken endpoint);
 }
 
 }

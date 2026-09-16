@@ -2,7 +2,9 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEditor;
+using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
+using HaruFamily.DependencyCore.GraphKit.Editor;
 using Object = UnityEngine.Object;
 
 namespace HaruFamily.Tools.AssetPipeline
@@ -16,11 +18,13 @@ namespace HaruFamily.Tools.AssetPipeline
     // 這裡只改資料——否則資產分頁那些既有操作也得各自再 SetDirty 一次。
     //
     // 資產分頁與目錄庫編的是同一份 prototypeAssets，兩個入口沒有各自的快取，所以不會不同步。
-    public partial class AssetPipeline : ICatalogOwner
+    // 同時實作兩半：ICatalogOwner 是資料操作（Runtime 契約），IHGCatalogRenderer 是這個領域
+    // 的項目畫法與拖放判定（Editor 契約）。框架只保留版面、展開、搜尋、改名與復原堆疊。
+    public partial class AssetPipeline : ICatalogOwner, IHGCatalogRenderer
     {
         private const string DefaultCatalogPrefix = "Catalog";
 
-        IReadOnlyList<IGraphCatalog> ICatalogOwner.Catalogs
+        IReadOnlyList<IGraphCatalogLibrary> ICatalogOwner.Catalogs
         {
             get
             {
@@ -29,7 +33,7 @@ namespace HaruFamily.Tools.AssetPipeline
             }
         }
 
-        IGraphCatalog ICatalogOwner.CreateCatalog()
+        IGraphCatalogLibrary ICatalogOwner.CreateCatalog()
         {
             EnsureCatalogIds();
             var group = new AssetPipelineAssetGroup
@@ -71,14 +75,16 @@ namespace HaruFamily.Tools.AssetPipeline
             prototypeAssets.Remove(group);
         }
 
-        int ICatalogOwner.AddToCatalog(string id, IReadOnlyList<Object> assets)
+        int ICatalogOwner.AddToCatalog(string id, IReadOnlyList<object> items)
         {
             var group = FindCatalog(id);
-            if (group == null || assets == null) return 0;
+            if (group == null || items == null) return 0;
 
             int added = 0;
-            foreach (Object obj in assets)
+            foreach (object item in items)
             {
+                // 契約收 object，驗型是庫自己的事：這個庫的 ItemType 是 UnityEngine.Object。
+                if (item is not Object obj) continue;
                 if (obj == null) continue;
                 if (obj == this) continue;                       // 不讓管線把自己收進去
                 if (!AssetDatabase.Contains(obj)) continue;
@@ -95,10 +101,11 @@ namespace HaruFamily.Tools.AssetPipeline
             return added;
         }
 
-        void ICatalogOwner.RemoveFromCatalog(string id, Object asset)
+        void ICatalogOwner.RemoveFromCatalog(string id, object item)
         {
             var group = FindCatalog(id);
             if (group == null) return;
+            if (item is not Object asset) return;
             if (!group.assets.Remove(asset)) return;
             RefreshGroupInfo(group);
         }
@@ -139,7 +146,7 @@ namespace HaruFamily.Tools.AssetPipeline
             return copy;
         }
 
-        GraphNodeContent ICatalogOwner.CreateCatalogNode(IGraphCatalog catalog)
+        GraphNodeContent ICatalogOwner.CreateCatalogNode(IGraphCatalogLibrary catalog)
         {
             if (catalog == null) return null;
             EnsureCatalogIds();
@@ -149,6 +156,45 @@ namespace HaruFamily.Tools.AssetPipeline
                 prototypeCatalogId = catalog.Id,
             };
         }
+
+        /// <summary>目錄裡的一筆資產：圖示、名字。點名字 ping 到 Project。</summary>
+        // 移除鈕由框架畫（它要進復原堆疊），所以這裡一律回 false。
+        bool IHGCatalogRenderer.DrawCatalogItem(Rect rect, IGraphCatalogLibrary library, object item)
+        {
+            if (item is not Object asset || asset == null)
+            {
+                GUI.Label(rect, "（資產已遺失）", HGStyles.RowLabelError);
+                return false;
+            }
+
+            var icon = EditorGUIUtility.ObjectContent(asset, asset.GetType()).image;
+            if (icon != null) GUI.DrawTexture(new Rect(rect.x, rect.y + 2f, 14f, 14f), icon);
+
+            var nameRect = new Rect(rect.x + 18f, rect.y, rect.width - 18f, rect.height);
+            if (GUI.Button(nameRect, HGStyles.Elide(asset.name, HGStyles.RowLabel, nameRect.width), HGStyles.RowLabel))
+                EditorGUIUtility.PingObject(asset);
+
+            return false;
+        }
+
+        /// <summary>這次拖曳裡真的能收的東西。Hierarchy 上的物件沒有資產路徑，一律排除。</summary>
+        IReadOnlyList<object> IHGCatalogRenderer.AcceptCatalogDrag(IGraphCatalogLibrary library)
+        {
+            var result = new List<object>();
+            var refs = DragAndDrop.objectReferences;
+            if (refs == null) return result;
+
+            foreach (Object obj in refs)
+            {
+                if (obj == null) continue;
+                if (!AssetDatabase.Contains(obj)) continue;
+                result.Add(obj);
+            }
+            return result;
+        }
+
+        string IHGCatalogRenderer.CatalogEmptyHint(IGraphCatalogLibrary library)
+            => "還是空的——把 Project 的資產拖到上面那一列";
 
         /// <summary>依 id 取目錄群組。找不到回 null——目錄可能已經被刪掉，節點還留著 id。</summary>
         public AssetPipelineAssetGroup FindCatalogById(string id) => FindCatalog(id);

@@ -48,7 +48,7 @@ namespace HaruFamily.Tools.AssetPipeline
             foreach (GraphNode node in graph.Orphans)
             {
                 if (node == null) continue;
-                if (node.PackObject is AssetCatalog catalog) catalog.SyncCells();
+                if (node.CatalogObject is AssetCatalog catalog) catalog.SyncCells();
                 WalkSlots(node.BodyObject, "候選節點", ignored, new StepReads(),
                     new HashSet<object>(ReferenceComparer.Instance));
             }
@@ -137,7 +137,7 @@ namespace HaruFamily.Tools.AssetPipeline
                 if (!string.IsNullOrWhiteSpace(endpoint.Name) && !seen.Add((endpoint.Slot.Kind, endpoint.Name)))
                     errors.Add($"{path} 與另一個同型別的Token重名。");
 
-                CheckFormulaSlot(endpoint.Slot, path, errors, new StepReads(), new HashSet<object>(ReferenceComparer.Instance));
+                CheckSlot(endpoint.Slot, path, errors, new StepReads(), new HashSet<object>(ReferenceComparer.Instance));
             }
         }
 
@@ -164,7 +164,8 @@ namespace HaruFamily.Tools.AssetPipeline
             WalkSlots(body, path, errors, reads, new HashSet<object>(ReferenceComparer.Instance));
         }
 
-        private static void CheckFormulaSlot(FormulaSlotBase slot, string path, List<string> errors, StepReads reads, HashSet<object> visiting)
+        // 公式欄位與目錄欄位共用這一條：兩者都是「指著一顆節點」，差別只在收得下哪些種類的節點。
+        private static void CheckSlot(GraphSlotBase slot, string path, List<string> errors, StepReads reads, HashSet<object> visiting)
         {
             GraphNode node = slot?.Node;
             if (node == null) return;   // 常數模式，合法。
@@ -180,23 +181,23 @@ namespace HaruFamily.Tools.AssetPipeline
                     errors.Add($"{path} 接了共用資產，但 AssetPipeline 不支援資產節點。");
                     return;
 
-                // 包不求值，只有宣告 AcceptsPack 的欄位（目前只有產出格）指得到它。
-                case NodeKind.Pack:
+                // 包不求值，只有目錄欄位（CatalogSlotBase，目前只有產出格）指得到它。
+                case NodeKind.Catalog:
                 {
-                    if (!slot.AcceptsPack) { errors.Add($"{path} 收不下包：這一格不是產出格。"); return; }
-                    if (node.PackObject is not AssetCatalog catalog)
+                    if (slot is not CatalogSlotBase catalogSlot) { errors.Add($"{path} 收不下包：這一格不是產出格。"); return; }
+                    if (node.CatalogObject is not AssetCatalog catalog)
                     {
                         errors.Add($"{path} 接的包不是目錄。");
                         return;
                     }
 
                     catalog.SyncCells();
-                    if (slot.IsOutput && !catalog.AcceptsWrite)
+                    if (catalogSlot.IsOutput && !catalog.AcceptsWrite)
                         errors.Add($"{path} 是產出格，但接到的目錄設為原型來源，寫不進去。");
 
                     CheckCatalog(catalog, path, errors);
 
-                    List<AssetCatalog> bucket = slot.IsOutput ? reads.CatalogOutputs : reads.CatalogReads;
+                    List<AssetCatalog> bucket = catalogSlot.IsOutput ? reads.CatalogOutputs : reads.CatalogReads;
                     if (!bucket.Contains(catalog)) bucket.Add(catalog);
                     return;
                 }
@@ -214,7 +215,7 @@ namespace HaruFamily.Tools.AssetPipeline
                         return;
                     }
 
-                    try { CheckFormulaSlot(endpoint.Slot, $"{path}→[{endpoint.Name}]", errors, reads, visiting); }
+                    try { CheckSlot(endpoint.Slot, $"{path}→[{endpoint.Name}]", errors, reads, visiting); }
                     finally { visiting.Remove(endpoint); }
                     return;
                 }
@@ -228,11 +229,13 @@ namespace HaruFamily.Tools.AssetPipeline
                     // 接到某一格＝讀它母目錄的內容。目錄本身接不到一般欄位上，所以讀取一律從這裡登記。
                     if (body is CatalogCell cell)
                     {
-                        if (cell.Owner == null) errors.Add($"{path} 的目錄格沒有母目錄。");
-                        else if (!reads.CatalogReads.Contains(cell.Owner))
+                        // Owner 的宣告型別是泛型基底，這裡要的是 AssetPipeline 這一種目錄。
+                        var cellOwner = cell.Owner as AssetCatalog;
+                        if (cellOwner == null) errors.Add($"{path} 的目錄格沒有母目錄。");
+                        else if (!reads.CatalogReads.Contains(cellOwner))
                         {
-                            reads.CatalogReads.Add(cell.Owner);
-                            CheckCatalog(cell.Owner, path, errors);
+                            reads.CatalogReads.Add(cellOwner);
+                            CheckCatalog(cellOwner, path, errors);
                         }
                     }
 
@@ -291,9 +294,9 @@ namespace HaruFamily.Tools.AssetPipeline
             Type type = owner.GetType();
             if (type.IsPrimitive || type.IsEnum || type == typeof(decimal)) return;
 
-            if (owner is FormulaSlotBase slot)
+            if (owner is GraphSlotBase slot)
             {
-                CheckFormulaSlot(slot, path, errors, reads, visiting);
+                CheckSlot(slot, path, errors, reads, visiting);
                 return;
             }
 
