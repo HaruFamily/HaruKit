@@ -20,7 +20,7 @@ public enum NodeKind
     Token = 4,
 
     /// <summary>
-    /// 目錄（<see cref="IGraphCatalog"/>）：內容住在節點自己身上，但它不是公式——沒有結果型別、求不出值。
+    /// 目錄（內容是 <see cref="CatalogNodeShape{T}"/>）：內容住在節點自己身上，但它不是公式——沒有結果型別、求不出值。
     /// </summary>
     // 與 Inline 的差別只在「會不會被求值」：目錄是容器，值要從它底下的子節點取。
     // 因此相容判定走 CatalogSlotBase.AcceptsCatalogObject，不走 AcceptsBody——族對容器沒有意義。

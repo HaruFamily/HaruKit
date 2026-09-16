@@ -2,7 +2,7 @@ namespace HaruFamily.DependencyCore.GraphKit
 {
 
 /// <summary>
-/// 目錄欄位的非泛型基底：指著一顆包節點（<see cref="IGraphCatalog"/>），方向可以是寫進去或讀出來。
+/// 目錄欄位的非泛型基底：指著一顆目錄節點（<see cref="CatalogNodeShape{T}"/>），方向可以是寫進去或讀出來。
 /// </summary>
 // 與 FormulaSlotBase 分家的理由是包不求值。當它還寄生在公式欄位上時，
 // ResultType 回 void、BodyBaseType／AssetBaseType 回 null、DefaultObject 的 setter 是空的、

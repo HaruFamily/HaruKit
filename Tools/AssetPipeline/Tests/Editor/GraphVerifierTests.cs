@@ -32,18 +32,23 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         /// <summary>建一顆目錄節點，並在底下開一格。寫入端接目錄，讀取端接那一格。</summary>
         // 目錄是包，一般欄位接不上它；讀取一律走格子，所以測試要把兩顆節點都建出來。
         // 節點放進候選池、不手動 SyncCells：格子的 Owner 該由驗證器自己接回去，那正是要測的路。
-        private GraphNode CatalogNode(out GraphNode cell, CatalogSource source = CatalogSource.Dynamic)
+        private GraphNode CatalogNode(AssetCatalogBase catalog, out GraphNode cell)
         {
             var node = new GraphNode();
             node.EnsureId();
 
-            var catalog = new AssetCatalog { source = source };
             node.SetCatalog(catalog);
             graph.Orphans.Add(node);
 
             cell = ((IGraphNodeOwner)catalog).CreateChild();
             return node;
         }
+
+        private GraphNode DynamicCatalog(out GraphNode cell)
+            => CatalogNode(new DynamicAssetCatalog(), out cell);
+
+        private GraphNode PrototypeCatalog(out GraphNode cell, string catalogId = "any-id")
+            => CatalogNode(new PrototypeAssetCatalog { catalogId = catalogId }, out cell);
 
         /// <summary>把目錄接到一個寫入動作上。被欄位指到的節點會離開候選池，與編輯器一致。</summary>
         private void AddWriteAction(GraphNode catalog)
@@ -64,7 +69,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void Verify_FailsWhenCatalogIsReadBeforeWrite()
         {
-            CatalogNode(out GraphNode cell);
+            DynamicCatalog(out GraphNode cell);
             AddAction(new ReadAction(cell));
 
             List<string> errors = GraphVerifier.Collect(graph);
@@ -75,7 +80,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void Verify_PassesWhenCatalogIsWrittenInOrder()
         {
-            GraphNode catalog = CatalogNode(out GraphNode cell);
+            GraphNode catalog = DynamicCatalog(out GraphNode cell);
             AddWriteAction(catalog);
             AddAction(new ReadAction(cell));
 
@@ -87,7 +92,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void Verify_FailsWhenWriterComesAfterReader()
         {
-            GraphNode catalog = CatalogNode(out GraphNode cell);
+            GraphNode catalog = DynamicCatalog(out GraphNode cell);
             AddAction(new ReadAction(cell));
             AddWriteAction(catalog);
 
@@ -102,8 +107,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void Verify_IgnoresOrderForPrototypeCatalog()
         {
-            GraphNode catalog = CatalogNode(out GraphNode cell, CatalogSource.Prototype);
-            ((AssetCatalog)catalog.CatalogObject).prototypeCatalogId = "any-id";
+            PrototypeCatalog(out GraphNode cell);
             AddAction(new ReadAction(cell));
 
             List<string> errors = GraphVerifier.Collect(graph);
@@ -114,19 +118,18 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void Verify_FailsWhenOutputSlotTakesPrototypeCatalog()
         {
-            GraphNode catalog = CatalogNode(out _, CatalogSource.Prototype);
-            ((AssetCatalog)catalog.CatalogObject).prototypeCatalogId = "any-id";
+            GraphNode catalog = PrototypeCatalog(out _);
             AddWriteAction(catalog);
 
             List<string> errors = GraphVerifier.Collect(graph);
 
-            Assert.That(errors, Has.Some.Contains("設為原型來源"));
+            Assert.That(errors, Has.Some.Contains("只接得上動態目錄"));
         }
 
         [Test]
         public void Verify_FailsWhenPrototypeCatalogHasNoKey()
         {
-            CatalogNode(out GraphNode cell, CatalogSource.Prototype);
+            PrototypeCatalog(out GraphNode cell, string.Empty);
             AddAction(new ReadAction(cell));
 
             List<string> errors = GraphVerifier.Collect(graph);
@@ -138,7 +141,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void Verify_FailsWhenOrdinaryFieldTakesTheCatalog()
         {
-            GraphNode catalog = CatalogNode(out _);
+            GraphNode catalog = DynamicCatalog(out _);
             AddAction(new ReadAction(catalog));
 
             List<string> errors = GraphVerifier.Collect(graph);
@@ -172,7 +175,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void Verify_FailsWhenFilteredCellDoesNotMatchTheField()
         {
-            GraphNode catalog = CatalogNode(out GraphNode cell);
+            GraphNode catalog = DynamicCatalog(out GraphNode cell);
             SetFilter(cell, new CountFilter());
             AddWriteAction(catalog);
             AddAction(new ReadAction(cell));
@@ -186,7 +189,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void Verify_PassesWhenFilterIsDisabled()
         {
-            GraphNode catalog = CatalogNode(out GraphNode cell);
+            GraphNode catalog = DynamicCatalog(out GraphNode cell);
             SetFilter(cell, new CountFilter()).Disabled = true;
             AddWriteAction(catalog);
             AddAction(new ReadAction(cell));
@@ -200,7 +203,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void Verify_FailsWhenCellHasNoCatalog()
         {
-            GraphNode catalog = CatalogNode(out GraphNode cell);
+            GraphNode catalog = DynamicCatalog(out GraphNode cell);
             graph.Orphans.Remove(catalog);
             AddAction(new ReadAction(cell));
 
@@ -213,8 +216,8 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void OutputSlot_RejectsPrototypeCatalog()
         {
-            GraphNode written = CatalogNode(out _);
-            GraphNode prototype = CatalogNode(out _, CatalogSource.Prototype);
+            GraphNode written = DynamicCatalog(out _);
+            GraphNode prototype = PrototypeCatalog(out _);
             var slot = new CatalogOutputSlot();
 
             Assert.That(slot.AcceptsCatalogObject(written.CatalogObject), Is.True);

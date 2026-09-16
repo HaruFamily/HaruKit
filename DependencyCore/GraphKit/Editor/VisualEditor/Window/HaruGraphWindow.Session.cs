@@ -134,6 +134,8 @@ public partial class HaruGraphWindow
 
         focus = new HGFocus();
         ClearViewState();
+        // 旗標跟著 Owner：換對象時歸零。
+        catalogDirty = false;
         graphDirty = true;
         verifiedOnce = false;
         report = HGValidator.Run(model, includeMissingTypes: true);
@@ -273,6 +275,7 @@ public partial class HaruGraphWindow
         pendingTarget = null;
         returnFocus = null;
         ClearAssetDirty();
+        catalogDirty = false;
         ClearViewState();
         UpdateUnsavedState();
         Repaint();
@@ -382,6 +385,9 @@ public partial class HaruGraphWindow
         DoVerify(true);
         if (!report.CanSave)
         {
+            // 圖一個字都沒改、只有目錄沒落盤時照存：目錄不在存檔交易裡，被圖的錯誤擋住等於再也存不了它。
+            if (!model.Dirty && catalogDirty) return SaveCatalogsOnly();
+
             console.RevealErrors();
             // Console 已經被展開切到錯誤頁，細節都在那裡；再彈一個要按「好」的框只是多一次跨螢幕來回。
             if (showDialog)
@@ -397,8 +403,19 @@ public partial class HaruGraphWindow
         // Owner 的引用內容變了，反向索引跟著失效。下次要用時才重算，這裡不掃。
         HGReferenceIndex.Invalidate();
         AssetDatabase.SaveAssets();
+        catalogDirty = false;
         UpdateUnsavedState();
         ShowNotification(new GUIContent("已存檔"));
+        return true;
+    }
+
+    /// <summary>只把目錄落盤。目錄不在存檔交易裡，所以不跑驗證、不寫回工作副本。</summary>
+    private bool SaveCatalogsOnly()
+    {
+        AssetDatabase.SaveAssets();
+        catalogDirty = false;
+        UpdateUnsavedState();
+        ShowNotification(new GUIContent("已存檔（目錄庫）"));
         return true;
     }
 

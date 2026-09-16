@@ -68,10 +68,11 @@ public class CatalogFormulaSlot<T> : FormulaSlotBase
 public abstract class CatalogCellBase<T> : GraphNodeContent, IGraphInlineNode
 {
     [NonSerialized]
-    private CatalogBase<T> owner;
+    private CatalogNodeShape<T> owner;
 
     /// <summary>母目錄。載入或深複製之後由目錄呼叫 <see cref="SetOwner"/> 指回來。</summary>
-    public CatalogBase<T> Owner => owner;
+    // 型別是形狀層而不是某一種目錄：格子只需要 Read()，不必知道內容從哪一種來源取得。
+    public CatalogNodeShape<T> Owner => owner;
 
     /// <summary>右側的輸入欄位。序列化欄位住在使用端的子類。</summary>
     public abstract FormulaSlotBase InputSlot { get; }
@@ -79,7 +80,7 @@ public abstract class CatalogCellBase<T> : GraphNodeContent, IGraphInlineNode
     /// <summary>這一格對下游宣稱的型別＝右側欄位算出來的型別。</summary>
     public Type ResultType => InputSlot.ResultType;
 
-    public void SetOwner(CatalogBase<T> value) => owner = value;
+    public void SetOwner(CatalogNodeShape<T> value) => owner = value;
 }
 
 }

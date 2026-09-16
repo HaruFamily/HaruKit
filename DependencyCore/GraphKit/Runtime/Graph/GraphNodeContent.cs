@@ -43,10 +43,22 @@ public abstract class FormulaNodeShape<TResult, TPack> : GraphNodeContent { }
 /// <summary>不接收執行期 pack 的公式節點形狀。</summary>
 public abstract class FormulaNodeShape<TResult> : FormulaNodeShape<TResult, NullPack> { }
 
-/// <summary>目錄節點的形狀基底：裝一包 T，自己不求值。寫入與讀取在 <see cref="CatalogBase{T}"/>。</summary>
-// 與另外兩個形狀基底同樣零欄位：編輯器要的是「這顆是目錄、裝的是哪種 T」這種型別關係。
-// 目錄不參與求值（值從底下的格子取），所以沒有結果型別，也沒有 pack 參數。
+/// <summary>
+/// 目錄節點的形狀基底：裝一包 T，自己不求值——值一律從底下的格子取。
+/// </summary>
+// 與另外兩個形狀基底同樣**零欄位**（不影響序列化），編輯器要的是「這顆是目錄、裝的是哪種 T」這種型別關係。
+// 目錄不參與求值，所以沒有結果型別，也沒有 pack 參數。
+//
+// **目錄的身分只有兩個問法**：載體那一側問 `NodeKind.Catalog`，內容這一側問這個基底。
+// 不要再開第三個標記介面——它比標記多給一個 T，標記答得出的它都答得出來。
+//
+// Read 宣告在形狀層：格子取內容只認得這一個方法，而「內容從哪來」是每種目錄自己的事。
+// 同步、不吃 pack，所以不會把執行層的相依帶進形狀層。
 [Serializable]
-public abstract class CatalogNodeShape<T> : GraphNodeContent { }
+public abstract class CatalogNodeShape<T> : GraphNodeContent
+{
+    /// <summary>這一包現在有什麼。這是格子唯一的讀取入口。</summary>
+    public abstract T Read();
+}
 
 }

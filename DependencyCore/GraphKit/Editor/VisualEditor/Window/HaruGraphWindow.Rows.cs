@@ -23,11 +23,11 @@ public partial class HaruGraphWindow
 
             switch (row.Kind)
             {
-                case HGRowKind.Slot:
+                case HGRowKind.OnePort:
                     if (row.IsListElement) DrawListElementControls(row, rowRect, nodeRect);
                     DrawSlotRow(row, rowRect);
                     break;
-                case HGRowKind.Value:
+                case HGRowKind.NoPort:
                     if (row.IsListElement) DrawListElementControls(row, rowRect, nodeRect);
                     DrawValueRow(row, rowRect);
                     break;
@@ -42,11 +42,49 @@ public partial class HaruGraphWindow
                     }
                     DrawRows(node, row.Children, nodeRect);
                     break;
+                case HGRowKind.TwoPort:
+                    DrawCellRow(row, rowRect);
+                    break;
                 case HGRowKind.List:
                     DrawList(node, row, rowRect, nodeRect);
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// 容器內的一格：左緣是自己的輸出接點，右緣是篩選欄位的輸入接點，中間寫這一格的結果型別。
+    /// </summary>
+    // 右端由右往左固定是「接點 → ✕」：接點永遠貼齊節點右緣，讓開的是 ✕。
+    // 兩顆接點的圓由 DrawNodePorts 統一畫（它在外框之後跑），這裡只處理命中與列上的內容。
+    private void DrawCellRow(HGRow row, Rect rowRect)
+    {
+        HGStyles.Fill(rowRect, row.ListIndex % 2 == 0 ? HGStyles.ListStripeEven : HGStyles.ListStripeOdd);
+
+        var inputPort = new Rect(rowRect.xMax - HGGraph.PortDiameter,
+            rowRect.y + rowRect.height * 0.5f - HGGraph.PortRadius,
+            HGGraph.PortDiameter, HGGraph.PortDiameter);
+
+        var remove = new Rect(inputPort.x - HGGraph.ListDeleteWidth, rowRect.y + 3f, 14f, rowRect.height - 6f);
+        // 走一般的刪載體路徑：指著這一格的欄位要一起斷開，否則它只是離開容器，
+        // 繼續掛在下游欄位上變成一顆沒有母容器的孤兒。
+        if (GUI.Button(remove, new GUIContent("✕", "刪除這一格"), HGStyles.ListAdd))
+        {
+            DeleteCarrier(row.Carrier);
+            return;
+        }
+
+        float left = rowRect.x + HGGraph.PortDiameter + 5f;
+        var label = new Rect(left, rowRect.y + 1f, remove.xMin - left - 5f, rowRect.height - 2f);
+        GUI.Label(label,
+            HGStyles.Elide(row.Label, HGStyles.RowLabel, label.width, "這一格的輸出結果型別"), HGStyles.RowLabel);
+
+        // 接點一個熱區兩種手勢，與一般欄位同一套：原地放開＝收合，拖出去＝拉線。
+        var e = Event.current;
+        if (e.type != EventType.MouseDown || e.button != 0 || !inputPort.Contains(e.mousePosition)) return;
+        portClickRow = row;
+        portClickStart = e.mousePosition - pan;
+        e.Use();
     }
 
     /// <summary>
@@ -141,7 +179,7 @@ public partial class HaruGraphWindow
     /// 常數框直接吃到底。左緣對齊由 `SplitRow` 保證，所以這裡只影響右緣。
     /// </summary>
     private static float ChipInset(HGRow row)
-        => row.Kind == HGRowKind.Slot && !row.IsActionSlot && row.ResultType != null && !row.HideLabel
+        => row.Kind == HGRowKind.OnePort && !row.IsActionSlot && row.ResultType != null && !row.HideLabel
             ? HGGraph.SlotChipColumn
             : 0f;
 

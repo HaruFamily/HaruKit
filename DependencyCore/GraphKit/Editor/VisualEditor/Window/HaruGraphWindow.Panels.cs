@@ -227,9 +227,12 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>目錄改完直接寫 Owner。不進工作副本，所以也不碰 model.Dirty 與存檔交易。</summary>
+    // 同時記 catalogDirty：寫進記憶體中的 SO 不等於寫進檔案，視窗要看得出有東西沒落盤。
     private void MarkOwnerDirty()
     {
         if (model?.Owner != null) EditorUtility.SetDirty(model.Owner);
+        catalogDirty = true;
+        UpdateUnsavedState();
         Repaint();
     }
 

@@ -8,8 +8,9 @@ namespace HaruFamily.Tools.AssetPipeline
     /// <summary>
     /// Asset group keyed by a pipeline operation key. 在節點圖上它就是一份「目錄」。
     /// </summary>
-    // 兩種指法並存：舊的目錄節點以 id 引用（改名不斷），新的目錄節點以 key 指定原型來源，
-    // 與 AssetPipelineSource、資產分頁一致。
+    // 兩個鍵各有職責，不可互相取代：
+    // key 是管線操作鍵，由管線執行時建立分組、AssetPipelineSource 以字串清單引用；
+    // id 是穩定引用，原型目錄節點指的是它，所以改 key 不會讓節點失聯。
     [Serializable]
     public class AssetPipelineAssetGroup : IGraphCatalogLibrary
     {

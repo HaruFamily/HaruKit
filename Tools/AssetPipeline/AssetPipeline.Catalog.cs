@@ -150,11 +150,7 @@ namespace HaruFamily.Tools.AssetPipeline
         {
             if (catalog == null) return null;
             EnsureCatalogIds();
-            return new AssetCatalog
-            {
-                source = CatalogSource.Prototype,
-                prototypeCatalogId = catalog.Id,
-            };
+            return new PrototypeAssetCatalog { catalogId = catalog.Id };
         }
 
         /// <summary>目錄裡的一筆資產：圖示、名字。點名字 ping 到 Project。</summary>

@@ -48,7 +48,7 @@ namespace HaruFamily.Tools.AssetPipeline
             foreach (GraphNode node in graph.Orphans)
             {
                 if (node == null) continue;
-                if (node.CatalogObject is AssetCatalog catalog) catalog.SyncCells();
+                if (node.CatalogObject is AssetCatalogBase catalog) catalog.SyncCells();
                 WalkSlots(node.BodyObject, "候選節點", ignored, new ActionReads(),
                     new HashSet<object>(ReferenceComparer.Instance));
             }
@@ -94,7 +94,7 @@ namespace HaruFamily.Tools.AssetPipeline
         private static void CheckActions(Graph graph, List<string> errors)
         {
             // 目錄比參照，不比名稱：名稱只是顯示用，同名的兩顆仍然是兩顆。
-            var producedCatalogs = new HashSet<AssetCatalog>();
+            var producedCatalogs = new HashSet<AssetCatalogBase>();
 
             List<ActionSlot> actions = graph.Actions;
             for (int i = 0; i < actions.Count; i++)
@@ -107,15 +107,15 @@ namespace HaruFamily.Tools.AssetPipeline
 
                 // 動態來源的目錄是前面的動作跑完才有內容的，所以只比對「到目前為止已產出」的集合。
                 // 原型來源隨時都有值，不受動作順序影響。
-                foreach (AssetCatalog catalog in reads.CatalogReads)
+                foreach (AssetCatalogBase catalog in reads.CatalogReads)
                 {
-                    if (!catalog.AcceptsWrite) continue;
+                    if (catalog is not DynamicAssetCatalog) continue;
                     if (!producedCatalogs.Contains(catalog))
                         errors.Add($"{path} 讀取動態目錄，但寫入它的動作不在前面。");
                 }
 
                 // 產出登記放在檢查之後：同一步讀自己的產出，仍然是「還沒跑完就讀」。
-                foreach (AssetCatalog catalog in reads.CatalogOutputs)
+                foreach (AssetCatalogBase catalog in reads.CatalogOutputs)
                     producedCatalogs.Add(catalog);
             }
         }
@@ -185,19 +185,19 @@ namespace HaruFamily.Tools.AssetPipeline
                 case NodeKind.Catalog:
                 {
                     if (slot is not CatalogSlotBase catalogSlot) { errors.Add($"{path} 收不下包：這一格不是產出格。"); return; }
-                    if (node.CatalogObject is not AssetCatalog catalog)
+                    if (node.CatalogObject is not AssetCatalogBase catalog)
                     {
                         errors.Add($"{path} 接的包不是目錄。");
                         return;
                     }
 
                     catalog.SyncCells();
-                    if (catalogSlot.IsOutput && !catalog.AcceptsWrite)
-                        errors.Add($"{path} 是產出格，但接到的目錄設為原型來源，寫不進去。");
+                    if (catalogSlot.IsOutput && catalog is not DynamicAssetCatalog)
+                        errors.Add($"{path} 是產出格，只接得上動態目錄。");
 
                     CheckCatalog(catalog, path, errors);
 
-                    List<AssetCatalog> bucket = catalogSlot.IsOutput ? reads.CatalogOutputs : reads.CatalogReads;
+                    List<AssetCatalogBase> bucket = catalogSlot.IsOutput ? reads.CatalogOutputs : reads.CatalogReads;
                     if (!bucket.Contains(catalog)) bucket.Add(catalog);
                     return;
                 }
@@ -230,7 +230,7 @@ namespace HaruFamily.Tools.AssetPipeline
                     if (body is CatalogCell cell)
                     {
                         // Owner 的宣告型別是泛型基底，這裡要的是 AssetPipeline 這一種目錄。
-                        var cellOwner = cell.Owner as AssetCatalog;
+                        var cellOwner = cell.Owner as AssetCatalogBase;
                         if (cellOwner == null) errors.Add($"{path} 的目錄格沒有母目錄。");
                         else if (!reads.CatalogReads.Contains(cellOwner))
                         {
@@ -257,13 +257,15 @@ namespace HaruFamily.Tools.AssetPipeline
         }
 
         /// <summary>目錄自己的設定對不對。同一顆在同一步只報一次，由呼叫端以 reads 去重。</summary>
-        private static void CheckCatalog(AssetCatalog catalog, string path, List<string> errors)
+        private static void CheckCatalog(AssetCatalogBase catalog, string path, List<string> errors)
         {
-            if (catalog.source != CatalogSource.Prototype) return;
-            if (string.IsNullOrWhiteSpace(catalog.prototypeCatalogId))
-                errors.Add($"{path} 的目錄設為原型來源，但沒有指定目錄。");
+            // 動態目錄的內容來自動作，設定上沒有東西可錯；時序由 CheckActions 負責。
+            if (catalog is not PrototypeAssetCatalog prototype) return;
+
+            if (string.IsNullOrWhiteSpace(prototype.catalogId))
+                errors.Add($"{path} 的原型目錄沒有指定目錄。");
             else if (AssetPipeline.current != null
-                     && AssetPipeline.current.FindCatalogById(catalog.prototypeCatalogId.Trim()) == null)
+                     && AssetPipeline.current.FindCatalogById(prototype.catalogId.Trim()) == null)
                 errors.Add($"{path} 指到的目錄已不存在。");
         }
 
@@ -327,8 +329,8 @@ namespace HaruFamily.Tools.AssetPipeline
         private sealed class ActionReads
         {
             public readonly List<string> Prototype = new List<string>();
-            public readonly List<AssetCatalog> CatalogReads = new List<AssetCatalog>();
-            public readonly List<AssetCatalog> CatalogOutputs = new List<AssetCatalog>();
+            public readonly List<AssetCatalogBase> CatalogReads = new List<AssetCatalogBase>();
+            public readonly List<AssetCatalogBase> CatalogOutputs = new List<AssetCatalogBase>();
         }
     }
 }

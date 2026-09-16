@@ -157,8 +157,6 @@ public partial class HaruGraphWindow
 
         if (graph != null)
         {
-            foreach (var node in graph.Nodes)
-                if (!node.IsInlineChild) UpdateInlineCellLayout(node);
             foreach (var node in graph.Nodes) UpdateRowGeometry(node, node.Rows);
             DrawLinks(graphMouse);
         }
@@ -171,7 +169,7 @@ public partial class HaruGraphWindow
                 HGNodeView linkTarget = LinkTargetNode(graphMouse);
                 foreach (var node in graph.Nodes)
                 {
-                    if (node.Hidden || node.IsInlineChild) continue;
+                    if (node.Hidden) continue;
                     DrawNode(node, ReferenceEquals(node, linkTarget));
                 }
                 DrawEmptyTimingHint();
@@ -273,14 +271,16 @@ public partial class HaruGraphWindow
                 if (!IsLinkVisible(link)) continue;
                 if (IsTracedLink(link) != tracedPass) continue;
                 // 停用子樹的線一起壓暗，才看得出整段路徑都不會被求值。
-                DrawGraphLine(link.ParentRow.PortPos, link.Target.OutputPort,
+                DrawGraphLine(link.ParentRow.PortPos, link.TargetPort,
                     link.Target.InDisabledSubtree || link.Target.InLockedSubtree, tracedPass,
                     link.ParentRow.IsOutput);
             }
         }
-        if (linking && (linkRow != null || linkNode != null))
+        if (linking && (linkRow != null || linkNode != null || linkCell != null))
         {
-            Vector2 from = linkRow != null ? linkRow.PortPos : linkNode.OutputPort;
+            Vector2 from = linkRow != null ? linkRow.PortPos
+                : linkCell != null ? linkCell.OutputPortPos
+                : linkNode.OutputPort;
             DrawGraphLine(from, LinkPreviewEnd(graphMouse), false, false, linkRow != null && linkRow.IsOutput);
         }
         Handles.EndGUI();
@@ -624,7 +624,7 @@ public partial class HaruGraphWindow
             {
                 DrawRows(node, node.Rows, rect);
                 if (nodeOwner is IGraphInlineNodeOwner inlineOwner)
-                    DrawInlineCells(node, inlineOwner, rect);
+                    DrawCellAddRow(node, inlineOwner, rect);
                 else DrawChildNodeRow(node, nodeOwner, rect);
             }
             else if (!node.IsPlaceholder) DrawRows(node, node.Rows, rect);
@@ -704,7 +704,7 @@ public partial class HaruGraphWindow
     /// <summary>
     /// 子節點擁有者的本體第一列：顯示現在有幾格，右邊一顆「＋」加一格。
     /// </summary>
-    // 非內嵌的 owner 維持「數量＋新增」列；ListCell owner 改由 DrawInlineCells 繪製自己的子列。
+    // 只有非內嵌的 owner 走這條：內嵌容器的每一格都是自己的 TwoPort 列，尾端另有一條新增列。
     private void DrawChildNodeRow(HGNodeView node, IGraphNodeOwner owner, Rect nodeRect)
     {
         var row = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight, nodeRect.width, HGGraph.RowHeight);
@@ -727,50 +727,25 @@ public partial class HaruGraphWindow
         MarkGraphChanged();
     }
 
-    /// <summary>內嵌格保留完整載體供其他欄位連線，但只在容器內畫成一條雙 port 列。</summary>
-    private void DrawInlineCells(HGNodeView node, IGraphInlineNodeOwner owner, Rect nodeRect)
+
+    /// <summary>容器尾端那條「＋ 新增」列。每一格本身是 Rows 裡的 TwoPort 列，由 DrawRows 畫。</summary>
+    // 整列寬而不是小鈕：0.45 倍縮放下 60px 的鈕只剩 27px，讀不到也按不到。
+    private void DrawCellAddRow(HGNodeView node, IGraphInlineNodeOwner owner, Rect nodeRect)
     {
-        for (int i = 0; i < node.InlineChildren.Count; i++)
-        {
-            HGNodeView child = node.InlineChildren[i];
-            if (child.Obj is not IGraphInlineNode inline) continue;
-
-            var row = new Rect(nodeRect.x, nodeRect.y + child.InlineLocalY, nodeRect.width, HGGraph.RowHeight);
-            HGStyles.Fill(row, i % 2 == 0 ? HGStyles.ListStripeEven : HGStyles.ListStripeOdd);
-
-            var output = new Rect(row.x, row.y + row.height * 0.5f - HGGraph.PortRadius,
-                HGGraph.PortDiameter, HGGraph.PortDiameter);
-            HGStyles.Port(output, HGStyles.LinkOutput);
-
-            HGRow input = InlineInputRow(child, inline.InputSlot);
-            var inputPort = new Rect(row.xMax - HGGraph.PortDiameter, row.y + row.height * 0.5f - HGGraph.PortRadius,
-                HGGraph.PortDiameter, HGGraph.PortDiameter);
-            if (input != null)
-            {
-                HGStyles.Port(inputPort, SlotPortColor(input));
-                DrawPortGlyph(input, inputPort);
-                HandleInlineInputPort(input, inputPort);
-            }
-
-            var remove = new Rect(inputPort.x - HGGraph.ListDeleteWidth, row.y + 3f, 14f, row.height - 6f);
-            // 走一般的刪節點路徑：還指著這一格的欄位要一起斷開，否則它只是離開容器，
-            // 繼續掛在下游欄位上變成一顆沒有母容器的孤兒節點。摘出容器由 RemoveFromNodeOwners 負責。
-            if (GUI.Button(remove, new GUIContent("✕", "刪除這一格"), HGStyles.ListAdd))
-            {
-                DeleteNode(child);
-                return;
-            }
-
-            var type = new Rect(output.xMax + 5f, row.y + 1f, remove.xMin - output.xMax - 10f, row.height - 2f);
-            string text = HGReflect.ResultTypeName(inline.ResultType);
-            GUI.Label(type, HGStyles.Elide(text, HGStyles.RowLabel, type.width, "這一格的輸出結果型別"), HGStyles.RowLabel);
-        }
-
-        var addRow = new Rect(nodeRect.x, nodeRect.y + node.InlineAddRowY, nodeRect.width, HGGraph.RowHeight);
+        var addRow = new Rect(nodeRect.x, nodeRect.y + node.CellAddRowY, nodeRect.width, HGGraph.RowHeight);
         var add = new Rect(addRow.x + 4f, addRow.y + 2f, addRow.width - 8f, addRow.height - 4f);
         HGStyles.RoundedFrame(add, HGStyles.ListRule, 3f);
-        string label = node.InlineChildren.Count == 0 ? "＋ 新增第一格" : "＋ 新增";
-        if (!GUI.Button(add, new GUIContent(label, "新增一個未接篩選 Formula 的 ListCell"), HGStyles.ListAdd)) return;
+
+        bool empty = true;
+        foreach (var child in owner.ChildNodes)
+        {
+            if (child == null) continue;
+            empty = false;
+            break;
+        }
+
+        string label = empty ? "＋ 新增第一格" : "＋ 新增";
+        if (!GUI.Button(add, new GUIContent(label, "新增一格，未接篩選公式時直接輸出整包內容"), HGStyles.ListAdd)) return;
 
         BreakUndoMerge();
         PreserveVisibleNodePositions();
@@ -778,38 +753,6 @@ public partial class HaruGraphWindow
         Invalidate();
         MarkGraphChanged();
     }
-
-    private static HGRow InlineInputRow(HGNodeView node, FormulaSlotBase slot)
-    {
-        foreach (var row in HGGraph.AllRows(node.Rows))
-            if (ReferenceEquals(row.Slot, slot)) return row;
-        return null;
-    }
-
-    private void HandleInlineInputPort(HGRow row, Rect port)
-    {
-        var e = Event.current;
-        if (e.type != EventType.MouseDown || e.button != 0 || !port.Contains(e.mousePosition)) return;
-        portClickRow = row;
-        portClickStart = e.mousePosition - pan;
-        e.Use();
-    }
-
-    private static void UpdateInlineCellLayout(HGNodeView node)
-    {
-        foreach (var child in node.InlineChildren)
-        {
-            child.Pos = new Vector2(node.Pos.x, node.Pos.y + child.InlineLocalY);
-            child.Width = node.Width;
-            child.Height = HGGraph.RowHeight;
-            if (child.Obj is not IGraphInlineNode inline) continue;
-            HGRow input = InlineInputRow(child, inline.InputSlot);
-            if (input == null) continue;
-            input.LocalY = 0f;
-            input.Height = HGGraph.RowHeight;
-        }
-    }
-
 
     private void DrawReferencePickerRow(HGNodeView node, Rect nodeRect)
     {
@@ -873,6 +816,9 @@ public partial class HaruGraphWindow
             var portRect = PortRectOf(row, nodeRect);
             HGStyles.Port(portRect, SlotPortColor(row));
             DrawPortGlyph(row, portRect);
+
+            // TwoPort：右側輸入之外，左緣有一顆自己的輸出接點——那一列自己就是一顆載體。
+            if (row.Kind == HGRowKind.TwoPort) HGStyles.Port(OutputPortRectOf(row, nodeRect), HGStyles.LinkOutput);
         }
 
         if (node.IsRoot || !node.HasOutputPort) return;
@@ -908,18 +854,24 @@ public partial class HaruGraphWindow
             nodeRect.y + row.LocalY + row.Height * 0.5f - HGGraph.PortRadius,
             HGGraph.PortDiameter, HGGraph.PortDiameter);
 
+    /// <summary>TwoPort 列左緣那顆輸出接點。繪製、命中與連線端點共用同一圓心。</summary>
+    private static Rect OutputPortRectOf(HGRow row, Rect nodeRect)
+        => new Rect(nodeRect.x,
+            nodeRect.y + row.LocalY + row.Height * 0.5f - HGGraph.PortRadius,
+            HGGraph.PortDiameter, HGGraph.PortDiameter);
+
     /// <summary>折疊的清單裡有沒有已經接上來源的元素。</summary>
     private static bool HasConnectedElement(HGRow listRow)
     {
         foreach (var child in HGGraph.AllRows(listRow.Children))
-            if (child.Kind == HGRowKind.Slot && child.Slot != null && HGReflect.GetNode(child.Slot) != null) return true;
+            if (child.HasSlot && HGReflect.GetNode(child.Slot) != null) return true;
         return false;
     }
 
     private Color SlotPortColor(HGRow row)
     {
         // 從 Node 發點拉線時，收得下它的欄位接點先亮起來，使用者不用逐一試。
-        if (linking && linkNode != null && linkCompatibleRows.Contains(row)) return HGStyles.Link;
+        if (linking && (linkNode != null || linkCell != null) && linkCompatibleRows.Contains(row)) return HGStyles.Link;
 
         bool hasIssue = Rep.HasIssue(row.Slot, out bool isError);
         int useType = HGReflect.UseType(row.Slot);
@@ -936,6 +888,9 @@ public partial class HaruGraphWindow
         {
             row.ScreenRect = new Rect(node.Pos.x, node.Pos.y + row.LocalY, node.Width, row.Height);
             row.PortPos = new Vector2(node.Pos.x + node.Width - HGGraph.PortRadius,
+                node.Pos.y + row.LocalY + row.Height * 0.5f);
+            // 左側輸出貼齊節點左緣，與節點 Header 的輸出接點同一條垂直線。
+            row.OutputPortPos = new Vector2(node.Pos.x + HGGraph.PortRadius,
                 node.Pos.y + row.LocalY + row.Height * 0.5f);
             UpdateRowGeometry(node, row.Children);
         }

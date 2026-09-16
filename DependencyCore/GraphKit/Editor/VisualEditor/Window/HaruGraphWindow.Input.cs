@@ -34,6 +34,13 @@ public partial class HaruGraphWindow
                     e.Use();
                     break;
                 }
+                // 容器上那一格的左側輸出：格子不是節點，所以另走一條命中路徑。
+                if (e.button == 0 && OutputCellAt(graphMouse) is HGRow outputCell)
+                {
+                    BeginLinkFromCell(outputCell);
+                    e.Use();
+                    break;
+                }
                 // 放置模式吃掉這一下點擊：左鍵落下節點，右鍵取消，兩者都不再往下走選取與框選。
                 if (placingSlot != null)
                 {
@@ -83,15 +90,12 @@ public partial class HaruGraphWindow
                     {
                         titleClickNode = hit.HasSourceSelector && hit.SourceMenuRect.Contains(graphMouse) ? hit : null;
                         titleClickStart = graphMouse;
-                        if (!hit.IsInlineChild)
-                        {
-                            dragNode = hit;
-                            dragOffset = graphMouse - hit.Pos;
-                            dragMoved = false;
-                            dragStartPositions.Clear();
-                            foreach (var n in graph.Nodes)
-                                if (selectedIds.Contains(n.Id) && !n.IsInlineChild) dragStartPositions[n.Id] = n.Pos;
-                        }
+                        dragNode = hit;
+                        dragOffset = graphMouse - hit.Pos;
+                        dragMoved = false;
+                        dragStartPositions.Clear();
+                        foreach (var n in graph.Nodes)
+                            if (selectedIds.Contains(n.Id)) dragStartPositions[n.Id] = n.Pos;
                     }
                     e.Use();
                 }
@@ -187,7 +191,7 @@ public partial class HaruGraphWindow
                 {
                     var box = BoxRect();
                     foreach (var n in graph.Nodes)
-                        if (!n.IsInlineChild && !n.Hidden && box.Overlaps(n.Rect)) selectedIds.Add(n.Id);
+                        if (!n.Hidden && box.Overlaps(n.Rect)) selectedIds.Add(n.Id);
                     boxSelecting = false;
                     e.Use();
                 }
@@ -443,7 +447,7 @@ public partial class HaruGraphWindow
     {
         if (graph == null) return null;
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
-            if (!graph.Nodes[i].IsInlineChild && !graph.Nodes[i].Hidden && graph.Nodes[i].Rect.Contains(graphPoint)) return graph.Nodes[i];
+            if (!graph.Nodes[i].Hidden && graph.Nodes[i].Rect.Contains(graphPoint)) return graph.Nodes[i];
         return null;
     }
 
@@ -462,11 +466,30 @@ public partial class HaruGraphWindow
         return null;
     }
 
+    /// <summary>落在哪一格的左側輸出接點上。圓心與 DrawNodePorts、連線端點共用 HGRow.OutputPortPos。</summary>
+    private HGRow OutputCellAt(Vector2 graphPoint)
+    {
+        if (graph == null) return null;
+        for (int i = graph.Nodes.Count - 1; i >= 0; i--)
+        {
+            var node = graph.Nodes[i];
+            if (node.Hidden) continue;
+            foreach (var row in HGGraph.AllRows(node.Rows))
+            {
+                if (row.Kind != HGRowKind.TwoPort || row.Hidden) continue;
+                var port = new Rect(row.OutputPortPos - Vector2.one * HGGraph.PortRadius,
+                    Vector2.one * HGGraph.PortDiameter);
+                if (port.Contains(graphPoint)) return row;
+            }
+        }
+        return null;
+    }
+
     private void ResetLayout()
     {
         if (graph == null) return;
         foreach (var node in graph.Nodes)
-            if (!node.IsInlineChild) model.ClearPosition(node.Id);
+            model.ClearPosition(node.Id);
         MarkPositionsChanged();
         graphDirty = true;
         Repaint();

@@ -33,17 +33,6 @@ public interface IGraphSink
 }
 
 /// <summary>
-/// 目錄：內容住在節點自己身上的容器。它<b>不是公式</b>——沒有結果型別，也求不出值。
-/// </summary>
-// 純標記。泛型層只需要知道「這顆節點不參與求值」，內容是什麼、怎麼裝滿由使用端決定。
-// 值要從它底下的子節點取（見 IGraphNodeOwner），指得到它的欄位是 CatalogSlotBase，收不收得下由該欄位逐顆判定。
-//
-// 與 IGraphCatalogLibrary 不同：這個是畫布上的一顆節點，那個是左欄手動蒐集的一份資產分組。
-public interface IGraphCatalog
-{
-}
-
-/// <summary>
 /// 內容底下自己帶一串子節點的節點。子節點是完整的 <see cref="GraphNode"/>——
 /// 有自己的 Id 與座標，所以任何欄位都指得到它，畫布上也各自是一顆節點。
 /// </summary>

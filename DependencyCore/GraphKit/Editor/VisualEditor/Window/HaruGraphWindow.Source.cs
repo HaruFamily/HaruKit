@@ -409,7 +409,7 @@ public partial class HaruGraphWindow
         if (node?.Carrier == null) return;
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
-            if (row.Kind != HGRowKind.Slot || row.Slot == null) continue;
+            if (!row.HasSlot) continue;
             var child = HGReflect.GetNode(row.Slot);
             if (child == null) continue;
             HGReflect.SetNode(row.Slot, null);
@@ -486,7 +486,7 @@ public partial class HaruGraphWindow
         if (graph?.Nodes == null) return;
         foreach (var node in graph.Nodes)
         {
-            if (node == null || node.IsInlineChild || string.IsNullOrEmpty(node.Id)) continue;
+            if (node == null || string.IsNullOrEmpty(node.Id)) continue;
             model.SetPosition(node.Id, node.Pos);
         }
     }
@@ -502,19 +502,28 @@ public partial class HaruGraphWindow
             return;
         }
         if (node.Carrier == null) return;
+        DeleteCarrier(node.Carrier, node.Id, pushUndo);
+    }
+
+    /// <summary>
+    /// 刪一顆載體：斷開所有指著它的欄位，並把它移出候選池與任何容器。
+    /// </summary>
+    // 節點與容器內的一格共用這一條：兩者的差別只有畫法，載體的拆除步驟完全一樣。
+    private void DeleteCarrier(GraphNode carrier, string nodeId = null, bool pushUndo = true)
+    {
+        if (carrier == null) return;
         if (pushUndo) BreakUndoMerge();
         PreserveVisibleNodePositions();
 
-        // 刪節點＝斷開所有指著這個載體的欄位，並把它移出候選池。
         foreach (var slot in SlotsInCurrentGraph())
-            if (ReferenceEquals(HGReflect.GetNode(slot), node.Carrier)) HGReflect.SetNode(slot, null);
+            if (ReferenceEquals(HGReflect.GetNode(slot), carrier)) HGReflect.SetNode(slot, null);
         if (focus.Kind == HGFocusKind.Asset && focus.AssetHostSlot != null
-            && ReferenceEquals(HGReflect.GetNode(focus.AssetHostSlot), node.Carrier))
+            && ReferenceEquals(HGReflect.GetNode(focus.AssetHostSlot), carrier))
             HGReflect.SetNode(focus.AssetHostSlot, null);
-        model.RemoveOrphan(node.Carrier);
-        RemoveFromNodeOwners(node.Carrier);
+        model.RemoveOrphan(carrier);
+        RemoveFromNodeOwners(carrier);
 
-        selectedIds.Remove(node.Id);
+        if (!string.IsNullOrEmpty(nodeId)) selectedIds.Remove(nodeId);
         Invalidate();
     }
 

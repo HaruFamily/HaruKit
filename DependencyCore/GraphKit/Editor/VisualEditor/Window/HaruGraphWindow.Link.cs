@@ -16,6 +16,7 @@ public partial class HaruGraphWindow
         linking = true;
         linkRow = row;
         linkNode = null;
+        linkCell = null;
         RebuildLinkCompatibility();
     }
 
@@ -24,6 +25,17 @@ public partial class HaruGraphWindow
         linking = true;
         linkRow = null;
         linkNode = node;
+        linkCell = null;
+        RebuildLinkCompatibility();
+    }
+
+    /// <summary>從容器上某一格的左側輸出起手。方向與 BeginLinkFromNode 相同，只是來源是一列。</summary>
+    private void BeginLinkFromCell(HGRow cell)
+    {
+        linking = true;
+        linkRow = null;
+        linkNode = null;
+        linkCell = cell;
         RebuildLinkCompatibility();
     }
 
@@ -32,6 +44,7 @@ public partial class HaruGraphWindow
         linking = false;
         linkRow = null;
         linkNode = null;
+        linkCell = null;
         linkCompatibleNodeIds.Clear();
         linkCompatibleRows.Clear();
     }
@@ -53,6 +66,14 @@ public partial class HaruGraphWindow
             return;
         }
 
+        if (linkCell != null)
+        {
+            foreach (var node in graph.Nodes)
+                foreach (var row in HGGraph.AllRows(node.Rows))
+                    if (row.IsLinkable && CanConnectToCell(row, linkCell)) linkCompatibleRows.Add(row);
+            return;
+        }
+
         if (linkNode == null) return;
         foreach (var node in graph.Nodes)
             foreach (var row in HGGraph.AllRows(node.Rows))
@@ -70,10 +91,16 @@ public partial class HaruGraphWindow
             ? linkCompatibleRows.Contains(row)
             : CanConnectLink(row, node);
 
+    private bool CanLinkFromCell(HGRow row, HGRow cell)
+        => linking && ReferenceEquals(cell, linkCell)
+            ? linkCompatibleRows.Contains(row)
+            : CanConnectToCell(row, cell);
+
     private HGNodeView LinkTargetNode(Vector2 graphMouse)
     {
         if (!linking) return null;
         if (linkRow != null) return SnappedOutputNode(graphMouse, linkRow);
+        if (linkCell != null) return OwnerOfRow(SnappedInputRowForCell(graphMouse, linkCell));
         return linkNode != null ? OwnerOfRow(SnappedInputRow(graphMouse, linkNode)) : null;
     }
 
@@ -82,10 +109,15 @@ public partial class HaruGraphWindow
         if (linkRow != null)
         {
             var target = SnappedOutputNode(graphMouse, linkRow);
-            return target != null ? target.OutputPort : graphMouse;
+            if (target != null) return target.OutputPort;
+
+            var cell = SnappedOutputCell(graphMouse, linkRow);
+            return cell != null ? cell.OutputPortPos : graphMouse;
         }
 
-        var row = SnappedInputRow(graphMouse, linkNode);
+        var row = linkCell != null
+            ? SnappedInputRowForCell(graphMouse, linkCell)
+            : SnappedInputRow(graphMouse, linkNode);
         return row != null ? row.PortPos : graphMouse;
     }
 
@@ -113,9 +145,61 @@ public partial class HaruGraphWindow
         return nearest;
     }
 
-    private HGRow SnappedInputRow(Vector2 graphMouse, HGNodeView node)
+    /// <summary>滑鼠附近那一格的左側輸出。格子不是節點，所以另走一條命中路徑。</summary>
+    private HGRow SnappedOutputCell(Vector2 graphMouse, HGRow row)
     {
-        if (graph == null || node == null) return null;
+        if (graph == null || row == null) return null;
+
+        float nearestDistanceSqr = LinkSnapDistance * LinkSnapDistance / (zoom * zoom);
+        HGRow nearest = null;
+        foreach (var node in graph.Nodes)
+        {
+            if (node.Hidden) continue;
+            foreach (var candidate in HGGraph.AllRows(node.Rows))
+            {
+                if (candidate.Kind != HGRowKind.TwoPort || candidate.Hidden) continue;
+                if (!CanConnectToCell(row, candidate)) continue;
+
+                float distanceSqr = (candidate.OutputPortPos - graphMouse).sqrMagnitude;
+                if (distanceSqr > nearestDistanceSqr) continue;
+                nearestDistanceSqr = distanceSqr;
+                nearest = candidate;
+            }
+        }
+        return nearest;
+    }
+
+    /// <summary>這個欄位收不收得下那一格。格子的內容是完整的節點內容，所以一律問 AcceptsBody。</summary>
+    private bool CanConnectToCell(HGRow row, HGRow cell)
+    {
+        if (row?.Slot == null || cell?.Carrier == null) return false;
+        if (row.Locked || ReferenceEquals(row, cell)) return false;
+        return HGReflect.AcceptsBody(row.Slot, cell.Carrier.BodyObject)
+            && !WouldCreateCycle(row.Slot, cell.Carrier);
+    }
+
+    private bool TryConnectCell(HGRow row, HGRow cell)
+    {
+        if (!CanConnectToCell(row, cell)) return false;
+
+        BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        AttachSource(row.Slot, cell.Carrier);
+        Invalidate();
+        return true;
+    }
+
+    private HGRow SnappedInputRow(Vector2 graphMouse, HGNodeView node)
+        => node == null ? null : SnappedInputRow(graphMouse, row => CanLinkFrom(row, node));
+
+    private HGRow SnappedInputRowForCell(Vector2 graphMouse, HGRow cell)
+        => cell == null ? null : SnappedInputRow(graphMouse, row => CanLinkFromCell(row, cell));
+
+    /// <summary>吸附到最近一個收得下來源的欄位接點。收不收得下由呼叫端決定，來源是節點或一格都走這裡。</summary>
+    // 先看滑鼠落在哪顆節點裡（同節點內比 Y 距離），沒有才退回全圖比接點距離。
+    private HGRow SnappedInputRow(Vector2 graphMouse, Func<HGRow, bool> accepts)
+    {
+        if (graph == null) return null;
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
         {
             var owner = graph.Nodes[i];
@@ -125,7 +209,7 @@ public partial class HaruGraphWindow
             float nearestY = float.MaxValue;
             foreach (var row in HGGraph.AllRows(owner.Rows))
             {
-                if (!row.IsLinkable || !CanLinkFrom(row, node)) continue;
+                if (!row.IsLinkable || !accepts(row)) continue;
                 float distanceY = Mathf.Abs(row.ScreenRect.center.y - graphMouse.y);
                 if (distanceY >= nearestY) continue;
                 nearestY = distanceY;
@@ -134,14 +218,13 @@ public partial class HaruGraphWindow
             if (nearestInNode != null) return nearestInNode;
         }
 
-        float maxDistanceSqr = LinkSnapDistance * LinkSnapDistance / (zoom * zoom);
-        float nearestDistanceSqr = maxDistanceSqr;
+        float nearestDistanceSqr = LinkSnapDistance * LinkSnapDistance / (zoom * zoom);
         HGRow nearest = null;
         foreach (var owner in graph.Nodes)
         {
             foreach (var row in HGGraph.AllRows(owner.Rows))
             {
-                if (!row.IsLinkable || !CanLinkFrom(row, node)) continue;
+                if (!row.IsLinkable || !accepts(row)) continue;
                 float distanceSqr = (row.PortPos - graphMouse).sqrMagnitude;
                 if (distanceSqr > nearestDistanceSqr) continue;
                 nearestDistanceSqr = distanceSqr;
@@ -181,7 +264,7 @@ public partial class HaruGraphWindow
         {
             if (!IsLinkVisible(link)) continue;       // 沒畫出來的線不該點得到
             Vector2 a = link.ParentRow.PortPos;
-            Vector2 b = link.Target.OutputPort;
+            Vector2 b = link.TargetPort;
             if (PointToSegmentSqrDistance(graphPoint, a, b) < 36f) return link;
         }
         return null;
@@ -258,6 +341,8 @@ public partial class HaruGraphWindow
         if (linkRow?.Slot == null) return;
         var target = SnappedOutputNode(graphMouse, linkRow);
         if (TryConnectLink(linkRow, target)) return;
+        // 容器上的一格不是節點，左側輸出另走一條命中路徑。
+        if (TryConnectCell(linkRow, SnappedOutputCell(graphMouse, linkRow))) return;
 
         // 落在既有 Node 但沒有相容來源時取消，不能把它誤判成空白而疊一顆空 Node 上去。
         if (NodeAt(graphMouse) != null)
@@ -282,6 +367,14 @@ public partial class HaruGraphWindow
 
     private void ResolveLinkFromOutput(Vector2 graphMouse)
     {
+        if (linkCell != null)
+        {
+            var target = SnappedInputRowForCell(graphMouse, linkCell);
+            if (target == null || !TryConnectCell(target, linkCell))
+                ShowNotification(new GUIContent("請拖到相容的參數接點"));
+            return;
+        }
+
         var row = SnappedInputRow(graphMouse, linkNode);
         if (row == null || !TryConnectLink(row, linkNode))
             ShowNotification(new GUIContent("請拖到相容的參數接點"));

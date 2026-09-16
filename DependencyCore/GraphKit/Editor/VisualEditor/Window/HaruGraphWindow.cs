@@ -120,6 +120,8 @@ public partial class HaruGraphWindow : EditorWindow
     private bool linking;
     private HGRow linkRow;
     private HGNodeView linkNode;
+    /// <summary>從容器上某一格的左側輸出拉出來的線。格子不是節點，所以與 linkNode 分開記。</summary>
+    private HGRow linkCell;
 
     // 接點一個熱區兩種手勢：按下先記著，移動超過 PortClickSlop 才起拉線，原地放開就是收合這一段。
     // 判定跟 Header 的 ▾ 同一套。刻意不在 MouseDown 當下起拉線：想收合卻抖了一下的話，
@@ -186,7 +188,14 @@ public partial class HaruGraphWindow : EditorWindow
     // 資產的復原歷程。資產不在 Owner 的工作副本裡，HGModel 那份 Undo 蓋不到，得自己記一份。
     private readonly HGAssetHistory assetHistory = new();
 
-    private bool HasUnsavedWork => model?.Dirty == true || assetDirty;
+    /// <summary>
+    /// 目錄庫有未落盤的改動。
+    /// </summary>
+    // 目錄立即寫 Owner、不進工作副本，所以它不碰 model.Dirty。未存檔狀態獨立記一份：
+    // 寫進記憶體中的 SO 不等於寫進檔案，沒落盤的目錄會在下一次 domain reload 消失。
+    private bool catalogDirty;
+
+    private bool HasUnsavedWork => model?.Dirty == true || assetDirty || catalogDirty;
 
     /// <summary>引用清單只在資產焦點有意義，作為左欄第三區出現（2026-08-20 由整條右欄改成分區）。</summary>
     /// <summary>資產庫與引用區要不要存在。由圖宣告，不從「現在有幾筆資產」推。</summary>
@@ -454,7 +463,7 @@ public partial class HaruGraphWindow : EditorWindow
         {
             foreach (var row in HGGraph.AllRows(n.Rows))
             {
-                if (row.Kind != HGRowKind.Slot || row.Slot == null) continue;
+                if (!row.HasSlot) continue;
                 if (IsSlotHidden(n, row)) effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
             }
         }
@@ -464,7 +473,7 @@ public partial class HaruGraphWindow : EditorWindow
         // 計數擋不住「引用者自己也被收掉了」這種間接情況。
         var visible = new HashSet<HGNodeView>();
         foreach (var n in graph.Nodes)
-            if (n.ParentRow == null && !n.IsInlineChild) MarkVisibleFrom(n, visible);
+            if (n.ParentRow == null) MarkVisibleFrom(n, visible);
 
         foreach (var n in graph.Nodes) n.Hidden = !visible.Contains(n);
 
@@ -509,7 +518,7 @@ public partial class HaruGraphWindow : EditorWindow
             if (n.Hidden) continue;
             foreach (var row in HGGraph.AllRows(n.Rows))
             {
-                if (row.Kind != HGRowKind.Slot || row.Slot == null) continue;
+                if (!row.HasSlot) continue;
                 if (!graph.BySlot.TryGetValue(row.Slot, out var target) || !target.Hidden) continue;
                 effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
             }
@@ -541,7 +550,7 @@ public partial class HaruGraphWindow : EditorWindow
         while (node != null && seen.Add(node))
         {
             keep.Add(node);
-            node = node.InlineParent ?? (node.ParentRow != null ? NodeById(node.ParentRow.OwnerNodeId) : null);
+            node = node.ParentRow != null ? NodeById(node.ParentRow.OwnerNodeId) : null;
         }
     }
 
@@ -556,8 +565,6 @@ public partial class HaruGraphWindow : EditorWindow
     private void MarkSubtree(HGNodeView node, HashSet<HGNodeView> into)
     {
         if (node == null || !into.Add(node)) return;
-        if (node.InlineParent != null) MarkSubtree(node.InlineParent, into);
-        foreach (var inlineChild in node.InlineChildren) MarkSubtree(inlineChild, into);
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
             if (row.Slot == null) continue;
@@ -572,6 +579,8 @@ public partial class HaruGraphWindow : EditorWindow
     private bool IsLinkVisible(HGLink link)
     {
         if (link?.ParentRow == null || link.Target == null || link.Target.Hidden) return false;
+        // 端點是容器上的一格時，那一列自己被收起來也沒有端點可畫。
+        if (link.TargetRow != null && link.TargetRow.Hidden) return false;
         if (link.Owner != null && link.Owner.Hidden) return false;
         return !effectiveHidden.Contains(HGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow));
     }
@@ -583,7 +592,6 @@ public partial class HaruGraphWindow : EditorWindow
     private void MarkVisibleFrom(HGNodeView node, HashSet<HGNodeView> visible)
     {
         if (node == null || !visible.Add(node)) return;
-        foreach (var inlineChild in node.InlineChildren) MarkVisibleFrom(inlineChild, visible);
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
             if (row.Slot == null) continue;
@@ -596,7 +604,7 @@ public partial class HaruGraphWindow : EditorWindow
     {
         foreach (var n in graph.Nodes)
             foreach (var row in HGGraph.AllRows(n.Rows))
-                if (row.Kind == HGRowKind.Slot && HGGraph.CollapseKey(n.Id, row) == key) return row;
+                if (row.HasSlot && HGGraph.CollapseKey(n.Id, row) == key) return row;
         return null;
     }
 
@@ -902,7 +910,11 @@ public partial class HaruGraphWindow : EditorWindow
         // 共用資產存檔會把引用它的 Owner 標成未驗證，但工作副本一個字都沒改（Dirty=false）。
         // 存檔是唯一會重跑 Core Verify 並寫回 Owner 的入口，這時候不開它就沒有任何路可以把圖救回已驗證。
         bool needsRevalidate = !inAsset && model.Owner is IGraphOwner asOwner && !asOwner.IsGraphValidated();
-        bool hasChanges = inAsset ? assetDirty : (model.Dirty || needsRevalidate);
+        // 只有目錄沒落盤時不被圖的錯誤擋住：目錄不在存檔交易裡，寫的是 Owner 上另一份資料，
+        // 擋住它等於「圖有錯就再也存不了目錄」。
+        bool catalogOnly = !inAsset && catalogDirty && !model.Dirty && !needsRevalidate;
+        if (catalogOnly) blocked = false;
+        bool hasChanges = inAsset ? assetDirty : (model.Dirty || needsRevalidate || catalogDirty);
         bool canSave = hasChanges && !blocked;
         bool revalidateOnly = needsRevalidate && !model.Dirty;
 
