@@ -7,15 +7,15 @@ using HaruFamily.DependencyCore.GraphKit;
 namespace HaruFamily.Tools.AssetPipeline
 {
     /// <summary>
-    /// 一條管線的步驟清單，在節點圖上是一顆節點。
+    /// 一條管線的動作清單，在節點圖上是一顆節點。
     /// </summary>
     // 形狀對應 LogicGraph 的 ActionTimingGroup：它是 root，本體是一串頭端。
     // AssetPipeline 目前只有一條管線，所以整張圖只會有一顆 root。
     [Serializable]
-    public class APStepGroup : IGraphHead
+    public class ActionGroup : IGraphHead
     {
         [SerializeReference]
-        public List<APActionSlot> Steps = new List<APActionSlot>();
+        public List<ActionSlot> Actions = new List<ActionSlot>();
 
         [SerializeField, HideInInspector]
         private Vector2 _pos;
@@ -42,13 +42,13 @@ namespace HaruFamily.Tools.AssetPipeline
     // 找的是「型別實作 IGraphDocument 的欄位」，並對那個欄位 DeepCopy 出工作副本。
     // SO 本身是 UnityEngine.Object，深複製會原樣沿用，取消就救不回來了。
     [Serializable]
-    public class APGraph : IGraphDocument
+    public class Graph : IGraphDocument
     {
         /// <summary>整張圖唯一的 root 識別值。編輯器只拿它做 Equals 比較與 ToString 顯示。</summary>
         public const string PipelineKey = "Pipeline";
 
         [SerializeReference]
-        private List<APStepGroup> _roots = new List<APStepGroup>();
+        private List<ActionGroup> _roots = new List<ActionGroup>();
 
         [SerializeReference, HideInInspector]
         private List<GraphNode> _orphans = new List<GraphNode>();
@@ -60,21 +60,21 @@ namespace HaruFamily.Tools.AssetPipeline
         private bool _validated;
 
         /// <summary>強型別存取，給 AssetPipeline 自己的執行與驗證用。</summary>
-        public List<APStepGroup> Groups
+        public List<ActionGroup> Groups
         {
-            get { _roots ??= new List<APStepGroup>(); return _roots; }
+            get { _roots ??= new List<ActionGroup>(); return _roots; }
         }
 
-        /// <summary>整張圖的步驟，依 root 順序展開。沒有 root 時回空清單。</summary>
-        public List<APActionSlot> Steps
+        /// <summary>整張圖的動作，依 root 順序展開。沒有 root 時回空清單。</summary>
+        public List<ActionSlot> Actions
         {
             get
             {
-                var result = new List<APActionSlot>();
-                foreach (APStepGroup group in Groups)
+                var result = new List<ActionSlot>();
+                foreach (ActionGroup group in Groups)
                 {
-                    if (group?.Steps == null) continue;
-                    foreach (APActionSlot slot in group.Steps)
+                    if (group?.Actions == null) continue;
+                    foreach (ActionSlot slot in group.Actions)
                         if (slot != null) result.Add(slot);
                 }
                 return result;
@@ -101,9 +101,9 @@ namespace HaruFamily.Tools.AssetPipeline
 
         IList IGraphDocument.Roots => Groups;
 
-        Type IGraphDocument.PackType => typeof(APPack);
+        Type IGraphDocument.PackType => typeof(NullPack);
 
-        Type IGraphDocument.ItemSlotType => typeof(APActionSlot);
+        Type IGraphDocument.ItemSlotType => typeof(ActionSlot);
 
         // 只有一條管線，所以不看 owner，永遠回同一個識別值。
         IReadOnlyList<object> IGraphDocument.RootKeys(UnityEngine.Object owner) => new object[] { PipelineKey };
@@ -112,25 +112,25 @@ namespace HaruFamily.Tools.AssetPipeline
 
         string IGraphDocument.TitleOf(object root) => "管線";
 
-        string IGraphDocument.RootChip => "步驟清單";
+        string IGraphDocument.RootChip => "動作清單";
 
         string IGraphDocument.RootNoun => "管線";
 
         string IGraphDocument.WindowTitle => "AssetPipelineGraph";
 
-        // 只宣告目錄：APSlot 的 AssetBaseType 是 null、AcceptsAsset 永遠 false，管線的欄位接不到共用資產；
-        // Token 則是管線用不到——步驟欄位不收 Token（APActionSlot.AcceptsToken 永遠 false），
+        // 只宣告目錄：Slot 的 AssetBaseType 是 null、AcceptsAsset 永遠 false，管線的欄位接不到共用資產；
+        // Token 則是管線用不到——動作欄位不收 Token（ActionSlot.AcceptsToken 永遠 false），
         // 公式欄位要的是「哪一批資產」而不是具名常數。目錄的內容由 Owner（AssetPipeline）提供，見 ICatalogOwner。
         HGCapabilities IGraphDocument.Capabilities => HGCapabilities.Catalogs;
 
-        IList IGraphDocument.ItemsOf(object root) => (root as APStepGroup)?.Steps;
+        IList IGraphDocument.ItemsOf(object root) => (root as ActionGroup)?.Actions;
 
         object IGraphDocument.AddRoot(object key)
         {
             if (!PipelineKey.Equals(key)) return null;
             if (Groups.Count > 0) return Groups[0];
 
-            var group = new APStepGroup();
+            var group = new ActionGroup();
             Groups.Add(group);
             return group;
         }
@@ -145,7 +145,7 @@ namespace HaruFamily.Tools.AssetPipeline
         /// </summary>
         public void Verify()
         {
-            List<string> errors = APGraphVerifier.Collect(this);
+            List<string> errors = GraphVerifier.Collect(this);
             _validated = errors.Count == 0;
 
             if (_validated) return;

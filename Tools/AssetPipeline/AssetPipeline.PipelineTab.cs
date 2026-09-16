@@ -31,7 +31,7 @@ namespace HaruFamily.Tools.AssetPipeline
             // 二次確認，防止誤觸實際修改資產
             bool confirmed = EditorUtility.DisplayDialog(
                 "執行管線",
-                $"確定執行 {graph.Steps.Count} 個管線步驟？\n此操作會實際修改資產，無法自動復原（請確認已 commit）。",
+                $"確定執行 {graph.Actions.Count} 個管線動作？\n此操作會實際修改資產，無法自動復原（請確認已 commit）。",
                 "執行",
                 "取消");
 
@@ -60,7 +60,7 @@ namespace HaruFamily.Tools.AssetPipeline
             BeginRun();
             // 格子的 owner 不序列化，Domain Reload 之後是 null。走一次驗證的走訪把它們接回母目錄，
             // 順便確保這次執行用的是最新的圖。
-            List<string> graphErrors = APGraphVerifier.Collect(graph);
+            List<string> graphErrors = GraphVerifier.Collect(graph);
             if (graphErrors.Count > 0)
             {
                 // 擋執行看這一趟算出來的結果，不看圖上存下來的 IsValidated：那個旗標跟著資料序列化，
@@ -83,13 +83,13 @@ namespace HaruFamily.Tools.AssetPipeline
 
             try
             {
-                // 順序仍然是唯一真相：節點圖只換了編輯方式，步驟還是嚴格依 root 底下的清單順序跑。
-                foreach (APActionSlot step in graph.Steps)
+                // 順序仍然是唯一真相：節點圖只換了編輯方式，動作還是嚴格依 root 底下的清單順序跑。
+                foreach (ActionSlot action in graph.Actions)
                 {
-                    if (step == null)
+                    if (action == null)
                     {
                         errorCount++;
-                        string message = $"[AssetPipeline] {actionName} 管線步驟失敗：元素為 null。";
+                        string message = $"[AssetPipeline] {actionName} 管線動作失敗：元素為 null。";
                         Debug.LogWarning(message);
                         pipelineReport.AppendLine(message);
                         continue;
@@ -98,12 +98,12 @@ namespace HaruFamily.Tools.AssetPipeline
                     try
                     {
                         // 停用、空槽、型別不符回 false，那是「跳過」不是「成功」。
-                        if (step.Execute()) successCount++;
+                        if (action.Execute()) successCount++;
                     }
                     catch (Exception ex)
                     {
                         errorCount++;
-                        string message = $"[AssetPipeline] {actionName} 管線步驟失敗：{step.DisplayName}\n{ex}";
+                        string message = $"[AssetPipeline] {actionName} 管線動作失敗：{action.DisplayName}\n{ex}";
                         Debug.LogError(message);
                         pipelineReport.AppendLine(message);
                     }

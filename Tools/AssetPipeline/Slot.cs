@@ -9,8 +9,8 @@ namespace HaruFamily.Tools.AssetPipeline
     /// 具名Token求值的遞迴防線。
     /// </summary>
     // 必須是非泛型的：泛型類別的 static 欄位是「每個封閉型別各一份」，
-    // 放進 APFormulaSlot<,> 的話 int 那份跟 float 那份互看不見，跨型別的環就抓不到。
-    internal static class APTokenGuard
+    // 放進 FormulaSlot<,> 的話 int 那份跟 float 那份互看不見，跨型別的環就抓不到。
+    internal static class TokenGuard
     {
         private static readonly HashSet<GraphToken> InFlight = new HashSet<GraphToken>();
 
@@ -25,10 +25,10 @@ namespace HaruFamily.Tools.AssetPipeline
     // 對應舊的 FormulaAssetBase：@default → _default，data / assetData 三態 → GraphNode.Kind，
     // formula 欄位 → 載體節點。舊的 AssetSource 模式改成「接一個讀 AssetPipelineSource 的葉節點公式」。
     // TFormula 的約束是「載體節點 ＋ 會回傳 TResult」兩件事，不是單一基底類別：
-    // Formula_AudioClip 繼承的是 Formula_Object<AudioClip>，靠 IAPFormula<AudioClip> 才接得上這一格。
+    // Formula_AudioClip 繼承的是 Formula_Object<AudioClip>，靠 IFormula<AudioClip> 才接得上這一格。
     [Serializable]
-    public abstract class APFormulaSlot<TResult, TFormula> : FormulaSlotBase
-        where TFormula : GraphNodeContent, IAPFormula<TResult>
+    public abstract class FormulaSlot<TResult, TFormula> : FormulaSlotBase
+        where TFormula : GraphNodeContent, IFormula<TResult>
     {
         [SerializeField]
         protected TResult _default = default;
@@ -38,9 +38,9 @@ namespace HaruFamily.Tools.AssetPipeline
 
         [NonSerialized] private bool _loggedMismatch;
 
-        protected APFormulaSlot() { }
+        protected FormulaSlot() { }
 
-        protected APFormulaSlot(TResult defaultValue)
+        protected FormulaSlot(TResult defaultValue)
         {
             _default = defaultValue;
         }
@@ -51,7 +51,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
         public override Type ResultType => typeof(TResult);
 
-        public override Type PackType => typeof(APPack);
+        public override Type PackType => typeof(NullPack);
 
         public override Type BodyBaseType => typeof(TFormula);
 
@@ -124,10 +124,10 @@ namespace HaruFamily.Tools.AssetPipeline
                 case NodeKind.Token:
                 {
                     var endpoint = _node.Token;
-                    if (endpoint?.Slot is not APFormulaSlot<TResult, TFormula> slot) return Fallback();
+                    if (endpoint?.Slot is not FormulaSlot<TResult, TFormula> slot) return Fallback();
 
                     // 編輯期 Verify 會擋掉環，這條是執行期最後一道防線：遞迴當場回保底值而不是炸堆疊。
-                    if (!APTokenGuard.TryEnter(endpoint))
+                    if (!TokenGuard.TryEnter(endpoint))
                     {
                         AssetPipeline.ReportFormulaWarning($"Token [{endpoint.Name}] 遞迴求值，改用預設值。");
                         return Fallback();
@@ -139,7 +139,7 @@ namespace HaruFamily.Tools.AssetPipeline
                     }
                     finally
                     {
-                        APTokenGuard.Exit(endpoint);
+                        TokenGuard.Exit(endpoint);
                     }
                 }
                 default:
@@ -159,10 +159,10 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     /// <summary>
-    /// 管線步驟欄位，同時是節點圖的頭端：自己是一顆固定節點，只有一個「來源」接點。
+    /// 管線動作欄位，同時是節點圖的頭端：自己是一顆固定節點，只有一個「來源」接點。
     /// </summary>
     [Serializable]
-    public class APActionSlot : ActionSlotBase
+    public class ActionSlot : ActionSlotBase
     {
         // 反向旗標：既有資料沒有這個欄位時反序列化為 false ＝ 啟用。
         [SerializeField]
@@ -188,11 +188,11 @@ namespace HaruFamily.Tools.AssetPipeline
 
         [NonSerialized] private bool _loggedMismatch;
 
-        public APActionSlot() { }
+        public ActionSlot() { }
 
-        public APActionSlot(APActionBase step)
+        public ActionSlot(ActionBase action)
         {
-            _node = new GraphNode(step);
+            _node = new GraphNode(action);
         }
 
         public override bool Disabled { get => _disabled; set => _disabled = value; }
@@ -228,21 +228,21 @@ namespace HaruFamily.Tools.AssetPipeline
             get { _orphans ??= new List<GraphNode>(); return _orphans; }
         }
 
-        public override Type PackType => typeof(APPack);
+        public override Type PackType => typeof(NullPack);
 
-        public override Type BodyBaseType => typeof(APActionBase);
+        public override Type BodyBaseType => typeof(ActionBase);
 
         public override Type AssetBaseType => null;
 
-        public override bool AcceptsBody(GraphNodeContent body) => body is APActionBase;
+        public override bool AcceptsBody(GraphNodeContent body) => body is ActionBase;
 
         public override bool AcceptsAsset(ScriptableObject asset) => false;
 
-        /// <summary>步驟欄位不能接具名Token：Token是公式端點，求值不執行副作用。</summary>
+        /// <summary>動作欄位不能接具名Token：Token是公式端點，求值不執行副作用。</summary>
         public override bool AcceptsToken(GraphToken endpoint) => false;
 
         /// <summary>
-        /// 執行這個步驟。停用、空槽、型別不符一律跳過。
+        /// 執行這個動作。停用、空槽、型別不符一律跳過。
         /// </summary>
         /// <returns>真的執行了才回 true；跳過回 false，呼叫端才不會把跳過算成成功。</returns>
         public bool Execute()
@@ -251,28 +251,28 @@ namespace HaruFamily.Tools.AssetPipeline
             if (_node == null || _node.Disabled) return false;
             if (_node.Kind != NodeKind.Inline) return false;
 
-            var step = _node.GetBody<APActionBase>();
-            if (step == null)
+            var action = _node.GetBody<ActionBase>();
+            if (action == null)
             {
                 if (!_loggedMismatch)
                 {
                     _loggedMismatch = true;
-                    AssetPipeline.ReportFormulaWarning("步驟欄位接的內容為空或型別不符，已跳過。");
+                    AssetPipeline.ReportFormulaWarning("動作欄位接的內容為空或型別不符，已跳過。");
                 }
                 return false;
             }
 
-            step.Execute();
+            action.Execute();
             return true;
         }
 
-        /// <summary>這個步驟在報告裡的顯示名：有標籤用標籤，否則用節點內容的型別名。</summary>
+        /// <summary>這個動作在報告裡的顯示名：有標籤用標籤，否則用節點內容的型別名。</summary>
         public string DisplayName
         {
             get
             {
                 if (!string.IsNullOrWhiteSpace(_label)) return _label;
-                return _node?.BodyObject?.GetType().Name ?? "(空步驟)";
+                return _node?.BodyObject?.GetType().Name ?? "(空動作)";
             }
         }
     }

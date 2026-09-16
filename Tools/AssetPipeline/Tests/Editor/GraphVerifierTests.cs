@@ -7,26 +7,26 @@ using Object = UnityEngine.Object;
 namespace HaruFamily.Tools.AssetPipeline.Tests
 {
     /// <summary>
-    /// 動態目錄的時序規則：寫入它的步驟必須排在讀取它的步驟之前。
+    /// 動態目錄的時序規則：寫入它的動作必須排在讀取它的動作之前。
     /// </summary>
-    // 這條是 AssetPipeline 獨有的，GraphKit 的具名Token沒有先後概念，所以測的是 APGraphVerifier 而不是 HGValidator。
-    public sealed class APGraphVerifierTests
+    // 這條是 AssetPipeline 獨有的，GraphKit 的具名Token沒有先後概念，所以測的是 GraphVerifier 而不是 HGValidator。
+    public sealed class GraphVerifierTests
     {
-        private const string OrderError = "寫入它的步驟不在前面";
+        private const string OrderError = "寫入它的動作不在前面";
 
-        private APGraph graph;
-        private APStepGroup root;
+        private Graph graph;
+        private ActionGroup root;
 
         [SetUp]
         public void SetUp()
         {
-            graph = new APGraph();
-            root = (APStepGroup)((IGraphDocument)graph).AddRoot(APGraph.PipelineKey);
+            graph = new Graph();
+            root = (ActionGroup)((IGraphDocument)graph).AddRoot(Graph.PipelineKey);
         }
 
-        private void AddStep(APActionBase step)
+        private void AddAction(ActionBase action)
         {
-            root.Steps.Add(new APActionSlot(step));
+            root.Actions.Add(new ActionSlot(action));
         }
 
         /// <summary>建一顆目錄節點，並在底下開一格。寫入端接目錄，讀取端接那一格。</summary>
@@ -45,11 +45,11 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             return node;
         }
 
-        /// <summary>把目錄接到一個寫入步驟上。被欄位指到的節點會離開候選池，與編輯器一致。</summary>
-        private void AddWriteStep(GraphNode catalog)
+        /// <summary>把目錄接到一個寫入動作上。被欄位指到的節點會離開候選池，與編輯器一致。</summary>
+        private void AddWriteAction(GraphNode catalog)
         {
             graph.Orphans.Remove(catalog);
-            AddStep(new WriteStep(catalog));
+            AddAction(new WriteAction(catalog));
         }
 
         /// <summary>給格子接上一顆篩選公式，回傳那顆公式的節點。</summary>
@@ -65,9 +65,9 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         public void Verify_FailsWhenCatalogIsReadBeforeWrite()
         {
             CatalogNode(out GraphNode cell);
-            AddStep(new ReadStep(cell));
+            AddAction(new ReadAction(cell));
 
-            List<string> errors = APGraphVerifier.Collect(graph);
+            List<string> errors = GraphVerifier.Collect(graph);
 
             Assert.That(errors, Has.Some.Contains(OrderError));
         }
@@ -76,10 +76,10 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         public void Verify_PassesWhenCatalogIsWrittenInOrder()
         {
             GraphNode catalog = CatalogNode(out GraphNode cell);
-            AddWriteStep(catalog);
-            AddStep(new ReadStep(cell));
+            AddWriteAction(catalog);
+            AddAction(new ReadAction(cell));
 
-            List<string> errors = APGraphVerifier.Collect(graph);
+            List<string> errors = GraphVerifier.Collect(graph);
 
             Assert.That(errors, Has.None.Contains(OrderError));
         }
@@ -88,25 +88,25 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         public void Verify_FailsWhenWriterComesAfterReader()
         {
             GraphNode catalog = CatalogNode(out GraphNode cell);
-            AddStep(new ReadStep(cell));
-            AddWriteStep(catalog);
+            AddAction(new ReadAction(cell));
+            AddWriteAction(catalog);
 
-            List<string> errors = APGraphVerifier.Collect(graph);
+            List<string> errors = GraphVerifier.Collect(graph);
 
             Assert.That(errors, Has.Some.Contains(OrderError));
         }
 
-        /// <summary>原型來源隨時都有內容，不受步驟順序影響。</summary>
-        // 這顆目錄沒有任何步驟寫得進去，節點只在候選池裡：驗證器得自己走到那裡把格子接回母目錄，
+        /// <summary>原型來源隨時都有內容，不受動作順序影響。</summary>
+        // 這顆目錄沒有任何動作寫得進去，節點只在候選池裡：驗證器得自己走到那裡把格子接回母目錄，
         // 否則整條原型路徑會停在「沒有母目錄」，執行期也取不到內容。所以這裡斷言的是整份無錯。
         [Test]
         public void Verify_IgnoresOrderForPrototypeCatalog()
         {
             GraphNode catalog = CatalogNode(out GraphNode cell, CatalogSource.Prototype);
             ((AssetCatalog)catalog.CatalogObject).prototypeCatalogId = "any-id";
-            AddStep(new ReadStep(cell));
+            AddAction(new ReadAction(cell));
 
-            List<string> errors = APGraphVerifier.Collect(graph);
+            List<string> errors = GraphVerifier.Collect(graph);
 
             Assert.That(errors, Is.Empty);
         }
@@ -116,9 +116,9 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         {
             GraphNode catalog = CatalogNode(out _, CatalogSource.Prototype);
             ((AssetCatalog)catalog.CatalogObject).prototypeCatalogId = "any-id";
-            AddWriteStep(catalog);
+            AddWriteAction(catalog);
 
-            List<string> errors = APGraphVerifier.Collect(graph);
+            List<string> errors = GraphVerifier.Collect(graph);
 
             Assert.That(errors, Has.Some.Contains("設為原型來源"));
         }
@@ -127,9 +127,9 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         public void Verify_FailsWhenPrototypeCatalogHasNoKey()
         {
             CatalogNode(out GraphNode cell, CatalogSource.Prototype);
-            AddStep(new ReadStep(cell));
+            AddAction(new ReadAction(cell));
 
-            List<string> errors = APGraphVerifier.Collect(graph);
+            List<string> errors = GraphVerifier.Collect(graph);
 
             Assert.That(errors, Has.Some.Contains("沒有指定目錄"));
         }
@@ -139,31 +139,31 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         public void Verify_FailsWhenOrdinaryFieldTakesTheCatalog()
         {
             GraphNode catalog = CatalogNode(out _);
-            AddStep(new ReadStep(catalog));
+            AddAction(new ReadAction(catalog));
 
-            List<string> errors = APGraphVerifier.Collect(graph);
+            List<string> errors = GraphVerifier.Collect(graph);
 
             Assert.That(errors, Has.Some.Contains("收不下包"));
         }
 
         [Test]
-        public void Verify_FailsWhenStepSlotHasNoContent()
+        public void Verify_FailsWhenActionSlotHasNoContent()
         {
-            root.Steps.Add(new APActionSlot());
+            root.Actions.Add(new ActionSlot());
 
-            List<string> errors = APGraphVerifier.Collect(graph);
+            List<string> errors = GraphVerifier.Collect(graph);
 
-            Assert.That(errors, Has.Some.Contains("沒有接任何步驟內容"));
+            Assert.That(errors, Has.Some.Contains("沒有接任何動作內容"));
         }
 
         [Test]
-        public void Verify_IgnoresDisabledStep()
+        public void Verify_IgnoresDisabledAction()
         {
-            var slot = new APActionSlot();
+            var slot = new ActionSlot();
             slot.Disabled = true;
-            root.Steps.Add(slot);
+            root.Actions.Add(slot);
 
-            List<string> errors = APGraphVerifier.Collect(graph);
+            List<string> errors = GraphVerifier.Collect(graph);
 
             Assert.That(errors, Is.Empty);
         }
@@ -174,10 +174,10 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         {
             GraphNode catalog = CatalogNode(out GraphNode cell);
             SetFilter(cell, new CountFilter());
-            AddWriteStep(catalog);
-            AddStep(new ReadStep(cell));
+            AddWriteAction(catalog);
+            AddAction(new ReadAction(cell));
 
-            List<string> errors = APGraphVerifier.Collect(graph);
+            List<string> errors = GraphVerifier.Collect(graph);
 
             Assert.That(errors, Has.Some.Contains("型別不相容"));
         }
@@ -188,10 +188,10 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         {
             GraphNode catalog = CatalogNode(out GraphNode cell);
             SetFilter(cell, new CountFilter()).Disabled = true;
-            AddWriteStep(catalog);
-            AddStep(new ReadStep(cell));
+            AddWriteAction(catalog);
+            AddAction(new ReadAction(cell));
 
-            List<string> errors = APGraphVerifier.Collect(graph);
+            List<string> errors = GraphVerifier.Collect(graph);
 
             Assert.That(errors, Is.Empty);
         }
@@ -202,9 +202,9 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         {
             GraphNode catalog = CatalogNode(out GraphNode cell);
             graph.Orphans.Remove(catalog);
-            AddStep(new ReadStep(cell));
+            AddAction(new ReadAction(cell));
 
-            List<string> errors = APGraphVerifier.Collect(graph);
+            List<string> errors = GraphVerifier.Collect(graph);
 
             Assert.That(errors, Has.Some.Contains("沒有母目錄"));
         }
@@ -215,7 +215,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         {
             GraphNode written = CatalogNode(out _);
             GraphNode prototype = CatalogNode(out _, CatalogSource.Prototype);
-            var slot = new APCatalogOutputSlot();
+            var slot = new CatalogOutputSlot();
 
             Assert.That(slot.AcceptsCatalogObject(written.CatalogObject), Is.True);
             Assert.That(slot.AcceptsCatalogObject(prototype.CatalogObject), Is.False);
@@ -225,18 +225,18 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         /// <summary>最小的篩選公式：整包有幾個。</summary>
         // 測試自備一顆而不是借用專案端那幾種：具體篩法住在使用端專案，測試組件看不到它們。
         [Serializable]
-        private sealed class CountFilter : APPackedFormulaBase<int, List<Object>>
+        private sealed class CountFilter : PackedFormulaBase<int, List<Object>>
         {
             public override int Evaluate(List<Object> catalog) => catalog.Count;
         }
 
-        /// <summary>只宣告「我把產出寫進這顆目錄」的假步驟，不做任何事。</summary>
+        /// <summary>只宣告「我把產出寫進這顆目錄」的假動作，不做任何事。</summary>
         [Serializable]
-        private sealed class WriteStep : APActionBase
+        private sealed class WriteAction : ActionBase
         {
-            public APCatalogOutputSlot output = new APCatalogOutputSlot();
+            public CatalogOutputSlot output = new CatalogOutputSlot();
 
-            public WriteStep(GraphNode catalog)
+            public WriteAction(GraphNode catalog)
             {
                 output.SetNode(catalog);
             }
@@ -246,13 +246,13 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             }
         }
 
-        /// <summary>只宣告「我讀這顆節點」的假步驟，不做任何事。</summary>
+        /// <summary>只宣告「我讀這顆節點」的假動作，不做任何事。</summary>
         [Serializable]
-        private sealed class ReadStep : APActionBase
+        private sealed class ReadAction : ActionBase
         {
             public FormulaAsset_ObjectList objects = new FormulaAsset_ObjectList();
 
-            public ReadStep(GraphNode node)
+            public ReadAction(GraphNode node)
             {
                 objects.SetNode(node);
             }

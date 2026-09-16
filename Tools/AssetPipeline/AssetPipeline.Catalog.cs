@@ -13,7 +13,7 @@ namespace HaruFamily.Tools.AssetPipeline
     /// 節點圖左欄「目錄庫」的資料來源：把既有的原型資產群組（<see cref="prototypeAssets"/>）
     /// 接成 GraphKit 的 <see cref="ICatalogOwner"/>。
     /// </summary>
-    // 實作在 Owner（本 SO）上而不是 APGraph 上：目錄的內容是「專案資產的分組」，不是圖的內容，
+    // 實作在 Owner（本 SO）上而不是 Graph 上：目錄的內容是「專案資產的分組」，不是圖的內容，
     // 不進編輯器的工作副本，改了就直接寫這份 SO。SetDirty 由呼叫端（視窗）負責，
     // 這裡只改資料——否則資產分頁那些既有操作也得各自再 SetDirty 一次。
     //
@@ -55,7 +55,7 @@ namespace HaruFamily.Tools.AssetPipeline
             if (name == null) { error = "名稱不可為空。"; return false; }
             if (name == group.key) return true;
 
-            // key 是步驟／公式用字串引用目錄的鍵，重名會讓其中一個永遠查不到，所以擋在這裡。
+            // key 是動作／公式用字串引用目錄的鍵，重名會讓其中一個永遠查不到，所以擋在這裡。
             foreach (var other in prototypeAssets)
             {
                 if (other == null || ReferenceEquals(other, group)) continue;

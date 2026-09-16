@@ -5,7 +5,7 @@ using UnityEngine;
 namespace HaruFamily.Tools.AssetPipeline
 {
     [Serializable]
-    public abstract class Formula_Folder : APFormulaBase<DefaultAsset>
+    public abstract class Formula_Folder : FormulaBase<DefaultAsset>
     {
     }
 
@@ -15,7 +15,7 @@ namespace HaruFamily.Tools.AssetPipeline
     // 兩層固定值是既有行為：企劃常常只想打一段路徑，而路徑在專案搬動後會失效，
     // 所以保留「資產優先、路徑備援」而不是二選一。
     [Serializable]
-    public class FormulaAsset_Folder : APFormulaSlot<DefaultAsset, Formula_Folder>
+    public class FormulaAsset_Folder : FormulaSlot<DefaultAsset, Formula_Folder>
     {
         [HideInInspector]
         public string defaultPath = "Assets";

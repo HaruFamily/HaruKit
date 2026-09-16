@@ -4,12 +4,12 @@ using System.Collections.Generic;
 namespace HaruFamily.Tools.AssetPipeline
 {
     [Serializable]
-    public abstract class Formula_String : APFormulaBase<string>
+    public abstract class Formula_String : FormulaBase<string>
     {
     }
 
     [Serializable]
-    public class FormulaAsset_String : APFormulaSlot<string, Formula_String>
+    public class FormulaAsset_String : FormulaSlot<string, Formula_String>
     {
         public FormulaAsset_String()
         {
@@ -22,12 +22,12 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public abstract class Formula_ListString : APFormulaBase<List<string>>
+    public abstract class Formula_ListString : FormulaBase<List<string>>
     {
     }
 
     [Serializable]
-    public class FormulaAsset_ListString : APFormulaSlot<List<string>, Formula_ListString>
+    public class FormulaAsset_ListString : FormulaSlot<List<string>, Formula_ListString>
     {
         public FormulaAsset_ListString()
         {
@@ -47,7 +47,7 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public class FormulaAsset_StringList : APFormulaSlot<List<string>, Formula_StringList>
+    public class FormulaAsset_StringList : FormulaSlot<List<string>, Formula_StringList>
     {
         public FormulaAsset_StringList()
         {

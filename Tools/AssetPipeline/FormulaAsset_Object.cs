@@ -5,7 +5,7 @@ using Object = UnityEngine.Object;
 namespace HaruFamily.Tools.AssetPipeline
 {
     [Serializable]
-    public abstract class Formula_Object : APFormulaBase<Object>
+    public abstract class Formula_Object : FormulaBase<Object>
     {
     }
 
@@ -13,13 +13,13 @@ namespace HaruFamily.Tools.AssetPipeline
     /// Object 公式的型別化中間層：<see cref="EvaluateTyped"/> 回具體 T，繼承來的 Evaluate 只做 T→Object 上轉。
     /// </summary>
     // 讓 Formula_<具體型別> 同時 is-a Formula_Object（可放進 Object 欄位）又能接上自己那一族的欄位。
-    // 靠介面而不是第二個基底：類別只能繼承一個，IAPFormula<T> 可以再宣告一個結果型別。
+    // 靠介面而不是第二個基底：類別只能繼承一個，IFormula<T> 可以再宣告一個結果型別。
     [Serializable]
-    public abstract class Formula_Object<T> : Formula_Object, IAPFormula<T> where T : Object
+    public abstract class Formula_Object<T> : Formula_Object, IFormula<T> where T : Object
     {
         public abstract T EvaluateTyped();
 
-        T IAPFormula<T>.Evaluate()
+        T IFormula<T>.Evaluate()
         {
             return EvaluateTyped();
         }
@@ -31,7 +31,7 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public abstract class Formula_ObjectList : APFormulaBase<List<Object>>
+    public abstract class Formula_ObjectList : FormulaBase<List<Object>>
     {
     }
 
@@ -39,11 +39,11 @@ namespace HaruFamily.Tools.AssetPipeline
     /// Object 清單公式的型別化中間層：<see cref="EvaluateTyped"/> 回 List&lt;T&gt;，繼承來的 Evaluate 逐項上轉。
     /// </summary>
     [Serializable]
-    public abstract class Formula_ObjectList<T> : Formula_ObjectList, IAPFormula<List<T>> where T : Object
+    public abstract class Formula_ObjectList<T> : Formula_ObjectList, IFormula<List<T>> where T : Object
     {
         public abstract List<T> EvaluateTyped();
 
-        List<T> IAPFormula<List<T>>.Evaluate()
+        List<T> IFormula<List<T>>.Evaluate()
         {
             return EvaluateTyped();
         }
@@ -62,7 +62,7 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public class FormulaAsset_Object : APFormulaSlot<Object, Formula_Object>
+    public class FormulaAsset_Object : FormulaSlot<Object, Formula_Object>
     {
         public FormulaAsset_Object()
         {
@@ -74,7 +74,7 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public class FormulaAsset_ObjectList : APFormulaSlot<List<Object>, Formula_ObjectList>
+    public class FormulaAsset_ObjectList : FormulaSlot<List<Object>, Formula_ObjectList>
     {
         public FormulaAsset_ObjectList()
         {

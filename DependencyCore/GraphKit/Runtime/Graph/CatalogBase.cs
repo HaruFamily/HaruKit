@@ -5,13 +5,13 @@ using System;
 /// <summary>
 /// 目錄的共同基底：持有一包 T，由外部寫入、由底下的格子讀取。
 /// </summary>
-// 形狀與行為分層，同 ActionBase／FormulaBase：CatalogNodeBase 只答型別關係，這一層才有資料。
+// 形狀與行為分層，同 ActionBase／FormulaBase：CatalogNodeShape 只答型別關係，這一層才有資料。
 // Write 是非虛的入口，合併語意一律走 OnWrite——abstract 而非 virtual 是刻意的：
 // new／Add／先 hash 再替換三種語意差太多，留下可以被不小心繼承的預設遲早會錯。
 //
 // 內容是執行期產物，因此 Index 與 Initialized 都不序列化；節點的序列化欄位留在使用端的子類上。
 [Serializable]
-public abstract class CatalogBase<T> : CatalogNodeBase<T>
+public abstract class CatalogBase<T> : CatalogNodeShape<T>
 {
     [NonSerialized]
     private T _index;

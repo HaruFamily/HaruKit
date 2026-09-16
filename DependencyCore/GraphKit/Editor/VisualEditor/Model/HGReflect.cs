@@ -312,19 +312,19 @@ public static class HGReflect
     }
 
     /// <summary>判斷具體節點是不是動作。</summary>
-    public static bool IsActionNodeType(Type type) => Closed(type, typeof(ActionNodeBase<>)) != null;
+    public static bool IsActionNodeType(Type type) => Closed(type, typeof(ActionNodeShape<>)) != null;
 
     /// <summary>從具體 Action／Formula 型別回推可供型別選單使用的封閉泛型 base。</summary>
     public static Type NodeBaseType(Type type)
-        => Closed(type, typeof(ActionNodeBase<>)) ?? Closed(type, typeof(FormulaNodeBase<,>));
+        => Closed(type, typeof(ActionNodeShape<>)) ?? Closed(type, typeof(FormulaNodeShape<,>));
 
     /// <summary>從具體 Formula 型別取得結果型別；Action 回 null。</summary>
-    public static Type FormulaResultType(Type type) => Closed(type, typeof(FormulaNodeBase<,>))?.GetGenericArguments()[0];
+    public static Type FormulaResultType(Type type) => Closed(type, typeof(FormulaNodeShape<,>))?.GetGenericArguments()[0];
 
     /// <summary>從具體 Formula 型別取得 pack 型別；Action 回 null。</summary>
     // 與 FormulaSlotPack 不同：那個問的是 Slot，這個問的是公式本體。
     // 候選以 pack 收窄時比的是這一個——欄位不一定有 Slot（候選池裡的節點就沒有）。
-    public static Type FormulaPackType(Type type) => Closed(type, typeof(FormulaNodeBase<,>))?.GetGenericArguments()[1];
+    public static Type FormulaPackType(Type type) => Closed(type, typeof(FormulaNodeShape<,>))?.GetGenericArguments()[1];
 
     // 沿繼承鏈找出指定泛型定義的封閉型別；找不到回 null。
     private static Type Closed(Type type, Type definition)

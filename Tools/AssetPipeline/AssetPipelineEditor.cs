@@ -17,7 +17,7 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
             graph = serializedObject.FindProperty("graph");
         }
 
-        // 資產的編輯入口只剩節點圖：原型群組在左欄的目錄庫編，動態產出由步驟寫進動態目錄節點。
+        // 資產的編輯入口只剩節點圖：原型群組在左欄的目錄庫編，動態產出由動作寫進動態目錄節點。
         // Inspector 只留「開圖」「執行」「看結果」這三件事，避免同一份資料有第二個會打架的編輯路徑。
         public override void OnInspectorGUI()
         {
@@ -41,7 +41,7 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
         {
             bool ready = pipeline.IsPrototypeSourceValidationCurrent();
             var content = ready
-                ? new GUIContent("執行管線", "依節點圖上的步驟順序實際修改資產。")
+                ? new GUIContent("執行管線", "依節點圖上的動作順序實際修改資產。")
                 : new GUIContent("執行管線（需先驗證）", "卡片上的「驗證」通過之後才能執行；改過圖或資產就要再驗一次。");
 
             Color previous = GUI.backgroundColor;

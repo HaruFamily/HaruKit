@@ -44,7 +44,7 @@ public abstract class FormulaSlotBase : GraphSlotBase
     /// 候選再依公式的 pack 型別收窄；回 null（預設）＝只看 <see cref="BodyBaseType"/>。
     /// </summary>
     // 為「pack 固定、結果型別任意」的欄位而生：那是個述詞，不是一個型別，BodyBaseType 表達不出來
-    // （FormulaNodeBase<,> 是開放泛型收不了，FormulaNodeBase<int,T> 又把結果鎖死）。
+    // （FormulaNodeShape<,> 是開放泛型收不了，FormulaNodeShape<int,T> 又把結果鎖死）。
     // 不併進 BodyBaseType：兩者是「繼承自誰」與「裝的是哪種包」兩個獨立條件，合併會讓其中一邊失去表達力。
     public virtual Type CandidatePackType => null;
 

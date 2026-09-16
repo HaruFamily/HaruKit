@@ -13,64 +13,64 @@ namespace HaruFamily.Tools.AssetPipeline
     /// （prototype key 缺漏、動態目錄在寫入者之前被讀取）接到節點圖上。
     /// </summary>
     // 時序是 AssetPipeline 獨有的概念，所以住在這裡而不是 GraphKit 的 HGValidator：
-    // 具名Token沒有先後，步驟清單才有。
-    public static class APGraphVerifier
+        // 具名Token沒有先後，動作清單才有。
+    public static class GraphVerifier
     {
         private const BindingFlags Fields = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
 
         /// <summary>驗證整張圖，回傳錯誤訊息清單。空清單＝通過。</summary>
-        public static List<string> Collect(APGraph graph)
+        public static List<string> Collect(Graph graph)
         {
             var errors = new List<string>();
             if (graph == null) return errors;
 
             SyncCatalogs(graph);
             CheckTokens(graph, errors);
-            CheckSteps(graph, errors);
+            CheckActions(graph, errors);
             return errors;
         }
 
         /// <summary>正式驗證前先把每一格接回它的母目錄。</summary>
         // 格子的 Owner 不序列化，接回去是驗證與執行的前提，不是驗證結果的一部分，所以先走一整趟：
-        // 一、驗證是依步驟順序走的，讀取排在產出之前時，格子在被檢查的當下還沒有母目錄，
+        // 一、驗證是依動作順序走的，讀取排在產出之前時，格子在被檢查的當下還沒有母目錄，
         //     報出來的會是「沒有母目錄」而不是真正的時序錯誤。
-        // 二、只有產出格指得到目錄，原型目錄沒有任何步驟寫得進去，它的節點只存在候選池裡，
-        //     光走步驟永遠碰不到它——那一整條路的格子會全部取不到內容。
+        // 二、只有產出格指得到目錄，原型目錄沒有任何動作寫得進去，它的節點只存在候選池裡，
+        //     光走動作永遠碰不到它——那一整條路的格子會全部取不到內容。
         // 候選節點本身不參與驗證，所以這一趟的錯誤一律丟掉，真正的錯誤由後面兩段負責。
-        private static void SyncCatalogs(APGraph graph)
+        private static void SyncCatalogs(Graph graph)
         {
             var ignored = new List<string>();
 
-            List<APActionSlot> steps = graph.Steps;
-            for (int i = 0; i < steps.Count; i++)
-                CheckActionSlot(steps[i], $"步驟[{i}]", ignored, new StepReads());
+            List<ActionSlot> actions = graph.Actions;
+            for (int i = 0; i < actions.Count; i++)
+                CheckActionSlot(actions[i], $"動作[{i}]", ignored, new ActionReads());
 
             foreach (GraphNode node in graph.Orphans)
             {
                 if (node == null) continue;
                 if (node.CatalogObject is AssetCatalog catalog) catalog.SyncCells();
-                WalkSlots(node.BodyObject, "候選節點", ignored, new StepReads(),
+                WalkSlots(node.BodyObject, "候選節點", ignored, new ActionReads(),
                     new HashSet<object>(ReferenceComparer.Instance));
             }
         }
 
         /// <summary>
-        /// 整張圖讀到的 prototype key → 讀它的步驟。給資產頁檢查「這個 key 有沒有群組、群組是不是空的」。
+        /// 整張圖讀到的 prototype key → 讀它的動作。給資產頁檢查「這個 key 有沒有群組、群組是不是空的」。
         /// </summary>
-        public static Dictionary<string, List<string>> CollectPrototypeKeyUsages(APGraph graph)
+        public static Dictionary<string, List<string>> CollectPrototypeKeyUsages(Graph graph)
         {
             var usages = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             if (graph == null) return usages;
 
             // 這裡只要 key，錯誤由 Collect 負責回報，所以丟一個不看的清單進去。
             var ignored = new List<string>();
-            List<APActionSlot> steps = graph.Steps;
+            List<ActionSlot> actions = graph.Actions;
 
-            for (int i = 0; i < steps.Count; i++)
+            for (int i = 0; i < actions.Count; i++)
             {
-                string path = $"步驟[{i}] {steps[i]?.DisplayName}";
-                var reads = new StepReads();
-                CheckActionSlot(steps[i], path, ignored, reads);
+                string path = $"動作[{i}] {actions[i]?.DisplayName}";
+                var reads = new ActionReads();
+                CheckActionSlot(actions[i], path, ignored, reads);
 
                 foreach (string key in reads.Prototype)
                 {
@@ -87,31 +87,31 @@ namespace HaruFamily.Tools.AssetPipeline
         }
 
         /// <summary>
-        /// 依步驟順序檢查每一步：內容完不完整，以及讀到的目錄有沒有產出者排在前面。
+        /// 依動作順序檢查每一項：內容完不完整，以及讀到的目錄有沒有產出者排在前面。
         /// </summary>
         // prototype key 存不存在是「資產群組」層面的事，需要 AssetPipeline 上的群組清單，
         // 所以留在 ValidatePipelinePrototypeSources；這裡只看圖自己答得出來的東西。
-        private static void CheckSteps(APGraph graph, List<string> errors)
+        private static void CheckActions(Graph graph, List<string> errors)
         {
             // 目錄比參照，不比名稱：名稱只是顯示用，同名的兩顆仍然是兩顆。
             var producedCatalogs = new HashSet<AssetCatalog>();
 
-            List<APActionSlot> steps = graph.Steps;
-            for (int i = 0; i < steps.Count; i++)
+            List<ActionSlot> actions = graph.Actions;
+            for (int i = 0; i < actions.Count; i++)
             {
-                APActionSlot slot = steps[i];
-                string path = $"步驟[{i}]";
+                ActionSlot slot = actions[i];
+                string path = $"動作[{i}]";
 
-                var reads = new StepReads();
+                var reads = new ActionReads();
                 CheckActionSlot(slot, path, errors, reads);
 
-                // 動態來源的目錄是前面的步驟跑完才有內容的，所以只比對「到目前為止已產出」的集合。
-                // 原型來源隨時都有值，不受步驟順序影響。
+                // 動態來源的目錄是前面的動作跑完才有內容的，所以只比對「到目前為止已產出」的集合。
+                // 原型來源隨時都有值，不受動作順序影響。
                 foreach (AssetCatalog catalog in reads.CatalogReads)
                 {
                     if (!catalog.AcceptsWrite) continue;
                     if (!producedCatalogs.Contains(catalog))
-                        errors.Add($"{path} 讀取動態目錄，但寫入它的步驟不在前面。");
+                        errors.Add($"{path} 讀取動態目錄，但寫入它的動作不在前面。");
                 }
 
                 // 產出登記放在檢查之後：同一步讀自己的產出，仍然是「還沒跑完就讀」。
@@ -120,7 +120,7 @@ namespace HaruFamily.Tools.AssetPipeline
             }
         }
 
-        private static void CheckTokens(APGraph graph, List<string> errors)
+        private static void CheckTokens(Graph graph, List<string> errors)
         {
             // 唯一性是「族＋名稱」：同名不同族是兩個Token，不算重複。
             var seen = new HashSet<(Type, string)>();
@@ -137,35 +137,35 @@ namespace HaruFamily.Tools.AssetPipeline
                 if (!string.IsNullOrWhiteSpace(endpoint.Name) && !seen.Add((endpoint.Slot.Kind, endpoint.Name)))
                     errors.Add($"{path} 與另一個同型別的Token重名。");
 
-                CheckSlot(endpoint.Slot, path, errors, new StepReads(), new HashSet<object>(ReferenceComparer.Instance));
+            CheckSlot(endpoint.Slot, path, errors, new ActionReads(), new HashSet<object>(ReferenceComparer.Instance));
             }
         }
 
-        private static void CheckActionSlot(APActionSlot slot, string path, List<string> errors, StepReads reads)
+        private static void CheckActionSlot(ActionSlot slot, string path, List<string> errors, ActionReads reads)
         {
             if (slot == null) { errors.Add($"{path} 是空的。"); return; }
-            if (slot.Disabled) return;   // 停用的步驟不執行，殘缺不擋。
+            if (slot.Disabled) return;   // 停用的動作不執行，殘缺不擋。
 
             GraphNode node = slot.Node;
-            if (node == null) { errors.Add($"{path} 沒有接任何步驟內容。"); return; }
+            if (node == null) { errors.Add($"{path} 沒有接任何動作內容。"); return; }
             if (node.Disabled) return;
 
             if (node.Kind != NodeKind.Inline)
             {
-                errors.Add($"{path} 的節點不是步驟內容（管線步驟只能接內嵌節點）。");
+                errors.Add($"{path} 的節點不是動作內容（管線動作只能接內嵌節點）。");
                 return;
             }
 
             GraphNodeContent body = node.BodyObject;
             if (body == null) { errors.Add($"{path} 的節點是空的。"); return; }
-            if (!slot.AcceptsBody(body)) { errors.Add($"{path} 接的 {body.GetType().Name} 不是管線步驟。"); return; }
+            if (!slot.AcceptsBody(body)) { errors.Add($"{path} 接的 {body.GetType().Name} 不是管線動作。"); return; }
 
             CollectKeys(body, reads);
             WalkSlots(body, path, errors, reads, new HashSet<object>(ReferenceComparer.Instance));
         }
 
         // 公式欄位與目錄欄位共用這一條：兩者都是「指著一顆節點」，差別只在收得下哪些種類的節點。
-        private static void CheckSlot(GraphSlotBase slot, string path, List<string> errors, StepReads reads, HashSet<object> visiting)
+        private static void CheckSlot(GraphSlotBase slot, string path, List<string> errors, ActionReads reads, HashSet<object> visiting)
         {
             GraphNode node = slot?.Node;
             if (node == null) return;   // 常數模式，合法。
@@ -267,7 +267,7 @@ namespace HaruFamily.Tools.AssetPipeline
                 errors.Add($"{path} 指到的目錄已不存在。");
         }
 
-        private static void CollectKeys(object body, StepReads reads)
+        private static void CollectKeys(object body, ActionReads reads)
         {
             if (body is IPrototypeKeyReader prototypeReader)
                 AddKeys(prototypeReader.PrototypeInputKeys, reads.Prototype);
@@ -287,7 +287,7 @@ namespace HaruFamily.Tools.AssetPipeline
         /// <summary>反射走訪一個節點內容的所有欄位，找出巢狀的公式欄位並繼續往下檢查。</summary>
         // visited 一律用 ReferenceComparer：裸 HashSet<object> 對 struct 走值相等，
         // 兩個內容相同的 struct 第二個底下的子樹會整段被無聲跳過。
-        private static void WalkSlots(object owner, string path, List<string> errors, StepReads reads, HashSet<object> visiting)
+        private static void WalkSlots(object owner, string path, List<string> errors, ActionReads reads, HashSet<object> visiting)
         {
             if (owner == null || owner is Object || owner is string) return;
 
@@ -323,8 +323,8 @@ namespace HaruFamily.Tools.AssetPipeline
                 }
         }
 
-        /// <summary>一個步驟碰到的東西：讀到的 prototype key、讀到的目錄，以及它自己寫入的目錄。</summary>
-        private sealed class StepReads
+        /// <summary>一個動作碰到的東西：讀到的 prototype key、讀到的目錄，以及它自己寫入的目錄。</summary>
+        private sealed class ActionReads
         {
             public readonly List<string> Prototype = new List<string>();
             public readonly List<AssetCatalog> CatalogReads = new List<AssetCatalog>();

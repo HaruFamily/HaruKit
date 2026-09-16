@@ -10,7 +10,7 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public class FormulaAsset_AudioClip : APFormulaSlot<AudioClip, Formula_AudioClip>
+    public class FormulaAsset_AudioClip : FormulaSlot<AudioClip, Formula_AudioClip>
     {
         public FormulaAsset_AudioClip()
         {
@@ -27,7 +27,7 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public class FormulaAsset_AudioClipList : APFormulaSlot<List<AudioClip>, Formula_AudioClipList>
+    public class FormulaAsset_AudioClipList : FormulaSlot<List<AudioClip>, Formula_AudioClipList>
     {
         public FormulaAsset_AudioClipList()
         {

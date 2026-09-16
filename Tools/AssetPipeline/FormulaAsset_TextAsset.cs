@@ -10,7 +10,7 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public class FormulaAsset_TextAsset : APFormulaSlot<TextAsset, Formula_TextAsset>
+    public class FormulaAsset_TextAsset : FormulaSlot<TextAsset, Formula_TextAsset>
     {
         public FormulaAsset_TextAsset()
         {
@@ -27,7 +27,7 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public class FormulaAsset_TextAssetList : APFormulaSlot<List<TextAsset>, Formula_TextAssetList>
+    public class FormulaAsset_TextAssetList : FormulaSlot<List<TextAsset>, Formula_TextAssetList>
     {
         public FormulaAsset_TextAssetList()
         {

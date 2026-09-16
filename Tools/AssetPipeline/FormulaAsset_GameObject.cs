@@ -10,7 +10,7 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public class FormulaAsset_GameObject : APFormulaSlot<GameObject, Formula_GameObject>
+    public class FormulaAsset_GameObject : FormulaSlot<GameObject, Formula_GameObject>
     {
         public FormulaAsset_GameObject()
         {
@@ -27,7 +27,7 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    public class FormulaAsset_GameObjectList : APFormulaSlot<List<GameObject>, Formula_GameObjectList>
+    public class FormulaAsset_GameObjectList : FormulaSlot<List<GameObject>, Formula_GameObjectList>
     {
         public FormulaAsset_GameObjectList()
         {

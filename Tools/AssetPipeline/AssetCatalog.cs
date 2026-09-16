@@ -9,7 +9,7 @@ namespace HaruFamily.Tools.AssetPipeline
     /// <summary>目錄整包內容的來源。</summary>
     public enum CatalogSource
     {
-        /// <summary>步驟執行時寫進來，跑到那一步之後才有值。</summary>
+        /// <summary>動作執行時寫進來，跑到該動作之後才有值。</summary>
         Dynamic = 0,
 
         /// <summary>取一份既有的原型資產群組，隨時都有值。</summary>
@@ -41,7 +41,7 @@ namespace HaruFamily.Tools.AssetPipeline
     {
         /// <summary>套用篩選；沒接、停用或型別不符時原樣回整包。</summary>
         public object Evaluate(List<Object> catalog)
-            => (ActiveFilter as IAPPackedFormula)?.EvaluateObject(catalog) ?? catalog;
+            => (ActiveFilter as IPackedFormula)?.EvaluateObject(catalog) ?? catalog;
     }
 
     /// <summary>
@@ -50,7 +50,7 @@ namespace HaruFamily.Tools.AssetPipeline
     // 它是包（IGraphCatalog）不是公式：沒有結果型別、求不出值，任何欄位都不能向它取值——
     // 值一律從它底下的格子取。只有目錄欄位（CatalogSlotBase）指得到它。
     // 動態內容是執行期產物，內容與初始化旗標都住在 CatalogBase 且不序列化。
-    // 沒有自動重置：跨輪次要不要清空由寫入端 APCatalogOutputSlot 的 reset 欄位決定，
+    // 沒有自動重置：跨輪次要不要清空由寫入端 CatalogOutputSlot 的 reset 欄位決定，
     // 所以一顆目錄有多個寫入端時，只有第一個該勾（見 Doc/2026-09-1/PLAN_Catalog泛型化與CatalogSlot.md §2.6、§3.4）。
     [HGNode("目錄", "一包資產；底下每一格各自篩出一種結果", "目錄")]
     [Serializable]
@@ -83,7 +83,7 @@ namespace HaruFamily.Tools.AssetPipeline
             get { cells ??= new List<GraphNode>(); return cells; }
         }
 
-        /// <summary>步驟能不能寫進來。原型模式的內容由使用者維護，步驟寫不進去。</summary>
+        /// <summary>動作能不能寫進來。原型模式的內容由使用者維護，動作寫不進去。</summary>
         public bool AcceptsWrite => source == CatalogSource.Dynamic;
 
         /// <summary>這一包現在有什麼。格子靠它取內容，這是唯一的讀取入口。</summary>
@@ -114,7 +114,7 @@ namespace HaruFamily.Tools.AssetPipeline
         protected override void OnInit() => Index = new List<Object>();
 
         /// <summary>接上去，重複的跳過。</summary>
-        // 去重比參照不比路徑：這裡收的是步驟剛產出的資產物件。資產庫那邊收的是使用者拖進來的選取，
+        // 去重比參照不比路徑：這裡收的是動作剛產出的資產物件。資產庫那邊收的是使用者拖進來的選取，
         // 同一個 .asset 的不同子資產各自是 Object，才需要比路徑。
         protected override void OnWrite(List<Object> value)
         {
@@ -127,14 +127,14 @@ namespace HaruFamily.Tools.AssetPipeline
             }
         }
 
-        /// <summary>步驟把產出寫進來，回傳實際加入幾個。同一次執行可以有多個步驟寫進同一顆。</summary>
-        // reset 由寫入端的 APCatalogOutputSlot 給，不在這裡依輪次推：一顆目錄有多個寫入端時，
+        /// <summary>動作把產出寫進來，回傳實際加入幾個。同一次執行可以有多個動作寫進同一顆。</summary>
+        // reset 由寫入端的 CatalogOutputSlot 給，不在這裡依輪次推：一顆目錄有多個寫入端時，
         // 「這一次是不是重來」只有圖上的接法答得出來，內容本身看不出差別。
         public int Write(IEnumerable<Object> assets, bool reset)
         {
             if (!AcceptsWrite)
             {
-                AssetPipeline.ReportFormulaWarning("目錄設為原型來源，不接受步驟寫入。");
+                AssetPipeline.ReportFormulaWarning("目錄設為原型來源，不接受動作寫入。");
                 return 0;
             }
 
@@ -147,7 +147,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
         /// <summary>把每一格的 Owner 指回自己。加格、載入與深複製之後都要呼叫。</summary>
         // 格子的 Owner 不序列化（存成回頭指向母目錄的欄位會讓資料成環），由目錄統一指派。
-        // 驗證與執行前由 APGraphVerifier.Collect 對整張圖走一趟，呼叫端不必自己記得補。
+        // 驗證與執行前由 GraphVerifier.Collect 對整張圖走一趟，呼叫端不必自己記得補。
         public void SyncCells()
         {
             foreach (GraphNode node in Cells)
@@ -188,19 +188,19 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     /// <summary>
-    /// 步驟的產出端：只接得上 <see cref="AssetCatalog"/>。
+    /// 動作的產出端：只接得上 <see cref="AssetCatalog"/>。
     /// </summary>
-    // 這一格從來不求值——步驟要的是節點本身，不是它的內容。公式、資產、Token 一律接不上，
+    // 這一格從來不求值——動作要的是節點本身，不是它的內容。公式、資產、Token 一律接不上，
     // 那三個由 GraphSlotBase 預設回 false，不必逐一宣告。
     [HGKind("目錄")]
     [Serializable]
-    public class APCatalogOutputSlot : CatalogSlotBase
+    public class CatalogOutputSlot : CatalogSlotBase
     {
         [SerializeReference]
         private GraphNode _node;
 
         /// <summary>這一次寫入是不是重來：勾了就先清空目錄再寫，沒勾就接上去。</summary>
-        // 「新的一輪開始」沒有任何步驟知道，所以由使用者在圖上指定哪一步負責重來。
+        // 「新的一輪開始」沒有任何動作知道，所以由使用者在圖上指定哪一項負責重來。
         // 預設 false＝累積；一顆目錄有多個寫入端時只有第一個該勾。
         [HGLabel("重來")]
         public bool reset;
@@ -209,7 +209,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
         public override void SetNode(GraphNode node) => _node = node;
 
-        /// <summary>原型來源的目錄接不上：它的內容由目錄庫供應，步驟寫不進去。</summary>
+        /// <summary>原型來源的目錄接不上：它的內容由目錄庫供應，動作寫不進去。</summary>
         // 擋在拉線與落點，不是擋在執行：接得上卻什麼都不會發生是最難查的一種錯。
         // 目錄改成原型來源時，已經接上的這條線由編輯器當場斷開。
         public override bool AcceptsCatalogObject(GraphNodeContent pack)
@@ -228,7 +228,7 @@ namespace HaruFamily.Tools.AssetPipeline
         }
 
         /// <summary>接到的目錄；沒接、停用、內容不對或設成原型來源時回 null。</summary>
-        // 原型來源的目錄擋在這裡而不是讓步驟寫進去再忽略：接得上卻什麼都不會發生是最難查的一種錯。
+        // 原型來源的目錄擋在這裡而不是讓動作寫進去再忽略：接得上卻什麼都不會發生是最難查的一種錯。
         public AssetCatalog Target
         {
             get

@@ -7,9 +7,9 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
     /// <summary>
     /// Inspector 上的管線節點圖欄位：畫成一張「節點圖入口」卡片，不展開圖的任何內容。
     /// </summary>
-    // 節點圖是唯一的編輯點：Inspector 展開巢狀步驟清單只會提供第二條會打架的編輯路徑。
-    [CustomPropertyDrawer(typeof(APGraph), true)]
-    public class APGraphDrawer : PropertyDrawer
+    // 節點圖是唯一的編輯點：Inspector 展開巢狀動作清單只會提供第二條會打架的編輯路徑。
+    [CustomPropertyDrawer(typeof(Graph), true)]
+    public class GraphDrawer : PropertyDrawer
     {
         private const float Pad = 6f;
         private const float AccentWidth = 3f;
@@ -40,11 +40,11 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
 
             bool known = !multi && validated != null && !validated.hasMultipleDifferentValues;
             bool ok = known && validated.boolValue;
-            int steps = 0, disabled = 0, tokens = 0;
-            if (!multi) steps = CountSteps(property, out disabled, out tokens);
+            int actions = 0, disabled = 0, tokens = 0;
+            if (!multi) actions = CountActions(property, out disabled, out tokens);
 
             // 空圖沒有「未驗證」可言，色條轉灰，免得一條全新的管線一開就紅著臉。
-            Color accent = !known || steps == 0 ? IdleColor : ok ? OkColor : FailColor;
+            Color accent = !known || actions == 0 ? IdleColor : ok ? OkColor : FailColor;
             DrawCard(position, accent);
 
             float x = position.x + AccentWidth + Pad;
@@ -54,10 +54,10 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
             GUI.Label(titleRect, "◈  管線節點圖", titleStyle);
 
             statusStyle.normal.textColor = accent;
-            GUI.Label(titleRect, StatusText(known, ok, steps, multi), statusStyle);
+            GUI.Label(titleRect, StatusText(known, ok, actions, multi), statusStyle);
 
             var summaryRect = new Rect(x, titleRect.yMax + 2f, width, SummaryHeight);
-            GUI.Label(summaryRect, SummaryText(multi, steps, disabled, tokens), summaryStyle);
+            GUI.Label(summaryRect, SummaryText(multi, actions, disabled, tokens), summaryStyle);
 
             var openRect = new Rect(x, summaryRect.yMax + Gap, width - VerifyWidth - Gap, ButtonHeight);
             var verifyRect = new Rect(openRect.xMax + Gap, openRect.y, VerifyWidth, ButtonHeight);
@@ -79,24 +79,24 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
             }
         }
 
-        private static string StatusText(bool known, bool ok, int steps, bool multi)
+        private static string StatusText(bool known, bool ok, int actions, bool multi)
         {
             if (multi) return "多重選取";
             if (!known) return "狀態未知";
-            if (steps == 0) return "空的";
+            if (actions == 0) return "空的";
             return ok ? "✔ 已驗證" : "✘ 未驗證";
         }
 
-        private static string SummaryText(bool multi, int steps, int disabled, int tokens)
+        private static string SummaryText(bool multi, int actions, int disabled, int tokens)
         {
             if (multi) return "多個對象：內容摘要不顯示";
-            if (steps == 0 && tokens == 0) return "尚未建立任何步驟——開啟編輯器新增第一個";
-            string text = $"{steps} 個步驟 · {tokens} 個Token";
+            if (actions == 0 && tokens == 0) return "尚未建立任何動作——開啟編輯器新增第一個";
+            string text = $"{actions} 個動作 · {tokens} 個Token";
             return disabled > 0 ? $"{text} · {disabled} 個停用" : text;
         }
 
         /// <summary>只讀 SerializedProperty 的長度，不碰實體物件；Inspector 每幀跑得起。</summary>
-        private static int CountSteps(SerializedProperty property, out int disabled, out int tokens)
+        private static int CountActions(SerializedProperty property, out int disabled, out int tokens)
         {
             disabled = 0;
             tokens = 0;
@@ -107,21 +107,21 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
             SerializedProperty roots = property.FindPropertyRelative("_roots");
             if (roots == null || !roots.isArray) return 0;
 
-            int steps = 0;
+            int actions = 0;
             for (int i = 0; i < roots.arraySize; i++)
             {
                 // SerializeReference 元素可能是 null（型別遺失或手動清空），FindPropertyRelative 會回 null。
-                SerializedProperty list = roots.GetArrayElementAtIndex(i)?.FindPropertyRelative("Steps");
+                SerializedProperty list = roots.GetArrayElementAtIndex(i)?.FindPropertyRelative("Actions");
                 if (list == null || !list.isArray) continue;
 
-                steps += list.arraySize;
+                actions += list.arraySize;
                 for (int s = 0; s < list.arraySize; s++)
                 {
                     SerializedProperty flag = list.GetArrayElementAtIndex(s)?.FindPropertyRelative("_disabled");
                     if (flag != null && flag.boolValue) disabled++;
                 }
             }
-            return steps;
+            return actions;
         }
 
         private static void DrawCard(Rect rect, Color accent)

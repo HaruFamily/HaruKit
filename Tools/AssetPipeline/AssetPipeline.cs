@@ -16,8 +16,8 @@ namespace HaruFamily.Tools.AssetPipeline
     {
         private const string DefaultAssetPath = "Assets/Editor/HaruFamily/AssetPipeline/AssetPipeline.asset";
         internal static Action<string> formulaWarningHandler;
-        /// <summary>目前正在執行的管線。步驟與公式靠它讀資產群組、登記 dynamic 資產。</summary>
-        // 步驟的具體實作住在使用端專案，所以這幾個給步驟用的成員必須是 public，不是 internal。
+        /// <summary>目前正在執行的管線。動作與公式靠它讀資產群組、登記 dynamic 資產。</summary>
+        // 動作的具體實作住在使用端專案，所以這幾個給動作用的成員必須是 public，不是 internal。
         public static AssetPipeline current;
 
         /// <summary>每執行一次管線加一。動態目錄節點靠它分辨「這一次的產出」與上一次的殘留。</summary>
@@ -51,7 +51,7 @@ namespace HaruFamily.Tools.AssetPipeline
         /// <summary>
         /// 管線的節點圖。編輯器靠「欄位型別實作 IGraphDocument」找到它，不必認識 AssetPipeline。
         /// </summary>
-        public APGraph graph = new APGraph();
+        public Graph graph = new Graph();
 
         [NonSerialized]
         private string pipelineLog = string.Empty;
