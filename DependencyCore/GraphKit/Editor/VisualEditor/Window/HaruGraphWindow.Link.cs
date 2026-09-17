@@ -26,7 +26,6 @@ public partial class HaruGraphWindow
         EndLink();
         inputPortClickPort = null;
         graphGeneration++;
-        graph.Generation = graphGeneration;
         graph.Ports.Clear();
         graph.PortsByKey.Clear();
 

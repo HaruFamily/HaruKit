@@ -213,7 +213,6 @@ public sealed class HGPortBuildContext
     {
         Graph = graph ?? throw new ArgumentNullException(nameof(graph));
         Generation = generation;
-        graph.Generation = generation;
         ports = graph.Ports;
         byKey = graph.PortsByKey;
     }
