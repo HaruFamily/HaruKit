@@ -147,7 +147,8 @@ public partial class HaruGraphWindow
                 {
                     var pressedPort = inputPortClickPort;
                     inputPortClickPort = null;
-                    if (pressedPort.Presentation.Owner is HGRow pressed && pressed.InputSlot?.Node != null)
+                    HGRow pressed = OwnerRowOfPort(pressedPort);
+                    if (pressed?.InputSlot?.Node != null)
                     {
                         ToggleSlotVisibility(HGGraph.CollapseKey(pressed.OwnerNodeId, pressed), e.alt);
                         e.Use();
@@ -526,10 +527,10 @@ public partial class HaruGraphWindow
     /// 時機畫布：所有時機群組畫在同一張圖上，一個時機一顆節點。一顆群組都還沒有也照樣成立——
     /// 畫布會顯示「新增時機節點」的佔位，不在這裡偷偷建資料。
     /// </summary>
-    private HGFocus AllTimingsFocus()
+    private HGFocus AllRootsFocus()
         => model?.Data == null
             ? new HGFocus()
-            : new HGFocus { Kind = HGFocusKind.Timing, Data = model.Data };
+            : new HGFocus { Kind = HGFocusKind.Root, Data = model.Data };
 }
 
 }

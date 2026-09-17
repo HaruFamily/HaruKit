@@ -8,6 +8,13 @@ using UnityEngine;
 /// <summary>Port construction, hit testing, compatibility, connection and disconnection.</summary>
 public partial class HaruGraphWindow
 {
+    private enum PortCommandResult
+    {
+        Changed,
+        NoChange,
+        Rejected,
+    }
+
     private static HGPortKey InputKey(HGRow row)
         => new HGPortKey(row?.OwnerNodeId, row?.Path, HGPortRole.Input);
 
@@ -35,26 +42,26 @@ public partial class HaruGraphWindow
             foreach (var row in HGGraph.AllRows(node.Rows))
             {
                 if (row.HasInputPort && row.InputSlot != null)
-                    context.Add(CreateInputPort(node, row));
+                    AddInputPort(context, node, row);
 
                 if (row.OutputNode != null)
-                    context.Add(CreateCellOutputPort(node, row));
+                    AddCellOutputPort(context, node, row);
 
                 if (row.Kind == HGRowKind.List)
-                    context.Add(CreateAggregatePort(node, row));
+                    AddAggregatePort(context, node, row);
             }
 
             if (!node.IsRoot && node.Carrier != null)
-                context.Add(CreateNodeOutputPort(node));
+                AddNodeOutputPort(context, node);
         }
 
         activeContext.Provider.AddPorts(context);
         ResolveLinkPorts();
     }
 
-    private HGPort CreateInputPort(HGNodeView node, HGRow row)
+    private void AddInputPort(HGPortBuildContext context, HGNodeView node, HGRow row)
     {
-        var presentation = new HGDelegatePortPresentation(row,
+        var presentation = new HGDelegatePortPresentation(row, node, row,
             () => row.InputPortPos,
             () => PortRect(row.InputPortPos),
             () => !node.Hidden && row.IsLinkable,
@@ -63,43 +70,40 @@ public partial class HaruGraphWindow
             () => true,
             source => source != null && source.Accepts(row.InputSlot)
                 && !WouldCreateCycle(row.InputSlot, source.CycleRoot));
-        return new HGPort(InputKey(row), new HGInputPortBinding(row.InputSlot), policy, presentation, graphGeneration);
+        context.AddInput(InputKey(row), row.InputSlot, policy, presentation);
     }
 
-    private HGPort CreateNodeOutputPort(HGNodeView node)
+    private void AddNodeOutputPort(HGPortBuildContext context, HGNodeView node)
     {
-        var presentation = new HGDelegatePortPresentation(node,
+        var presentation = new HGDelegatePortPresentation(node, node, null,
             () => node.OutputPort,
             () => PortRect(node.OutputPort),
             () => !node.IsRoot && !node.Hidden && node.HasOutputPort,
             () => node.InLockedSubtree);
         var source = new HGDelegatePortSource(node.Carrier, CycleRoot(node), input => SourceAccepts(node, input));
-        return new HGPort(OutputKey(node), new HGOutputPortBinding(source),
-            new HGDelegatePortPolicy(() => true), presentation, graphGeneration);
+        context.AddOutput(OutputKey(node), source, new HGDelegatePortPolicy(() => true), presentation);
     }
 
-    private HGPort CreateCellOutputPort(HGNodeView node, HGRow row)
+    private void AddCellOutputPort(HGPortBuildContext context, HGNodeView node, HGRow row)
     {
-        var presentation = new HGDelegatePortPresentation(row,
+        var presentation = new HGDelegatePortPresentation(row, node, row,
             () => row.OutputPortPos,
             () => PortRect(row.OutputPortPos),
             () => !node.Hidden && !row.Hidden,
             () => row.Locked || node.InLockedSubtree);
         var source = new HGDelegatePortSource(row.OutputNode, row.OutputNode,
             input => input.AcceptsBody(row.OutputNode?.BodyObject));
-        return new HGPort(OutputKey(row), new HGOutputPortBinding(source),
-            new HGDelegatePortPolicy(() => true), presentation, graphGeneration);
+        context.AddOutput(OutputKey(row), source, new HGDelegatePortPolicy(() => true), presentation);
     }
 
-    private HGPort CreateAggregatePort(HGNodeView node, HGRow row)
+    private void AddAggregatePort(HGPortBuildContext context, HGNodeView node, HGRow row)
     {
-        var presentation = new HGDelegatePortPresentation(row,
+        var presentation = new HGDelegatePortPresentation(row, node, row,
             () => row.InputPortPos,
             () => Rect.zero,
             () => !node.Hidden && row.Collapsed && HasConnectedElement(row),
             () => true);
-        return new HGPort(new HGPortKey(row.OwnerNodeId, row.Path, HGPortRole.Aggregate),
-            HGAggregatePortBinding.Instance, new HGDelegatePortPolicy(() => false), presentation, graphGeneration);
+        context.AddAggregate(new HGPortKey(row.OwnerNodeId, row.Path, HGPortRole.Aggregate), presentation);
     }
 
     private void ResolveLinkPorts()
@@ -170,8 +174,8 @@ public partial class HaruGraphWindow
     private bool CanAcceptExternal(HGRow row, IHGPortSource source)
     {
         var input = PortFor(row);
-        return input != null && source != null && input.Presentation.Visible && !input.Presentation.Locked
-            && input.Policy.CanAccept(source);
+        return HGPortConnection.CheckInputSource(input, source, graphGeneration)
+            == HGPortConnectionResult.Allowed;
     }
 
     private HGNodeView LinkTargetNode(Vector2 graphMouse)
@@ -221,8 +225,15 @@ public partial class HaruGraphWindow
 
     private HGNodeView OwnerNodeOfPort(HGPort port)
     {
+        if (port?.Presentation is IHGPortPresentationAnchor anchor) return anchor.Node;
         if (port?.Presentation.Owner is HGNodeView node) return node;
         return port?.Presentation.Owner is HGRow row ? OwnerOfRow(row) : null;
+    }
+
+    private static HGRow OwnerRowOfPort(HGPort port)
+    {
+        if (port?.Presentation is IHGPortPresentationAnchor anchor) return anchor.Row;
+        return port?.Presentation.Owner as HGRow;
     }
 
     private HGNodeView OwnerOfRow(HGRow target)
@@ -265,7 +276,8 @@ public partial class HaruGraphWindow
         for (int i = graph.Ports.Count - 1; i >= 0; i--)
         {
             var port = graph.Ports[i];
-            if (!port.IsInput || !port.Presentation.Visible || port.Presentation.Owner is not HGRow row) continue;
+            HGRow row = OwnerRowOfPort(port);
+            if (!port.IsInput || !port.Presentation.Visible || row == null) continue;
             if (!row.ScreenRect.Contains(graphPoint)) continue;
             owner = OwnerNodeOfPort(port);
             return row;
@@ -328,36 +340,39 @@ public partial class HaruGraphWindow
         Repaint();
     }
 
-    private bool TryConnectPorts(HGPort first, HGPort second)
+    private PortCommandResult TryConnectPorts(HGPort first, HGPort second)
     {
-        if (!CanConnectPorts(first, second)) return false;
+        if (HGPortConnection.Check(first, second, graphGeneration) != HGPortConnectionResult.Allowed)
+            return PortCommandResult.Rejected;
         HGPort input = first.IsInput ? first : second;
         HGPort output = first.IsOutput ? first : second;
-        if (input.InputSlot == null || output.Source?.OutputNode == null) return false;
+        if (input.InputSlot == null || output.Source?.OutputNode == null) return PortCommandResult.Rejected;
+        if (ReferenceEquals(input.InputSlot.Node, output.Source.OutputNode)) return PortCommandResult.NoChange;
 
         BreakUndoMerge();
         PreserveVisibleNodePositions();
         AttachSource(input.InputSlot, output.Source.OutputNode);
         Invalidate();
-        return true;
+        return PortCommandResult.Changed;
     }
 
     // 線的輸入端一律走 Port：命中測試（LinkAt）已經要求兩端都解析得到，走不到沒有 Port 的線。
-    private void CutLink(HGLink link) => CutLink(link?.InputPort?.InputSlot);
+    private PortCommandResult CutLink(HGLink link) => CutLink(link?.InputPort?.InputSlot);
 
-    private void CutLink(GraphSlotBase slot)
+    private PortCommandResult CutLink(GraphSlotBase slot)
     {
-        if (slot == null) return;
+        if (slot?.Node == null) return PortCommandResult.NoChange;
         PreserveVisibleNodePositions();
         AttachSource(slot, null);
         Invalidate();
+        return PortCommandResult.Changed;
     }
 
-    private void AttachSource(GraphSlotBase slot, GraphNode next)
+    private bool AttachSource(GraphSlotBase slot, GraphNode next)
     {
-        if (slot == null) return;
+        if (slot == null) return false;
         var old = slot.Node;
-        if (ReferenceEquals(old, next)) return;
+        if (ReferenceEquals(old, next)) return false;
 
         slot.SetNode(next);
         if (old != null && !IsCarrierUsed(old))
@@ -370,6 +385,7 @@ public partial class HaruGraphWindow
             next.EnsureId();
             model.RemoveOrphan(next);
         }
+        return true;
     }
 
     private bool IsCarrierUsed(GraphNode carrier)

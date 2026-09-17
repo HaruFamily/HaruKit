@@ -44,6 +44,15 @@ public partial class HaruGraphWindow
         }
     }
 
+    /// <summary>Opens one explicitly selected document on an Owner without legacy field discovery.</summary>
+    public static void OpenForDocument(UnityEngine.Object owner, HGDocumentBinding binding,
+        HGEditorExtensionContext context = null)
+    {
+        if (binding == null) throw new ArgumentNullException(nameof(binding));
+        var window = OpenWindow();
+        window.BindDocument(owner, binding, context ?? HGEditorExtensionContext.Default);
+    }
+
     [MenuItem("PinTools/HaruGraph")]
     public static void OpenFromMenu()
     {
@@ -147,9 +156,26 @@ public partial class HaruGraphWindow
     public bool Bind(UnityEngine.Object owner, HGEditorExtensionContext context)
     {
         var previous = sessionContext;
+        var previousBinding = sessionBinding;
         sessionContext = context ?? HGEditorExtensionContext.Default;
+        sessionBinding = null;
         if (BindInSession(owner)) return true;
         sessionContext = previous;
+        sessionBinding = previousBinding;
+        return false;
+    }
+
+    /// <summary>Begins a session for one Tool-selected document binding.</summary>
+    public bool BindDocument(UnityEngine.Object owner, HGDocumentBinding binding, HGEditorExtensionContext context)
+    {
+        if (binding == null) return false;
+        var previousContext = sessionContext;
+        var previousBinding = sessionBinding;
+        sessionContext = context ?? HGEditorExtensionContext.Default;
+        sessionBinding = binding;
+        if (BindInSession(owner)) return true;
+        sessionContext = previousContext;
+        sessionBinding = previousBinding;
         return false;
     }
 
@@ -166,7 +192,7 @@ public partial class HaruGraphWindow
         assetVerifiedOnce = false;
         assetReportStale = false;
         model = new HGModel();
-        if (!model.Bind(owner))
+        if (!model.Bind(owner, sessionBinding))
         {
             model = null;
             activeContext = HGEditorExtensionContext.Default;
@@ -185,11 +211,12 @@ public partial class HaruGraphWindow
         graphDirty = true;
         verifiedOnce = false;
         report = HGValidator.Run(model, includeMissingTypes: true);
+        AddExtensionDiagnostics(report);
         verifiedOnce = true;
         reportStale = false;
 
         // 所有時機共用一張畫布，綁定後直接進去；不再有「記住上次看的是哪個時機」這件事。
-        SetFocus(AllTimingsFocus());
+        SetFocus(AllRootsFocus());
 
         ApplyWindowTitle();
         UpdateUnsavedState();
@@ -307,6 +334,7 @@ public partial class HaruGraphWindow
     {
         model = null;
         activeContext = HGEditorExtensionContext.Default;
+        sessionBinding = null;
         focus = new HGFocus();
         graph = null;
         graphDirty = true;
@@ -391,7 +419,7 @@ public partial class HaruGraphWindow
         if (model?.Dirty == true)
         {
             model.Reload();
-            focus = AllTimingsFocus();
+            focus = AllRootsFocus();
             graphDirty = true;
         }
         UpdateUnsavedState();
@@ -414,6 +442,7 @@ public partial class HaruGraphWindow
         if (focus.Kind == HGFocusKind.Asset)
         {
             assetReport = HGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
+            AddExtensionDiagnostics(assetReport);
             assetVerifiedOnce = true;
             assetReportStale = false;
             if (assetReport.ErrorCount > 0) console.RevealErrors();
@@ -422,6 +451,7 @@ public partial class HaruGraphWindow
         }
 
         report = HGValidator.Run(model, includeMissingTypes: true);
+        AddExtensionDiagnostics(report);
         verifiedOnce = true;
         reportStale = false;
         if (report.ErrorCount > 0) console.RevealErrors();
@@ -475,7 +505,7 @@ public partial class HaruGraphWindow
             return;
         model.Reload();
         // 重抓工作副本＝焦點抓的是舊資料，直接回到時機畫布（不回去的話畫面會空白）。
-        focus = AllTimingsFocus();
+        focus = AllRootsFocus();
         selectedIds.Clear();
         graphDirty = true;
         DoVerify(true);
@@ -536,7 +566,7 @@ public partial class HaruGraphWindow
                 AssetTokens = focus.AssetTokens,
             });
         }
-        else SetFocus(AllTimingsFocus());
+        else SetFocus(AllRootsFocus());
         selectedIds.Clear();
         graphDirty = true;
         Repaint();
@@ -693,7 +723,7 @@ public partial class HaruGraphWindow
         assetVerifiedOnce = false;
         assetReportStale = false;
         assetReport = new HGReport();
-        SetFocus(back != null && back.Kind != HGFocusKind.None ? back : AllTimingsFocus());
+        SetFocus(back != null && back.Kind != HGFocusKind.None ? back : AllRootsFocus());
         DoVerify(true);
         UpdateUnsavedState();
         Repaint();

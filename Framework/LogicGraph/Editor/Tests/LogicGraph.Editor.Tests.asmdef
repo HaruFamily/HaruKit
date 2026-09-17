@@ -5,7 +5,8 @@
     "HaruFamily.Framework.LogicGraph",
     "HaruFamily.Framework.LogicGraph.Editor",
     "HaruFamily.DependencyCore.GraphKit",
-    "HaruFamily.DependencyCore.GraphKit.Editor"
+    "HaruFamily.DependencyCore.GraphKit.Editor",
+    "UniTask"
   ],
   "includePlatforms": [
     "Editor"

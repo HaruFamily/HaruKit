@@ -32,6 +32,21 @@ public class GraphDeepCopyTests
         UnityEngine.Object.DestroyImmediate(asset);
     }
 
+    [Test]
+    public void CollectDiagnostics_ValidatesWithoutEmittingSummary()
+    {
+        var graph = new LogicGraph<TestTiming, TestPack>();
+        graph.MarkValidated();
+        graph.Tokens.Add(null);
+
+        IReadOnlyList<GraphDiagnostic> diagnostics = graph.CollectDiagnostics();
+
+        Assert.That(diagnostics, Has.Count.EqualTo(1));
+        Assert.That(diagnostics[0].Code, Is.EqualTo("logicgraph.reportduplicatetokennames"));
+        Assert.That(diagnostics[0].Severity, Is.EqualTo(GraphDiagnosticSeverity.Error));
+        Assert.That(graph.IsValidated, Is.True, "Live diagnostics must not replace Owner validation state.");
+    }
+
     /// <summary>共用來源：兩個欄位指到同一個載體，複製後必須還是同一個，否則存檔會裂成兩個節點。</summary>
     [Test]
     public void Copy_KeepsSharedCarrierShared()
@@ -228,10 +243,12 @@ public class GraphDeepCopyTests
 
     private sealed class CloneAsset : ScriptableObject { }
 
+    private enum TestTiming { Start }
+
     private struct TestPack { }
 
     [Serializable]
-    private sealed class TestFormula : FormulaBase<int, TestPack>
+    private class TestFormula : FormulaBase<int, TestPack>
     {
         protected override UniTask<int> OnEvaluate(TestPack pack, TokenTable<TestPack> tokens)
             => UniTask.FromResult(1);
@@ -240,7 +257,7 @@ public class GraphDeepCopyTests
     private sealed class TestFormulaAsset : FormulaAsset<int, TestPack> { }
 
     [Serializable]
-    private sealed class CountingFormula : FormulaBase<int, TestPack>
+    private sealed class CountingFormula : TestFormula
     {
         public int Calls;
 

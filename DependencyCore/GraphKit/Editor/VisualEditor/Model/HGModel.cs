@@ -24,8 +24,16 @@ public class HGToken
 }
 
 /// <summary>畫布上的一個 root：識別值與它底下的項目清單。</summary>
-// Timing 宣告成 object 而不是 Enum：編輯器只做相等比較與 ToString()，
+// RootKey 宣告成 object 而不是 Enum：編輯器只做相等比較與 ToString()，
 // 「識別值是什麼型別」由 IGraphDocument 的實作決定（LogicGraph 給的是時機 enum）。
+public class HGRootGroupView
+{
+    public object Root;
+    public object RootKey;
+    public IList Items;
+}
+
+/// <summary>Legacy Timing-shaped root view retained for existing Editor consumers.</summary>
 public class HGTimingGroup
 {
     public object Group;
@@ -60,13 +68,16 @@ public class HGModel
     /// <summary>工作副本的圖契約。所有 root／時機操作都經過它，編輯器不認識具體圖型別。</summary>
     public IGraphDocument Doc => Data as IGraphDocument;
 
-    /// <summary>時機選單要列的值。過濾由 <see cref="IGraphDocument.RootKeys"/> 決定（含 Owner 的允許集合）。</summary>
+    /// <summary>可建立或跳轉的 root 識別值。過濾由 <see cref="IGraphDocument.RootKeys"/> 決定（含 Owner 的允許集合）。</summary>
     // 快取在這一層而不是選單那一層：兩個選單入口共用同一份，不會有一邊漏過濾。
-    public IReadOnlyList<object> TimingValues { get; private set; }
+    public IReadOnlyList<object> AvailableRootKeys { get; private set; }
+    [Obsolete("Use AvailableRootKeys.")]
+    public IReadOnlyList<object> TimingValues => AvailableRootKeys;
     public bool Dirty { get; private set; }
     public bool TrackChanges { get; set; } = true;
 
     private FieldInfo systemField;                    // Owner 上放 LogicGraph 的欄位
+    private HGDocumentBinding documentBinding;
     private readonly Dictionary<ScriptableObject, List<AssetParameterDefinition>> assetParameterCache = new();
 
     // 建不出參數列的那些參數只吼一次：EnsureAssetBindings 每次重建圖都會跑，不去重會洗版。
@@ -91,10 +102,15 @@ public class HGModel
 
     /// <summary>綁定 Owner 並複製一份工作副本。失敗回 false 並記 Log。</summary>
     public bool Bind(UnityEngine.Object owner)
+        => Bind(owner, null);
+
+    /// <summary>以指定的文件 binding 綁定 Owner；未指定時才使用 legacy 欄位探索。</summary>
+    public bool Bind(UnityEngine.Object owner, HGDocumentBinding binding)
     {
         Owner = owner;
-        systemField = FindSystemField(owner);
-        if (systemField == null)
+        documentBinding = binding;
+        systemField = binding == null ? FindSystemField(owner) : null;
+        if (binding == null && systemField == null)
         {
             Debug.LogError($"[GraphKit] '{(owner != null ? owner.name : "null")}' 沒有可編輯的圖欄位，無法編輯。");
             return false;
@@ -103,12 +119,12 @@ public class HGModel
         Reload();
         if (Data is not IGraphDocument doc)
         {
-            Debug.LogError($"[GraphKit] '{(owner != null ? owner.name : "null")}' 的圖欄位取不到內容，無法編輯。");
+            Debug.LogError($"[GraphKit] '{(owner != null ? owner.name : "null")}' 的圖文件取不到內容，無法編輯。");
             return false;
         }
 
         PackType = doc.PackType;
-        TimingValues = doc.RootKeys(owner);
+        AvailableRootKeys = doc.RootKeys(owner);
         return true;
     }
 
@@ -116,22 +132,49 @@ public class HGModel
     /// <summary>從 Owner 重新抓一份工作副本（開啟與「取消」共用）。</summary>
     public void Reload()
     {
-        var live = systemField.GetValue(Owner);
-        if (live == null)
-            live = Activator.CreateInstance(systemField.FieldType);
+        object live;
+        if (documentBinding != null)
+        {
+            if (!TryReadBoundDocument(out var bound) && !TryCreateBoundDocument(out bound))
+            {
+                Data = null;
+                Dirty = false;
+                ClearHistory();
+                return;
+            }
+            live = bound;
+        }
+        else
+        {
+            live = systemField.GetValue(Owner);
+            if (live == null)
+                live = Activator.CreateInstance(systemField.FieldType);
+        }
         Data = DeepCopy(live);
         Dirty = false;
         ClearHistory();
     }
 
-    private static object DeepCopy(object system)
+    private object DeepCopy(object system)
     {
         if (system == null)
         {
             Debug.LogError("[GraphKit] 無法建立圖的工作副本，來源為 null。");
             return null;
         }
-        var copy = (system as IGraphDocument)?.DeepCopy();
+        if (system is not IGraphDocument document)
+        {
+            Debug.LogError("[GraphKit] 無法建立圖的工作副本，來源不是 IGraphDocument。");
+            return null;
+        }
+
+        if (documentBinding != null)
+        {
+            if (!TryCloneBoundDocument(document, out var boundCopy)) return null;
+            return boundCopy;
+        }
+
+        var copy = document.DeepCopy();
         if (copy == null) Debug.LogError("[GraphKit] 圖的 DeepCopy 失敗，已停止編輯以避免直接修改 Owner。");
         return copy;
     }
@@ -296,7 +339,14 @@ public class HGModel
             return false;
         }
 
-        systemField.SetValue(Owner, toStore);
+        if (documentBinding != null)
+        {
+            if (!TryWriteBoundDocument(doc)) return false;
+        }
+        else
+        {
+            systemField.SetValue(Owner, toStore);
+        }
         EditorUtility.SetDirty(Owner);
         if (Owner is Component component && component.gameObject.scene.IsValid())
             EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
@@ -305,51 +355,151 @@ public class HGModel
         return true;
     }
 
-    // ===== 時機群組 =====
-
-    public IList Groups => Doc?.Roots;
-
-    /// <summary>項目欄位的型別。空群組時也要建得出新項目，所以問契約而不是從現有內容推。</summary>
-    public Type ActionSlotType => Doc?.ItemSlotType;
-
-    public List<HGTimingGroup> ReadGroups()
+    private bool TryReadBoundDocument(out IGraphDocument document)
     {
-        var result = new List<HGTimingGroup>();
+        try
+        {
+            return documentBinding.TryRead(Owner, out document);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogError($"[GraphKit] 讀取文件 '{documentBinding.DocumentId}' 失敗：{exception.Message}");
+            document = null;
+            return false;
+        }
+    }
+
+    private bool TryCreateBoundDocument(out IGraphDocument document)
+    {
+        try
+        {
+            return documentBinding.TryCreate(out document);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogError($"[GraphKit] 建立文件 '{documentBinding.DocumentId}' 失敗：{exception.Message}");
+            document = null;
+            return false;
+        }
+    }
+
+    private bool TryCloneBoundDocument(IGraphDocument document, out IGraphDocument clone)
+    {
+        try
+        {
+            if (documentBinding.TryClone(document, out clone)) return true;
+        }
+        catch (Exception exception)
+        {
+            Debug.LogError($"[GraphKit] 複製文件 '{documentBinding.DocumentId}' 失敗：{exception.Message}");
+            clone = null;
+            return false;
+        }
+
+        Debug.LogError($"[GraphKit] 文件 '{documentBinding.DocumentId}' 的工作副本型別不符或與來源共用實例。");
+        clone = null;
+        return false;
+    }
+
+    private bool TryWriteBoundDocument(IGraphDocument document)
+    {
+        try
+        {
+            if (documentBinding.TryWrite(Owner, document)) return true;
+        }
+        catch (Exception exception)
+        {
+            Debug.LogError($"[GraphKit] 寫入文件 '{documentBinding.DocumentId}' 失敗：{exception.Message}");
+            return false;
+        }
+
+        Debug.LogError($"[GraphKit] 文件 '{documentBinding.DocumentId}' 的工作副本型別不符，Owner 未寫入。");
+        return false;
+    }
+
+    // ===== Root groups =====
+
+    public IList RootGroups => Doc?.Roots;
+
+    /// <summary>Root 項目欄位的型別。空 root 時也要建得出新項目，所以問契約而不是從現有內容推。</summary>
+    public Type RootItemSlotType => Doc?.ItemSlotType;
+    [Obsolete("Use RootItemSlotType.")]
+    public Type ActionSlotType => RootItemSlotType;
+
+    public List<HGRootGroupView> ReadRootGroups()
+    {
+        var result = new List<HGRootGroupView>();
         var doc = Doc;
         if (doc?.Roots == null) return result;
         foreach (var g in doc.Roots)
         {
             if (g == null) continue;
-            result.Add(new HGTimingGroup { Group = g, Timing = doc.KeyOf(g), Actions = doc.ItemsOf(g) });
+            result.Add(new HGRootGroupView { Root = g, RootKey = doc.KeyOf(g), Items = doc.ItemsOf(g) });
         }
         return result;
     }
 
-    /// <summary>這個識別值是否已經有群組（識別值不可重複，新增選單靠它決定哪些還能選）。</summary>
-    public bool HasGroup(object timing)
+    /// <summary>這個識別值是否已經有 root（識別值不可重複，新增選單靠它決定哪些還能選）。</summary>
+    public bool HasRoot(object rootKey)
     {
-        foreach (var g in ReadGroups())
-            if (Equals(g.Timing, timing)) return true;
+        foreach (var root in ReadRootGroups())
+            if (Equals(root.RootKey, rootKey)) return true;
         return false;
     }
 
-    /// <summary>新增一個時機群組；已存在同一個識別值則回傳既有的。</summary>
-    public HGTimingGroup AddGroup(object timing)
+    /// <summary>新增一個 root；已存在同一個識別值則回傳既有的。</summary>
+    public HGRootGroupView AddRoot(object rootKey)
     {
         var doc = Doc;
-        var group = doc?.AddRoot(timing);
-        if (group == null) return null;
+        var root = doc?.AddRoot(rootKey);
+        if (root == null) return null;
 
-        return new HGTimingGroup { Group = group, Timing = doc.KeyOf(group), Actions = doc.ItemsOf(group) };
+        return new HGRootGroupView { Root = root, RootKey = doc.KeyOf(root), Items = doc.ItemsOf(root) };
     }
 
-    public void RemoveGroup(HGTimingGroup group)
+    public void RemoveRoot(HGRootGroupView root)
     {
-        Groups?.Remove(group.Group);
+        RootGroups?.Remove(root?.Root);
     }
 
-    /// <summary>建立空的動作欄位；可先加入清單，稍後再由空 Node 選擇動作型別。</summary>
-    public object NewActionSlot(IList actionList) => HGReflect.CreateInstance(ActionSlotType);
+    /// <summary>建立空的 root 項目；可先加入清單，稍後再由空 Node 選擇型別。</summary>
+    public object NewRootItem(IList items) => HGReflect.CreateInstance(RootItemSlotType);
+
+    [Obsolete("Use ReadRootGroups.")]
+    public List<HGTimingGroup> ReadGroups()
+    {
+        var result = new List<HGTimingGroup>();
+        foreach (var root in ReadRootGroups())
+            result.Add(new HGTimingGroup { Group = root.Root, Timing = root.RootKey, Actions = root.Items });
+        return result;
+    }
+
+    [Obsolete("Use HasRoot.")]
+    public bool HasGroup(object timing) => HasRoot(timing);
+
+    [Obsolete("Use AddRoot.")]
+    public HGTimingGroup AddGroup(object timing)
+    {
+        var root = AddRoot(timing);
+        return root == null ? null : new HGTimingGroup
+        {
+            Group = root.Root,
+            Timing = root.RootKey,
+            Actions = root.Items,
+        };
+    }
+
+    [Obsolete("Use RemoveRoot.")]
+    public void RemoveGroup(HGTimingGroup group)
+        => RemoveRoot(group == null ? null : new HGRootGroupView
+        {
+            Root = group.Group,
+            RootKey = group.Timing,
+            Items = group.Actions,
+        });
+
+    [Obsolete("Use NewRootItem.")]
+    public object NewActionSlot(IList actionList) => NewRootItem(actionList);
 
     /// <summary>
     /// 本 pack 的所有公式族：(結果型別, 具體 Slot 型別)。掃專案裡所有具體 FormulaSlot 子類，
@@ -740,10 +890,10 @@ public class HGModel
 
     private IEnumerable<object> Roots()
     {
-        foreach (var g in ReadGroups())
+        foreach (var g in ReadRootGroups())
         {
-            if (g.Actions == null) continue;
-            foreach (var a in g.Actions)
+            if (g.Items == null) continue;
+            foreach (var a in g.Items)
                 if (a != null) yield return a;
         }
         // Token的取值欄位也是根：它的子樹是正式資料，走訪、驗證與資產引用都要算進來。
@@ -762,10 +912,10 @@ public class HGModel
         if (Data != null) yield return Data;
         foreach (var endpoint in OwnerTokens)
             if (endpoint != null) yield return endpoint;
-        foreach (var g in ReadGroups())
+        foreach (var g in ReadRootGroups())
         {
-            if (g.Actions == null) continue;
-            foreach (var a in g.Actions)
+            if (g.Items == null) continue;
+            foreach (var a in g.Items)
                 if (a != null) yield return a;
         }
     }

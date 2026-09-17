@@ -15,12 +15,12 @@ public enum HGFocusKind
     /// <summary>下鑽進一個共用資產的內部。</summary>
     Asset,
 
-    /// <summary>
-    /// 全部時機共用的那張畫布：每個 ActionTimingGroup 是一顆節點，可自由擺位，
-    /// 跨時機的共用來源因此拉得到線。切時機不再是換畫布。
-    /// </summary>
+    /// <summary>全部 root 共用的那張畫布；每個 root 是一顆節點，可自由擺位與共用來源。</summary>
     // 排在最後而不是接在 Action 後面：其他 Kind 的數值不動，既有比較與紀錄不受影響。
-    Timing,
+    Root,
+
+    [Obsolete("Use Root.")]
+    Timing = Root,
 
     /// <summary>下鑽進一個具名Token的內部。端點是頭端，它的取值欄位就是這張畫布唯一的來源接點。</summary>
     Token,
@@ -33,13 +33,16 @@ public class HGFocus : IOrphanPool
 
     // Action 焦點。畫布不再切到單一動作，但 HGValidator 仍用它當「這則問題屬於哪個動作」的標籤。
     // 型別是 object：識別值是什麼由 IGraphDocument 的實作決定，這裡只做相等比較與顯示。
-    public object Timing;
+    private object rootKey;
+    public object RootKey { get => rootKey; set => rootKey = value; }
+    [Obsolete("Use RootKey.")]
+    public object Timing { get => rootKey; set => rootKey = value; }
     public IList ActionList;
     public int ActionIndex = -1;
     public GraphSlotBase ActionSlot;
 
-    // Timing 焦點：LogicGraph 工作副本本身（＝HGModel.Data）。
-    // 群組清單每次都從它現讀，新增／刪除時機不必回頭修焦點。
+    // Root 焦點：文件工作副本本身（＝HGModel.Data）。
+    // 群組清單每次都從它現讀，新增／刪除 root 不必回頭修焦點。
     public object Data;
 
     // 資產焦點：HostSlot 是合成出來的槽，內容＝資產內容的工作副本
@@ -60,16 +63,16 @@ public class HGFocus : IOrphanPool
     public List<GraphNode> Orphans => Kind == HGFocusKind.Asset && Token == null ? AssetOrphans : null;
 
     /// <summary>
-    /// 這個焦點畫成 HEAD 的東西。多數焦點只有一個 Slot 頭端；Timing 焦點則是**每個
-    /// ActionTimingGroup 各一顆**——它們不是 Slot，建圖時走「一般物件節點」那條路。
-    /// 群組清單現讀不快取：新增或刪除時機不需要重建焦點。
+    /// 這個焦點畫成 HEAD 的東西。多數焦點只有一個 Slot 頭端；Root 焦點則是每個
+    /// root 各一顆，它們不是 Slot，建圖時走一般物件節點那條路。
+    /// 群組清單現讀不快取：新增或刪除 root 不需要重建焦點。
     /// </summary>
     public List<object> Roots
     {
         get
         {
             var roots = new List<object>();
-            if (Kind == HGFocusKind.Timing)
+            if (Kind == HGFocusKind.Root)
             {
                 if ((Data as IGraphDocument)?.Roots is IList groups)
                     foreach (var g in groups)
@@ -98,7 +101,7 @@ public class HGFocus : IOrphanPool
             {
                 case HGFocusKind.Action:
                     return ActionHeadTitle(ActionSlot);
-                case HGFocusKind.Timing:
+                case HGFocusKind.Root:
                     return $"全部{HGGraph.RootNoun(Data as IGraphDocument)}";
                 case HGFocusKind.Asset:
                     if (Token != null) return $"資產 {AssetObject?.name} ／ Token {Token.Name ?? "（未命名）"}";
@@ -120,8 +123,8 @@ public class HGFocus : IOrphanPool
             {
                 case HGFocusKind.Action:
                     return ActionHeadTitle(ActionSlot);
-                // 時機焦點有多顆 HEAD，名字由每個群組自己的 Timing 決定，不從焦點來。
-                case HGFocusKind.Timing:
+                // Root 焦點有多顆 HEAD，名字由每個 root 自己的 key 決定，不從焦點來。
+                case HGFocusKind.Root:
                     return "";
                 case HGFocusKind.Asset:
                     if (Token != null) return Token.Name ?? "（未命名 Token）";
@@ -143,8 +146,8 @@ public class HGFocus : IOrphanPool
             {
                 case HGFocusKind.Action:
                     return "act:" + HGReflect.EnsureSlotEditorId(ActionSlot);
-                // 只有一張時機畫布，所以焦點 id 是常數；每顆群組 HEAD 的 id 走 HGGraph.GroupHeadId。
-                case HGFocusKind.Timing:
+                // 保留既有 focus id，避免既有 session 視圖狀態失去對應；每顆 root HEAD 的 id 走 HGGraph.GroupHeadId。
+                case HGFocusKind.Root:
                     return "tim:*";
                 case HGFocusKind.Asset:
                     string asset = AssetObject != null
@@ -162,12 +165,12 @@ public class HGFocus : IOrphanPool
 
     /// <summary>
     /// 候選池掛在頭端上，切焦點時視窗用它指定 HGModel.OrphanHead。
-    /// 時機畫布沒有單一頭端，候選就掛在整套 LogicGraph 上——那張畫布的主人本來就是它。
+    /// Root 畫布沒有單一頭端，候選就掛在整份文件上——那張畫布的主人本來就是它。
     /// </summary>
     public object Head => Kind switch
     {
         HGFocusKind.Action => ActionSlot,
-        HGFocusKind.Timing => Data,
+        HGFocusKind.Root => Data,
         // 端點自己就是頭端：Id、座標與候選池都在它身上，跟 ActionSlot 同一套。
         HGFocusKind.Asset => Token != null ? Token : (object)this,
         HGFocusKind.Token => Token,
@@ -188,8 +191,8 @@ public class HGFocus : IOrphanPool
         switch (Kind)
         {
             case HGFocusKind.Action: return ReferenceEquals(ActionSlot, other.ActionSlot);
-            // 時機畫布只有一張，同 Kind 就是同一個焦點。
-            case HGFocusKind.Timing: return true;
+            // Root 畫布只有一張，同 Kind 就是同一個焦點。
+            case HGFocusKind.Root: return true;
             case HGFocusKind.Asset:
                 return AssetObject == other.AssetObject && ReferenceEquals(Token, other.Token);
             case HGFocusKind.Token: return ReferenceEquals(Token, other.Token);

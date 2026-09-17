@@ -46,6 +46,7 @@ public partial class HaruGraphWindow : EditorWindow
     private HGFocus focus = new();
     private HGEditorExtensionContext sessionContext = HGEditorExtensionContext.Default;
     private HGEditorExtensionContext activeContext = HGEditorExtensionContext.Default;
+    private HGDocumentBinding sessionBinding;
 
     /// <summary>目前這張圖怎麼稱呼它的 root。選單、提示與 log 都用它組字，編輯器不寫死領域用詞。</summary>
     private string RootNoun => HGGraph.RootNoun(model?.Doc);
@@ -432,7 +433,16 @@ public partial class HaruGraphWindow : EditorWindow
         graph = focus.Kind == HGFocusKind.None
             ? new HGGraphView()
             : HGGraph.Build(model, focus.Roots, OrphansOfCurrentFocus(), focus.Id, focus.HeadTitle,
-                listCollapse, noteOpenId, noteCollapsed, focus.HeadCarrier, orphanKindHints);
+                listCollapse, noteOpenId, noteCollapsed, focus.HeadCarrier, orphanKindHints, activeContext.Metadata);
+        (focus.Kind == HGFocusKind.Asset ? assetReport : report).ReplaceMetadataDiagnostics(graph.Diagnostics);
+        if (graph.Normalized)
+        {
+            if (focus.Kind == HGFocusKind.Asset) MarkAssetContentChanged();
+            else { model.MarkDirty(); reportStale = true; }
+            LiveVerify();
+        }
+
+        ResolveDiagnosticLocations(focus.Kind == HGFocusKind.Asset ? assetReport : report);
 
         ApplyVisibility();
         MarkCatalogPorts();
@@ -648,14 +658,14 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private IList OrphansOfCurrentFocus()
     {
-        if (focus.Kind != HGFocusKind.Timing) return HGReflect.Orphans(focus.Head);
+        if (focus.Kind != HGFocusKind.Root) return HGReflect.Orphans(focus.Head);
 
         var all = new List<object>();
         Append(all, HGReflect.Orphans(model.Data));
-        foreach (var g in model.ReadGroups())
+        foreach (var g in model.ReadRootGroups())
         {
-            if (g.Actions == null) continue;
-            foreach (var slot in g.Actions) Append(all, HGReflect.Orphans(slot));
+            if (g.Items == null) continue;
+            foreach (var slot in g.Items) Append(all, HGReflect.Orphans(slot));
         }
         return all;
     }
@@ -831,12 +841,117 @@ public partial class HaruGraphWindow : EditorWindow
         {
             if (focus.AssetHostSlot == null) return;
             assetReport = HGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
+            AddExtensionDiagnostics(assetReport);
+            assetReport.ReplaceMetadataDiagnostics(graph?.Diagnostics);
             assetVerifiedOnce = true;
             return;
         }
 
         report = HGValidator.Run(model);
+        AddExtensionDiagnostics(report);
+        report.ReplaceMetadataDiagnostics(graph?.Diagnostics);
         verifiedOnce = true;
+    }
+
+    private void AddExtensionDiagnostics(HGReport target)
+    {
+        var diagnostics = new List<GraphDiagnostic>();
+        activeContext.CollectDiagnostics(model.Owner, model.Doc, diagnostics);
+        target.ReplaceExtensionDiagnostics(diagnostics);
+    }
+
+    /// <summary>Rebinds pure-data diagnostic locations after a graph rebuild; reports never retain old row objects.</summary>
+    private void ResolveDiagnosticLocations(HGReport target)
+    {
+        if (target == null || graph == null || model == null) return;
+
+        foreach (var issue in target.Issues)
+        {
+            GraphDiagnosticLocation location = issue.Location;
+            if (!string.IsNullOrEmpty(location.FocusId)) issue.Focus = FindFocus(location.FocusId);
+            if (!string.IsNullOrEmpty(location.NodeId))
+                issue.Node = FindCarrier(location.NodeId);
+            else if (!string.IsNullOrEmpty(location.TokenId))
+                issue.Node = FindToken(location.TokenId);
+            else if (TryFindRoot(location.FieldPath, out object root))
+                issue.Node = root;
+
+            if (issue.Node != null || string.IsNullOrEmpty(location.FieldPath)) continue;
+            foreach (var node in graph.Nodes)
+            {
+                foreach (var row in HGGraph.AllRows(node.Rows))
+                {
+                    if (!string.Equals(row.Path, location.FieldPath, StringComparison.Ordinal)) continue;
+                    issue.Slot = row.InputSlot;
+                    issue.Node = node.Obj ?? node.ParentSlot;
+                    break;
+                }
+                if (issue.Node != null || issue.Slot != null) break;
+            }
+        }
+    }
+
+    private GraphNode FindCarrier(string id)
+    {
+        foreach (var carrier in model.AllCarriers())
+            if (carrier != null && carrier.Id == id) return carrier;
+        return null;
+    }
+
+    private HGFocus FindFocus(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return null;
+        if (focus != null && focus.Id == id) return focus;
+
+        if (id.StartsWith("act:", StringComparison.Ordinal))
+        {
+            foreach (var group in model.ReadRootGroups())
+            {
+                if (group.Items == null) continue;
+                for (int i = 0; i < group.Items.Count; i++)
+                {
+                    if (group.Items[i] is not GraphSlotBase slot || "act:" + HGReflect.EnsureSlotEditorId(slot) != id) continue;
+                    return new HGFocus
+                    {
+                        Kind = HGFocusKind.Action,
+                        RootKey = group.RootKey,
+                        ActionList = group.Items,
+                        ActionIndex = i,
+                        ActionSlot = slot,
+                    };
+                }
+            }
+        }
+
+        if (id.StartsWith("var:", StringComparison.Ordinal))
+        {
+            GraphToken token = FindToken(id.Substring("var:".Length));
+            if (token != null) return new HGFocus { Kind = HGFocusKind.Token, Token = token };
+        }
+        return null;
+    }
+
+    private GraphToken FindToken(string id)
+    {
+        var scope = focus.Kind == HGFocusKind.Asset ? focus.AssetTokens : model.OwnerTokens;
+        if (scope == null) return null;
+        foreach (var token in scope)
+            if (token != null && token.Id == id) return token;
+        return null;
+    }
+
+    private bool TryFindRoot(string fieldPath, out object root)
+    {
+        root = null;
+        const string prefix = "ActionGroups[";
+        if (string.IsNullOrEmpty(fieldPath) || !fieldPath.StartsWith(prefix, StringComparison.Ordinal)) return false;
+
+        int end = fieldPath.IndexOf(']', prefix.Length);
+        if (end < 0 || !int.TryParse(fieldPath.Substring(prefix.Length, end - prefix.Length), out int index)) return false;
+        IList roots = model.Doc?.Roots;
+        if (roots == null || index < 0 || index >= roots.Count) return false;
+        root = roots[index];
+        return root != null;
     }
 
     // ===== 全域快捷鍵 =====
@@ -882,7 +997,7 @@ public partial class HaruGraphWindow : EditorWindow
         // 只退回目錄的那一步不換圖，焦點與選取要留著——那一步在使用者眼裡只是左欄的一列變回來。
         if (step != HGStepKind.Catalogs)
         {
-            focus = focus.Kind == HGFocusKind.Timing ? AllTimingsFocus() : new HGFocus();
+            focus = focus.Kind == HGFocusKind.Root ? AllRootsFocus() : new HGFocus();
             selectedIds.Clear();
         }
 

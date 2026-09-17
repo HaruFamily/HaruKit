@@ -33,6 +33,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public List<HGNodeView> Nodes = new();
         public List<HGLink> Links = new();
         public List<HGPort> Ports = new();
+        public List<GraphDiagnostic> Diagnostics = new();
+        public bool Normalized;
         public Dictionary<HGPortKey, HGPort> PortsByKey = new();
 
         // 同一個載體被多個欄位指到＝共用來源：只畫一個節點，連線各自一條。GraphNode 沒有覆寫 Equals，預設就是參考比對。
@@ -141,6 +143,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
         public object Target;            // payload：一般值欄位所屬的物件
         public FieldInfo Field;
+        public HGFieldDescriptor Descriptor;
+        public IHGValueDrawer ValueDrawer;
 
         /// <summary>payload：這一列自己承載一整段項目（List 形狀）。</summary>
         // 「承載一段」與「屬於某一段的某一項」是兩件事，用兩組欄位表示，不從 ItemIndex 是不是 -1 推。
@@ -183,6 +187,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// <summary>欄位標了 <c>[HGEnum]</c>。最終畫不畫 enum 按鈕列仍要另算：替代預設值型別是 enum 時沒標也要畫。</summary>
         public bool ForceEnumButtons;
         public bool HideLabel;
+        public int LabelWidthUnits;
+        public float LabelWidthRatio;
+        public bool Normalized;
 
         // 排版結果（每次重畫填）
         public float LocalY;
@@ -301,7 +308,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public static HGGraphView Build(HGModel model, IReadOnlyList<object> roots, IList orphans, string focusId,
             string headTitle, IReadOnlyDictionary<string, bool> listCollapse = null,
             string noteOpenId = null, ICollection<string> noteCollapsed = null, object headCarrier = null,
-            IReadOnlyDictionary<string, Type> orphanHints = null)
+            IReadOnlyDictionary<string, Type> orphanHints = null, IHGEditorMetadataProvider metadata = null)
         {
             var view = new HGGraphView();
 
@@ -314,8 +321,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 if (root == null) continue;
                 var rootNode = root is GraphSlotBase rootSlot
                     ? MakeHeadNode(model, rootSlot, focusId, headTitle, headCarrier)
-                    : MakeGroupNode(model, root);
-                Collect(model, rootNode, view, 0, listCollapse, false, false);
+                    : MakeGroupNode(model, root, metadata, view.Diagnostics);
+                Collect(model, rootNode, view, 0, listCollapse, false, false, metadata, view.Diagnostics);
             }
 
             if (orphans != null)
@@ -330,14 +337,17 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     Type hint = null;
                     orphanHints?.TryGetValue(carrier.EnsureId(), out hint);
                     // 候選不需要額外標記：沒有連入線本身就是訊號。
-                    var node = MakeNodeForCarrier(model, carrier, null, null, hint);
-                    Collect(model, node, view, 0, listCollapse, false, false);
+                    var node = MakeNodeForCarrier(model, carrier, null, null, hint, metadata, view.Diagnostics);
+                    Collect(model, node, view, 0, listCollapse, false, false, metadata, view.Diagnostics);
                 }
             }
 
             // 端點解析要等整張圖走完：指著某一格的欄位可能比它的容器更早走到。
             ResolveCellLinks(view);
             ApplyViewState(model, view, noteOpenId, noteCollapsed);
+            foreach (var node in view.Nodes)
+                foreach (var row in AllRows(node.Rows))
+                    if (row.Normalized) view.Normalized = true;
             AutoLayout(model, view);
             return view;
         }
@@ -349,9 +359,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// 所以每個動作直接是清單的一列——序號、拖曳把手、刪除鈕、折疊、斑馬紋全部沿用清單那一套，
         /// 不需要為動作另做一組互動。一張畫布上有幾個時機就有幾顆。
         /// </summary>
-        private static HGNodeView MakeGroupNode(HGModel model, object group)
+        private static HGNodeView MakeGroupNode(HGModel model, object group, IHGEditorMetadataProvider metadata,
+            List<GraphDiagnostic> diagnostics)
         {
-            var node = MakeNodeForObject(group, null, null, null);
+            var node = MakeNodeForObject(group, null, null, null, metadata, diagnostics);
             node.Id = GroupHeadId(model, group);
             node.IsRoot = true;
             node.IsTimingGroup = true;
@@ -413,7 +424,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
         /// <summary>一個載體＝一個節點。內容種類決定畫成公式／動作、資產葉或編輯中的空節點。</summary>
         private static HGNodeView MakeNodeForCarrier(HGModel model, GraphNode carrier, GraphSlotBase parentSlot, HGRow parentRow,
-            Type hintSlotType = null)
+            Type hintSlotType = null, IHGEditorMetadataProvider metadata = null, List<GraphDiagnostic> diagnostics = null)
         {
             string id = carrier.EnsureId();
             // 候選節點沒有父欄位，用建立時記下的族當代表；有父欄位時一律以父欄位為準。
@@ -425,13 +436,13 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             switch (carrier.Kind)
             {
                 case NodeKind.Inline when carrier.BodyObject != null:
-                    node = MakeNodeForObject(carrier.BodyObject, parentSlot, parentRow, slotResultType);
+                    node = MakeNodeForObject(carrier.BodyObject, parentSlot, parentRow, slotResultType, metadata, diagnostics);
                     break;
 
                 // 包與 Inline 走同一條建法（Header 標籤、參數列都來自內容物），差別只在它不求值：
                 // 結果型別一律 null，相容判定改看 CatalogSlotBase.AcceptsCatalogObject。
                 case NodeKind.Catalog when carrier.CatalogObject != null:
-                    node = MakeNodeForObject(carrier.CatalogObject, parentSlot, parentRow, null);
+                    node = MakeNodeForObject(carrier.CatalogObject, parentSlot, parentRow, null, metadata, diagnostics);
                     node.IsCatalogNode = true;
                     node.ResultType = null;
                     node.Chip = null;
@@ -513,7 +524,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             return isAction ? "Action" : null;
         }
 
-        private static HGNodeView MakeNodeForObject(object obj, GraphSlotBase parentSlot, HGRow parentRow, Type slotResultType)
+        private static HGNodeView MakeNodeForObject(object obj, GraphSlotBase parentSlot, HGRow parentRow, Type slotResultType,
+            IHGEditorMetadataProvider metadata, List<GraphDiagnostic> diagnostics)
         {
             bool isAction = HGReflect.IsActionNodeType(obj.GetType());
             Type resultType = obj is IGraphInlineNode inline
@@ -532,13 +544,14 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 IsActionNode = isAction,
                 ResultType = resultType,
             };
-            BuildRows(obj, 0, node.Rows, new HashSet<object>(HGRefComparer.Instance), "", 0f);
+            BuildRows(obj, 0, node.Rows, new HashSet<object>(HGRefComparer.Instance), "", 0f, metadata, diagnostics);
             return node;
         }
 
         /// <summary>把節點與其子樹加入視圖。已經畫過的載體只補一條連線，不重複建節點。</summary>
         private static void Collect(HGModel model, HGNodeView node, HGGraphView view, int depth,
-            IReadOnlyDictionary<string, bool> listCollapse, bool disabled, bool locked)
+            IReadOnlyDictionary<string, bool> listCollapse, bool disabled, bool locked, IHGEditorMetadataProvider metadata,
+            List<GraphDiagnostic> diagnostics)
         {
             if (depth > 24) return;                       // 資料異常時不讓編輯器堆疊爆掉
             node.InDisabledSubtree = disabled || (node.Carrier != null && node.Carrier.Disabled);
@@ -561,8 +574,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     if (child == null) continue;
                     if (view.ByCarrier.ContainsKey(child)) continue;
 
-                    var childNode = MakeNodeForCarrier(model, child, null, null, null);
-                    Collect(model, childNode, view, depth + 1, listCollapse, node.InDisabledSubtree, locked);
+                    var childNode = MakeNodeForCarrier(model, child, null, null, null, metadata, diagnostics);
+                    Collect(model, childNode, view, depth + 1, listCollapse, node.InDisabledSubtree, locked, metadata, diagnostics);
                 }
             }
             // 節點 Id 到這裡才確定，所以列的歸屬也在這裡補；折疊與分支收合都靠它組 key。
@@ -606,11 +619,11 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     continue;
                 }
 
-                var child = MakeNodeForCarrier(model, carrier, row.InputSlot, row);
+                var child = MakeNodeForCarrier(model, carrier, row.InputSlot, row, null, metadata, diagnostics);
                 bool bindingOff = row.AssetBinding != null && !row.AssetBinding.OverrideEnabled;
                 Collect(model, child, view, depth + 1, listCollapse,
                     node.InDisabledSubtree || bindingOff || RowCarrierDisabled(row),
-                    node.InLockedSubtree || bindingOff);
+                    node.InLockedSubtree || bindingOff, metadata, diagnostics);
 
                 // 連線在這裡建，父節點才記得住：畫線時要靠它判斷「線的起點還在不在畫面上」。
                 // 超過深度上限被擋掉的子節點沒有進圖，也就不該有線。
@@ -734,9 +747,116 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
         // ===== 參數列 =====
 
-        private static void BuildRows(object obj, int depth, List<HGRow> into, HashSet<object> visited, string path, float leftPad)
+        private static void BuildRows(object obj, int depth, List<HGRow> into, HashSet<object> visited, string path, float leftPad,
+            IHGEditorMetadataProvider metadata, List<GraphDiagnostic> diagnostics)
         {
             if (obj == null || depth > 5 || !visited.Add(obj)) return;
+
+            if (metadata != null && metadata.TryGetNodeDescriptor(obj.GetType(), out var descriptor))
+            {
+                foreach (var field in descriptor.Fields)
+                {
+                    string fieldPath = path + "/" + field.Id;
+                    if (!field.TryGetVisibility(obj, out bool visible, out var exception))
+                    {
+                        diagnostics?.Add(new GraphDiagnostic("graphkit.metadata.visibility-failed", GraphDiagnosticSeverity.Error,
+                            $"{obj.GetType().FullName}.{field.Id} visibility predicate failed: {exception.Message}",
+                            new GraphDiagnosticLocation(fieldPath: fieldPath)));
+                    }
+                    if (!visible) continue;
+
+                    if (field.Role == HGFieldRole.Slot)
+                    {
+                        object value = field.Read(obj);
+                        bool normalized = false;
+                        Exception factoryException = null;
+                        if (value == null && field.TryCreateMissing(obj, out value, out factoryException)) normalized = true;
+                        if (factoryException != null)
+                        {
+                            diagnostics?.Add(new GraphDiagnostic("graphkit.metadata.factory-failed", GraphDiagnosticSeverity.Error,
+                                $"{obj.GetType().FullName}.{field.Id} null factory failed: {factoryException.Message}",
+                                new GraphDiagnosticLocation(fieldPath: fieldPath)));
+                        }
+                        if (value is not GraphSlotBase slot) continue;
+                        var row = SlotRow(slot, field.Label, depth);
+                        row.Path = fieldPath;
+                        row.LeftPad = leftPad;
+                        row.Target = obj;
+                        row.Descriptor = field;
+                        row.Normalized = normalized;
+                        ApplyDescriptorPresentation(row, field);
+                        into.Add(row);
+                        continue;
+                    }
+
+                    if (field.Role == HGFieldRole.Group)
+                    {
+                        object value = field.Read(obj);
+                        if (value == null) continue;
+                        var group = new HGRow
+                        {
+                            Kind = HGRowKind.Group,
+                            Label = field.Label,
+                            Depth = depth,
+                            Path = fieldPath,
+                            LeftPad = leftPad,
+                            Target = obj,
+                            Descriptor = field,
+                        };
+                        ApplyDescriptorPresentation(group, field);
+                        BuildRows(value, depth + 1, group.Children, visited, group.Path, leftPad, metadata, diagnostics);
+                        if (group.Children.Count > 0) into.Add(group);
+                        continue;
+                    }
+
+                    if (field.Role == HGFieldRole.List)
+                    {
+                        object value = field.Read(obj);
+                        bool normalized = false;
+                        Exception factoryException = null;
+                        if (value == null && field.TryCreateMissing(obj, out value, out factoryException)) normalized = true;
+                        if (factoryException != null)
+                        {
+                            diagnostics?.Add(new GraphDiagnostic("graphkit.metadata.factory-failed", GraphDiagnosticSeverity.Error,
+                                $"{obj.GetType().FullName}.{field.Id} null factory failed: {factoryException.Message}",
+                                new GraphDiagnosticLocation(fieldPath: fieldPath)));
+                        }
+                        if (value is not IList list) continue;
+                        var row = new HGRow
+                        {
+                            Kind = HGRowKind.List,
+                            Label = field.Label,
+                            Depth = depth,
+                            Path = fieldPath,
+                            LeftPad = leftPad,
+                            Target = obj,
+                            Descriptor = field,
+                            Items = new HGListItemSource(list, field.ValueType),
+                            Normalized = normalized,
+                        };
+                        ApplyDescriptorPresentation(row, field);
+                        BuildListChildren(row, depth + 1, visited, metadata, diagnostics);
+                        into.Add(row);
+                        continue;
+                    }
+
+                    metadata.TryGetValueDrawer(field.ValueType, out var drawer);
+                    var valueRow = new HGRow
+                    {
+                        Kind = HGRowKind.NoPort,
+                        Label = field.Label,
+                        Depth = depth,
+                        Path = fieldPath,
+                        LeftPad = leftPad,
+                        Target = obj,
+                        Descriptor = field,
+                        ValueDrawer = drawer,
+                    };
+                    ApplyDescriptorPresentation(valueRow, field);
+                    into.Add(valueRow);
+                }
+                return;
+            }
 
             foreach (var f in HGReflect.Fields(obj.GetType()))
             {
@@ -785,7 +905,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         ForceEnumButtons = HGReflect.IsEnum(f),
                         HideLabel = HGReflect.IsLabelHidden(f),
                     };
-                    BuildListChildren(row, depth + 1, visited);
+                    BuildListChildren(row, depth + 1, visited, metadata, diagnostics);
                     into.Add(row);
                     continue;
                 }
@@ -820,13 +940,22 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     Field = f,
                     HideLabel = HGReflect.IsLabelHidden(f),
                 };
-                BuildRows(value, depth + 1, group.Children, visited, fieldPath, leftPad);
+                BuildRows(value, depth + 1, group.Children, visited, fieldPath, leftPad, metadata, diagnostics);
                 if (group.Children.Count > 0) into.Add(group);
             }
         }
 
+        private static void ApplyDescriptorPresentation(HGRow row, HGFieldDescriptor field)
+        {
+            row.HideLabel = field.HideLabel;
+            row.LabelWidthUnits = field.LabelWidthUnits;
+            row.LabelWidthRatio = field.LabelWidthRatio;
+            row.ForceEnumButtons = field.ForceEnumButtons;
+        }
+
         /// <summary>清單元素展開：Slot 元素直接成列，複合元素展開成子群組。</summary>
-        private static void BuildListChildren(HGRow row, int depth, HashSet<object> visited)
+        private static void BuildListChildren(HGRow row, int depth, HashSet<object> visited, IHGEditorMetadataProvider metadata,
+            List<GraphDiagnostic> diagnostics)
         {
             row.Children.Clear();
             if (row.Items is not HGListItemSource items) return;
@@ -857,7 +986,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 {
                     child = new HGRow { Kind = HGRowKind.Group, Label = HGReflect.TypeName(item.GetType()), Depth = depth };
                     BuildRows(item, depth + 1, child.Children, visited ?? new HashSet<object>(HGRefComparer.Instance),
-                        childPath, elementPad);
+                        childPath, elementPad, metadata, diagnostics);
                 }
 
                 child.Path = childPath;
@@ -983,7 +1112,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             // 內嵌容器的子節點與新增列接在自己的 Rows 後面，不另外加頂端列。
             bool inlineOwner = node.Obj is IGraphInlineNodeOwner;
             float refRows = node.IsAssetNode || node.IsTokenNode || (node.Obj is IGraphNodeOwner && !inlineOwner) ? RowHeight : 0f;
-            float y = MeasureRows(node.Rows, HeaderHeight + refRows);
+            float y = MeasureRows(node.Rows, HeaderHeight + refRows, node.Width);
             // 格子是 Rows 裡的 InputOutputPort 列，量測與其他列共用同一條路；這裡只補尾端那條新增列。
             if (inlineOwner)
             {
@@ -1009,7 +1138,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             foreach (var node in view.Nodes) MeasureNode(node);
         }
 
-        private static float MeasureRows(List<HGRow> rows, float y)
+        private static float MeasureRows(List<HGRow> rows, float y, float nodeWidth)
         {
             foreach (var r in rows)
             {
@@ -1020,7 +1149,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     case HGRowKind.Group:
                         r.Height = RowHeight;
                         y += RowHeight;
-                        y = MeasureRows(r.Children, y);
+                        y = MeasureRows(r.Children, y, nodeWidth);
                         break;
                     case HGRowKind.List:
                         r.Height = RowHeight;
@@ -1032,17 +1161,28 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                             r.AddRowY = r.LocalY;
                             break;
                         }
-                        y = MeasureRows(r.Children, y);
+                        y = MeasureRows(r.Children, y, nodeWidth);
                         r.AddRowY = y;                // 新增項目列
                         y += RowHeight;
                         break;
                     default:
-                        r.Height = RowHeight;
-                        y += RowHeight;
+                        r.Height = DescriptorHeight(r, nodeWidth);
+                        y += r.Height;
                         break;
                 }
             }
             return y;
+        }
+
+        private static float DescriptorHeight(HGRow row, float nodeWidth)
+        {
+            if (row.Descriptor == null || row.ValueDrawer == null) return RowHeight;
+
+            float labelWidth = LabelWidthOf(nodeWidth, row.LabelWidthUnits, row.LabelWidthRatio);
+            float fieldWidth = Mathf.Max(20f, nodeWidth - labelWidth - 20f);
+            float height = row.ValueDrawer.Measure(new HGValueDrawerContext(row.Descriptor, row.Target, row.Locked), fieldWidth);
+            if (float.IsNaN(height) || float.IsInfinity(height)) return RowHeight;
+            return Mathf.Max(RowHeight, height + 3f);
         }
 
         /// <summary>把整個子樹壓到同一條列上並標記隱藏；高度保留是為了讓接點落在標題列中心。</summary>

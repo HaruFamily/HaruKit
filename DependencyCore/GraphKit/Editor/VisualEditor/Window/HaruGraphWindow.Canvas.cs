@@ -112,13 +112,13 @@ public partial class HaruGraphWindow
 
     private string PlainFocusDescription()
     {
-        if (focus.Kind == HGFocusKind.Timing)
+        if (focus.Kind == HGFocusKind.Root)
         {
             int groups = 0, actions = 0;
-            foreach (var g in model.ReadGroups())
+            foreach (var g in model.ReadRootGroups())
             {
                 groups++;
-                actions += g.Actions?.Count ?? 0;
+                actions += g.Items?.Count ?? 0;
             }
             return groups > 0
                 ? $"{groups} 個{RootNoun}、{actions} 個動作。{RootNoun}節點可自由擺位；跨{RootNoun}共用來源直接拉線即可。"
@@ -279,7 +279,7 @@ public partial class HaruGraphWindow
         }
         if (linking && linkPort != null)
         {
-            bool producedValue = linkPort.Presentation.Owner is HGRow row && row.IsProducedValue;
+            bool producedValue = OwnerRowOfPort(linkPort)?.IsProducedValue == true;
             DrawGraphLine(linkPort.Presentation.Position, LinkPreviewEnd(graphMouse), false, false, producedValue);
         }
         Handles.EndGUI();
@@ -298,7 +298,7 @@ public partial class HaruGraphWindow
     /// </summary>
     private void DrawEmptyTimingHint()
     {
-        if (focus.Kind != HGFocusKind.Timing || graph.Nodes.Count > 0) return;
+        if (focus.Kind != HGFocusKind.Root || graph.Nodes.Count > 0) return;
 
         var rect = new Rect(new Vector2(40f, 40f) + pan, new Vector2(HGGraph.NodeWidth, HGGraph.HeaderHeight + 4f));
         HGStyles.RoundedFill(rect, HGStyles.NodeBody, NodeCornerRadius);
@@ -828,7 +828,10 @@ public partial class HaruGraphWindow
     {
         foreach (var port in graph.Ports)
         {
-            if (port.Presentation.Owner is HGRow or HGNodeView || !port.Presentation.Visible) continue;
+            bool hasBuiltInAnchor = port.Presentation is IHGPortPresentationAnchor anchor
+                ? anchor.Node != null || anchor.Row != null
+                : port.Presentation.Owner is HGRow or HGNodeView;
+            if (hasBuiltInAnchor || !port.Presentation.Visible) continue;
             Rect rect = PortRect(port.Presentation.Position + pan);
             if (port.IsInput)
                 HGStyles.DrawInputPort(rect, IsCompatible(port) ? HGStyles.Link : HGStyles.InputPortEmpty);

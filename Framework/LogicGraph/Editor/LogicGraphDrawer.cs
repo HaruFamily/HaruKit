@@ -1,5 +1,6 @@
 namespace HaruFamily.Framework.LogicGraph.Editor
 {
+using System;
 using UnityEditor;
 using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
@@ -25,6 +26,8 @@ public class LogicGraphDrawer : PropertyDrawer
     private static GUIStyle titleStyle;
     private static GUIStyle summaryStyle;
     private static GUIStyle statusStyle;
+    private static readonly HGEditorExtensionContext GraphContext =
+        new HGEditorExtensionContext(new LogicGraphDiagnosticProvider());
 
     private static readonly Color OkColor = new Color(0.36f, 0.90f, 0.52f);
     private static readonly Color FailColor = new Color(1f, 0.42f, 0.42f);
@@ -72,7 +75,7 @@ public class LogicGraphDrawer : PropertyDrawer
         {
             var open = new GUIContent("開啟節點圖編輯器",
                 "節點圖是唯一的編輯入口；Inspector 不展開圖的內容。");
-            if (GUI.Button(openRect, open)) HaruGraphWindow.OpenFor(target);
+            if (GUI.Button(openRect, open)) OpenGraph(target);
         }
 
         var owner = target as IGraphOwner;
@@ -151,6 +154,22 @@ public class LogicGraphDrawer : PropertyDrawer
         property.serializedObject.Update();
     }
 
+    /// <summary>這個 PropertyDrawer 已知道正確欄位，不要讓 GraphKit 再從 Owner 探索另一份圖。</summary>
+    private void OpenGraph(UnityEngine.Object owner)
+    {
+        if (fieldInfo == null)
+        {
+            Debug.LogError("[LogicGraph] 找不到 Inspector 對應的圖欄位，無法開啟節點圖編輯器。");
+            return;
+        }
+
+        string documentId = $"LogicGraph.{fieldInfo.DeclaringType?.FullName}.{fieldInfo.Name}";
+        HaruGraphWindow.OpenForDocument(owner, new HGDocumentBinding<IGraphDocument>(documentId,
+            target => fieldInfo.GetValue(target) as IGraphDocument,
+            (target, document) => fieldInfo.SetValue(target, document),
+            () => Activator.CreateInstance(fieldInfo.FieldType) as IGraphDocument), GraphContext);
+    }
+
     private static void EnsureStyles()
     {
         if (titleStyle != null) return;
@@ -163,6 +182,25 @@ public class LogicGraphDrawer : PropertyDrawer
 
         statusStyle = new GUIStyle(EditorStyles.miniLabel);
         statusStyle.alignment = TextAnchor.MiddleRight;
+    }
+
+    private sealed class LogicGraphDiagnosticProvider : IHGEditorExtensionProvider, IHGEditorDiagnosticProvider
+    {
+        public bool Supports(UnityEngine.Object owner, IGraphDocument document)
+            => owner is IGraphOwner && document is ILogicGraphEditorDiagnostics;
+
+        public void AddPorts(HGPortBuildContext context)
+        {
+        }
+
+        public void CollectDiagnostics(UnityEngine.Object owner, IGraphDocument document,
+            System.Collections.Generic.List<GraphDiagnostic> diagnostics)
+        {
+            if (document is not ILogicGraphEditorDiagnostics graph) return;
+            diagnostics.AddRange(graph.CollectDiagnostics(owner as IExternalTokenKeys));
+            if (owner is IGraphDomainDiagnostics domain)
+                domain.CollectDiagnostics(document, diagnostics);
+        }
     }
 }
 

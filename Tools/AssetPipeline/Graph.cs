@@ -145,13 +145,13 @@ namespace HaruFamily.Tools.AssetPipeline
         /// </summary>
         public void Verify()
         {
-            List<string> errors = GraphVerifier.Collect(this);
-            _validated = errors.Count == 0;
+            List<GraphDiagnostic> diagnostics = GraphVerifier.CollectDiagnostics(this);
+            _validated = diagnostics.Count == 0;
 
             if (_validated) return;
 
             var report = new System.Text.StringBuilder("[AssetPipeline] 驗證未通過：");
-            foreach (string error in errors) report.Append('\n').Append("  • ").Append(error);
+            foreach (GraphDiagnostic diagnostic in diagnostics) report.Append('\n').Append("  • ").Append(diagnostic.Message);
             Debug.LogError(report.ToString());
         }
     }

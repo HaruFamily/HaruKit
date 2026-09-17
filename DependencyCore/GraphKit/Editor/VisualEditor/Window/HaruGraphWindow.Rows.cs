@@ -52,7 +52,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             {
                 var groupRect = Indent(rowRect, row);
                 GUI.Label(groupRect,
-                    HGStyles.Elide(row.Label, HGStyles.RowLabel, groupRect.width, HGReflect.FieldDescription(row.Field)),
+                    HGStyles.Elide(row.Label, HGStyles.RowLabel, groupRect.width,
+                        row.Descriptor?.Description ?? HGReflect.FieldDescription(row.Field)),
                     HGStyles.RowLabel);
             }
             DrawRows(node, row.Children, nodeRect);
@@ -171,7 +172,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// </summary>
         private static void SplitRow(Rect rowRect, HGRow row, float rightInset, out Rect labelRect, out Rect fieldRect)
         {
-            var (units, ratio) = HGReflect.LabelWidth(row.Field);
+            var (units, ratio) = row.Descriptor != null
+                ? (row.LabelWidthUnits, row.LabelWidthRatio)
+                : HGReflect.LabelWidth(row.Field);
             float labelWidth = HGGraph.LabelWidthOf(rowRect.width, units, ratio);
 
             labelRect = Indent(new Rect(rowRect.x, rowRect.y, labelWidth, rowRect.height), row, false);
@@ -437,7 +440,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 else
                 {
                     GUI.Label(labelRect,
-                        HGStyles.Elide(row.Label, labelStyle, labelRect.width, HGReflect.FieldDescription(row.Field)), labelStyle);
+                        HGStyles.Elide(row.Label, labelStyle, labelRect.width,
+                            row.Descriptor?.Description ?? HGReflect.FieldDescription(row.Field)), labelStyle);
                 }
             }
 
@@ -568,10 +572,27 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             SplitRow(rowRect, row, rightInset, out var labelRect, out var fieldRect);
 
             if (!row.HideLabel)
-                GUI.Label(labelRect, HGStyles.Elide(row.Label, HGStyles.RowLabel, labelRect.width, HGReflect.FieldDescription(row.Field)), HGStyles.RowLabel);
+            {
+                string description = row.Descriptor?.Description ?? HGReflect.FieldDescription(row.Field);
+                GUI.Label(labelRect, HGStyles.Elide(row.Label, HGStyles.RowLabel, labelRect.width, description), HGStyles.RowLabel);
+            }
             else
                 fieldRect = new Rect(labelRect.x, rowRect.y + 1f,
                     Mathf.Max(20f, rowRect.xMax - labelRect.x - rightInset), rowRect.height - 3f);
+
+            if (row.Descriptor != null && row.Target != null)
+            {
+                EditorGUI.BeginDisabledGroup(row.Locked || row.Descriptor.ReadOnly);
+                EditorGUI.BeginChangeCheck();
+                var value = DrawDescriptorValue(fieldRect, row);
+                if (EditorGUI.EndChangeCheck() && !row.Locked && !row.Descriptor.ReadOnly)
+                {
+                    row.Descriptor.Write(row.Target, value);
+                    AfterValueEdit();
+                }
+                EditorGUI.EndDisabledGroup();
+                return;
+            }
 
             if (row.Field != null && row.Target != null)
             {
@@ -591,6 +612,19 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             EditorGUI.BeginChangeCheck();
             var element = HGValueField.Draw(fieldRect, items.ElementType, items.Get(row.ItemIndex));
             if (EditorGUI.EndChangeCheck()) { items.Set(row.ItemIndex, element); AfterValueEdit(); }
+        }
+
+        /// <summary>自訂 drawer 只回傳編輯意圖；工作副本寫回仍由這個視窗的既有交易負責。</summary>
+        private static object DrawDescriptorValue(Rect rect, HGRow row)
+        {
+            var descriptor = row.Descriptor;
+            object current = descriptor.Read(row.Target);
+            if (row.ValueDrawer == null) return HGValueField.Draw(rect, descriptor.ValueType, current, row.ForceEnumButtons);
+
+            var context = new HGValueDrawerContext(descriptor, row.Target, row.Locked);
+            var result = row.ValueDrawer.Draw(rect, context, current);
+            if (result.Changed) GUI.changed = true;
+            return result.Value;
         }
 
         /// <summary>值欄位改完的收尾。</summary>

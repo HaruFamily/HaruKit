@@ -1,5 +1,6 @@
 using UnityEditor;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit;
 using HaruFamily.DependencyCore.GraphKit.Editor;
 
 namespace HaruFamily.Tools.AssetPipeline.Editor
@@ -22,6 +23,8 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
         private static GUIStyle titleStyle;
         private static GUIStyle summaryStyle;
         private static GUIStyle statusStyle;
+        private static readonly HGEditorExtensionContext GraphContext =
+            new HGEditorExtensionContext(new AssetPipelineGraphProvider());
 
         private static readonly Color OkColor = new Color(0.36f, 0.90f, 0.52f);
         private static readonly Color FailColor = new Color(1f, 0.42f, 0.42f);
@@ -66,7 +69,17 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
             {
                 var open = new GUIContent("開啟節點圖編輯器",
                     "節點圖是唯一的編輯入口；Inspector 不展開圖的內容。");
-                if (GUI.Button(openRect, open)) HaruGraphWindow.OpenFor(target);
+                if (GUI.Button(openRect, open))
+                {
+                    if (target is AssetPipeline)
+                    {
+                        HaruGraphWindow.OpenForDocument(target, new HGDocumentBinding<Graph>("AssetPipeline.Graph",
+                            owner => (owner as AssetPipeline)?.graph,
+                            (owner, document) => (owner as AssetPipeline).graph = document,
+                            () => new Graph()), GraphContext);
+                    }
+                    else HaruGraphWindow.OpenFor(target);
+                }
             }
 
             var pipeline = target as AssetPipeline;
@@ -165,6 +178,26 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
 
             statusStyle = new GUIStyle(EditorStyles.miniLabel);
             statusStyle.alignment = TextAnchor.MiddleRight;
+        }
+
+        private sealed class AssetPipelineGraphProvider : IHGEditorExtensionProvider, IHGEditorDiagnosticProvider
+        {
+            public bool Supports(Object owner, IGraphDocument document)
+                => owner is AssetPipeline && document is Graph;
+
+            public void AddPorts(HGPortBuildContext context)
+            {
+            }
+
+            public void CollectDiagnostics(Object owner, IGraphDocument document, System.Collections.Generic.List<GraphDiagnostic> diagnostics)
+            {
+                if (owner is not AssetPipeline pipeline || document is not Graph graph) return;
+
+                AssetPipeline previous = AssetPipeline.current;
+                AssetPipeline.current = pipeline;
+                try { diagnostics.AddRange(GraphVerifier.CollectDiagnostics(graph)); }
+                finally { AssetPipeline.current = previous; }
+            }
         }
     }
 }

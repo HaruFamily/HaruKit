@@ -3,40 +3,67 @@ namespace HaruFamily.Framework.LogicGraph
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 
+/// <summary>Editor-only validation surface for a LogicGraph working copy.</summary>
+public interface ILogicGraphEditorDiagnostics
+{
+    IReadOnlyList<GraphDiagnostic> CollectDiagnostics(IExternalTokenKeys external = null);
+}
+
 public partial class LogicGraph<TTiming, TPack>
+    : ILogicGraphEditorDiagnostics
 where TTiming : Enum
 {
     [NonSerialized] private List<string> _errors = new();
     [NonSerialized] private List<string> _warnings = new();
+    [NonSerialized] private List<GraphDiagnostic> _diagnostics = new();
 
     // 節點內容檢查跑兩趟：第一趟只走啟用路徑，第二趟才穿透停用節點。見 ValidateSlotSources。
     [NonSerialized] private bool _walkDisabled;
     [NonSerialized] private HashSet<GraphNode> _checkedNodes = new();
 
-    private void Err(string msg) => _errors.Add(msg);
-    private void Warn(string msg) => _warnings.Add(msg);
+    /// <summary>Current verification output for Editor integrations; rebuilt by every Verify call.</summary>
+    public IReadOnlyList<GraphDiagnostic> Diagnostics
+        => _diagnostics ?? (IReadOnlyList<GraphDiagnostic>)Array.Empty<GraphDiagnostic>();
 
-    /// <summary>第二趟才走到的節點代表所有指著它的路徑都被停用，runtime 不會求值，殘缺降成警告。</summary>
-    private void Issue(string msg)
+    private void Err(string msg, [CallerMemberName] string rule = null)
     {
-        if (_walkDisabled) Warn(msg);
-        else Err(msg);
+        _errors.Add(msg);
+        AddDiagnostic(GraphDiagnosticSeverity.Error, msg, rule);
     }
 
-    /// <summary>external：Owner 自己，宣告它會從圖外用字串 key 求值哪些Token（見 IExternalTokenKeys）。null＝沒有圖外引用。</summary>
-    public void Verify(IExternalTokenKeys external = null)
+    private void Warn(string msg, [CallerMemberName] string rule = null)
+    {
+        _warnings.Add(msg);
+        AddDiagnostic(GraphDiagnosticSeverity.Warning, msg, rule);
+    }
+
+    /// <summary>第二趟才走到的節點代表所有指著它的路徑都被停用，runtime 不會求值，殘缺降成警告。</summary>
+    private void Issue(string msg, [CallerMemberName] string rule = null)
+    {
+        if (_walkDisabled) Warn(msg, rule);
+        else Err(msg, rule);
+    }
+
+    /// <summary>Runs generic LogicGraph validation without emitting a Console summary.</summary>
+    public IReadOnlyList<GraphDiagnostic> CollectDiagnostics(IExternalTokenKeys external = null)
+        => RunValidation(external, updateValidationState: false);
+
+    private IReadOnlyList<GraphDiagnostic> RunValidation(IExternalTokenKeys external, bool updateValidationState)
     {
         // DeepCopy 與 Unity 反序列化不會保留 NonSerialized 驗證緩衝。
         _errors ??= new List<string>();
         _warnings ??= new List<string>();
+        _diagnostics ??= new List<GraphDiagnostic>();
 
         _errors.Clear();
         _warnings.Clear();
+        _diagnostics.Clear();
 
         ReportDuplicateTokenNames();
         ReportExternalTokenKeys(external);
@@ -62,11 +89,20 @@ where TTiming : Enum
 
         ReportAssetCycles();
 
-        bool ok = _errors.Count == 0;
-        _validated = ok;
-        _hasLoggedValidationFailure = false;
+        if (updateValidationState)
+        {
+            _validated = _errors.Count == 0;
+            _hasLoggedValidationFailure = false;
+        }
 
-        EmitSummary(ok);
+        return Diagnostics;
+    }
+
+    /// <summary>external：Owner 自己，宣告它會從圖外用字串 key 求值哪些Token（見 IExternalTokenKeys）。null＝沒有圖外引用。</summary>
+    public void Verify(IExternalTokenKeys external = null)
+    {
+        RunValidation(external, updateValidationState: true);
+        EmitSummary(_errors.Count == 0);
     }
 
     private const string COLOR_OK      = "#5BE584";
@@ -75,6 +111,12 @@ where TTiming : Enum
     private const string COLOR_NAME    = "#7FD0FF";
     private const string COLOR_DIVIDER = "#888888";
     private const string COLOR_TAG     = "#B084EB";
+
+    private void AddDiagnostic(GraphDiagnosticSeverity severity, string message, string rule)
+    {
+        string code = $"logicgraph.{(string.IsNullOrEmpty(rule) ? "validation" : rule.ToLowerInvariant())}";
+        _diagnostics.Add(new GraphDiagnostic(code, severity, message));
+    }
 
     private void EmitSummary(bool ok)
     {

@@ -791,7 +791,7 @@ public partial class HaruGraphWindow
         bool canEditFocus = CanCreateReferenceNode();
 
         // root 節點由使用者自己建，位置就是按下右鍵的地方。
-        if (focus.Kind == HGFocusKind.Timing)
+        if (focus.Kind == HGFocusKind.Root)
         {
             AddTimingMenuItems(menu, $"新增{RootNoun}節點/", graphMouse);
             menu.AddSeparator("");
@@ -1162,10 +1162,10 @@ public partial class HaruGraphWindow
 
     private Type ActionAssetTypeOfCurrentSystem()
     {
-        foreach (var g in model.ReadGroups())
+        foreach (var g in model.ReadRootGroups())
         {
-            if (g.Actions == null) continue;
-            var slotType = g.Actions.GetType().GetGenericArguments()[0];
+            if (g.Items == null) continue;
+            var slotType = g.Items.GetType().GetGenericArguments()[0];
             return HGReflect.ActionAssetType(slotType);
         }
         return null;
@@ -1173,10 +1173,10 @@ public partial class HaruGraphWindow
 
     private Type ActionBaseTypeOfCurrentSystem()
     {
-        foreach (var g in model.ReadGroups())
+        foreach (var g in model.ReadRootGroups())
         {
-            if (g.Actions == null) continue;
-            var slotType = g.Actions.GetType().GetGenericArguments()[0];
+            if (g.Items == null) continue;
+            var slotType = g.Items.GetType().GetGenericArguments()[0];
             return HGReflect.ActionBaseType(slotType);
         }
         return null;
@@ -1213,12 +1213,12 @@ public partial class HaruGraphWindow
     /// <summary>本系統的動作欄位型別。建立動作用它當代表性 Slot。</summary>
     private Type ActionSlotTypeOfCurrentSystem()
     {
-        foreach (var g in model.ReadGroups())
+        foreach (var g in model.ReadRootGroups())
         {
-            if (g.Actions == null) continue;
-            return g.Actions.GetType().GetGenericArguments()[0];
+            if (g.Items == null) continue;
+            return g.Items.GetType().GetGenericArguments()[0];
         }
-        return model.ActionSlotType;
+        return model.RootItemSlotType;
     }
 }
 

@@ -7,14 +7,26 @@ using System.Collections.Generic;
 /// <summary>一則驗證訊息：在哪裡、是什麼問題、怎麼處理。</summary>
 public class HGIssue
 {
-    public bool IsError;
-    public string Message;
+    public GraphDiagnostic Diagnostic { get; }
+    public string Code => Diagnostic.Code;
+    public bool IsError => Diagnostic.Severity == GraphDiagnosticSeverity.Error;
+    public string Message => Diagnostic.Message;
     public string Where;
-    public string Fix;
+    public string Fix => Diagnostic.Fix;
+    public GraphDiagnosticLocation Location => Diagnostic.Location;
 
     public HGFocus Focus;         // 點擊要跳到的焦點
     public GraphSlotBase Slot;    // 出問題的參數欄位（可空）
     public object Node;           // 出問題的節點（可空）：GraphNode 或 GraphToken
+
+    public HGIssue(GraphDiagnostic diagnostic, string where, HGFocus focus, GraphSlotBase slot, object node)
+    {
+        Diagnostic = diagnostic ?? throw new ArgumentNullException(nameof(diagnostic));
+        Where = where;
+        Focus = focus;
+        Slot = slot;
+        Node = node;
+    }
 
     public string Line => $"{Where}：{Message}　→ {Fix}";
 }
@@ -56,6 +68,32 @@ public class HGReport
         }
         return found;
     }
+
+    /// <summary>Replaces rebuild-scoped metadata diagnostics without duplicating them across repaints.</summary>
+    public void ReplaceMetadataDiagnostics(IEnumerable<GraphDiagnostic> diagnostics)
+    {
+        Issues.RemoveAll(issue => issue.Code.StartsWith("graphkit.metadata.", StringComparison.Ordinal));
+        if (diagnostics == null) return;
+        foreach (var diagnostic in diagnostics)
+        {
+            if (diagnostic == null) continue;
+            string where = string.IsNullOrEmpty(diagnostic.Location.FieldPath) ? "Metadata" : diagnostic.Location.FieldPath;
+            Issues.Add(new HGIssue(diagnostic, where, null, null, null));
+        }
+    }
+
+    /// <summary>Replaces Tool-owned diagnostics after a structural validation pass without coupling Core to Tool rules.</summary>
+    public void ReplaceExtensionDiagnostics(IEnumerable<GraphDiagnostic> diagnostics)
+    {
+        Issues.RemoveAll(issue => !issue.Code.StartsWith("graphkit.", StringComparison.Ordinal));
+        if (diagnostics == null) return;
+        foreach (var diagnostic in diagnostics)
+        {
+            if (diagnostic == null) continue;
+            string where = string.IsNullOrEmpty(diagnostic.Location.FieldPath) ? "Domain" : diagnostic.Location.FieldPath;
+            Issues.Add(new HGIssue(diagnostic, where, null, null, null));
+        }
+    }
 }
 
 /// <summary>
@@ -83,34 +121,34 @@ public static class HGValidator
         {
             var focus = TokenFocus(t);
             if (!seen.Add((t.Kind, t.Key)))
-                Err(report, focus, $"Token {t.Key}", "名稱重複",
+                Err(report, "graphkit.token.duplicate", focus, $"Token {t.Key}", "名稱重複",
                     "改成同族內唯一的名稱；撞號時外部只查得到其中一個。", null, t.Token);
 
             ValidateToken(report, model, focus, t);
         }
 
         // 2. 每個動作、每個 Token 的節點樹
-        foreach (var g in model.ReadGroups())
+        foreach (var g in model.ReadRootGroups())
         {
-            if (g.Actions == null) continue;
-            for (int i = 0; i < g.Actions.Count; i++)
+            if (g.Items == null) continue;
+            for (int i = 0; i < g.Items.Count; i++)
             {
-                var slot = g.Actions[i] as GraphSlotBase;
+                var slot = g.Items[i] as GraphSlotBase;
                 if (slot == null) continue;
                 var focus = new HGFocus
                 {
                     Kind = HGFocusKind.Action,
-                    Timing = g.Timing,
-                    ActionList = g.Actions,
+                    RootKey = g.RootKey,
+                    ActionList = g.Items,
                     ActionIndex = i,
                     ActionSlot = slot,
                 };
                 bool disabled = HGReflect.GetDisabled(slot) || (HGReflect.GetNode(slot)?.Disabled ?? false);
                 if (HGReflect.UseType(slot) == 0)
-                    Issue(report, disabled, focus, $"{g.Timing} 第 {i + 1} 個動作", "尚未指定 Action 類型",
+                    Issue(report, "graphkit.root.action-missing", disabled, focus, $"{g.RootKey} 第 {i + 1} 個動作", "尚未指定 Action 類型",
                         "在空 Action Node 的下拉選單選擇一個 Action。", slot, null);
-                WalkTree(report, model, focus, slot, $"{g.Timing} 第 {i + 1} 個動作", disabled);
-                ValidateAssetCycles(report, focus, slot, null, $"{g.Timing} 第 {i + 1} 個動作", checkedAssets);
+                WalkTree(report, model, focus, slot, $"{g.RootKey} 第 {i + 1} 個動作", disabled);
+                ValidateAssetCycles(report, focus, slot, null, $"{g.RootKey} 第 {i + 1} 個動作", checkedAssets);
             }
         }
 
@@ -128,7 +166,7 @@ public static class HGValidator
             foreach (var t in tokens)
                 if (t.Key == key) { declared = true; break; }
             if (declared) continue;
-            Err(report, null, model.Owner != null ? model.Owner.name : "編輯對象",
+            Err(report, "graphkit.external-token.missing", null, model.Owner != null ? model.Owner.name : "編輯對象",
                 $"Inspector 指名了不存在的 Token '{key}'",
                 "在左欄建一個同名 Token，或修正 Inspector 上的名稱；查不到的 key 會被靜默跳過。", null, null);
         }
@@ -141,7 +179,7 @@ public static class HGValidator
         {
             foreach (var missing in UnityEditor.SerializationUtility.GetManagedReferencesWithMissingTypes(model.Owner))
             {
-                Err(report, null, "資產本體",
+                Err(report, "graphkit.serialize-reference.missing-type", null, "資產本體",
                     $"有節點的程式類別已不存在：{missing.namespaceName}.{missing.className}（{missing.assemblyName}）",
                     "把類別改回原名，或確認要放棄這段內容後手動清除；直接存檔會永久刪掉它。", null, null);
             }
@@ -162,7 +200,7 @@ public static class HGValidator
 
         var rootCarrier = HGReflect.GetNode(rootSlot);
         if (rootCarrier?.Kind == NodeKind.Token)
-            Err(report, focus, where, "資產內容不能只是一個 Token 引用",
+            Err(report, "graphkit.asset.token-root", focus, where, "資產內容不能只是一個 Token 引用",
                 "資產的內容要是公式或動作；要對外開參數請用左欄的 Token 清單。", rootSlot, rootCarrier);
 
         var tokens = HGModel.ReadTokens(focus?.AssetTokens);
@@ -171,7 +209,7 @@ public static class HGValidator
         {
             var tokenFocus = AssetTokenFocus(focus, token);
             if (!seen.Add((token.Kind, token.Key)))
-                Err(report, tokenFocus, $"Token {token.Key}", "名稱重複",
+                Err(report, "graphkit.token.duplicate", tokenFocus, $"Token {token.Key}", "名稱重複",
                     "改成這個資產內同族唯一的名稱。", null, token.Token);
             ValidateToken(report, model, tokenFocus, token);
             WalkTokenCarrier(report, model, tokenFocus, token, new HashSet<UnityEngine.Object>(), focus?.AssetObject);
@@ -242,12 +280,12 @@ public static class HGValidator
         if (token?.Token == null) return;
         if (token.Token.Slot == null)
         {
-            Err(report, focus, $"Token {token.Key ?? "（未命名）"}", "沒有取值欄位",
+            Err(report, "graphkit.token.slot-missing", focus, $"Token {token.Key ?? "（未命名）"}", "沒有取值欄位",
                 "刪掉這個 Token 重建；結果型別是建立時決定的。", null, token.Token);
             return;
         }
         if (string.IsNullOrEmpty(token.Key))
-            Err(report, focus, $"{HGReflect.ResultTypeName(token.ResultType)} Token", "沒有名稱",
+            Err(report, "graphkit.token.name-missing", focus, $"{HGReflect.ResultTypeName(token.ResultType)} Token", "沒有名稱",
                 "取一個名字；外部是用名字查它的值。", null, token.Token);
     }
 
@@ -283,7 +321,7 @@ public static class HGValidator
         {
             var formula = HGReflect.GetFormula(slot);
             if (formula == null)
-                Issue(report, disabled, focus, where, "欄位設為公式，但內容是空的", "選一個公式，或把模式改回常數。", slot, null);
+                Issue(report, "graphkit.slot.formula-missing", disabled, focus, where, "欄位設為公式，但內容是空的", "選一個公式，或把模式改回常數。", slot, null);
             else
                 WalkNode(report, model, focus, formula, where, visited, disabled);
         }
@@ -291,14 +329,14 @@ public static class HGValidator
         {
             var asset = HGReflect.GetAsset(slot);
             if (asset == null)
-                Issue(report, disabled, focus, where, "欄位設為資產，但沒有指定資產", "指定一個資產，或把模式改回常數。", slot, null);
+                Issue(report, "graphkit.slot.asset-missing", disabled, focus, where, "欄位設為資產，但沒有指定資產", "指定一個資產，或把模式改回常數。", slot, null);
             var carrier = HGReflect.GetNode(slot);
             ValidateAssetBindings(report, focus, carrier, where);
 
             // 資產內部殘缺在這張畫布上修不了，所以只報一條入口級錯誤讓人跳進去；不報的話會變成
             // 「視覺驗證全綠、存檔被 Core 擋住且沒有訊息」。細項在資產畫布自己的驗證裡。
             if (AssetHasError(model, slot.GetType(), asset))
-                Issue(report, disabled, focus, where, $"資產 '{asset.name}' 內部有錯誤",
+                Issue(report, "graphkit.asset.invalid", disabled, focus, where, $"資產 '{asset.name}' 內部有錯誤",
                     "雙擊這顆節點進入資產畫布，依那裡的驗證訊息修正。", slot, carrier);
             if (carrier != null)
             {
@@ -313,13 +351,13 @@ public static class HGValidator
             // 端點被刪掉時參照會變 null，這裡看得到；不會像字串 key 一樣留著一個查不到的名字。
             var endpoint = HGReflect.GetToken(slot);
             if (endpoint == null)
-                Issue(report, disabled, focus, where, "欄位設為 Token，但沒有指定 Token",
+                Issue(report, "graphkit.slot.token-missing", disabled, focus, where, "欄位設為 Token，但沒有指定 Token",
                     "選一個 Token，或把模式改回常數。", slot, HGReflect.GetNode(slot));
             else if (!HGReflect.AcceptsToken(slot, endpoint))
-                Err(report, focus, where, $"接的 Token '{endpoint.Name}' 型別不相容",
+                Err(report, "graphkit.token.type-incompatible", focus, where, $"接的 Token '{endpoint.Name}' 型別不相容",
                     "改接同結果型別的 Token。", slot, HGReflect.GetNode(slot));
             else if (!InScope(model, focus, endpoint))
-                Err(report, focus, where, $"接的 Token '{endpoint.Name}' 不屬於這張圖",
+                Err(report, "graphkit.token.out-of-scope", focus, where, $"接的 Token '{endpoint.Name}' 不屬於這張圖",
                     "改接本圖 Token 清單裡的 Token；求值是用名字在本圖的 Token 表查的，跨圖引用永遠查不到，會靜默取預設值。",
                     slot, HGReflect.GetNode(slot));
         }
@@ -344,7 +382,7 @@ public static class HGValidator
         if (carrier?.AssetObject == null) return;
         var parameters = AssetGraphSchema.Read(carrier.AssetObject, out var duplicates);
         foreach (var duplicate in duplicates)
-            Err(report, focus, where, $"資產參數標註名稱重複：'{duplicate}'", "進入資產並改成唯一名稱。", null, carrier);
+            Err(report, "graphkit.asset-binding.parameter-duplicate", focus, where, $"資產參數標註名稱重複：'{duplicate}'", "進入資產並改成唯一名稱。", null, carrier);
 
         // 綁定與參數的配對鍵是（族, 名稱），和 TokenTable 的覆蓋表一致：同名不同族的參數是兩個參數。
         var byKey = new HashSet<(Type, string)>();
@@ -357,20 +395,20 @@ public static class HGValidator
         var seen = new HashSet<(Type, string)>();
         foreach (var binding in carrier.Bindings)
         {
-            if (binding == null) { Err(report, focus, where, "有空的資產參數綁定", "移除空綁定。", null, carrier); continue; }
+            if (binding == null) { Err(report, "graphkit.asset-binding.null", focus, where, "有空的資產參數綁定", "移除空綁定。", null, carrier); continue; }
             if (binding.Slot == null)
             {
-                Err(report, focus, where, $"資產參數 '{binding.Name}' 沒有取值欄位", "重新建立這筆綁定。", null, carrier);
+                Err(report, "graphkit.asset-binding.slot-missing", focus, where, $"資產參數 '{binding.Name}' 沒有取值欄位", "重新建立這筆綁定。", null, carrier);
                 continue;
             }
             var key = (binding.Slot.Kind, binding.Name);
             if (!seen.Add(key))
-                Err(report, focus, where, $"資產參數綁定重複：'{binding.Name}'", "移除重複綁定。", binding.Slot, carrier);
+                Err(report, "graphkit.asset-binding.duplicate", focus, where, $"資產參數綁定重複：'{binding.Name}'", "移除重複綁定。", binding.Slot, carrier);
             if (byKey.Contains(key)) continue;
             if (parameterNames.Contains(binding.Name))
-                Err(report, focus, where, $"資產參數 '{binding.Name}' 型別不相容", "重新建立這筆綁定。", binding.Slot, carrier);
+                Err(report, "graphkit.asset-binding.type-incompatible", focus, where, $"資產參數 '{binding.Name}' 型別不相容", "重新建立這筆綁定。", binding.Slot, carrier);
             else
-                Err(report, focus, where, $"資產已沒有參數 '{binding.Name}'", "切換資產或移除這筆舊綁定。", binding.Slot, carrier);
+                Err(report, "graphkit.asset-binding.orphaned", focus, where, $"資產已沒有參數 '{binding.Name}'", "切換資產或移除這筆舊綁定。", binding.Slot, carrier);
         }
     }
 
@@ -403,7 +441,7 @@ public static class HGValidator
                     string itemWhere = $"{nodeWhere}.{HGReflect.FieldLabel(f)}[{i + 1}]";
                     if (item == null)
                     {
-                        Warn(report, focus, itemWhere, "清單有空項目", "填入內容或移除這一列。", null, node);
+                        Warn(report, "graphkit.list.null-item", focus, itemWhere, "清單有空項目", "填入內容或移除這一列。", null, node);
                         continue;
                     }
                     if (item is GraphSlotBase itemSlot)
@@ -442,7 +480,7 @@ public static class HGValidator
         if (rootAsset != null) completed.Add(rootAsset);
         if (cycle == null) return;
 
-        Err(report, focus, where, $"Asset 循環引用：{cycle}",
+        Err(report, "graphkit.asset.cycle", focus, where, $"Asset 循環引用：{cycle}",
             "替換其中一個 Asset，切斷遞迴引用。", root, null);
     }
 
@@ -557,21 +595,30 @@ public static class HGValidator
         return keys;
     }
 
-    private static void Err(HGReport r, HGFocus focus, string where, string message, string fix, GraphSlotBase slot, object node)
-        => r.Issues.Add(new HGIssue { IsError = true, Focus = focus, Where = where, Message = message, Fix = fix, Slot = slot, Node = node });
+    private static void Err(HGReport r, string code, HGFocus focus, string where, string message, string fix, GraphSlotBase slot, object node)
+        => AddIssue(r, code, GraphDiagnosticSeverity.Error, focus, where, message, fix, slot, node);
 
     /// <summary>
     /// 停用路徑上的殘缺降成警告：那段 runtime 直接回保底值、不求值，擋存檔只會妨礙測試。
     /// 共用載體若同時被啟用路徑指著，那條路徑會另外走一遍並報成錯誤，所以不必在這裡取聯集。
     /// </summary>
-    private static void Issue(HGReport r, bool disabled, HGFocus focus, string where, string message, string fix, GraphSlotBase slot, object node)
+    private static void Issue(HGReport r, string code, bool disabled, HGFocus focus, string where, string message, string fix, GraphSlotBase slot, object node)
     {
-        if (disabled) Warn(r, focus, where, message, fix, slot, node);
-        else Err(r, focus, where, message, fix, slot, node);
+        if (disabled) Warn(r, code, focus, where, message, fix, slot, node);
+        else Err(r, code, focus, where, message, fix, slot, node);
     }
 
-    private static void Warn(HGReport r, HGFocus focus, string where, string message, string fix, GraphSlotBase slot, object node)
-        => r.Issues.Add(new HGIssue { IsError = false, Focus = focus, Where = where, Message = message, Fix = fix, Slot = slot, Node = node });
+    private static void Warn(HGReport r, string code, HGFocus focus, string where, string message, string fix, GraphSlotBase slot, object node)
+        => AddIssue(r, code, GraphDiagnosticSeverity.Warning, focus, where, message, fix, slot, node);
+
+    private static void AddIssue(HGReport report, string code, GraphDiagnosticSeverity severity, HGFocus focus, string where,
+        string message, string fix, GraphSlotBase slot, object node)
+    {
+        string nodeId = node is GraphNode graphNode ? graphNode.Id : null;
+        string tokenId = node is GraphToken graphToken ? graphToken.Id : null;
+        var location = new GraphDiagnosticLocation(focusId: focus?.Id, nodeId: nodeId, tokenId: tokenId);
+        report.Issues.Add(new HGIssue(new GraphDiagnostic(code, severity, message, location, fix), where, focus, slot, node));
+    }
 }
 
 }

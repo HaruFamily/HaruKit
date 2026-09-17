@@ -78,6 +78,21 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         }
 
         [Test]
+        public void CollectDiagnostics_ReportsStableCodeAndFieldPath()
+        {
+            DynamicCatalog(out GraphNode cell);
+            AddAction(new ReadAction(cell));
+
+            List<GraphDiagnostic> diagnostics = GraphVerifier.CollectDiagnostics(graph);
+
+            GraphDiagnostic diagnostic = diagnostics.Find(item =>
+                item.Code == "assetpipeline.action.dynamic-catalog-read-before-write");
+            Assert.That(diagnostic, Is.Not.Null);
+            Assert.That(diagnostic.Severity, Is.EqualTo(GraphDiagnosticSeverity.Error));
+            Assert.That(diagnostic.Location.FieldPath, Is.EqualTo("動作[0]"));
+        }
+
+        [Test]
         public void Verify_PassesWhenCatalogIsWrittenInOrder()
         {
             GraphNode catalog = DynamicCatalog(out GraphNode cell);

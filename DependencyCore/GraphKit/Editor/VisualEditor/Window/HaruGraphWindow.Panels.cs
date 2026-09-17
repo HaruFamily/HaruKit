@@ -454,7 +454,7 @@ public partial class HaruGraphWindow
             if (accepted != null) result.Add((accepted, slotType));
         }
 
-        Type actionSlotType = model.ActionSlotType;
+        Type actionSlotType = model.RootItemSlotType;
         Type actionAssetType = actionSlotType != null ? HGReflect.ActionAssetType(actionSlotType) : null;
         if (actionAssetType != null) result.Add((actionAssetType, actionSlotType));
         return result;
@@ -508,13 +508,13 @@ public partial class HaruGraphWindow
     private void ShowTimingMenu(Vector2 createPos)
     {
         var menu = new GenericMenu();
-        var groups = model.ReadGroups();
+        var groups = model.ReadRootGroups();
 
-        foreach (var timing in model.TimingValues)
+        foreach (var timing in model.AvailableRootKeys)
         {
-            HGTimingGroup group = null;
+            HGRootGroupView group = null;
             foreach (var candidate in groups)
-                if (Equals(candidate.Timing, timing)) { group = candidate; break; }
+                if (Equals(candidate.RootKey, timing)) { group = candidate; break; }
 
             var captured = timing;
             if (group == null)
@@ -523,7 +523,7 @@ public partial class HaruGraphWindow
                 continue;
             }
 
-            int actionCount = group.Actions?.Count ?? 0;
+            int actionCount = group.Items?.Count ?? 0;
             int errors = ErrorsOfGroup(group);
             string label = errors > 0
                 ? $"{timing} ({actionCount})　{errors} 個錯誤"
@@ -533,16 +533,16 @@ public partial class HaruGraphWindow
         menu.ShowAsContext();
     }
 
-    private int ErrorsOfGroup(HGTimingGroup group)
+    private int ErrorsOfGroup(HGRootGroupView group)
     {
-        if (group?.Actions == null) return 0;
+        if (group?.Items == null) return 0;
         int errors = 0;
-        for (int i = 0; i < group.Actions.Count; i++)
+        for (int i = 0; i < group.Items.Count; i++)
         {
             var f = new HGFocus
             {
-                Kind = HGFocusKind.Action, Timing = group.Timing,
-                ActionList = group.Actions, ActionIndex = i, ActionSlot = group.Actions[i] as GraphSlotBase,
+                Kind = HGFocusKind.Action, RootKey = group.RootKey,
+                ActionList = group.Items, ActionIndex = i, ActionSlot = group.Items[i] as GraphSlotBase,
             };
             report.CountFor(f, out int e, out _);
             errors += e;
@@ -553,10 +553,10 @@ public partial class HaruGraphWindow
     /// <summary>時機節點的新增入口。已經存在的時機一律停用——一個時機只能有一顆節點。</summary>
     private void AddTimingMenuItems(GenericMenu menu, string prefix, Vector2 createPos)
     {
-        foreach (var timing in model.TimingValues)
+        foreach (var timing in model.AvailableRootKeys)
         {
             var content = new GUIContent(prefix + timing);
-            if (model.HasGroup(timing)) { menu.AddDisabledItem(content); continue; }
+            if (model.HasRoot(timing)) { menu.AddDisabledItem(content); continue; }
             var captured = timing;
             menu.AddItem(content, false, () => AddTimingGroup(captured, createPos));
         }
@@ -573,25 +573,25 @@ public partial class HaruGraphWindow
     private void AddTimingGroup(object timing, Vector2 pos)
     {
         if (timing == null) return;
-        if (model.HasGroup(timing))
+        if (model.HasRoot(timing))
         {
             ShowNotification(new GUIContent($"{timing} 已經有節點了"));
             return;
         }
 
         BreakUndoMerge();
-        var group = model.AddGroup(timing);
-        if (group?.Group == null)
+        var group = model.AddRoot(timing);
+        if (group?.Root == null)
         {
             Debug.LogWarning($"[GraphKit] 建立{RootNoun}群組 '{timing}' 失敗：識別值型別與這張圖不符。");
             return;
         }
 
         // 建在使用者按下右鍵的位置，不要丟去自動排版的角落。
-        HGReflect.SetHeadPos(group.Group, SnapToGrid(pos));
-        if (focus.Kind != HGFocusKind.Timing) SetFocus(AllTimingsFocus());
+        HGReflect.SetHeadPos(group.Root, SnapToGrid(pos));
+        if (focus.Kind != HGFocusKind.Root) SetFocus(AllRootsFocus());
         selectedIds.Clear();
-        selectedIds.Add(HGGraph.GroupHeadId(model, group.Group));
+        selectedIds.Add(HGGraph.GroupHeadId(model, group.Root));
         Invalidate();
         Repaint();
     }
@@ -621,10 +621,10 @@ public partial class HaruGraphWindow
 
         BreakUndoMerge();
         PreserveVisibleNodePositions();
-        foreach (var g in model.ReadGroups())
+        foreach (var g in model.ReadRootGroups())
         {
-            if (!ReferenceEquals(g.Group, node.Obj)) continue;
-            model.RemoveGroup(g);
+            if (!ReferenceEquals(g.Root, node.Obj)) continue;
+            model.RemoveRoot(g);
             break;
         }
         selectedIds.Remove(node.Id);
@@ -635,11 +635,11 @@ public partial class HaruGraphWindow
     /// <summary>跳到某顆時機節點。同一張畫布，所以只是把視野移過去，不換焦點。</summary>
     private void JumpToTiming(object timing)
     {
-        if (focus.Kind != HGFocusKind.Timing) SetFocus(AllTimingsFocus());
-        foreach (var g in model.ReadGroups())
+        if (focus.Kind != HGFocusKind.Root) SetFocus(AllRootsFocus());
+        foreach (var g in model.ReadRootGroups())
         {
-            if (!Equals(g.Timing, timing)) continue;
-            pendingCenterTarget = g.Group;
+            if (!Equals(g.RootKey, timing)) continue;
+            pendingCenterTarget = g.Root;
             graphDirty = true;
             break;
         }
@@ -718,7 +718,7 @@ public partial class HaruGraphWindow
         if (issue.Focus == null) { }
         else if (issue.Focus.Kind == HGFocusKind.Action)
         {
-            if (focus.Kind != HGFocusKind.Timing) SetFocus(AllTimingsFocus());
+            if (focus.Kind != HGFocusKind.Root) SetFocus(AllRootsFocus());
         }
         else if (!issue.Focus.SameAs(focus)) SetFocus(issue.Focus);
         pendingCenterTarget = issue.Slot ?? issue.Node;
