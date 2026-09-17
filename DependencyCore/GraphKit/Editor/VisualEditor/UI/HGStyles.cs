@@ -55,12 +55,13 @@ public static class HGStyles
 
     // 線與接點用明度分層，不用色相：空槽是暗灰、接了東西是亮白、Token保留一點紫相當作唯一例外。
     public static readonly Color Link = new(0.80f, 0.80f, 0.82f);
-    public static readonly Color PortEmpty = new(0.42f, 0.42f, 0.43f);
-    public static readonly Color PortLive = new(0.80f, 0.80f, 0.82f);
+    public static readonly Color InputPortEmpty = new(0.42f, 0.42f, 0.43f);
+    public static readonly Color InputPortLive = new(0.80f, 0.80f, 0.82f);
+    public static readonly Color OutputPortLive = new(0.80f, 0.80f, 0.82f);
 
     // 輸出是唯一方向與其他線相反的連線（擁有者寫進去，不是取值），所以它是明度分層的第二個例外：
     // 借目錄的青藍，一眼看得出「這條不是取值」。停用與選取仍蓋得過它。
-    public static readonly Color LinkOutput = new(0.42f, 0.72f, 0.74f);
+    public static readonly Color OutputPortColor = new(0.42f, 0.72f, 0.74f);
 
     public static readonly Color Muted = new(0.74f, 0.74f, 0.75f);
     public static readonly Color RowAlt = new(1f, 1f, 1f, 0.04f);
@@ -91,11 +92,11 @@ public static class HGStyles
     public static Color GroupTint(Color kind) => Color.Lerp(PanelList, kind, 0.14f);
 
     // 語意色：錯誤永遠是紅、警告永遠是琥珀，不參與配色調整。
-    public static readonly Color PortError = new(1f, 0.42f, 0.42f);
+    public static readonly Color InputPortError = new(1f, 0.42f, 0.42f);
     public static readonly Color Error = new(1f, 0.42f, 0.42f);
     public static readonly Color Warning = new(1f, 0.78f, 0.34f);
 
-    private static GUIStyle nodeTitle, nodeDesc, focusTitle, rowLabel, rowLabelError, chip, nodeChip, slotChip, portGlyph, headerButton, headerButtonDim, overlayTitle, panelHeader, consoleRow, tiny, listIndex, listAdd;
+    private static GUIStyle nodeTitle, nodeDesc, focusTitle, rowLabel, rowLabelError, chip, nodeChip, slotChip, inputPortGlyph, headerButton, headerButtonDim, overlayTitle, panelHeader, consoleRow, tiny, listIndex, listAdd;
 
     public static GUIStyle NodeTitle => nodeTitle ??= new GUIStyle(EditorStyles.boldLabel)
     {
@@ -169,7 +170,7 @@ public static class HGStyles
     /// <summary>
     /// 接點上的收合符號 `+`／`-`：字要壓在亮色的圓上，所以用深色而不是沿用 Header 的淺色圖示。
     /// </summary>
-    public static GUIStyle PortGlyph => portGlyph ??= new GUIStyle(EditorStyles.miniLabel)
+    public static GUIStyle InputPortGlyph => inputPortGlyph ??= new GUIStyle(EditorStyles.miniLabel)
     {
         fontSize = 11,
         alignment = TextAnchor.MiddleCenter,
@@ -362,7 +363,11 @@ public static class HGStyles
     }
 
     /// <summary>接點：以圓形區分資料流端點，外框保持在深色畫布上的辨識度。</summary>
-    public static void Port(Rect r, Color c)
+    public static void DrawInputPort(Rect r, Color c) => DrawPort(r, c);
+
+    public static void DrawOutputPort(Rect r, Color c) => DrawPort(r, c);
+
+    private static void DrawPort(Rect r, Color c)
     {
         float radius = Mathf.Min(r.width, r.height) * 0.5f;
         RoundedFill(r, c, radius);
