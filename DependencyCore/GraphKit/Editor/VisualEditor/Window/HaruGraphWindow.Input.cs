@@ -23,21 +23,21 @@ public partial class HaruGraphWindow
                 break;
 
             case EventType.MouseDown:
-                // 走到這裡代表這一下不是按在接點上（按在接點的那一下已經被 DrawSlotRow 吃掉），
+                // 走到這裡代表這一下不是按在輸入接點上（按在輸入接點的那一下已經被 DrawInputPortRow 吃掉），
                 // 所以先清掉殘留：在畫布外放開滑鼠時 MouseUp 收不到，記錄會留到下一次操作。
-                portClickRow = null;
+                inputPortClickPort = null;
                 // 這一下多半會被下面 e.Use() 掉，左欄與焦點標題列的改名欄就再也收不到它——先替它們收尾。
                 inlineName.Commit();
-                if (e.button == 0 && OutputNodeAt(graphMouse) is HGNodeView outputNode)
+                if (e.button == 0 && InputPortAt(graphMouse) is HGPort inputPort)
                 {
-                    BeginLinkFromNode(outputNode);
+                    inputPortClickPort = inputPort;
+                    inputPortClickStart = graphMouse;
                     e.Use();
                     break;
                 }
-                // 容器上那一格的左側輸出：格子不是節點，所以另走一條命中路徑。
-                if (e.button == 0 && OutputCellAt(graphMouse) is HGRow outputCell)
+                if (e.button == 0 && OutputPortAt(graphMouse) is HGPort outputPort)
                 {
-                    BeginLinkFromCell(outputCell);
+                    BeginLink(outputPort);
                     e.Use();
                     break;
                 }
@@ -103,12 +103,12 @@ public partial class HaruGraphWindow
 
             case EventType.MouseDrag:
                 // 接點按著往外拖＝拉線；沒超過門檻前什麼都不做，放開才知道是不是收合。
-                if (portClickRow != null && !linking
-                    && (graphMouse - portClickStart).sqrMagnitude > PortClickSlop * PortClickSlop)
+                if (inputPortClickPort != null && !linking
+                    && (graphMouse - inputPortClickStart).sqrMagnitude > InputPortClickSlop * InputPortClickSlop)
                 {
-                    var from = portClickRow;
-                    portClickRow = null;
-                    if (!from.Locked) BeginLinkFromRow(from);   // 鎖住的列接上去也不會被採用
+                    var from = inputPortClickPort;
+                    inputPortClickPort = null;
+                    BeginLink(from);
                     e.Use();
                     break;
                 }
@@ -143,11 +143,11 @@ public partial class HaruGraphWindow
 
             case EventType.MouseUp:
                 // 接點原地放開＝收合這個欄位底下的子樹（Alt＝solo）。沒接來源的接點沒有子樹，放開就當沒事。
-                if (portClickRow != null)
+                if (inputPortClickPort != null)
                 {
-                    var pressed = portClickRow;
-                    portClickRow = null;
-                    if (HGReflect.GetNode(pressed.Slot) != null)
+                    var pressedPort = inputPortClickPort;
+                    inputPortClickPort = null;
+                    if (pressedPort.Presentation.Owner is HGRow pressed && pressed.InputSlot?.Node != null)
                     {
                         ToggleSlotVisibility(HGGraph.CollapseKey(pressed.OwnerNodeId, pressed), e.alt);
                         e.Use();
@@ -197,8 +197,7 @@ public partial class HaruGraphWindow
                 }
                 if (linking && e.button == 0)
                 {
-                    if (linkRow != null) ResolveLink(graphMouse);
-                    else ResolveLinkFromOutput(graphMouse);
+                    ResolveLink(graphMouse);
                     EndLink();
                     e.Use();
                 }
@@ -451,40 +450,6 @@ public partial class HaruGraphWindow
         return null;
     }
 
-    private HGNodeView OutputNodeAt(Vector2 graphPoint)
-    {
-        if (graph == null) return null;
-        for (int i = graph.Nodes.Count - 1; i >= 0; i--)
-        {
-            var node = graph.Nodes[i];
-            // 沒畫接點的節點也不能從那裡起拉線：命中區與圓一起消失，才不會有看不見的熱區。
-            if (node.IsRoot || node.Hidden || !node.HasOutputPort) continue;
-            var port = new Rect(node.OutputPort - Vector2.one * HGGraph.PortRadius,
-                Vector2.one * HGGraph.PortDiameter);
-            if (port.Contains(graphPoint)) return node;
-        }
-        return null;
-    }
-
-    /// <summary>落在哪一格的左側輸出接點上。圓心與 DrawNodePorts、連線端點共用 HGRow.OutputPortPos。</summary>
-    private HGRow OutputCellAt(Vector2 graphPoint)
-    {
-        if (graph == null) return null;
-        for (int i = graph.Nodes.Count - 1; i >= 0; i--)
-        {
-            var node = graph.Nodes[i];
-            if (node.Hidden) continue;
-            foreach (var row in HGGraph.AllRows(node.Rows))
-            {
-                if (row.Kind != HGRowKind.TwoPort || row.Hidden) continue;
-                var port = new Rect(row.OutputPortPos - Vector2.one * HGGraph.PortRadius,
-                    Vector2.one * HGGraph.PortDiameter);
-                if (port.Contains(graphPoint)) return row;
-            }
-        }
-        return null;
-    }
-
     private void ResetLayout()
     {
         if (graph == null) return;
@@ -520,7 +485,7 @@ public partial class HaruGraphWindow
             bool match = ReferenceEquals(node.Obj, slotOrNode);
             if (!match)
                 foreach (var row in HGGraph.AllRows(node.Rows))
-                    if (ReferenceEquals(row.Slot, slotOrNode)) { match = true; break; }
+                    if (ReferenceEquals(row.InputSlot, slotOrNode)) { match = true; break; }
             if (!match) continue;
 
             selectedIds.Clear();

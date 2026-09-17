@@ -1,0 +1,14 @@
+{
+  "name": "HaruFamily.DependencyCore.GraphKit.Editor.Tests",
+  "rootNamespace": "HaruFamily.DependencyCore.GraphKit.Editor.Tests",
+  "references": [
+    "HaruFamily.DependencyCore.GraphKit",
+    "HaruFamily.DependencyCore.GraphKit.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

@@ -24,7 +24,7 @@ public partial class HaruGraphWindow
             ShowNotification(new GUIContent("資產型別不符，無法接到這個欄位"));
             return;
         }
-        AssignAsset(row.Slot, drag.Asset);
+        AssignAsset(row.InputSlot, drag.Asset);
     }
 
     /// <summary>Token落到畫布上：落在參數列就直接接上，空白處就建立候選節點。拖曳與「建立節點」共用。</summary>
@@ -37,13 +37,14 @@ public partial class HaruGraphWindow
             AddTokenReferenceNode(endpoint, graphMouse);
             return;
         }
-        if (row.IsActionSlot || !HGReflect.AcceptsToken(row.Slot, endpoint))
+        var source = TokenDropSource(endpoint);
+        if (row.IsActionSlot || !CanAcceptExternal(row, source))
         {
             ShowNotification(new GUIContent("Token 型別不符，無法接到這個欄位"));
             return;
         }
         BreakUndoMerge();
-        AssignToken(row.Slot, endpoint);
+        AssignToken(row.InputSlot, endpoint);
     }
 
     /// <summary>
@@ -60,7 +61,7 @@ public partial class HaruGraphWindow
             AddCatalogReferenceNode(catalog, graphMouse);
             return;
         }
-        if (row.Slot is not CatalogSlotBase catalogSlot)
+        if (row.InputSlot is not CatalogSlotBase)
         {
             ShowNotification(new GUIContent("這個欄位收不下目錄"));
             return;
@@ -70,7 +71,8 @@ public partial class HaruGraphWindow
         if (pack == null) return;
 
         // 目錄庫的目錄是「內容由目錄庫供應」的那一種：往裡面寫的欄位接上去什麼都不會發生。
-        if (!catalogSlot.AcceptsCatalogObject(pack))
+        var source = CatalogDropSource(pack);
+        if (!CanAcceptExternal(row, source))
         {
             ShowNotification(new GUIContent("這個欄位收不下目錄庫的目錄"));
             return;
@@ -78,7 +80,7 @@ public partial class HaruGraphWindow
 
         BreakUndoMerge();
         PreserveVisibleNodePositions();
-        SoloSource(row.Slot).SetCatalog(pack);
+        SoloSource(row.InputSlot).SetCatalog(pack);
         Invalidate();
         MarkGraphChanged();
     }
@@ -169,7 +171,7 @@ public partial class HaruGraphWindow
             return true;
         }
 
-        if (canAssign) AssignAsset(row.Slot, asset);
+        if (canAssign) AssignAsset(row.InputSlot, asset);
         else if (canCreate) AddAssetReferenceNode(asset, graphMouse);
         else if (row == null) ShowNotification(new GUIContent("先指定根公式或動作，才能放入參照節點"));
         else ShowNotification(new GUIContent("資產型別不符，無法接到這個欄位"));
@@ -181,14 +183,24 @@ public partial class HaruGraphWindow
     // 有頭端才有候選池可放；資產焦點的頭端是資產本身，時機畫布的頭端是整套 LogicGraph。
     private bool CanCreateReferenceNode() => focus.Head != null;
 
-    private static bool CanAssignAsset(HGRow row, UnityEngine.Object asset)
+    private bool CanAssignAsset(HGRow row, UnityEngine.Object asset)
     {
-        if (row?.Slot == null || asset == null) return false;
-        Type accepted = row.IsActionSlot
-            ? HGReflect.ActionAssetType(row.Slot.GetType())
-            : HGReflect.AssetType(row.Slot.GetType());
-        return accepted != null && accepted.IsInstanceOfType(asset);
+        if (row?.InputSlot == null || asset == null) return false;
+        return CanAcceptExternal(row, AssetDropSource(asset));
     }
+
+    private static bool CanAssignAsset(GraphSlotBase slot, UnityEngine.Object asset)
+        => slot != null && asset is ScriptableObject scriptable && slot.AcceptsAsset(scriptable);
+
+    private static IHGPortSource AssetDropSource(UnityEngine.Object asset)
+        => new HGDelegatePortSource(null, null, input => CanAssignAsset(input, asset));
+
+    private static IHGPortSource TokenDropSource(GraphToken endpoint)
+        => new HGDelegatePortSource(null, endpoint?.Slot, input => input.AcceptsToken(endpoint));
+
+    private static IHGPortSource CatalogDropSource(GraphNodeContent catalog)
+        => new HGDelegatePortSource(null, null,
+            input => (input as CatalogSlotBase)?.AcceptsCatalogObject(catalog) == true);
 
     private void ShowNodeSourceSelector(HGNodeView node, Rect selector)
     {
@@ -274,13 +286,13 @@ public partial class HaruGraphWindow
         HGTypeCatalog.ShowSourcePicker(selector, options);
     }
 
-    private object SourceSlot(HGNodeView node)
+    private GraphSlotBase SourceSlot(HGNodeView node)
     {
         if (node?.ParentSlot != null) return node.ParentSlot;
         if (graph?.Links == null) return null;
         foreach (var link in graph.Links)
-            if (ReferenceEquals(link.Target, node) && link.ParentRow?.Slot != null)
-                return link.ParentRow.Slot;
+            if (ReferenceEquals(link.Target, node) && link.ParentRow?.InputSlot != null)
+                return link.ParentRow.InputSlot;
         return null;
     }
 
@@ -338,8 +350,8 @@ public partial class HaruGraphWindow
         {
             foreach (var link in graph.Links)
             {
-                if (!ReferenceEquals(link.Target, node) || link.ParentRow?.Slot == null) continue;
-                return link.ParentRow.Slot.GetType();
+                if (!ReferenceEquals(link.Target, node) || link.ParentRow?.InputSlot == null) continue;
+                return link.ParentRow.InputSlot.GetType();
             }
         }
 
@@ -410,9 +422,9 @@ public partial class HaruGraphWindow
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
             if (!row.HasSlot) continue;
-            var child = HGReflect.GetNode(row.Slot);
+            var child = row.InputSlot.Node;
             if (child == null) continue;
-            HGReflect.SetNode(row.Slot, null);
+            row.InputSlot.SetNode(null);
             model.AddOrphan(child);
         }
     }
@@ -421,7 +433,7 @@ public partial class HaruGraphWindow
     /// 取一個可以直接改內容的載體：欄位獨佔且不是內嵌內容時就地沿用；
     /// 共用中或還掛著內嵌子樹時另建一個，舊載體整棵留成候選。
     /// </summary>
-    private GraphNode SoloSource(object slot)
+    private GraphNode SoloSource(GraphSlotBase slot)
     {
         var carrier = HGReflect.GetNode(slot);
         bool reusable = carrier != null && carrier.Kind != NodeKind.Inline && CountCarrierUsers(carrier) <= 1;
@@ -450,7 +462,7 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>欄位長出一顆Token節點。與 <see cref="AssignAsset"/> 對稱：先長節點，選哪一個Token在節點本體那一列。</summary>
-    private void AssignToken(object slot, GraphToken endpoint)
+    private void AssignToken(GraphSlotBase slot, GraphToken endpoint)
     {
         PreserveVisibleNodePositions();
         SoloSource(slot).SetToken(endpoint);
@@ -459,7 +471,7 @@ public partial class HaruGraphWindow
 
     /// <summary>放置模式落下：在點擊處長一顆空節點並接上欄位，內容由使用者在節點 Header 選。</summary>
     // 和「拉線到空白處」同一條路徑，只是起點是右鍵選單而不是接點。
-    private void PlaceNewSource(object slot, Vector2 graphMouse)
+    private void PlaceNewSource(GraphSlotBase slot, Vector2 graphMouse)
     {
         if (slot == null) return;
         BreakUndoMerge();
@@ -468,7 +480,7 @@ public partial class HaruGraphWindow
         Invalidate();
     }
 
-    private void AssignAsset(object slot, UnityEngine.Object asset)
+    private void AssignAsset(GraphSlotBase slot, UnityEngine.Object asset)
     {
         if (asset is not ScriptableObject so) return;
         PreserveVisibleNodePositions();
@@ -627,7 +639,7 @@ public partial class HaruGraphWindow
             {
                 if (!ReferenceEquals(link.Target, node)) continue;
                 hasLink = true;
-                if (link.ParentRow?.Slot == null || !HGReflect.AcceptsToken(link.ParentRow.Slot, endpoint)) return false;
+                if (link.ParentRow?.InputSlot == null || !link.ParentRow.InputSlot.AcceptsToken(endpoint)) return false;
             }
         }
         if (hasLink) return true;

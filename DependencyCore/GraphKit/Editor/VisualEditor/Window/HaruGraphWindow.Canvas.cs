@@ -172,6 +172,7 @@ public partial class HaruGraphWindow
                     if (node.Hidden) continue;
                     DrawNode(node, ReferenceEquals(node, linkTarget));
                 }
+                DrawExtensionPorts();
                 DrawEmptyTimingHint();
                 if (boxSelecting)
                 {
@@ -271,17 +272,15 @@ public partial class HaruGraphWindow
                 if (!IsLinkVisible(link)) continue;
                 if (IsTracedLink(link) != tracedPass) continue;
                 // 停用子樹的線一起壓暗，才看得出整段路徑都不會被求值。
-                DrawGraphLine(link.ParentRow.PortPos, link.TargetPort,
+                DrawGraphLine(link.InputPort.Presentation.Position, link.OutputPort.Presentation.Position,
                     link.Target.InDisabledSubtree || link.Target.InLockedSubtree, tracedPass,
-                    link.ParentRow.IsOutput);
+                    link.ParentRow.IsProducedValue);
             }
         }
-        if (linking && (linkRow != null || linkNode != null || linkCell != null))
+        if (linking && linkPort != null)
         {
-            Vector2 from = linkRow != null ? linkRow.PortPos
-                : linkCell != null ? linkCell.OutputPortPos
-                : linkNode.OutputPort;
-            DrawGraphLine(from, LinkPreviewEnd(graphMouse), false, false, linkRow != null && linkRow.IsOutput);
+            bool producedValue = linkPort.Presentation.Owner is HGRow row && row.IsProducedValue;
+            DrawGraphLine(linkPort.Presentation.Position, LinkPreviewEnd(graphMouse), false, false, producedValue);
         }
         Handles.EndGUI();
     }
@@ -380,7 +379,7 @@ public partial class HaruGraphWindow
 
         // 顏色表達「這條線接的是選取中的節點」，其次是「這條是輸出不是取值」；
         // 透明度仍歸停用管——三件事互不覆蓋，選取最優先。
-        Color color = traced ? HGStyles.NodeBorderSelected : output ? HGStyles.LinkOutput : Color.white;
+        Color color = traced ? HGStyles.NodeBorderSelected : output ? HGStyles.OutputPortColor : Color.white;
         if (dim) color.a *= HGStyles.LinkDisabled.a;
 
         Color oldColor = Handles.color;
@@ -675,7 +674,7 @@ public partial class HaruGraphWindow
 
         bool selected = selectedIds.Contains(node.Id);
         // 拉線期間：可以接的 Node 整個亮外框，滑鼠實際吸到的那個再加粗。
-        bool linkCandidate = linking && linkRow != null && linkCompatibleNodeIds.Contains(node.Id);
+        bool linkCandidate = linking && IsCompatible(PortFor(node));
         Color borderColor = isLinkTarget ? HGStyles.Link
             : linkCandidate ? new Color(HGStyles.Link.r, HGStyles.Link.g, HGStyles.Link.b, 0.55f)
             : selected ? HGStyles.NodeBorderSelected
@@ -704,7 +703,7 @@ public partial class HaruGraphWindow
     /// <summary>
     /// 子節點擁有者的本體第一列：顯示現在有幾格，右邊一顆「＋」加一格。
     /// </summary>
-    // 只有非內嵌的 owner 走這條：內嵌容器的每一格都是自己的 TwoPort 列，尾端另有一條新增列。
+    // 只有非內嵌的 owner 走這條：內嵌容器的每一格都是自己的 InputOutputPort 列，尾端另有一條新增列。
     private void DrawChildNodeRow(HGNodeView node, IGraphNodeOwner owner, Rect nodeRect)
     {
         var row = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight, nodeRect.width, HGGraph.RowHeight);
@@ -728,7 +727,7 @@ public partial class HaruGraphWindow
     }
 
 
-    /// <summary>容器尾端那條「＋ 新增」列。每一格本身是 Rows 裡的 TwoPort 列，由 DrawRows 畫。</summary>
+    /// <summary>容器尾端那條「＋ 新增」列。每一格本身是 Rows 裡的 InputOutputPort 列，由 DrawRows 畫。</summary>
     // 整列寬而不是小鈕：0.45 倍縮放下 60px 的鈕只剩 27px，讀不到也按不到。
     private void DrawCellAddRow(HGNodeView node, IGraphInlineNodeOwner owner, Rect nodeRect)
     {
@@ -809,21 +808,43 @@ public partial class HaruGraphWindow
             if (row.Kind == HGRowKind.List && row.Collapsed)
             {
                 if (!HasConnectedElement(row)) continue;
-                HGStyles.Port(PortRectOf(row, nodeRect), HGStyles.PortLive);
+                var aggregateKey = new HGPortKey(row.OwnerNodeId, row.Path, HGPortRole.Aggregate);
+                if (!graph.PortsByKey.TryGetValue(aggregateKey, out var aggregate) || !aggregate.Presentation.Visible) continue;
+                HGStyles.DrawInputPort(PortRect(aggregate.Presentation.Position + pan), HGStyles.InputPortLive);
                 continue;
             }
-            if (!row.IsLinkable) continue;
-            var portRect = PortRectOf(row, nodeRect);
-            HGStyles.Port(portRect, SlotPortColor(row));
-            DrawPortGlyph(row, portRect);
+            var inputPort = PortFor(row);
+            if (inputPort?.Presentation.Visible != true) continue;
+            var inputPortRect = PortRect(inputPort.Presentation.Position + pan);
+            HGStyles.DrawInputPort(inputPortRect, InputPortColor(row));
+            DrawInputPortGlyph(row, inputPortRect);
 
-            // TwoPort：右側輸入之外，左緣有一顆自己的輸出接點——那一列自己就是一顆載體。
-            if (row.Kind == HGRowKind.TwoPort) HGStyles.Port(OutputPortRectOf(row, nodeRect), HGStyles.LinkOutput);
+            // InputOutputPort：右側輸入之外，左緣有一顆自己的輸出接點——那一列自己就是一顆載體。
+            if (row.OutputNode != null && graph.PortsByKey.TryGetValue(OutputKey(row), out var outputPort)
+                && outputPort.Presentation.Visible)
+                HGStyles.DrawOutputPort(PortRect(outputPort.Presentation.Position + pan), HGStyles.OutputPortColor);
         }
 
         if (node.IsRoot || !node.HasOutputPort) return;
-        HGStyles.Port(new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight * 0.5f - HGGraph.PortRadius,
-            HGGraph.PortDiameter, HGGraph.PortDiameter), HGStyles.PortLive);
+        var headerPort = PortFor(node);
+        if (headerPort?.Presentation.Visible == true)
+            HGStyles.DrawOutputPort(PortRect(headerPort.Presentation.Position + pan), HGStyles.OutputPortLive);
+    }
+
+    /// <summary>Ports owned by Tool-specific adapters are drawn without adding a central concrete-type branch.</summary>
+    private void DrawExtensionPorts()
+    {
+        foreach (var port in graph.Ports)
+        {
+            if (port.Presentation.Owner is HGRow or HGNodeView || !port.Presentation.Visible) continue;
+            Rect rect = PortRect(port.Presentation.Position + pan);
+            if (port.IsInput)
+                HGStyles.DrawInputPort(rect, IsCompatible(port) ? HGStyles.Link : HGStyles.InputPortEmpty);
+            else if (port.IsOutput)
+                HGStyles.DrawOutputPort(rect, IsCompatible(port) ? HGStyles.Link : HGStyles.OutputPortLive);
+            else
+                HGStyles.DrawInputPort(rect, HGStyles.InputPortLive);
+        }
     }
 
     /// <summary>
@@ -831,54 +852,39 @@ public partial class HaruGraphWindow
     /// 那種列沒有子樹可收，圓上乾乾淨淨剛好也說明「這裡只能拉線」。
     /// 不掛 tooltip：接點在滑鼠移動的必經路徑上，跳說明框只會擋住底下的圖。
     /// </summary>
-    private void DrawPortGlyph(HGRow row, Rect portRect)
+    private void DrawInputPortGlyph(HGRow row, Rect inputPortRect)
     {
-        if (HGReflect.GetNode(row.Slot) == null) return;
+        if (row.InputSlot.Node == null) return;
 
         string key = HGGraph.CollapseKey(row.OwnerNodeId, row);
         bool solo = soloSlotKey == key;
         bool hidden = effectiveHidden.Contains(key);
 
         // solo 額外墊一層底：它和一般展開都顯示 -，靠底色分辨「只看這一段」。
-        if (solo) HGStyles.RoundedFill(portRect, HGStyles.HeaderOverlay, HGGraph.PortRadius);
+        if (solo) HGStyles.RoundedFill(inputPortRect, HGStyles.HeaderOverlay, HGGraph.PortRadius);
 
-        GUI.Label(portRect, hidden && !solo ? "+" : "-", HGStyles.PortGlyph);
+        GUI.Label(inputPortRect, hidden && !solo ? "+" : "-", HGStyles.InputPortGlyph);
     }
-
-    /// <summary>
-    /// 接點圓的位置。**永遠貼齊節點右緣**，不因為那一列是不是清單元素而縮排——
-    /// 所有接點排成一條垂直線是這張圖的基本語彙，讓開刪除鈕的是 ✕ 自己（它排到接點左邊）。
-    /// </summary>
-    private static Rect PortRectOf(HGRow row, Rect nodeRect)
-        => new Rect(nodeRect.xMax - HGGraph.PortDiameter,
-            nodeRect.y + row.LocalY + row.Height * 0.5f - HGGraph.PortRadius,
-            HGGraph.PortDiameter, HGGraph.PortDiameter);
-
-    /// <summary>TwoPort 列左緣那顆輸出接點。繪製、命中與連線端點共用同一圓心。</summary>
-    private static Rect OutputPortRectOf(HGRow row, Rect nodeRect)
-        => new Rect(nodeRect.x,
-            nodeRect.y + row.LocalY + row.Height * 0.5f - HGGraph.PortRadius,
-            HGGraph.PortDiameter, HGGraph.PortDiameter);
 
     /// <summary>折疊的清單裡有沒有已經接上來源的元素。</summary>
     private static bool HasConnectedElement(HGRow listRow)
     {
         foreach (var child in HGGraph.AllRows(listRow.Children))
-            if (child.HasSlot && HGReflect.GetNode(child.Slot) != null) return true;
+            if (child.HasSlot && child.InputSlot.Node != null) return true;
         return false;
     }
 
-    private Color SlotPortColor(HGRow row)
+    private Color InputPortColor(HGRow row)
     {
         // 從 Node 發點拉線時，收得下它的欄位接點先亮起來，使用者不用逐一試。
-        if (linking && (linkNode != null || linkCell != null) && linkCompatibleRows.Contains(row)) return HGStyles.Link;
+        if (linking && IsCompatible(PortFor(row))) return HGStyles.Link;
 
-        bool hasIssue = Rep.HasIssue(row.Slot, out bool isError);
-        int useType = HGReflect.UseType(row.Slot);
-        if (hasIssue && isError) return HGStyles.PortError;
+        bool hasIssue = Rep.HasIssue(row.InputSlot, out bool isError);
+        int useType = HGReflect.UseType(row.InputSlot);
+        if (hasIssue && isError) return HGStyles.InputPortError;
         // 輸出接點不分空／接：它的顏色是在講方向，接上與否看得到線。
-        if (row.IsOutput) return HGStyles.LinkOutput;
-        return useType == 1 || useType == 2 ? HGStyles.PortLive : HGStyles.PortEmpty;
+        if (row.IsProducedValue) return HGStyles.OutputPortColor;
+        return useType == 1 || useType == 2 ? HGStyles.InputPortLive : HGStyles.InputPortEmpty;
     }
 
     /// <summary>把每一列的圖面座標（命中測試與接點）更新成目前的節點位置。</summary>
@@ -887,7 +893,7 @@ public partial class HaruGraphWindow
         foreach (var row in rows)
         {
             row.ScreenRect = new Rect(node.Pos.x, node.Pos.y + row.LocalY, node.Width, row.Height);
-            row.PortPos = new Vector2(node.Pos.x + node.Width - HGGraph.PortRadius,
+            row.InputPortPos = new Vector2(node.Pos.x + node.Width - HGGraph.PortRadius,
                 node.Pos.y + row.LocalY + row.Height * 0.5f);
             // 左側輸出貼齊節點左緣，與節點 Header 的輸出接點同一條垂直線。
             row.OutputPortPos = new Vector2(node.Pos.x + HGGraph.PortRadius,

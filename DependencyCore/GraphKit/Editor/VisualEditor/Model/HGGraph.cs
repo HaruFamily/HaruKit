@@ -12,15 +12,15 @@ using UnityEngine;
 /// 一列的<b>視覺形狀</b>：畫幾顆接點、怎麼排。<b>不承載邏輯身分</b>。
 /// </summary>
 // 這個軸只回答「這一列長什麼樣」。「這一列掛的是什麼」由 payload 自己回答（HGRow.HasSlot／List／Field）。
-// 兩者不可互相推導：用 Kind 兼判 payload，每個呼叫點就得再補一次 row.Slot == null。
+// 兩者不可互相推導：用 Kind 兼判 payload，每個呼叫點就得再補一次 row.InputSlot == null。
 public enum HGRowKind
 {
     /// <summary>沒有接點：一般值欄位，直接編輯。</summary>
     NoPort,
     /// <summary>右側一顆輸入接點：參數欄位，四種狀態（常數／公式／資產／Token）。</summary>
-    OnePort,
+    InputPort,
     /// <summary>左輸出 + 右輸入：容器內的一格（見 IGraphInlineNode），左側由自己的載體輸出。</summary>
-    TwoPort,
+    InputOutputPort,
     /// <summary>巢狀資料的分組標題。</summary>
     Group,
     /// <summary>清單型參數的標題列。折疊時標題列會畫一顆代表接點，那是 List 這個形狀自己的特例。</summary>
@@ -35,27 +35,27 @@ public class HGRow
     public string Label;
     public int Depth;
 
-    public object Slot;              // payload：欄位（OnePort 的輸入、TwoPort 的右側輸入）
+    public GraphSlotBase InputSlot;  // payload：欄位（InputPort 的輸入、InputOutputPort 的右側輸入）
     public Type ResultType;          // Slot 的結果型別；ActionSlot 為 null
     public bool IsActionSlot;
 
     /// <summary>
-    /// payload：這一列自己就是一顆載體，左側輸出接點指的就是它。只有 TwoPort 有。
+    /// payload：這一列自己就是一顆載體，左側輸出接點指的就是它。只有 InputOutputPort 有。
     /// </summary>
     // 連線只存節點參照，沒有列位址，所以「一列可以被別人指」在資料上必然等於「那一列是一顆載體」。
     // 列只是畫法：載體、Id、座標與所有連入邊都照舊。
-    public GraphNode Carrier;
+    public GraphNode OutputNode;
 
-    /// <summary>左側輸出接點的圖面座標。只有 TwoPort 有意義，由 UpdateRowGeometry 每次重畫填。</summary>
+    /// <summary>左側輸出接點的圖面座標。只有 InputOutputPort 有意義，由 UpdateRowGeometry 每次重畫填。</summary>
     public Vector2 OutputPortPos;
 
     /// <summary>這一列是輸出（<see cref="CatalogSlotBase.IsOutput"/>）：接點與線改用輸出色，不畫常數框。</summary>
-    public bool IsOutput;
+    public bool IsProducedValue;
     public NamedFormulaSlot AssetBinding;
 
     public object Target;            // payload：一般值欄位所屬的物件
     public FieldInfo Field;
-    public bool IsEnum;
+    public bool ForceEnumButtons;
     public bool HideLabel;
 
     public IList List;               // payload：清單本體
@@ -82,7 +82,7 @@ public class HGRow
     /// </summary>
     public HGRow ListOwner;
 
-    /// <summary>在自己那一段裡的序號。清單元素用它算斑馬紋與重排；TwoPort 用它算斑馬紋（沒有 ListOwner）。</summary>
+    /// <summary>在自己那一段裡的序號。清單元素用它算斑馬紋與重排；InputOutputPort 用它算斑馬紋（沒有 ListOwner）。</summary>
     public int ListIndex = -1;
 
     /// <summary>
@@ -97,19 +97,19 @@ public class HGRow
     public float AddRowY;            // 清單列的「新增項目」列位置
     public bool Hidden;              // 被折疊的清單蓋住：不畫、不畫接點、不可當拉線目標
     public Rect ScreenRect;
-    public Vector2 PortPos;
+    public Vector2 InputPortPos;
 
     /// <summary>
     /// 這一列掛著一個欄位。<b>payload 判定，與 <see cref="Kind"/> 無關</b>——
     /// 形狀說的是畫幾顆接點，這裡說的是有沒有東西可以接。
     /// </summary>
-    public bool HasSlot => Slot != null;
+    public bool HasSlot => InputSlot != null;
 
     /// <summary>右側輸入接點畫不畫。</summary>
-    public bool HasPort => Kind is HGRowKind.OnePort or HGRowKind.TwoPort;
+    public bool HasInputPort => Kind is HGRowKind.InputPort or HGRowKind.InputOutputPort;
 
     /// <summary>可以拉線的欄位：折疊起來的列不算，否則會接到看不見的東西。</summary>
-    public bool IsLinkable => HasPort && !Hidden;
+    public bool IsLinkable => HasInputPort && !Hidden;
 }
 
 /// <summary>編輯區上的一個節點。</summary>
@@ -154,7 +154,7 @@ public class HGNodeView
     /// <summary>註解框被打開但還沒有內容：只有這顆節點被選取時才成立，取消選取就收起來。</summary>
     public bool NoteOpen;
 
-    public object ParentSlot;             // 這個節點接在哪個 Slot 上（root / orphan 為 null）
+    public GraphSlotBase ParentSlot;      // 這個節點接在哪個 Slot 上（root / orphan 為 null）
     public HGRow ParentRow;
 
     public List<HGRow> Rows = new();
@@ -181,7 +181,10 @@ public class HGGraphView
 {
     public List<HGNodeView> Nodes = new();
     public List<HGLink> Links = new();
-    public Dictionary<object, HGNodeView> BySlot = new(HGRefComparer.Instance);
+    public Dictionary<GraphSlotBase, HGNodeView> BySlot = new();
+    public List<HGPort> Ports = new();
+    public Dictionary<HGPortKey, HGPort> PortsByKey = new();
+    public int Generation;
 
     // 同一個載體被多個欄位指到＝共用來源：只畫一個節點，連線各自一條。GraphNode 沒有覆寫 Equals，預設就是參考比對。
     public Dictionary<GraphNode, HGNodeView> ByCarrier = new();
@@ -192,7 +195,7 @@ public class HGGraphView
     /// </summary>
     public Dictionary<GraphNode, int> CarrierUsers = new();
 
-    /// <summary>容器上那些自己是載體的列（TwoPort）：載體 → 那一列。下游欄位指的就是這些載體。</summary>
+    /// <summary>容器上那些自己是載體的列（InputOutputPort）：載體 → 那一列。下游欄位指的就是這些載體。</summary>
     public Dictionary<GraphNode, HGRow> CellRows = new();
 
     /// <summary>每一格屬於哪顆容器節點。連線要靠它決定「線的起點在不在畫面上」。</summary>
@@ -208,12 +211,16 @@ public class HGGraphView
 
 public class HGLink
 {
+    /// <summary>Resolved generation-local endpoints. Runtime data remains Slot -> GraphNode.</summary>
+    public HGPort InputPort;
+    public HGPort OutputPort;
+
     public HGRow ParentRow;
 
     /// <summary>線接到哪顆節點。目標是容器上的一格時，這裡是那顆<b>容器</b>。</summary>
     public HGNodeView Target;
 
-    /// <summary>目標是容器上的一格（TwoPort）時的那一列；null＝接在節點 Header 的輸出接點。</summary>
+    /// <summary>目標是容器上的一格（InputOutputPort）時的那一列；null＝接在節點 Header 的輸出接點。</summary>
     public HGRow TargetRow;
 
     /// <summary>ParentRow 所屬的節點。父節點被收起來時線也要跟著不畫，否則會留一條從空白處拉出的線。</summary>
@@ -223,7 +230,8 @@ public class HGLink
     public GraphNode PendingCarrier;
 
     /// <summary>線的目標端點（圖面座標）。繪製與命中共用它，兩邊才不會分岔。</summary>
-    public Vector2 TargetPort => TargetRow != null ? TargetRow.OutputPortPos : Target.OutputPort;
+    public Vector2 TargetOutputPort => OutputPort?.Presentation.Position
+        ?? (TargetRow != null ? TargetRow.OutputPortPos : Target.OutputPort);
 }
 
 /// <summary>
@@ -309,8 +317,8 @@ public static class HGGraph
         foreach (var root in roots ?? Array.Empty<object>())
         {
             if (root == null) continue;
-            var rootNode = HGReflect.IsSlotType(root.GetType())
-                ? MakeHeadNode(model, root, focusId, headTitle, headCarrier)
+            var rootNode = root is GraphSlotBase rootSlot
+                ? MakeHeadNode(model, rootSlot, focusId, headTitle, headCarrier)
                 : MakeGroupNode(model, root);
             Collect(model, rootNode, view, 0, listCollapse, false, false);
         }
@@ -386,7 +394,7 @@ public static class HGGraph
 
     // headCarrier：HEAD 的座標主人（HGFocus.HeadCarrier）。Token焦點傳 GraphToken、資產本體傳資產 SO，
     // 位置才記得住——資產的 HEAD 容器槽是每次進來現做的，記在它上面等於不記。其他焦點沿用 rootSlot。
-    private static HGNodeView MakeHeadNode(HGModel model, object rootSlot, string focusId, string headTitle, object headCarrier)
+    private static HGNodeView MakeHeadNode(HGModel model, GraphSlotBase rootSlot, string focusId, string headTitle, object headCarrier)
     {
         bool isAction = HGReflect.IsActionSlotType(rootSlot.GetType());
         Type resultType = isAction ? null : HGReflect.ResultType(rootSlot.GetType());
@@ -409,7 +417,7 @@ public static class HGGraph
     public static string HeadId(string focusId) => "head:" + (focusId ?? "?");
 
     /// <summary>一個載體＝一個節點。內容種類決定畫成公式／動作、資產葉或編輯中的空節點。</summary>
-    private static HGNodeView MakeNodeForCarrier(HGModel model, GraphNode carrier, object parentSlot, HGRow parentRow,
+    private static HGNodeView MakeNodeForCarrier(HGModel model, GraphNode carrier, GraphSlotBase parentSlot, HGRow parentRow,
         Type hintSlotType = null)
     {
         string id = carrier.EnsureId();
@@ -510,7 +518,7 @@ public static class HGGraph
         return isAction ? "Action" : null;
     }
 
-    private static HGNodeView MakeNodeForObject(object obj, object parentSlot, HGRow parentRow, Type slotResultType)
+    private static HGNodeView MakeNodeForObject(object obj, GraphSlotBase parentSlot, HGRow parentRow, Type slotResultType)
     {
         bool isAction = HGReflect.IsActionNodeType(obj.GetType());
         Type resultType = obj is IGraphInlineNode inline
@@ -544,7 +552,7 @@ public static class HGGraph
         if (node.Carrier != null) view.ByCarrier[node.Carrier] = node;
         if (node.ParentSlot != null) view.BySlot[node.ParentSlot] = node;
 
-        // 內嵌容器的子節點畫成容器上的一列（TwoPort），不獨立成節點。
+        // 內嵌容器的子節點畫成容器上的一列（InputOutputPort），不獨立成節點。
         if (node.Obj is IGraphInlineNodeOwner inlineOwner)
         {
             BuildCellRows(node, inlineOwner, view);
@@ -578,7 +586,7 @@ public static class HGGraph
         {
             if (!row.HasSlot) continue;
 
-            var carrier = HGReflect.GetNode(row.Slot);
+            var carrier = row.InputSlot.Node;
             if (carrier == null) continue;            // 常數／空槽留在列上，不長節點
 
             view.CarrierUsers.TryGetValue(carrier, out int users);
@@ -595,7 +603,7 @@ public static class HGGraph
             if (view.ByCarrier.TryGetValue(carrier, out var existing))
             {
                 view.Links.Add(new HGLink { ParentRow = row, Target = existing, Owner = node });
-                view.BySlot[row.Slot] = existing;
+                view.BySlot[row.InputSlot] = existing;
                 // 這條路徑沒被停用就整顆恢復：共用節點只要還有一條會求值的路徑，它就不是停用的。
                 bool rowLocked = row.AssetBinding != null && !row.AssetBinding.OverrideEnabled;
                 if (!node.InDisabledSubtree && !rowLocked && !RowCarrierDisabled(row)) ClearDisabledSubtree(existing, view);
@@ -603,7 +611,7 @@ public static class HGGraph
                 continue;
             }
 
-            var child = MakeNodeForCarrier(model, carrier, row.Slot, row);
+            var child = MakeNodeForCarrier(model, carrier, row.InputSlot, row);
             bool bindingOff = row.AssetBinding != null && !row.AssetBinding.OverrideEnabled;
             Collect(model, child, view, depth + 1, listCollapse,
                 node.InDisabledSubtree || bindingOff || RowCarrierDisabled(row),
@@ -617,7 +625,7 @@ public static class HGGraph
     }
 
     /// <summary>這一列自己的載體被停用了：掛在它右側的子樹跟著壓暗。</summary>
-    private static bool RowCarrierDisabled(HGRow row) => row.Carrier != null && row.Carrier.Disabled;
+    private static bool RowCarrierDisabled(HGRow row) => row.OutputNode != null && row.OutputNode.Disabled;
 
     /// <summary>把容器的子節點建成容器上的一列。每一格是完整載體，只是不獨立成節點。</summary>
     // 一顆載體只屬於一個容器：已經被認過就不再認第二次，否則同一顆會出現在兩個容器的列裡。
@@ -632,9 +640,9 @@ public static class HGGraph
             string id = child.EnsureId();
             node.Rows.Add(new HGRow
             {
-                Kind = HGRowKind.TwoPort,
-                Carrier = child,
-                Slot = cell.InputSlot,
+                Kind = HGRowKind.InputOutputPort,
+                OutputNode = child,
+                InputSlot = cell.InputSlot,
                 ResultType = cell.ResultType,
                 Label = HGReflect.ResultTypeName(cell.ResultType),
                 // Path 帶載體 Id：折疊與分支收合的 key 靠它，重排格子不會讓兩格共用狀態。
@@ -680,8 +688,8 @@ public static class HGGraph
 
         foreach (var row in AllRows(node.Rows))
         {
-            if (row.Slot == null) continue;
-            if (view.BySlot.TryGetValue(row.Slot, out var child)) ClearDisabledSubtree(child, view);
+            if (row.InputSlot == null) continue;
+            if (view.BySlot.TryGetValue(row.InputSlot, out var child)) ClearDisabledSubtree(child, view);
         }
     }
 
@@ -694,8 +702,8 @@ public static class HGGraph
         foreach (var row in AllRows(node.Rows))
         {
             row.Locked = row.AssetBinding != null && !row.AssetBinding.OverrideEnabled;
-            if (row.Slot == null) continue;
-            if (view.BySlot.TryGetValue(row.Slot, out var child)) ClearLockedSubtree(child, view);
+            if (row.InputSlot == null) continue;
+            if (view.BySlot.TryGetValue(row.InputSlot, out var child)) ClearLockedSubtree(child, view);
         }
     }
 
@@ -751,12 +759,12 @@ public static class HGGraph
                     slot = HGReflect.CreateInstance(t);      // 缺 Slot 就補一個，避免整列不可編輯
                     if (slot != null) f.SetValue(obj, slot);
                 }
-                if (slot == null) continue;
-                var row = SlotRow(slot, label, depth);
+                if (slot is not GraphSlotBase graphSlot) continue;
+                var row = SlotRow(graphSlot, label, depth);
                 row.Field = f;
                 row.Path = fieldPath;
                 row.LeftPad = leftPad;
-                row.IsEnum = HGReflect.IsEnum(f);
+                row.ForceEnumButtons = HGReflect.IsEnum(f);
                 row.HideLabel = HGReflect.IsLabelHidden(f);
                 into.Add(row);
                 continue;
@@ -776,7 +784,7 @@ public static class HGGraph
                     ElementType = elem,
                     Target = obj,
                     Field = f,
-                    IsEnum = HGReflect.IsEnum(f),
+                    ForceEnumButtons = HGReflect.IsEnum(f),
                     HideLabel = HGReflect.IsLabelHidden(f),
                 };
                 BuildListChildren(row, depth + 1, visited);
@@ -795,7 +803,7 @@ public static class HGGraph
                     LeftPad = leftPad,
                     Target = obj,
                     Field = f,
-                    IsEnum = HGReflect.IsEnum(f),
+                    ForceEnumButtons = HGReflect.IsEnum(f),
                     HideLabel = HGReflect.IsLabelHidden(f),
                 });
                 continue;
@@ -841,7 +849,7 @@ public static class HGGraph
             else if (HGReflect.IsSlotType(item.GetType()))
             {
                 // 序號已經有自己的欄位，標籤只留內容。
-                child = SlotRow(item, SlotShortName(item), depth);
+                child = SlotRow((GraphSlotBase)item, SlotShortName((GraphSlotBase)item), depth);
             }
             else if (IsLeafValue(item.GetType()))
             {
@@ -872,23 +880,23 @@ public static class HGGraph
         foreach (var child in row.Children) MarkListSubtree(child, owner, index);
     }
 
-    private static HGRow SlotRow(object slot, string label, int depth)
+    private static HGRow SlotRow(GraphSlotBase slot, string label, int depth)
     {
         bool isAction = HGReflect.IsActionSlotType(slot.GetType());
         return new HGRow
         {
-            Kind = HGRowKind.OnePort,
+            Kind = HGRowKind.InputPort,
             Label = label,
             Depth = depth,
-            Slot = slot,
+            InputSlot = slot,
             IsActionSlot = isAction,
-            IsOutput = slot is CatalogSlotBase catalogSlot && catalogSlot.IsOutput,
+            IsProducedValue = slot is CatalogSlotBase catalogSlot && catalogSlot.IsOutput,
             ResultType = isAction ? null : HGReflect.ResultType(slot.GetType()),
         };
     }
 
     /// <summary>清單裡的 Slot 顯示它目前接了什麼，企劃不用逐一點開。</summary>
-    private static string SlotShortName(object slot)
+    private static string SlotShortName(GraphSlotBase slot)
     {
         bool isAction = HGReflect.IsActionSlotType(slot.GetType());
 
@@ -977,7 +985,7 @@ public static class HGGraph
         bool inlineOwner = node.Obj is IGraphInlineNodeOwner;
         float refRows = node.IsAssetNode || node.IsTokenNode || (node.Obj is IGraphNodeOwner && !inlineOwner) ? RowHeight : 0f;
         float y = MeasureRows(node.Rows, HeaderHeight + refRows);
-        // 格子是 Rows 裡的 TwoPort 列，量測與其他列共用同一條路；這裡只補尾端那條新增列。
+        // 格子是 Rows 裡的 InputOutputPort 列，量測與其他列共用同一條路；這裡只補尾端那條新增列。
         if (inlineOwner)
         {
             node.CellAddRowY = y;

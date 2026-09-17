@@ -542,7 +542,7 @@ public partial class HaruGraphWindow
             var f = new HGFocus
             {
                 Kind = HGFocusKind.Action, Timing = group.Timing,
-                ActionList = group.Actions, ActionIndex = i, ActionSlot = group.Actions[i],
+                ActionList = group.Actions, ActionIndex = i, ActionSlot = group.Actions[i] as GraphSlotBase,
             };
             report.CountFor(f, out int e, out _);
             errors += e;
@@ -660,7 +660,7 @@ public partial class HaruGraphWindow
     {
         if (!ConfirmLeaveAsset()) return false;
         ExitAsset();
-        Bind(user);
+        BindInSession(user);
         EditorGUIUtility.PingObject(user);
         return true;
     }

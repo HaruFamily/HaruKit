@@ -14,17 +14,45 @@ public partial class HaruGraphWindow
 
     /// <summary>開窗並聚焦到指定對象。Owner 直接編輯，共用資產則借引用者當上下文下鑽。</summary>
     public static void OpenFor(UnityEngine.Object target)
+        => OpenFor(target, HGEditorExtensionContext.Default);
+
+    /// <summary>以明確的 Editor extension context 開啟一個新的編輯 session。</summary>
+    public static void OpenFor(UnityEngine.Object target, HGEditorExtensionContext context)
     {
         var window = OpenWindow();
-        if (target == null) return;
+        var requested = context ?? HGEditorExtensionContext.Default;
+        if (target == null)
+        {
+            window.sessionContext = requested;
+            window.activeContext = HGEditorExtensionContext.Default;
+            window.graphDirty = true;
+            window.Repaint();
+            return;
+        }
 
         var owner = ResolveOwner(target);
-        if (owner != null) { window.Bind(owner); return; }
-        if (target is ScriptableObject so && IsSharedAsset(so)) window.OpenSharedAsset(so);
+        if (owner != null) { window.Bind(owner, requested); return; }
+        if (target is ScriptableObject so && IsSharedAsset(so))
+        {
+            window.sessionContext = requested;
+            window.activeContext = window.model != null
+                && window.sessionContext.Supports(window.model.Owner, window.model.Doc)
+                    ? window.sessionContext
+                    : HGEditorExtensionContext.Default;
+            window.graphDirty = true;
+            window.OpenSharedAsset(so);
+        }
     }
 
     [MenuItem("PinTools/HaruGraph")]
-    public static void OpenFromMenu() => OpenWindow();
+    public static void OpenFromMenu()
+    {
+        var window = OpenWindow();
+        window.sessionContext = HGEditorExtensionContext.Default;
+        window.activeContext = HGEditorExtensionContext.Default;
+        window.graphDirty = true;
+        window.Repaint();
+    }
 
     private static HaruGraphWindow OpenWindow()
     {
@@ -88,7 +116,7 @@ public partial class HaruGraphWindow
             return;
         }
 
-        if (!Bind(owner)) return;
+        if (!BindInSession(owner)) return;
         if (TryEnterSharedAsset(asset)) return;
         EditorUtility.DisplayDialog("找不到引用點",
             $"索引說 '{owner.name}' 引用這個資產，但它的內容裡找不到指向它的欄位。\n磁碟上的資料可能剛被外部改過，重開視窗再試。", "好");
@@ -113,6 +141,20 @@ public partial class HaruGraphWindow
     }
 
     public bool Bind(UnityEngine.Object owner)
+        => Bind(owner, HGEditorExtensionContext.Default);
+
+    /// <summary>開始一個使用明確 Editor extension context 的新 session。</summary>
+    public bool Bind(UnityEngine.Object owner, HGEditorExtensionContext context)
+    {
+        var previous = sessionContext;
+        sessionContext = context ?? HGEditorExtensionContext.Default;
+        if (BindInSession(owner)) return true;
+        sessionContext = previous;
+        return false;
+    }
+
+    /// <summary>在目前 session 內切換 owner；不支援時只讓目前 owner 退回 default provider。</summary>
+    private bool BindInSession(UnityEngine.Object owner)
     {
         if (HasUnsavedWork && !EditorUtility.DisplayDialog(
                 "尚未儲存", $"'{(model?.Owner != null ? model.Owner.name : "?")}' 有未儲存的修改，切換後會遺失。要繼續嗎？", "捨棄並切換", "取消"))
@@ -127,9 +169,13 @@ public partial class HaruGraphWindow
         if (!model.Bind(owner))
         {
             model = null;
+            activeContext = HGEditorExtensionContext.Default;
             UpdateUnsavedState();
             return false;
         }
+        activeContext = sessionContext.Supports(owner, model.Doc)
+            ? sessionContext
+            : HGEditorExtensionContext.Default;
         pendingTarget = null;
 
         focus = new HGFocus();
@@ -158,7 +204,7 @@ public partial class HaruGraphWindow
     /// </summary>
     private void PickOwner(ScriptableObject owner)
     {
-        if (!Bind(owner)) return;
+        if (!BindInSession(owner)) return;
         Selection.activeObject = owner;
         Repaint();
     }
@@ -199,7 +245,7 @@ public partial class HaruGraphWindow
 
         bool busy = model != null && (model.Dirty || focus.Kind == HGFocusKind.Asset);
         if (busy) pendingTarget = picked;
-        else { pendingTarget = null; Bind(picked); }
+        else { pendingTarget = null; BindInSession(picked); }
         Repaint();
     }
 
@@ -260,6 +306,7 @@ public partial class HaruGraphWindow
     private void ReturnToIdle()
     {
         model = null;
+        activeContext = HGEditorExtensionContext.Default;
         focus = new HGFocus();
         graph = null;
         graphDirty = true;
@@ -297,6 +344,8 @@ public partial class HaruGraphWindow
 
     private void OnEnable()
     {
+        sessionContext ??= HGEditorExtensionContext.Default;
+        activeContext ??= HGEditorExtensionContext.Default;
         saveChangesMessage = $"{HGGraph.DefaultWindowTitle} 有未儲存的修改。是否在關閉前存檔？";
         inlineName ??= new HGInlineRename(Repaint);
         console.LoadPrefs();
@@ -507,7 +556,7 @@ public partial class HaruGraphWindow
         HGFocus back = focus.Kind == HGFocusKind.Asset ? returnFocus : focus;
         if (focus.Kind == HGFocusKind.Asset && !ConfirmLeaveAsset()) return;
 
-        object host = slotType != null ? HGReflect.CreateInstance(slotType) : null;
+        var host = slotType != null ? HGReflect.CreateInstance(slotType) as GraphSlotBase : null;
         if (host == null)
         {
             ShowNotification(new GUIContent("無法編輯：找不到這個資產對應的欄位型別"));

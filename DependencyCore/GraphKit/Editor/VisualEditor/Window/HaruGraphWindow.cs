@@ -44,12 +44,15 @@ public partial class HaruGraphWindow : EditorWindow
 
     private HGModel model;
     private HGFocus focus = new();
+    private HGEditorExtensionContext sessionContext = HGEditorExtensionContext.Default;
+    private HGEditorExtensionContext activeContext = HGEditorExtensionContext.Default;
 
     /// <summary>目前這張圖怎麼稱呼它的 root。選單、提示與 log 都用它組字，編輯器不寫死領域用詞。</summary>
     private string RootNoun => HGGraph.RootNoun(model?.Doc);
 
     private HGGraphView graph;
     private bool graphDirty = true;
+    private int graphGeneration;
     private HGReport report = new();
     private bool verifiedOnce;
     private bool reportStale;
@@ -118,28 +121,24 @@ public partial class HaruGraphWindow : EditorWindow
     private const float SourceArrowWidth = 18f;
 
     private bool linking;
-    private HGRow linkRow;
-    private HGNodeView linkNode;
-    /// <summary>從容器上某一格的左側輸出拉出來的線。格子不是節點，所以與 linkNode 分開記。</summary>
-    private HGRow linkCell;
+    private HGPort linkPort;
 
-    // 接點一個熱區兩種手勢：按下先記著，移動超過 PortClickSlop 才起拉線，原地放開就是收合這一段。
+    // 輸入接點一個熱區兩種手勢：按下先記著，移動超過 InputPortClickSlop 才起拉線，原地放開就是收合這一段。
     // 判定跟 Header 的 ▾ 同一套。刻意不在 MouseDown 當下起拉線：想收合卻抖了一下的話，
     // 放開時那條線會落在畫布空白處，於是憑空多一顆空節點。
-    private HGRow portClickRow;
-    private Vector2 portClickStart;
-    private const float PortClickSlop = 4f;
+    private HGPort inputPortClickPort;
+    private Vector2 inputPortClickStart;
+    private const float InputPortClickSlop = 4f;
 
     // 待開的就地確認框（見 RequestConfirm）。錨點是視窗座標。
     private HGConfirmPopup pendingConfirm;
     private Rect pendingConfirmAnchor;
 
     // 拉線期間的相容性：起手時對全圖判定一次，之後高亮與吸附都讀這份，不必每幀重算。
-    private readonly HashSet<string> linkCompatibleNodeIds = new();
-    private readonly HashSet<HGRow> linkCompatibleRows = new();
+    private readonly HashSet<HGPortKey> linkCompatiblePorts = new();
     // Token的拖曳與下鑽和資產同一套：按下先記著，拖出去是建節點，原地放開是進它的畫布。
     // 「建立節點」的放置模式：新節點跟著滑鼠，點一下才落在畫布上。Esc 或右鍵取消。
-    private object placingSlot;
+    private GraphSlotBase placingSlot;
     // 候選池裡的空節點屬於哪一族（值＝代表性的 Slot 型別）。key 是載體 Id，所以撐得過 Undo 與重建圖。
     // 純編輯期提示，不進資料：視窗關掉就沒了，那顆節點退回一般空節點。
     private readonly Dictionary<string, Type> orphanKindHints = new();
@@ -437,6 +436,7 @@ public partial class HaruGraphWindow : EditorWindow
 
         ApplyVisibility();
         MarkCatalogPorts();
+        RebuildPorts();
         if (pendingCenterTarget != null) { CenterOn(pendingCenterTarget); pendingCenterTarget = null; }
     }
 
@@ -519,7 +519,7 @@ public partial class HaruGraphWindow : EditorWindow
             foreach (var row in HGGraph.AllRows(n.Rows))
             {
                 if (!row.HasSlot) continue;
-                if (!graph.BySlot.TryGetValue(row.Slot, out var target) || !target.Hidden) continue;
+                if (!graph.BySlot.TryGetValue(row.InputSlot, out var target) || !target.Hidden) continue;
                 effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
             }
         }
@@ -530,7 +530,7 @@ public partial class HaruGraphWindow : EditorWindow
     {
         var keep = new HashSet<HGNodeView>();
         var row = FindSlotRow(soloSlotKey);
-        if (row?.Slot != null && graph.BySlot.TryGetValue(row.Slot, out var target)) MarkSubtree(target, keep);
+        if (row?.InputSlot != null && graph.BySlot.TryGetValue(row.InputSlot, out var target)) MarkSubtree(target, keep);
 
         // 持有這個欄位的節點、以及它一路往上的祖先都要留著。把來路藏掉的話，
         // 畫面上會剩一段浮在空中、看不出從哪裡接出來的子樹，連要退出 solo 的那顆開關都不見了。
@@ -567,8 +567,8 @@ public partial class HaruGraphWindow : EditorWindow
         if (node == null || !into.Add(node)) return;
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
-            if (row.Slot == null) continue;
-            if (graph.BySlot.TryGetValue(row.Slot, out var child)) MarkSubtree(child, into);
+            if (row.InputSlot == null) continue;
+            if (graph.BySlot.TryGetValue(row.InputSlot, out var child)) MarkSubtree(child, into);
         }
     }
 
@@ -578,10 +578,8 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private bool IsLinkVisible(HGLink link)
     {
-        if (link?.ParentRow == null || link.Target == null || link.Target.Hidden) return false;
-        // 端點是容器上的一格時，那一列自己被收起來也沒有端點可畫。
-        if (link.TargetRow != null && link.TargetRow.Hidden) return false;
-        if (link.Owner != null && link.Owner.Hidden) return false;
+        if (link?.InputPort == null || link.OutputPort == null) return false;
+        if (!link.InputPort.Presentation.Visible || !link.OutputPort.Presentation.Visible) return false;
         return !effectiveHidden.Contains(HGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow));
     }
 
@@ -594,9 +592,9 @@ public partial class HaruGraphWindow : EditorWindow
         if (node == null || !visible.Add(node)) return;
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
-            if (row.Slot == null) continue;
+            if (row.InputSlot == null) continue;
             if (effectiveHidden.Contains(HGGraph.CollapseKey(node.Id, row))) continue;
-            if (graph.BySlot.TryGetValue(row.Slot, out var child)) MarkVisibleFrom(child, visible);
+            if (graph.BySlot.TryGetValue(row.InputSlot, out var child)) MarkVisibleFrom(child, visible);
         }
     }
 
@@ -971,7 +969,7 @@ public partial class HaruGraphWindow : EditorWindow
             ExitAsset();
         }
         if (target is ScriptableObject asset && IsSharedAsset(asset)) OpenSharedAsset(asset);
-        else Bind(target);
+        else BindInSession(target);
     }
 
 }

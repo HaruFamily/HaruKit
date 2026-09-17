@@ -27,7 +27,7 @@ public enum HGFocusKind
 }
 
 /// <summary>中欄目前在編輯什麼。切焦點就是換一份節點圖。</summary>
-public class HGFocus
+public class HGFocus : IOrphanPool
 {
     public HGFocusKind Kind = HGFocusKind.None;
 
@@ -36,7 +36,7 @@ public class HGFocus
     public object Timing;
     public IList ActionList;
     public int ActionIndex = -1;
-    public object ActionSlot;
+    public GraphSlotBase ActionSlot;
 
     // Timing 焦點：LogicGraph 工作副本本身（＝HGModel.Data）。
     // 群組清單每次都從它現讀，新增／刪除時機不必回頭修焦點。
@@ -44,7 +44,7 @@ public class HGFocus
 
     // 資產焦點：HostSlot 是合成出來的槽，內容＝資產內容的工作副本
     public UnityEngine.Object AssetObject;
-    public object AssetHostSlot;
+    public GraphSlotBase AssetHostSlot;
     public List<GraphNode> AssetOrphans;
 
     // 資產的Token工作副本。與 AssetOrphans 同一次 DeepCopy 出來，兩邊指向同一批端點物件。
@@ -198,13 +198,13 @@ public class HGFocus
     }
 
     /// <summary>一個動作頭端的名字：有標籤用標籤，否則用內容型別名。</summary>
-    public static string ActionHeadTitle(object actionSlot)
+    public static string ActionHeadTitle(GraphSlotBase actionSlot)
     {
         string label = HGReflect.GetLabel(actionSlot);
         return string.IsNullOrEmpty(label) ? ActionName(actionSlot) : label;
     }
 
-    public static string ActionName(object actionSlot)
+    public static string ActionName(GraphSlotBase actionSlot)
     {
         if (actionSlot == null) return "（空動作）";
         int useType = HGReflect.UseType(actionSlot);

@@ -95,7 +95,7 @@ public static class HGValidator
             if (g.Actions == null) continue;
             for (int i = 0; i < g.Actions.Count; i++)
             {
-                var slot = g.Actions[i];
+                var slot = g.Actions[i] as GraphSlotBase;
                 if (slot == null) continue;
                 var focus = new HGFocus
                 {
@@ -199,7 +199,7 @@ public static class HGValidator
 
         var root = HGReflect.AssetRoot(asset);
         if (root == null) return false;   // 空資產：資產畫布也不報，這裡跟著不報
-        object host = HGReflect.CreateInstance(hostSlotType);
+        var host = HGReflect.CreateInstance(hostSlotType) as GraphSlotBase;
         if (host == null) return false;
         HGReflect.SetNode(host, root);
 
@@ -418,7 +418,7 @@ public static class HGValidator
         }
     }
 
-    // Token 循環偵測已隨標註化移除：圖內引用一律是連線，環在拉線當下就被 CanConnectLink 擋掉。
+    // Token 循環偵測已隨標註化移除：圖內引用一律是連線，環在拉線當下就被 Port policy 擋掉。
 
     // ===== Asset 參照循環 =====
 

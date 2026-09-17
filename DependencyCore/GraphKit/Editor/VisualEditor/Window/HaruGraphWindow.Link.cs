@@ -1,237 +1,229 @@
 namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
-/// <summary>
-/// 拉線：相容性快取、命中測試、連接與中斷。
-/// </summary>
+/// <summary>Port construction, hit testing, compatibility, connection and disconnection.</summary>
 public partial class HaruGraphWindow
 {
-    private void BeginLinkFromRow(HGRow row)
+    private static HGPortKey InputKey(HGRow row)
+        => new HGPortKey(row?.OwnerNodeId, row?.Path, HGPortRole.Input);
+
+    private static HGPortKey OutputKey(HGNodeView node)
+        => new HGPortKey(node?.Id, "", HGPortRole.Output);
+
+    private static HGPortKey OutputKey(HGRow row)
+        => new HGPortKey(row?.OutputNode?.EnsureId(), "", HGPortRole.Output);
+
+    private static Rect PortRect(Vector2 position)
+        => new Rect(position - Vector2.one * HGGraph.PortRadius, Vector2.one * HGGraph.PortDiameter);
+
+    /// <summary>Rebuild all generation-local Port adapters and discard every old hit/compatibility reference.</summary>
+    private void RebuildPorts()
     {
-        linking = true;
-        linkRow = row;
-        linkNode = null;
-        linkCell = null;
-        RebuildLinkCompatibility();
+        EndLink();
+        inputPortClickPort = null;
+        graphGeneration++;
+        graph.Generation = graphGeneration;
+        graph.Ports.Clear();
+        graph.PortsByKey.Clear();
+
+        var context = new HGPortBuildContext(graph, graphGeneration, graph.Ports, graph.PortsByKey);
+        foreach (var node in graph.Nodes)
+        {
+            foreach (var row in HGGraph.AllRows(node.Rows))
+            {
+                if (row.HasInputPort && row.InputSlot != null)
+                    context.Add(CreateInputPort(node, row));
+
+                if (row.OutputNode != null)
+                    context.Add(CreateCellOutputPort(node, row));
+
+                if (row.Kind == HGRowKind.List)
+                    context.Add(CreateAggregatePort(node, row));
+            }
+
+            if (!node.IsRoot && node.Carrier != null)
+                context.Add(CreateNodeOutputPort(node));
+        }
+
+        activeContext.Provider.AddPorts(context);
+        ResolveLinkPorts();
     }
 
-    private void BeginLinkFromNode(HGNodeView node)
+    private HGPort CreateInputPort(HGNodeView node, HGRow row)
     {
-        linking = true;
-        linkRow = null;
-        linkNode = node;
-        linkCell = null;
-        RebuildLinkCompatibility();
+        var presentation = new HGDelegatePortPresentation(row,
+            () => row.InputPortPos,
+            () => PortRect(row.InputPortPos),
+            () => !node.Hidden && row.IsLinkable,
+            () => row.Locked || node.InLockedSubtree);
+        var policy = new HGDelegatePortPolicy(
+            () => true,
+            source => source != null && source.Accepts(row.InputSlot)
+                && !WouldCreateCycle(row.InputSlot, source.CycleRoot));
+        return new HGPort(InputKey(row), new HGInputPortBinding(row.InputSlot), policy, presentation, graphGeneration);
     }
 
-    /// <summary>從容器上某一格的左側輸出起手。方向與 BeginLinkFromNode 相同，只是來源是一列。</summary>
-    private void BeginLinkFromCell(HGRow cell)
+    private HGPort CreateNodeOutputPort(HGNodeView node)
     {
+        var presentation = new HGDelegatePortPresentation(node,
+            () => node.OutputPort,
+            () => PortRect(node.OutputPort),
+            () => !node.IsRoot && !node.Hidden && node.HasOutputPort,
+            () => node.InLockedSubtree);
+        var source = new HGDelegatePortSource(node.Carrier, CycleRoot(node), input => SourceAccepts(node, input));
+        return new HGPort(OutputKey(node), new HGOutputPortBinding(source),
+            new HGDelegatePortPolicy(() => true), presentation, graphGeneration);
+    }
+
+    private HGPort CreateCellOutputPort(HGNodeView node, HGRow row)
+    {
+        var presentation = new HGDelegatePortPresentation(row,
+            () => row.OutputPortPos,
+            () => PortRect(row.OutputPortPos),
+            () => !node.Hidden && !row.Hidden,
+            () => row.Locked || node.InLockedSubtree);
+        var source = new HGDelegatePortSource(row.OutputNode, row.OutputNode,
+            input => input.AcceptsBody(row.OutputNode?.BodyObject));
+        return new HGPort(OutputKey(row), new HGOutputPortBinding(source),
+            new HGDelegatePortPolicy(() => true), presentation, graphGeneration);
+    }
+
+    private HGPort CreateAggregatePort(HGNodeView node, HGRow row)
+    {
+        var presentation = new HGDelegatePortPresentation(row,
+            () => row.InputPortPos,
+            () => Rect.zero,
+            () => !node.Hidden && row.Collapsed && HasConnectedElement(row),
+            () => true);
+        return new HGPort(new HGPortKey(row.OwnerNodeId, row.Path, HGPortRole.Aggregate),
+            HGAggregatePortBinding.Instance, new HGDelegatePortPolicy(() => false), presentation, graphGeneration);
+    }
+
+    private void ResolveLinkPorts()
+    {
+        foreach (var link in graph.Links)
+        {
+            graph.PortsByKey.TryGetValue(InputKey(link.ParentRow), out link.InputPort);
+            HGPortKey outputKey = link.TargetRow != null ? OutputKey(link.TargetRow) : OutputKey(link.Target);
+            graph.PortsByKey.TryGetValue(outputKey, out link.OutputPort);
+        }
+    }
+
+    private static object CycleRoot(HGNodeView node)
+    {
+        if (node == null || node.IsCatalogNode) return null;
+        return node.IsTokenNode ? node.Token?.Slot : node.Carrier;
+    }
+
+    private bool SourceAccepts(HGNodeView source, GraphSlotBase input)
+    {
+        if (source?.Carrier == null || input == null) return false;
+        if (source.IsAssetNode) return CanAssignAsset(input, source.Asset);
+        if (source.IsTokenNode) return input.AcceptsToken(source.Token);
+        if (source.IsCatalogNode)
+            return (input as CatalogSlotBase)?.AcceptsCatalogObject(source.Carrier.CatalogObject) == true;
+
+        if (source.IsPlaceholder)
+        {
+            Type sourceKind = RepresentativeSlotType(source);
+            return sourceKind == null || sourceKind == input.GetType();
+        }
+
+        return source.Obj is GraphNodeContent body && input.AcceptsBody(body);
+    }
+
+    private HGPort PortFor(HGRow row) => graph != null && graph.PortsByKey.TryGetValue(InputKey(row), out var port) ? port : null;
+    private HGPort PortFor(HGNodeView node) => graph != null && graph.PortsByKey.TryGetValue(OutputKey(node), out var port) ? port : null;
+
+    private void BeginLink(HGPort port)
+    {
+        if (port == null || port.Generation != graphGeneration || !port.CanStart) return;
         linking = true;
-        linkRow = null;
-        linkNode = null;
-        linkCell = cell;
+        linkPort = port;
         RebuildLinkCompatibility();
     }
 
     private void EndLink()
     {
         linking = false;
-        linkRow = null;
-        linkNode = null;
-        linkCell = null;
-        linkCompatibleNodeIds.Clear();
-        linkCompatibleRows.Clear();
+        linkPort = null;
+        linkCompatiblePorts.Clear();
     }
 
-    /// <summary>
-    /// 拉線起手時把整張圖判定一次：從欄位拉出去就標出所有能當來源的 Node，從 Node 拉出去就標出所有收得下它的欄位。
-    /// 判定結果整段拖曳期間不變（拖曳不改資料），所以算一次就夠，比原本每幀重算便宜。
-    /// </summary>
     private void RebuildLinkCompatibility()
     {
-        linkCompatibleNodeIds.Clear();
-        linkCompatibleRows.Clear();
-        if (graph == null) return;
-
-        if (linkRow != null)
-        {
-            foreach (var node in graph.Nodes)
-                if (!node.IsRoot && !node.Hidden && CanConnectLink(linkRow, node)) linkCompatibleNodeIds.Add(node.Id);
-            return;
-        }
-
-        if (linkCell != null)
-        {
-            foreach (var node in graph.Nodes)
-                foreach (var row in HGGraph.AllRows(node.Rows))
-                    if (row.IsLinkable && CanConnectToCell(row, linkCell)) linkCompatibleRows.Add(row);
-            return;
-        }
-
-        if (linkNode == null) return;
-        foreach (var node in graph.Nodes)
-            foreach (var row in HGGraph.AllRows(node.Rows))
-                if (row.IsLinkable && CanConnectLink(row, linkNode)) linkCompatibleRows.Add(row);
+        linkCompatiblePorts.Clear();
+        if (graph == null || linkPort == null) return;
+        foreach (var candidate in graph.Ports)
+            if (CanConnectPorts(linkPort, candidate)) linkCompatiblePorts.Add(candidate.Key);
     }
 
-    /// <summary>本次拉線中直接查快取；不在拉線中（例如放開瞬間的重算）才實算。</summary>
-    private bool CanLinkTo(HGRow row, HGNodeView node)
-        => linking && ReferenceEquals(row, linkRow)
-            ? linkCompatibleNodeIds.Contains(node.Id)
-            : CanConnectLink(row, node);
+    private bool CanConnectPorts(HGPort first, HGPort second)
+        => HGPortConnection.CanConnect(first, second, graphGeneration);
 
-    private bool CanLinkFrom(HGRow row, HGNodeView node)
-        => linking && ReferenceEquals(node, linkNode)
-            ? linkCompatibleRows.Contains(row)
-            : CanConnectLink(row, node);
+    private bool IsCompatible(HGPort port)
+        => port != null && linking && linkCompatiblePorts.Contains(port.Key);
 
-    private bool CanLinkFromCell(HGRow row, HGRow cell)
-        => linking && ReferenceEquals(cell, linkCell)
-            ? linkCompatibleRows.Contains(row)
-            : CanConnectToCell(row, cell);
+    private bool CanAcceptExternal(HGRow row, IHGPortSource source)
+    {
+        var input = PortFor(row);
+        return input != null && source != null && input.Presentation.Visible && !input.Presentation.Locked
+            && input.Policy.CanAccept(source);
+    }
 
     private HGNodeView LinkTargetNode(Vector2 graphMouse)
-    {
-        if (!linking) return null;
-        if (linkRow != null) return SnappedOutputNode(graphMouse, linkRow);
-        if (linkCell != null) return OwnerOfRow(SnappedInputRowForCell(graphMouse, linkCell));
-        return linkNode != null ? OwnerOfRow(SnappedInputRow(graphMouse, linkNode)) : null;
-    }
+        => OwnerNodeOfPort(SnappedCompatiblePort(graphMouse));
 
     private Vector2 LinkPreviewEnd(Vector2 graphMouse)
     {
-        if (linkRow != null)
-        {
-            var target = SnappedOutputNode(graphMouse, linkRow);
-            if (target != null) return target.OutputPort;
-
-            var cell = SnappedOutputCell(graphMouse, linkRow);
-            return cell != null ? cell.OutputPortPos : graphMouse;
-        }
-
-        var row = linkCell != null
-            ? SnappedInputRowForCell(graphMouse, linkCell)
-            : SnappedInputRow(graphMouse, linkNode);
-        return row != null ? row.PortPos : graphMouse;
+        var snapped = SnappedCompatiblePort(graphMouse);
+        return snapped?.Presentation.Position ?? graphMouse;
     }
 
-    private HGNodeView SnappedOutputNode(Vector2 graphMouse, HGRow row)
+    private HGPort SnappedCompatiblePort(Vector2 graphMouse)
     {
-        if (graph == null || row == null) return null;
+        if (!linking || graph == null || linkPort == null) return null;
+
+        // Inside a node, use the nearest compatible endpoint in that node before global distance snapping.
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
         {
             var node = graph.Nodes[i];
-            if (node.IsRoot || node.Hidden || !node.Rect.Contains(graphMouse) || !CanLinkTo(row, node)) continue;
-            return node;
+            if (node.Hidden || !node.Rect.Contains(graphMouse)) continue;
+            HGPort nearest = null;
+            float nearestDistance = float.MaxValue;
+            foreach (var port in graph.Ports)
+            {
+                if (!IsCompatible(port) || !ReferenceEquals(OwnerNodeOfPort(port), node)) continue;
+                float distance = Mathf.Abs(port.Presentation.Position.y - graphMouse.y);
+                if (distance >= nearestDistance) continue;
+                nearestDistance = distance;
+                nearest = port;
+            }
+            if (nearest != null) return nearest;
         }
 
         float maxDistanceSqr = LinkSnapDistance * LinkSnapDistance / (zoom * zoom);
         float nearestDistanceSqr = maxDistanceSqr;
-        HGNodeView nearest = null;
-        foreach (var node in graph.Nodes)
+        HGPort result = null;
+        foreach (var port in graph.Ports)
         {
-            if (node.IsRoot || node.Hidden || !CanLinkTo(row, node)) continue;
-            float distanceSqr = (node.OutputPort - graphMouse).sqrMagnitude;
+            if (!IsCompatible(port)) continue;
+            float distanceSqr = (port.Presentation.Position - graphMouse).sqrMagnitude;
             if (distanceSqr > nearestDistanceSqr) continue;
             nearestDistanceSqr = distanceSqr;
-            nearest = node;
+            result = port;
         }
-        return nearest;
+        return result;
     }
 
-    /// <summary>滑鼠附近那一格的左側輸出。格子不是節點，所以另走一條命中路徑。</summary>
-    private HGRow SnappedOutputCell(Vector2 graphMouse, HGRow row)
+    private HGNodeView OwnerNodeOfPort(HGPort port)
     {
-        if (graph == null || row == null) return null;
-
-        float nearestDistanceSqr = LinkSnapDistance * LinkSnapDistance / (zoom * zoom);
-        HGRow nearest = null;
-        foreach (var node in graph.Nodes)
-        {
-            if (node.Hidden) continue;
-            foreach (var candidate in HGGraph.AllRows(node.Rows))
-            {
-                if (candidate.Kind != HGRowKind.TwoPort || candidate.Hidden) continue;
-                if (!CanConnectToCell(row, candidate)) continue;
-
-                float distanceSqr = (candidate.OutputPortPos - graphMouse).sqrMagnitude;
-                if (distanceSqr > nearestDistanceSqr) continue;
-                nearestDistanceSqr = distanceSqr;
-                nearest = candidate;
-            }
-        }
-        return nearest;
-    }
-
-    /// <summary>這個欄位收不收得下那一格。格子的內容是完整的節點內容，所以一律問 AcceptsBody。</summary>
-    private bool CanConnectToCell(HGRow row, HGRow cell)
-    {
-        if (row?.Slot == null || cell?.Carrier == null) return false;
-        if (row.Locked || ReferenceEquals(row, cell)) return false;
-        return HGReflect.AcceptsBody(row.Slot, cell.Carrier.BodyObject)
-            && !WouldCreateCycle(row.Slot, cell.Carrier);
-    }
-
-    private bool TryConnectCell(HGRow row, HGRow cell)
-    {
-        if (!CanConnectToCell(row, cell)) return false;
-
-        BreakUndoMerge();
-        PreserveVisibleNodePositions();
-        AttachSource(row.Slot, cell.Carrier);
-        Invalidate();
-        return true;
-    }
-
-    private HGRow SnappedInputRow(Vector2 graphMouse, HGNodeView node)
-        => node == null ? null : SnappedInputRow(graphMouse, row => CanLinkFrom(row, node));
-
-    private HGRow SnappedInputRowForCell(Vector2 graphMouse, HGRow cell)
-        => cell == null ? null : SnappedInputRow(graphMouse, row => CanLinkFromCell(row, cell));
-
-    /// <summary>吸附到最近一個收得下來源的欄位接點。收不收得下由呼叫端決定，來源是節點或一格都走這裡。</summary>
-    // 先看滑鼠落在哪顆節點裡（同節點內比 Y 距離），沒有才退回全圖比接點距離。
-    private HGRow SnappedInputRow(Vector2 graphMouse, Func<HGRow, bool> accepts)
-    {
-        if (graph == null) return null;
-        for (int i = graph.Nodes.Count - 1; i >= 0; i--)
-        {
-            var owner = graph.Nodes[i];
-            if (!owner.Rect.Contains(graphMouse)) continue;
-
-            HGRow nearestInNode = null;
-            float nearestY = float.MaxValue;
-            foreach (var row in HGGraph.AllRows(owner.Rows))
-            {
-                if (!row.IsLinkable || !accepts(row)) continue;
-                float distanceY = Mathf.Abs(row.ScreenRect.center.y - graphMouse.y);
-                if (distanceY >= nearestY) continue;
-                nearestY = distanceY;
-                nearestInNode = row;
-            }
-            if (nearestInNode != null) return nearestInNode;
-        }
-
-        float nearestDistanceSqr = LinkSnapDistance * LinkSnapDistance / (zoom * zoom);
-        HGRow nearest = null;
-        foreach (var owner in graph.Nodes)
-        {
-            foreach (var row in HGGraph.AllRows(owner.Rows))
-            {
-                if (!row.IsLinkable || !accepts(row)) continue;
-                float distanceSqr = (row.PortPos - graphMouse).sqrMagnitude;
-                if (distanceSqr > nearestDistanceSqr) continue;
-                nearestDistanceSqr = distanceSqr;
-                nearest = row;
-            }
-        }
-        return nearest;
+        if (port?.Presentation.Owner is HGNodeView node) return node;
+        return port?.Presentation.Owner is HGRow row ? OwnerOfRow(row) : null;
     }
 
     private HGNodeView OwnerOfRow(HGRow target)
@@ -243,29 +235,53 @@ public partial class HaruGraphWindow
         return null;
     }
 
-    private HGRow RowAt(Vector2 graphPoint, out HGNodeView owner)
+    private HGPort OutputPortAt(Vector2 graphPoint)
     {
-        owner = null;
         if (graph == null) return null;
-        foreach (var node in graph.Nodes)
+        for (int i = graph.Ports.Count - 1; i >= 0; i--)
         {
-            if (!node.Rect.Contains(graphPoint)) continue;
-            foreach (var row in HGGraph.AllRows(node.Rows))
-                if (row.IsLinkable && row.ScreenRect.Contains(graphPoint)) { owner = node; return row; }
+            var port = graph.Ports[i];
+            if (!port.IsOutput || !port.CanStart) continue;
+            if (port.Presentation.HitRect.Contains(graphPoint)) return port;
         }
         return null;
     }
 
-    /// <summary>找滑鼠附近的直線連線。</summary>
+    private HGPort InputPortAt(Vector2 graphPoint)
+    {
+        if (graph == null) return null;
+        for (int i = graph.Ports.Count - 1; i >= 0; i--)
+        {
+            var port = graph.Ports[i];
+            if (!port.IsInput || !port.Presentation.Visible) continue;
+            if (port.Presentation.HitRect.Contains(graphPoint)) return port;
+        }
+        return null;
+    }
+
+    private HGRow RowAt(Vector2 graphPoint, out HGNodeView owner)
+    {
+        owner = null;
+        if (graph == null) return null;
+        for (int i = graph.Ports.Count - 1; i >= 0; i--)
+        {
+            var port = graph.Ports[i];
+            if (!port.IsInput || !port.Presentation.Visible || port.Presentation.Owner is not HGRow row) continue;
+            if (!row.ScreenRect.Contains(graphPoint)) continue;
+            owner = OwnerNodeOfPort(port);
+            return row;
+        }
+        return null;
+    }
+
     private HGLink LinkAt(Vector2 graphPoint)
     {
         if (graph == null) return null;
         foreach (var link in graph.Links)
         {
-            if (!IsLinkVisible(link)) continue;       // 沒畫出來的線不該點得到
-            Vector2 a = link.ParentRow.PortPos;
-            Vector2 b = link.TargetPort;
-            if (PointToSegmentSqrDistance(graphPoint, a, b) < 36f) return link;
+            if (!IsLinkVisible(link) || link.InputPort == null || link.OutputPort == null) continue;
+            if (PointToSegmentSqrDistance(graphPoint, link.InputPort.Presentation.Position,
+                    link.OutputPort.Presentation.Position) < 36f) return link;
         }
         return null;
     }
@@ -279,13 +295,57 @@ public partial class HaruGraphWindow
         return (point - (from + segment * t)).sqrMagnitude;
     }
 
-    /// <summary>切線：父欄位改回常數／空槽，被切下來的來源留成候選。</summary>
-    private void CutLink(HGLink link)
+    private void ResolveLink(Vector2 graphMouse)
     {
-        CutLink(link?.ParentRow?.Slot);
+        if (linkPort == null) return;
+        var target = SnappedCompatiblePort(graphMouse);
+        if (target != null)
+        {
+            TryConnectPorts(linkPort, target);
+            return;
+        }
+
+        if (linkPort.IsOutput)
+        {
+            ShowNotification(new GUIContent("請拖到相容的參數接點"));
+            return;
+        }
+
+        if (NodeAt(graphMouse) != null)
+        {
+            ShowNotification(new GUIContent("請拖到相容的節點或畫布空白處"));
+            return;
+        }
+
+        var slot = linkPort.InputSlot;
+        if (slot == null) return;
+        BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        GraphNode carrier = NewSource(slot);
+        if ((slot as CatalogSlotBase)?.CreateDefaultCatalog() is GraphNodeContent pack) carrier.SetCatalog(pack);
+        else if ((slot as FormulaSlotBase)?.CreateDefaultBody() is GraphNodeContent body) carrier.SetBody(body);
+        carrier.Pos = SnapToGrid(graphMouse);
+        Invalidate();
+        Repaint();
     }
 
-    private void CutLink(object slot)
+    private bool TryConnectPorts(HGPort first, HGPort second)
+    {
+        if (!CanConnectPorts(first, second)) return false;
+        HGPort input = first.IsInput ? first : second;
+        HGPort output = first.IsOutput ? first : second;
+        if (input.InputSlot == null || output.Source?.OutputNode == null) return false;
+
+        BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        AttachSource(input.InputSlot, output.Source.OutputNode);
+        Invalidate();
+        return true;
+    }
+
+    private void CutLink(HGLink link) => CutLink(link?.InputPort?.InputSlot ?? link?.ParentRow?.InputSlot);
+
+    private void CutLink(GraphSlotBase slot)
     {
         if (slot == null) return;
         PreserveVisibleNodePositions();
@@ -293,20 +353,16 @@ public partial class HaruGraphWindow
         Invalidate();
     }
 
-    /// <summary>
-    /// 換掉欄位接的來源載體。舊載體若沒有其他欄位在用，原地留成候選——完整子樹與座標都跟著載體走。
-    /// </summary>
-    private void AttachSource(object slot, GraphNode next)
+    private void AttachSource(GraphSlotBase slot, GraphNode next)
     {
         if (slot == null) return;
-        var old = HGReflect.GetNode(slot);
+        var old = slot.Node;
         if (ReferenceEquals(old, next)) return;
 
-        HGReflect.SetNode(slot, next);
+        slot.SetNode(next);
         if (old != null && !IsCarrierUsed(old))
         {
             model.AddOrphan(old);
-            // 切下來就失去父欄位。空節點的型別線索只剩這個欄位，記成族，候選池裡才還畫得出型別。
             RememberOrphanKind(old, slot.GetType());
         }
         if (next != null)
@@ -316,19 +372,16 @@ public partial class HaruGraphWindow
         }
     }
 
-    /// <summary>還有沒有別的欄位指著這個載體（共用來源）。</summary>
     private bool IsCarrierUsed(GraphNode carrier)
     {
         if (carrier == null) return false;
         foreach (var slot in SlotsInCurrentGraph())
-            if (ReferenceEquals(HGReflect.GetNode(slot), carrier)) return true;
-        if (focus.Kind == HGFocusKind.Asset && focus.AssetHostSlot != null)
-            return ReferenceEquals(HGReflect.GetNode(focus.AssetHostSlot), carrier);
-        return false;
+            if (slot is GraphSlotBase graphSlot && ReferenceEquals(graphSlot.Node, carrier)) return true;
+        return focus.Kind == HGFocusKind.Asset && focus.AssetHostSlot != null
+            && ReferenceEquals(focus.AssetHostSlot.Node, carrier);
     }
 
-    /// <summary>建立新的空載體並接上欄位；使用者接著在節點上選具體來源。</summary>
-    private GraphNode NewSource(object slot)
+    private GraphNode NewSource(GraphSlotBase slot)
     {
         var carrier = new GraphNode();
         carrier.EnsureId();
@@ -336,108 +389,7 @@ public partial class HaruGraphWindow
         return carrier;
     }
 
-    private void ResolveLink(Vector2 graphMouse)
-    {
-        if (linkRow?.Slot == null) return;
-        var target = SnappedOutputNode(graphMouse, linkRow);
-        if (TryConnectLink(linkRow, target)) return;
-        // 容器上的一格不是節點，左側輸出另走一條命中路徑。
-        if (TryConnectCell(linkRow, SnappedOutputCell(graphMouse, linkRow))) return;
-
-        // 落在既有 Node 但沒有相容來源時取消，不能把它誤判成空白而疊一顆空 Node 上去。
-        if (NodeAt(graphMouse) != null)
-        {
-            ShowNotification(new GUIContent("請拖到相容的節點或畫布空白處"));
-            return;
-        }
-
-        // 真正的空白處放開：先建立空 Node，讓使用者在 Node 上決定具體型別。
-        BreakUndoMerge();
-        PreserveVisibleNodePositions();
-        GraphNode carrier = NewSource(linkRow.Slot);
-        // 欄位可以自己指定「拉出來就是這個」（FormulaSlotBase.CreateDefaultBody）。預設沒有，
-        // 所以這裡對絕大多數欄位仍然是空節點——會用它的欄位自己知道為什麼。
-        // 包要走 SetCatalog，不能當 body 塞進去——兩者的節點種類不同，欄位種類也不同。
-        if ((linkRow.Slot as CatalogSlotBase)?.CreateDefaultCatalog() is GraphNodeContent pack) carrier.SetCatalog(pack);
-        else if ((linkRow.Slot as FormulaSlotBase)?.CreateDefaultBody() is GraphNodeContent body) carrier.SetBody(body);
-        carrier.Pos = SnapToGrid(graphMouse);
-        Invalidate();
-        Repaint();
-    }
-
-    private void ResolveLinkFromOutput(Vector2 graphMouse)
-    {
-        if (linkCell != null)
-        {
-            var target = SnappedInputRowForCell(graphMouse, linkCell);
-            if (target == null || !TryConnectCell(target, linkCell))
-                ShowNotification(new GUIContent("請拖到相容的參數接點"));
-            return;
-        }
-
-        var row = SnappedInputRow(graphMouse, linkNode);
-        if (row == null || !TryConnectLink(row, linkNode))
-            ShowNotification(new GUIContent("請拖到相容的參數接點"));
-    }
-
-    /// <summary>接線＝欄位指到那個節點的載體。Token／資產節點因此天然可以被多個欄位共用。</summary>
-    private bool TryConnectLink(HGRow row, HGNodeView target)
-    {
-        if (row?.Slot == null || target?.Carrier == null) return false;
-
-        if (!CanConnectLink(row, target))
-        {
-            ShowNotification(new GUIContent("型別或連線關係不符"));
-            return true;
-        }
-
-        BreakUndoMerge();
-        PreserveVisibleNodePositions();
-        AttachSource(row.Slot, target.Carrier);
-        Invalidate();
-        return true;
-    }
-
-    // 不是 static：空節點的族要靠 RepresentativeSlotType 推（連入邊、資產、建立當下的族提示都在視窗狀態裡）。
-    private bool CanConnectLink(HGRow row, HGNodeView target)
-    {
-        if (row?.Slot == null || target?.Carrier == null) return false;
-        if (row.Locked) return false;             // 沒勾覆蓋的參數不收來源：接上去也不會被採用
-        if (target.IsAssetNode)
-            return CanAssignAsset(row, target.Asset) && !WouldCreateCycle(row.Slot, target.Carrier);
-        // Token節點沒有內容，型別由端點的取值欄位決定；環偵測要走進端點的子樹。
-        if (target.IsTokenNode)
-            return HGReflect.AcceptsToken(row.Slot, target.Token)
-                && !WouldCreateCycle(row.Slot, target.Token?.Slot);
-
-        // 目錄節點沒有內容也沒有子欄位，所以不可能成環，只比結果型別。
-        // List<> 是不變的：型別選「全部」（List<Object>）的節點接不進 List<AudioClip> 欄位，
-        // 要先在節點上把型別縮到對得上為止。這是刻意的——靜默放行會在求值時得到空清單。
-        //
-        // 包不求值，所以結果型別與族對它都沒有意義：收不收得下只看這一格收不收包，
-        // 以及這一顆包現在的設定還收不收得下（例：內容由外部供應的包，往裡面寫的欄位接不上）。
-        if (target.IsCatalogNode)
-            return (row.Slot as CatalogSlotBase)?.AcceptsCatalogObject(target.Carrier.CatalogObject) == true;
-
-        // 空節點沒有內容，但**可能已經有族**：右鍵「建立公式/X」選的、或從欄位切下來時記的。
-        // 有族就必須同族——不擋的話 String 空節點接得進 Key 欄位，接上去當場被改寫成 Key 節點，族形同虛設。
-        // 完全推不出族（舊資料留下的空載體）才照舊放行，由接上的父欄位決定它是哪一族。
-        if (target.IsPlaceholder)
-        {
-            Type targetKind = RepresentativeSlotType(target);
-            if (targetKind != null && targetKind != row.Slot.GetType()) return false;
-            return !WouldCreateCycle(row.Slot, target.Carrier);
-        }
-
-        if (target.Obj == null) return false;
-
-        return HGReflect.AcceptsBody(row.Slot, target.Obj) && !WouldCreateCycle(row.Slot, target.Carrier);
-    }
-
     /// <summary>把已經失效的包連線就地斷開，回傳斷了幾條。</summary>
-    // 包的設定改了之後，原本收得下它的欄位可能不再收得下（例：包改成內容由外部供應，
-    // 往裡面寫的欄位就沒有東西可寫）。留著一條接得上卻什麼都不會發生的線是最難查的一種錯。
-    // 先收集再清空：清空會改變走訪走得到的範圍，邊走邊改會漏掉後面的欄位。
     private int BreakInvalidPackLinks()
     {
         var stale = new List<CatalogSlotBase>();
@@ -451,20 +403,15 @@ public partial class HaruGraphWindow
         if (stale.Count == 0) return 0;
 
         PreserveVisibleNodePositions();
-        foreach (var formula in stale)
+        foreach (var catalogSlot in stale)
         {
-            // 斷線不是刪節點：載體要移進候選池，節點才留得下來。
-            // 少了這一步，圖上就沒有任何東西指得到它，重建時整顆連同底下的子節點一起消失。
-            GraphNode carrier = formula.Node;
-            formula.SetNode(null);
+            GraphNode carrier = catalogSlot.Node;
+            catalogSlot.SetNode(null);
             model.AddOrphan(carrier);
         }
         return stale.Count;
     }
 
-    /// <summary>標出哪些包節點還有 Header 接點：沒有任何欄位指得到的包不畫那顆圓。</summary>
-    // 判定與拉線共用 AcceptsCatalogObject，所以「看得到的圓」與「接得上的位置」不會分岔。
-    // 已經有欄位指著它時一律要畫：舊資料可能留著一條現在接不上的線，線總得有個端點。
     private void MarkCatalogPorts()
     {
         foreach (var node in graph.Nodes)
@@ -480,27 +427,25 @@ public partial class HaruGraphWindow
         foreach (var slot in SlotsInCurrentGraph())
         {
             if (slot is not CatalogSlotBase catalogSlot) continue;
-            if (catalogSlot.AcceptsCatalogObject(pack)) return true;
-            if (ReferenceEquals(catalogSlot.Node, carrier)) return true;
+            if (catalogSlot.AcceptsCatalogObject(pack) || ReferenceEquals(catalogSlot.Node, carrier)) return true;
         }
         return false;
     }
 
-    private static bool WouldCreateCycle(object slot, object node)
+    private static bool WouldCreateCycle(GraphSlotBase slot, object node)
     {
+        if (slot == null || node == null) return false;
         foreach (var childSlot in HGModel.WalkSlots(node, new HashSet<object>(HGRefComparer.Instance)))
             if (ReferenceEquals(childSlot, slot)) return true;
         return false;
     }
 
-    /// <summary>把一個新建立的具體 Action／Formula 接到欄位（右鍵「指定公式」等入口）。</summary>
-    private void Connect(object slot, object node)
+    private void Connect(GraphSlotBase slot, object node)
     {
-        if (node is not GraphNodeContent body) return;
+        if (slot == null || node is not GraphNodeContent body) return;
         PreserveVisibleNodePositions();
         NewSource(slot).SetBody(body);
         Invalidate();
     }
 }
-
 }
