@@ -602,12 +602,12 @@ public class HGModel
     }
 
     /// <summary>這個Token在圖內被幾個欄位接著。0＝純對外端點，不是錯誤。</summary>
-    public static int CountReferences(GraphToken endpoint, IEnumerable<object> slots)
+    public static int CountReferences(GraphToken endpoint, IEnumerable<GraphSlotBase> slots)
     {
         if (endpoint == null || slots == null) return 0;
         int n = 0;
         foreach (var slot in slots)
-            if (ReferenceEquals(HGReflect.GetNode(slot)?.Token, endpoint)) n++;
+            if (ReferenceEquals(slot?.Node?.Token, endpoint)) n++;
         return n;
     }
 
@@ -721,16 +721,16 @@ public class HGModel
     // ===== 全圖走訪 =====
 
     /// <summary>走訪整份工作副本裡的所有 FormulaSlot（動作、Token、未連接節點）。不下沉到 Asset 內部。</summary>
-    public IEnumerable<object> AllFormulaSlots()
+    public IEnumerable<FormulaSlotBase> AllFormulaSlots()
     {
         var visited = new HashSet<object>(HGRefComparer.Instance);
         foreach (var root in Roots())
             foreach (var slot in WalkSlots(root, visited))
-                if (slot is FormulaSlotBase) yield return slot;
+                if (slot is FormulaSlotBase formulaSlot) yield return formulaSlot;
     }
 
     /// <summary>走訪整份工作副本裡的所有 Slot（含 ActionSlot）。</summary>
-    public IEnumerable<object> AllSlots()
+    public IEnumerable<GraphSlotBase> AllSlots()
     {
         var visited = new HashSet<object>(HGRefComparer.Instance);
         foreach (var root in Roots())
@@ -783,7 +783,7 @@ public class HGModel
     }
 
     /// <summary>走訪任意一份 LogicGraph 的所有 Slot（重建資產引用清單用，對象不是工作副本）。</summary>
-    public static IEnumerable<object> SlotsOfSystem(object system)
+    public static IEnumerable<GraphSlotBase> SlotsOfSystem(object system)
     {
         if (system == null) yield break;
         var visited = new HashSet<object>(HGRefComparer.Instance);
@@ -854,21 +854,21 @@ public class HGModel
     }
 
     /// <summary>由任一節點或 Slot 往下收集所有 Slot。Asset（ScriptableObject）視為 leaf。</summary>
-    public static IEnumerable<object> WalkSlots(object node, HashSet<object> visited)
+    public static IEnumerable<GraphSlotBase> WalkSlots(object node, HashSet<object> visited)
     {
         if (node == null || !visited.Add(node)) yield break;
 
-        var type = node.GetType();
-        if (HGReflect.IsSlotType(type))
+        // 走訪入口收任意物件（節點、內容、清單），但只有 Slot 會被吐出來。
+        if (node is GraphSlotBase slot)
         {
-            yield return node;
-            var carrier = HGReflect.GetNode(node);
+            yield return slot;
+            var carrier = slot.Node;
             if (carrier != null)
                 foreach (var s in WalkSlots(carrier, visited)) yield return s;
             yield break;
         }
 
-        foreach (var f in HGReflect.Fields(type))
+        foreach (var f in HGReflect.Fields(node.GetType()))
         {
             var val = f.GetValue(node);
             if (val == null) continue;
@@ -922,9 +922,9 @@ public class HGModel
     {
         if (node == null || !visited.Add(node)) return;
 
-        if (HGReflect.IsSlotType(node.GetType()))
+        if (node is GraphSlotBase slot)
         {
-            CollectFormalAssets(HGReflect.GetNode(node), visited, result);
+            CollectFormalAssets(slot.Node, visited, result);
             return;
         }
         if (node is GraphNode carrier)
@@ -956,9 +956,9 @@ public class HGModel
     {
         if (node == null || !visited.Add(node)) yield break;
 
-        if (HGReflect.IsSlotType(node.GetType()))
+        if (node is GraphSlotBase slot)
         {
-            var carrier = HGReflect.GetNode(node);
+            var carrier = slot.Node;
             if (carrier != null)
                 foreach (var found in WalkCarriers(carrier, visited)) yield return found;
             yield break;

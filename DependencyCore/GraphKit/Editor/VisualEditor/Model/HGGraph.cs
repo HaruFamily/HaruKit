@@ -46,20 +46,16 @@ public class HGRow
     // 列只是畫法：載體、Id、座標與所有連入邊都照舊。
     public GraphNode OutputNode;
 
-    /// <summary>左側輸出接點的圖面座標。只有 InputOutputPort 有意義，由 UpdateRowGeometry 每次重畫填。</summary>
-    public Vector2 OutputPortPos;
-
     /// <summary>這一列是輸出（<see cref="CatalogSlotBase.IsOutput"/>）：接點與線改用輸出色，不畫常數框。</summary>
     public bool IsProducedValue;
     public NamedFormulaSlot AssetBinding;
 
     public object Target;            // payload：一般值欄位所屬的物件
     public FieldInfo Field;
-    public bool ForceEnumButtons;
-    public bool HideLabel;
 
-    public IList List;               // payload：清單本體
-    public Type ElementType;
+    /// <summary>payload：這一列自己承載一整段項目（List 形狀）。</summary>
+    // 「承載一段」與「屬於某一段的某一項」是兩件事，用兩組欄位表示，不從 ItemIndex 是不是 -1 推。
+    public HGItemSource Items;
     public bool Collapsed;           // 只對 List 形狀有意義：折疊時子列不畫、不可互動
 
     public List<HGRow> Children = new();
@@ -70,26 +66,34 @@ public class HGRow
     /// <summary>這一列屬於哪個節點。折疊與分支收合的 key 都是「節點 Id + Path」，繪製時不必再回頭找主人。</summary>
     public string OwnerNodeId;
 
-    /// <summary>清單元素本身：只有它畫序號欄與刪除鈕。</summary>
-    public bool IsListElement;
+    /// <summary>項目本體，而且項目控制項由共用繪製路徑代畫（序號欄、把手、✕）。展開出來的子列不畫。</summary>
+    // 自己有繪製路徑的來源（容器的格子）不設這個旗標，它的 ✕ 位置與命中都不一樣。
+    public bool IsItem;
 
     /// <summary>這一列不會被採用（沒勾覆蓋的資產參數，或整顆節點在鎖定子樹裡）：不可編、不可接線。</summary>
     public bool Locked;
 
     /// <summary>
-    /// 所屬的清單標題列與索引。**元素展開出來的子列也會帶著它**，斑馬紋才涵蓋整段；
-    /// 只有元素標題有底、內部欄位沒有的話，看起來會像清單只有一行。
+    /// 這一列屬於哪一段項目的第幾項。**項目展開出來的子列也會帶著它**，斑馬紋才涵蓋整段；
+    /// 只有項目標題有底、內部欄位沒有的話，看起來會像清單只有一行。
     /// </summary>
-    public HGRow ListOwner;
+    public HGItemSource ItemSource;
+    public int ItemIndex = -1;
 
-    /// <summary>在自己那一段裡的序號。清單元素用它算斑馬紋與重排；InputOutputPort 用它算斑馬紋（沒有 ListOwner）。</summary>
-    public int ListIndex = -1;
+    /// <summary>所屬的清單標題列。重排的插入位置要靠它的 <see cref="Children"/> 算，容器的格子沒有這一列。</summary>
+    // 它同時是「要不要畫底帶」的判準：格子的底是自己畫的，沒有標題列包住整段。
+    public HGRow ItemOwnerRow;
 
     /// <summary>
     /// 左側額外留白。清單元素要留位置給序號／拖曳把手，而**它展開出來的子列也必須繼承**，
     /// 否則子列會比自己的父標題還靠左，看起來像壞掉。
     /// </summary>
     public float LeftPad;
+
+    // 視覺 metadata（欄位宣告帶來的畫法偏好，與 Kind 和 payload 都無關）
+    /// <summary>欄位標了 <c>[HGEnum]</c>。最終畫不畫 enum 按鈕列仍要另算：替代預設值型別是 enum 時沒標也要畫。</summary>
+    public bool ForceEnumButtons;
+    public bool HideLabel;
 
     // 排版結果（每次重畫填）
     public float LocalY;
@@ -98,6 +102,9 @@ public class HGRow
     public bool Hidden;              // 被折疊的清單蓋住：不畫、不畫接點、不可當拉線目標
     public Rect ScreenRect;
     public Vector2 InputPortPos;
+
+    /// <summary>左側輸出接點的圖面座標。只有 InputOutputPort 有意義。</summary>
+    public Vector2 OutputPortPos;
 
     /// <summary>
     /// 這一列掛著一個欄位。<b>payload 判定，與 <see cref="Kind"/> 無關</b>——
@@ -228,10 +235,6 @@ public class HGLink
 
     /// <summary>待解析的目標載體。容器可能比指著它的欄位更晚走到，所以解析留到建圖最後一趟。</summary>
     public GraphNode PendingCarrier;
-
-    /// <summary>線的目標端點（圖面座標）。繪製與命中共用它，兩邊才不會分岔。</summary>
-    public Vector2 TargetOutputPort => OutputPort?.Presentation.Position
-        ?? (TargetRow != null ? TargetRow.OutputPortPos : Target.OutputPort);
 }
 
 /// <summary>
@@ -631,9 +634,10 @@ public static class HGGraph
     // 一顆載體只屬於一個容器：已經被認過就不再認第二次，否則同一顆會出現在兩個容器的列裡。
     private static void BuildCellRows(HGNodeView node, IGraphInlineNodeOwner owner, HGGraphView view)
     {
-        foreach (var child in owner.ChildNodes)
+        var items = new HGCellItemSource(owner);
+        for (int i = 0; i < items.Count; i++)
         {
-            if (child == null) continue;
+            if (items.Get(i) is not GraphNode child) continue;
             if (child.BodyObject is not IGraphInlineNode cell) continue;
             if (view.CellRows.ContainsKey(child)) continue;
 
@@ -647,7 +651,10 @@ public static class HGGraph
                 Label = HGReflect.ResultTypeName(cell.ResultType),
                 // Path 帶載體 Id：折疊與分支收合的 key 靠它，重排格子不會讓兩格共用狀態。
                 Path = "/cell/" + id,
-                ListIndex = view.CellRows.Count,
+                // 格子有來源與序號（斑馬紋要用），但沒有標題列，項目控制項也是自己畫的：
+                // ItemOwnerRow 與 IsItem 都留空，共用的序號欄與 ✕ 不套到它身上。
+                ItemSource = items,
+                ItemIndex = i,
             });
             view.CellRows[child] = node.Rows[node.Rows.Count - 1];
             view.CellOwners[child] = node;
@@ -711,7 +718,7 @@ public static class HGGraph
     public static string CollapseKey(string nodeId, HGRow row) => nodeId + "#" + row.Path;
 
     /// <summary>沒有明確記錄過的清單，項數多就預設折疊。</summary>
-    private static bool DefaultCollapsed(HGRow row) => (row.List?.Count ?? 0) > ListAutoCollapseCount;
+    private static bool DefaultCollapsed(HGRow row) => (row.Items?.Count ?? 0) > ListAutoCollapseCount;
 
     private static void ApplyListCollapse(HGNodeView node, IReadOnlyDictionary<string, bool> listCollapse)
     {
@@ -780,8 +787,7 @@ public static class HGGraph
                     Depth = depth,
                     Path = fieldPath,
                     LeftPad = leftPad,
-                    List = list,
-                    ElementType = elem,
+                    Items = new HGListItemSource(list, elem),
                     Target = obj,
                     Field = f,
                     ForceEnumButtons = HGReflect.IsEnum(f),
@@ -831,14 +837,14 @@ public static class HGGraph
     private static void BuildListChildren(HGRow row, int depth, HashSet<object> visited)
     {
         row.Children.Clear();
-        if (row.List == null) return;
+        if (row.Items is not HGListItemSource items) return;
 
         // 元素與其展開出來的子列都要讓開左側的序號欄，父子左緣才對得齊。
         float elementPad = row.LeftPad + ListGutter;
 
-        for (int i = 0; i < row.List.Count; i++)
+        for (int i = 0; i < items.Count; i++)
         {
-            var item = row.List[i];
+            var item = items.Get(i);
             string childPath = row.Path + "[" + i + "]";
             HGRow child;
 
@@ -853,7 +859,7 @@ public static class HGGraph
             }
             else if (IsLeafValue(item.GetType()))
             {
-                child = new HGRow { Kind = HGRowKind.NoPort, Label = "", Depth = depth, Target = row.List, Field = null, HideLabel = true };
+                child = new HGRow { Kind = HGRowKind.NoPort, Label = "", Depth = depth, Target = items.List, Field = null, HideLabel = true };
             }
             else
             {
@@ -864,20 +870,21 @@ public static class HGGraph
 
             child.Path = childPath;
             child.LeftPad = elementPad;
-            child.IsListElement = true;
-            MarkListSubtree(child, row, i);
+            child.IsItem = true;
+            MarkItemSubtree(child, items, row, i);
             row.Children.Add(child);
         }
     }
 
-    /// <summary>把元素與它展開出來的子列都認到同一個清單索引下，讓斑馬紋覆蓋整段。</summary>
-    private static void MarkListSubtree(HGRow row, HGRow owner, int index)
+    /// <summary>把項目與它展開出來的子列都認到同一段的同一個索引下，讓斑馬紋覆蓋整段。</summary>
+    private static void MarkItemSubtree(HGRow row, HGItemSource source, HGRow ownerRow, int index)
     {
         // 內層清單已經認領的子樹不被外層覆蓋，巢狀清單才各自算自己的奇偶。
-        if (row.ListOwner != null) return;
-        row.ListOwner = owner;
-        row.ListIndex = index;
-        foreach (var child in row.Children) MarkListSubtree(child, owner, index);
+        if (row.ItemSource != null) return;
+        row.ItemSource = source;
+        row.ItemOwnerRow = ownerRow;
+        row.ItemIndex = index;
+        foreach (var child in row.Children) MarkItemSubtree(child, source, ownerRow, index);
     }
 
     private static HGRow SlotRow(GraphSlotBase slot, string label, int depth)

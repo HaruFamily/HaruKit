@@ -579,9 +579,9 @@ public partial class HaruGraphWindow
         }
 
         // 先收集再改接：改完之後端點自己的取值欄位也指著這顆載體，邊掃邊改會把它一起換成Token節點。
-        var users = new List<object>();
+        var users = new List<GraphSlotBase>();
         foreach (var slot in SlotsInCurrentGraph())
-            if (slot != null && ReferenceEquals(HGReflect.GetNode(slot), node.Carrier)) users.Add(slot);
+            if (slot != null && ReferenceEquals(slot.Node, node.Carrier)) users.Add(slot);
 
         // 端點的取值欄位接下這顆載體；它的子樹整棵跟著搬進Token畫布。
         // 空 Node 沒有內容可搬，而且搬進去會讓端點變成「來源接了一顆空節點」——那是存檔驗證會擋的狀態。
@@ -764,7 +764,7 @@ public partial class HaruGraphWindow
         }
     }
 
-    private IEnumerable<object> SlotsInCurrentGraph()
+    private IEnumerable<GraphSlotBase> SlotsInCurrentGraph()
     {
         if (focus.Kind != HGFocusKind.Asset)
         {
@@ -1066,9 +1066,9 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>子樹裡被子樹外欄位指著的載體 → 那些外部欄位。根自己不算：指著根的線會跟著它一起變成資產引用。</summary>
-    private Dictionary<GraphNode, List<object>> FindBoundaryShared(GraphNode root)
+    private Dictionary<GraphNode, List<GraphSlotBase>> FindBoundaryShared(GraphNode root)
     {
-        var result = new Dictionary<GraphNode, List<object>>();
+        var result = new Dictionary<GraphNode, List<GraphSlotBase>>();
         if (root == null) return result;
 
         // 端點先當成走過了：Token的內容不會跟著搬進資產，指著它的欄位也就不算跨邊界。
@@ -1076,13 +1076,14 @@ public partial class HaruGraphWindow
         foreach (var endpoint in CurrentTokens() ?? new List<GraphToken>())
             if (endpoint != null) visited.Add(endpoint);
 
-        var innerSlots = new HashSet<object>(HGRefComparer.Instance);
+        // GraphSlotBase 沒有覆寫 Equals，預設就是參考比對，不必再給 HGRefComparer。
+        var innerSlots = new HashSet<GraphSlotBase>();
         foreach (var slot in HGModel.WalkSlots(root, visited)) innerSlots.Add(slot);
 
         var innerCarriers = new HashSet<GraphNode>();
         foreach (var slot in innerSlots)
         {
-            var carrier = HGReflect.GetNode(slot);
+            var carrier = slot.Node;
             if (carrier != null && !ReferenceEquals(carrier, root)) innerCarriers.Add(carrier);
         }
         if (innerCarriers.Count == 0) return result;
@@ -1090,10 +1091,10 @@ public partial class HaruGraphWindow
         foreach (var slot in SlotsInCurrentGraph())
         {
             if (slot == null || innerSlots.Contains(slot)) continue;
-            var carrier = HGReflect.GetNode(slot);
+            var carrier = slot.Node;
             if (carrier == null || !innerCarriers.Contains(carrier)) continue;
 
-            if (!result.TryGetValue(carrier, out var users)) result[carrier] = users = new List<object>();
+            if (!result.TryGetValue(carrier, out var users)) result[carrier] = users = new List<GraphSlotBase>();
             users.Add(slot);
         }
         return result;

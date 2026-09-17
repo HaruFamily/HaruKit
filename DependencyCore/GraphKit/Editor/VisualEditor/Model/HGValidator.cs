@@ -12,9 +12,9 @@ public class HGIssue
     public string Where;
     public string Fix;
 
-    public HGFocus Focus;      // 點擊要跳到的焦點
-    public object Slot;        // 出問題的參數欄位（可空）
-    public object Node;        // 出問題的節點（可空）
+    public HGFocus Focus;         // 點擊要跳到的焦點
+    public GraphSlotBase Slot;    // 出問題的參數欄位（可空）
+    public object Node;           // 出問題的節點（可空）：GraphNode 或 GraphToken
 
     public string Line => $"{Where}：{Message}　→ {Fix}";
 }
@@ -151,7 +151,7 @@ public static class HGValidator
     }
 
     /// <summary>只驗一棵子樹（資產焦點用）。</summary>
-    public static HGReport RunSubtree(HGModel model, HGFocus focus, object rootSlot, string where)
+    public static HGReport RunSubtree(HGModel model, HGFocus focus, GraphSlotBase rootSlot, string where)
     {
         if (probeDepth == 0) assetHealth.Clear();
         var report = new HGReport();
@@ -262,14 +262,14 @@ public static class HGValidator
 
     // ===== 節點樹走訪 =====
 
-    private static void WalkTree(HGReport report, HGModel model, HGFocus focus, object slot,
+    private static void WalkTree(HGReport report, HGModel model, HGFocus focus, GraphSlotBase slot,
         string where, bool disabled)
     {
         var visited = new HashSet<object>(HGRefComparer.Instance);
         WalkSlot(report, model, focus, slot, where, visited, disabled);
     }
 
-    private static void WalkSlot(HGReport report, HGModel model, HGFocus focus, object slot,
+    private static void WalkSlot(HGReport report, HGModel model, HGFocus focus, GraphSlotBase slot,
         string where, HashSet<object> visited, bool disabled)
     {
         if (slot == null || !visited.Add(slot)) return;
@@ -389,9 +389,9 @@ public static class HGValidator
             var t = val.GetType();
             if (t.IsPrimitive || t.IsEnum || val is string || val is UnityEngine.Object) continue;
 
-            if (HGReflect.IsSlotType(t))
+            if (val is GraphSlotBase fieldSlot)
             {
-                WalkSlot(report, model, focus, val, $"{nodeWhere}.{HGReflect.FieldLabel(f)}", visited, disabled);
+                WalkSlot(report, model, focus, fieldSlot, $"{nodeWhere}.{HGReflect.FieldLabel(f)}", visited, disabled);
                 continue;
             }
 
@@ -406,8 +406,8 @@ public static class HGValidator
                         Warn(report, focus, itemWhere, "清單有空項目", "填入內容或移除這一列。", null, node);
                         continue;
                     }
-                    if (HGReflect.IsSlotType(item.GetType()))
-                        WalkSlot(report, model, focus, item, itemWhere, visited, disabled);
+                    if (item is GraphSlotBase itemSlot)
+                        WalkSlot(report, model, focus, itemSlot, itemWhere, visited, disabled);
                     else if (!item.GetType().IsPrimitive && item is not string && item is not UnityEngine.Object)
                         WalkNode(report, model, focus, item, itemWhere, visited, disabled);
                 }
@@ -422,7 +422,7 @@ public static class HGValidator
 
     // ===== Asset 參照循環 =====
 
-    private static void ValidateAssetCycles(HGReport report, HGFocus focus, object root,
+    private static void ValidateAssetCycles(HGReport report, HGFocus focus, GraphSlotBase root,
         UnityEngine.Object rootAsset, string where, HashSet<UnityEngine.Object> completed)
     {
         var stack = new HashSet<UnityEngine.Object>();
@@ -498,15 +498,15 @@ public static class HGValidator
     {
         if (node == null || !visited.Add(node)) return;
         Type type = node.GetType();
-        if (HGReflect.IsSlotType(type))
+        if (node is GraphSlotBase slot)
         {
-            int useType = HGReflect.UseType(node);
+            int useType = HGReflect.UseType(slot);
             if (useType == 1)
-                CollectDirectAssetReferences(HGReflect.GetFormula(node), visited, result);
-            else if (useType == 2 && HGReflect.GetAsset(node) is UnityEngine.Object asset)
+                CollectDirectAssetReferences(HGReflect.GetFormula(slot), visited, result);
+            else if (useType == 2 && HGReflect.GetAsset(slot) is UnityEngine.Object asset)
             {
                 result.Add(asset);
-                var carrier = HGReflect.GetNode(node);
+                var carrier = slot.Node;
                 if (carrier != null)
                     foreach (var binding in carrier.Bindings)
                         if (binding?.Slot != null) CollectDirectAssetReferences(binding.Slot, visited, result);
@@ -557,20 +557,20 @@ public static class HGValidator
         return keys;
     }
 
-    private static void Err(HGReport r, HGFocus focus, string where, string message, string fix, object slot, object node)
+    private static void Err(HGReport r, HGFocus focus, string where, string message, string fix, GraphSlotBase slot, object node)
         => r.Issues.Add(new HGIssue { IsError = true, Focus = focus, Where = where, Message = message, Fix = fix, Slot = slot, Node = node });
 
     /// <summary>
     /// 停用路徑上的殘缺降成警告：那段 runtime 直接回保底值、不求值，擋存檔只會妨礙測試。
     /// 共用載體若同時被啟用路徑指著，那條路徑會另外走一遍並報成錯誤，所以不必在這裡取聯集。
     /// </summary>
-    private static void Issue(HGReport r, bool disabled, HGFocus focus, string where, string message, string fix, object slot, object node)
+    private static void Issue(HGReport r, bool disabled, HGFocus focus, string where, string message, string fix, GraphSlotBase slot, object node)
     {
         if (disabled) Warn(r, focus, where, message, fix, slot, node);
         else Err(r, focus, where, message, fix, slot, node);
     }
 
-    private static void Warn(HGReport r, HGFocus focus, string where, string message, string fix, object slot, object node)
+    private static void Warn(HGReport r, HGFocus focus, string where, string message, string fix, GraphSlotBase slot, object node)
         => r.Issues.Add(new HGIssue { IsError = false, Focus = focus, Where = where, Message = message, Fix = fix, Slot = slot, Node = node });
 }
 

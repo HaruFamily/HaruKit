@@ -623,7 +623,7 @@ public partial class HaruGraphWindow
             {
                 DrawRows(node, node.Rows, rect);
                 if (nodeOwner is IGraphInlineNodeOwner inlineOwner)
-                    DrawCellAddRow(node, inlineOwner, rect);
+                    DrawCellAddRow(node, new HGCellItemSource(inlineOwner), rect);
                 else DrawChildNodeRow(node, nodeOwner, rect);
             }
             else if (!node.IsPlaceholder) DrawRows(node, node.Rows, rect);
@@ -729,26 +729,18 @@ public partial class HaruGraphWindow
 
     /// <summary>容器尾端那條「＋ 新增」列。每一格本身是 Rows 裡的 InputOutputPort 列，由 DrawRows 畫。</summary>
     // 整列寬而不是小鈕：0.45 倍縮放下 60px 的鈕只剩 27px，讀不到也按不到。
-    private void DrawCellAddRow(HGNodeView node, IGraphInlineNodeOwner owner, Rect nodeRect)
+    private void DrawCellAddRow(HGNodeView node, HGCellItemSource items, Rect nodeRect)
     {
         var addRow = new Rect(nodeRect.x, nodeRect.y + node.CellAddRowY, nodeRect.width, HGGraph.RowHeight);
         var add = new Rect(addRow.x + 4f, addRow.y + 2f, addRow.width - 8f, addRow.height - 4f);
         HGStyles.RoundedFrame(add, HGStyles.ListRule, 3f);
 
-        bool empty = true;
-        foreach (var child in owner.ChildNodes)
-        {
-            if (child == null) continue;
-            empty = false;
-            break;
-        }
-
-        string label = empty ? "＋ 新增第一格" : "＋ 新增";
+        string label = items.IsEmpty ? "＋ 新增第一格" : "＋ 新增";
         if (!GUI.Button(add, new GUIContent(label, "新增一格，未接篩選公式時直接輸出整包內容"), HGStyles.ListAdd)) return;
 
         BreakUndoMerge();
         PreserveVisibleNodePositions();
-        owner.CreateChild();
+        items.CreateChild();
         Invalidate();
         MarkGraphChanged();
     }

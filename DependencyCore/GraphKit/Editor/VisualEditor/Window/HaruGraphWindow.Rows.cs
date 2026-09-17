@@ -19,23 +19,23 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 var rowRect = new Rect(nodeRect.x, nodeRect.y + row.LocalY, nodeRect.width, row.Height);
                 if (rowRect.yMax > nodeRect.yMax) continue;
                 // 底要畫在所有內容之下，而且元素展開出來的子列也算同一段，所以在這裡統一畫，不放進元素控制項。
-                if (row.ListOwner != null) DrawListRowBackground(row, rowRect);
+                if (row.ItemOwnerRow != null) DrawListRowBackground(row, rowRect);
 
                 switch (row.Kind)
                 {
                     case HGRowKind.NoPort:
-                        if (row.IsListElement) DrawListElementControls(row, rowRect, nodeRect);
+                        if (row.IsItem) DrawListElementControls(row, rowRect, nodeRect);
                         DrawNoPortRow(row, rowRect);
                         break;
                     case HGRowKind.InputPort:
-                        if (row.IsListElement) DrawListElementControls(row, rowRect, nodeRect);
+                        if (row.IsItem) DrawListElementControls(row, rowRect, nodeRect);
                         DrawInputPortRow(row, rowRect);
                         break;
                     case HGRowKind.InputOutputPort:
                         DrawInputOutputPortRow(row, rowRect);
                         break;
                     case HGRowKind.Group:
-                        if (row.IsListElement) DrawListElementControls(row, rowRect, nodeRect);
+                        if (row.IsItem) DrawListElementControls(row, rowRect, nodeRect);
                         DrawGroupRow(node, row, rowRect, nodeRect);
                         break;
                     case HGRowKind.List:
@@ -65,7 +65,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         // 兩顆接點的圓由 DrawNodePorts 統一畫（它在外框之後跑），這裡只處理命中與列上的內容。
         private void DrawInputOutputPortRow(HGRow row, Rect rowRect)
         {
-            HGStyles.Fill(rowRect, row.ListIndex % 2 == 0 ? HGStyles.ListStripeEven : HGStyles.ListStripeOdd);
+            HGStyles.Fill(rowRect, row.ItemIndex % 2 == 0 ? HGStyles.ListStripeEven : HGStyles.ListStripeOdd);
 
             var inputPort = PortRect(PortFor(row).Presentation.Position + pan);
 
@@ -97,8 +97,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// </summary>
         private void DrawListSection(HGNodeView node, HGRow row, Rect rowRect, Rect nodeRect)
         {
-            int count = row.List?.Count ?? 0;
-            bool fixedSize = row.List != null && row.List.IsFixedSize;
+            var items = row.Items as HGListItemSource;
+            int count = items?.Count ?? 0;
+            bool fixedSize = items != null && !items.CanEditStructure;
 
             // 底帶要先畫（在所有內容之下），所以這裡就得知道整段的下緣。
             float bandBottom = row.Collapsed
@@ -128,7 +129,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             }
             HGStyles.RoundedFrame(addBtn, HGStyles.ListRule, 3f);
             if (GUI.Button(addBtn, new GUIContent(count == 0 ? "＋ 新增第一項" : "＋ 新增", "在清單尾端加一項"), HGStyles.ListAdd))
-                AddListItem(row);
+                AddListItem(items);
         }
 
         /// <summary>拖曳重排的插入位置：一條線就夠，不需要動到資料。</summary>
@@ -148,7 +149,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         private static Rect Indent(Rect r, HGRow row, bool spansRow = true)
         {
             float left = 4f + row.LeftPad + row.Depth * HGGraph.IndentWidth;
-            float right = 4f + (spansRow && row.IsListElement ? HGGraph.ListDeleteWidth : 0f);
+            float right = 4f + (spansRow && row.IsItem ? HGGraph.ListDeleteWidth : 0f);
             return new Rect(r.x + left, r.y + 1f, Mathf.Max(8f, r.width - left - right), r.height - 2f);
         }
 
@@ -158,7 +159,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// 這裡回傳 ✕ 佔掉的橫向空間，清單元素才有。
         /// </summary>
         private static float ListRightInset(HGRow row)
-            => row.IsListElement ? HGGraph.ListDeleteWidth : 0f;
+            => row.IsItem ? HGGraph.ListDeleteWidth : 0f;
 
         /// <summary>接點固定佔住的右緣寬度。收合鈕與 ✕ 都從這裡往左推。</summary>
         private const float InputPortReserve = HGGraph.PortDiameter;
@@ -215,7 +216,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
         /// <summary>
         /// 清單底帶的左右邊界（高度由呼叫端填）。標題列與元素列都用它，斑馬紋才會和底帶切齊。
-        /// listRow 傳清單標題列；元素列傳自己的 ListOwner。
+        /// listRow 傳清單標題列；元素列傳自己的 ItemOwnerRow。
         /// </summary>
         private static Rect ListBandRect(HGRow listRow, Rect rowRect)
         {
@@ -230,11 +231,11 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// </summary>
         private void DrawListRowBackground(HGRow row, Rect rowRect)
         {
-            var owner = row.ListOwner;
+            var owner = row.ItemOwnerRow;
             var band = ListBandRect(owner, rowRect);
-            HGStyles.Fill(band, row.ListIndex % 2 == 0 ? HGStyles.ListStripeEven : HGStyles.ListStripeOdd);
+            HGStyles.Fill(band, row.ItemIndex % 2 == 0 ? HGStyles.ListStripeEven : HGStyles.ListStripeOdd);
 
-            if (ReferenceEquals(dragListRow, owner) && dragListIndex == row.ListIndex)
+            if (ReferenceEquals(dragListRow, owner) && dragListIndex == row.ItemIndex)
                 HGStyles.Fill(band, HGStyles.ListRowDragging);
             else if (rowRect.Contains(Event.current.mousePosition))
                 HGStyles.Fill(band, HGStyles.ListRowHover);
@@ -246,20 +247,20 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// </summary>
         private void DrawListElementControls(HGRow row, Rect rowRect, Rect nodeRect)
         {
-            var owner = row.ListOwner;
-            if (owner?.List == null) return;
+            var owner = row.ItemOwnerRow;
+            if (row.ItemSource is not HGListItemSource items) return;
 
             var e = Event.current;
             bool hover = rowRect.Contains(e.mousePosition);
-            bool dragging = ReferenceEquals(dragListRow, owner) && dragListIndex == row.ListIndex;
-            bool fixedSize = owner.List.IsFixedSize;
+            bool dragging = ReferenceEquals(dragListRow, owner) && dragListIndex == row.ItemIndex;
+            bool fixedSize = !items.CanEditStructure;
 
             // 序號與把手各佔控制欄一半：序號是順序資訊，把手是操作入口，兩件事不該互相取代。
             // 把手排在最前面——它是這一列的抓取點，放在最外緣最好瞄準。
             float x = rowRect.x + 4f + row.Depth * HGGraph.IndentWidth + row.LeftPad - HGGraph.ListGutter;
             var handle = new Rect(x, rowRect.y, 13f, rowRect.height);
             var index = new Rect(x + 13f, rowRect.y, 15f, rowRect.height);
-            GUI.Label(index, new GUIContent((row.ListIndex + 1) + ".", "序號即執行順序"), HGStyles.ListIndex);
+            GUI.Label(index, new GUIContent((row.ItemIndex + 1) + ".", "序號即執行順序"), HGStyles.ListIndex);
             GUI.Label(handle,
                 new GUIContent("≡", fixedSize ? "陣列長度固定，不能重排" : "拖曳可調整順序；右鍵有插入與刪除"),
                 dragging ? HGStyles.RowLabel : HGStyles.Tiny);
@@ -275,7 +276,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             if (clickedRemove && !fixedSize)
             {
                 BreakUndoMerge();
-                owner.List.RemoveAt(row.ListIndex);
+                items.RemoveAt(row.ItemIndex);
                 Invalidate();
                 return;
             }
@@ -283,15 +284,15 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
             if (e.type == EventType.MouseDown && e.button == 1 && hover)
             {
-                ShowListElementMenu(owner, row.ListIndex);
+                ShowListElementMenu(items, row.ItemIndex);
                 e.Use();
             }
             else if (e.type == EventType.MouseDown && e.button == 0 &&
                      (handle.Contains(e.mousePosition) || index.Contains(e.mousePosition)))
             {
                 dragListRow = owner;
-                dragListIndex = row.ListIndex;
-                dragListTarget = row.ListIndex;
+                dragListIndex = row.ItemIndex;
+                dragListTarget = row.ItemIndex;
                 e.Use();
             }
             else if (e.type == EventType.MouseDrag && dragging)
@@ -314,10 +315,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             return owner.Children.Count - 1;
         }
 
-        private void ShowListElementMenu(HGRow owner, int index)
+        private void ShowListElementMenu(HGListItemSource items, int index)
         {
             var menu = new GenericMenu();
-            if (owner.List != null && owner.List.IsFixedSize)
+            if (!items.CanEditStructure)
             {
                 menu.AddDisabledItem(new GUIContent("陣列長度固定，無法增刪或重排"));
                 menu.ShowAsContext();
@@ -326,23 +327,21 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
             menu.AddItem(new GUIContent("在此插入一項"), false, () =>
             {
-                var item = owner.ElementType.IsValueType || owner.ElementType == typeof(string)
-                    ? DefaultOf(owner.ElementType)
-                    : HGReflect.CreateInstance(owner.ElementType);
-                if (item == null && owner.ElementType != typeof(string)) return;
+                var item = items.CreateElement();
+                if (item == null) return;
                 BreakUndoMerge();
-                owner.List.Insert(index, item);
+                items.Insert(index, item);
                 Invalidate();
                 Repaint();
             });
-            menu.AddItem(new GUIContent("複製這一項"), false, () => DuplicateListItem(owner, index));
-            menu.AddItem(new GUIContent("往上移"), false, () => MoveListItem(owner, index, index - 1));
-            menu.AddItem(new GUIContent("往下移"), false, () => MoveListItem(owner, index, index + 1));
+            menu.AddItem(new GUIContent("複製這一項"), false, () => DuplicateListItem(items, index));
+            menu.AddItem(new GUIContent("往上移"), false, () => MoveListItem(items, index, index - 1));
+            menu.AddItem(new GUIContent("往下移"), false, () => MoveListItem(items, index, index + 1));
             menu.AddSeparator("");
             menu.AddItem(new GUIContent("刪除這一項"), false, () =>
             {
                 BreakUndoMerge();
-                owner.List.RemoveAt(index);
+                items.RemoveAt(index);
                 Invalidate();
                 Repaint();
             });
@@ -354,16 +353,16 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// 這張圖的具名Token一律共用——子樹裡指向Token的 Token 節點還是指向同一個端點，
         /// 跟著抄一份會變成不在清單裡的孤兒端點。理由與 <see cref="HGModel.DuplicateToken"/> 同一條。
         /// </summary>
-        private void DuplicateListItem(HGRow owner, int index)
+        private void DuplicateListItem(HGListItemSource items, int index)
         {
-            if (owner?.List == null || owner.List.IsFixedSize) return;
-            if (index < 0 || index >= owner.List.Count) return;
+            if (items == null || !items.CanEditStructure) return;
+            if (index < 0 || index >= items.Count) return;
 
-            var source = owner.List[index];
+            var source = items.Get(index);
             if (source == null)
             {
                 BreakUndoMerge();
-                owner.List.Insert(index + 1, null);
+                items.Insert(index + 1, null);
                 Invalidate();
                 Repaint();
                 return;
@@ -381,19 +380,17 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             HGModel.ResetNodeIds(copy, shared);
 
             BreakUndoMerge();
-            owner.List.Insert(index + 1, copy);
+            items.Insert(index + 1, copy);
             Invalidate();
             Repaint();
         }
 
-        private void MoveListItem(HGRow owner, int from, int to)
+        private void MoveListItem(HGListItemSource items, int from, int to)
         {
-            if (owner?.List == null || owner.List.IsFixedSize) return;
-            if (to < 0 || to >= owner.List.Count || from == to) return;
+            if (items == null || !items.CanEditStructure) return;
+            if (to < 0 || to >= items.Count || from == to) return;
             BreakUndoMerge();
-            var item = owner.List[from];
-            owner.List.RemoveAt(from);
-            owner.List.Insert(to, item);
+            if (!items.Move(from, to)) return;
             Invalidate();
             Repaint();
         }
@@ -430,7 +427,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             // 動作清單的元素：標籤本身就是「現在接了什麼」（見 SlotShortName），右半再寫一次型別名只是重複，
             // 接了什麼順著線看子節點的 Header 更完整。所以這種列讓標籤吃滿整列，右半不畫。
             // 具名的動作欄位（「True 分支」之類）不同：標籤是欄位名，右半仍要寫內容。
-            bool labelIsContent = row.IsActionSlot && row.IsListElement;
+            bool labelIsContent = row.IsActionSlot && row.IsItem;
             if (labelIsContent) labelRect.xMax = rowRect.xMax - inputPortInset;
 
             if (!row.HideLabel)
@@ -587,14 +584,13 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 return;
             }
 
-            // 清單裡的基本型別元素沒有 FieldInfo，改用「清單 + 索引」寫回。
-            var owner = row.ListOwner;
-            if (!row.IsListElement || owner?.List == null || owner.ElementType == null) return;
-            if (row.ListIndex < 0 || row.ListIndex >= owner.List.Count) return;
+            // 清單裡的基本型別元素沒有 FieldInfo，改用「來源 + 索引」寫回。
+            if (!row.IsItem || row.ItemSource is not HGListItemSource items || items.ElementType == null) return;
+            if (row.ItemIndex < 0 || row.ItemIndex >= items.Count) return;
 
             EditorGUI.BeginChangeCheck();
-            var element = HGValueField.Draw(fieldRect, owner.ElementType, owner.List[row.ListIndex]);
-            if (EditorGUI.EndChangeCheck()) { owner.List[row.ListIndex] = element; AfterValueEdit(); }
+            var element = HGValueField.Draw(fieldRect, items.ElementType, items.Get(row.ItemIndex));
+            if (EditorGUI.EndChangeCheck()) { items.Set(row.ItemIndex, element); AfterValueEdit(); }
         }
 
         /// <summary>值欄位改完的收尾。</summary>
@@ -682,21 +678,15 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             return owner != null ? owner.Id : "";
         }
 
-        private void AddListItem(HGRow row)
+        private void AddListItem(HGListItemSource items)
         {
-            if (row.List == null || row.ElementType == null || row.List.IsFixedSize) return;
-            // 基本型別沒有「空實例」的問題，用 default 值；其餘走無參數建構。
-            var item = row.ElementType.IsValueType || row.ElementType == typeof(string)
-                ? DefaultOf(row.ElementType)
-                : HGReflect.CreateInstance(row.ElementType);
-            if (item == null && row.ElementType != typeof(string)) return;
+            if (items == null || !items.CanEditStructure) return;
+            var item = items.CreateElement();
+            if (item == null) return;
             BreakUndoMerge();
-            row.List.Add(item);
+            items.Add(item);
             Invalidate();
         }
-
-        private static object DefaultOf(Type t)
-            => t == typeof(string) ? "" : Activator.CreateInstance(t);
     }
 
 }

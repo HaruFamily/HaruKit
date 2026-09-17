@@ -261,7 +261,7 @@ public partial class HaruGraphWindow : EditorWindow
             drag.Clear();
             // 放開才真的搬：拖曳中途放棄不會留下任何改動。
             if (dragListRow != null && dragListTarget >= 0 && dragListTarget != dragListIndex)
-                MoveListItem(dragListRow, dragListIndex, dragListTarget);
+                MoveListItem(dragListRow.Items as HGListItemSource, dragListIndex, dragListTarget);
             dragListRow = null;
             dragListIndex = -1;
             dragListTarget = -1;

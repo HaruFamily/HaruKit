@@ -133,12 +133,12 @@ public static class HGReflect
     // 兩種 Slot 各有非泛型基底（FormulaSlotBase / ActionSlotBase），所以這裡一律走型別，不走成員名。
 
     /// <summary>Slot 目前接的節點；null 代表常數（公式）、空槽（動作）或未接（目錄）。</summary>
-    public static GraphNode GetNode(object slot) => (slot as GraphSlotBase)?.Node;
+    public static GraphNode GetNode(GraphSlotBase slot) => slot?.Node;
 
-    public static void SetNode(object slot, GraphNode node) => (slot as GraphSlotBase)?.SetNode(node);
+    public static void SetNode(GraphSlotBase slot, GraphNode node) => slot?.SetNode(node);
 
     /// <summary>沒接節點時就地建立一個空節點（＝使用者從接點拉線出來的編輯中狀態）。</summary>
-    public static GraphNode EnsureNode(object slot)
+    public static GraphNode EnsureNode(GraphSlotBase slot)
     {
         var node = GetNode(slot);
         if (node != null) return node;
@@ -150,7 +150,7 @@ public static class HGReflect
     }
 
     /// <summary>相容既有呼叫端的模式碼：0 常數／空槽、1 公式或動作（含編輯中空節點）、2 資產、3 具名Token。</summary>
-    public static int UseType(object slot)
+    public static int UseType(GraphSlotBase slot)
     {
         var node = GetNode(slot);
         if (node == null) return 0;
@@ -163,26 +163,26 @@ public static class HGReflect
         };
     }
 
-    public static object GetFormula(object slot)
+    public static object GetFormula(GraphSlotBase slot)
     {
         var node = GetNode(slot);
         return node != null && node.Kind == NodeKind.Inline ? node.BodyObject : null;
     }
 
-    public static UnityEngine.Object GetAsset(object slot)
+    public static UnityEngine.Object GetAsset(GraphSlotBase slot)
     {
         var node = GetNode(slot);
         return node != null && node.Kind == NodeKind.Asset ? node.AssetObject : null;
     }
 
-    public static void SetAsset(object slot, UnityEngine.Object asset)
+    public static void SetAsset(GraphSlotBase slot, UnityEngine.Object asset)
         => EnsureNode(slot).SetAsset(asset as UnityEngine.ScriptableObject);
 
     /// <summary>這個欄位接的具名Token（沒接或不是Token節點回 null）。</summary>
-    public static GraphToken GetToken(object slot) => GetNode(slot)?.Token;
+    public static GraphToken GetToken(GraphSlotBase slot) => GetNode(slot)?.Token;
 
     /// <summary>換成具名Token引用：節點 Id、座標、備註與連入邊全部保留，只換內容。</summary>
-    public static void SetToken(object slot, GraphToken endpoint)
+    public static void SetToken(GraphSlotBase slot, GraphToken endpoint)
     {
         if (endpoint == null)
         {
@@ -193,26 +193,26 @@ public static class HGReflect
     }
 
     /// <summary>斷開來源：公式欄位回常數、動作欄位回空槽。</summary>
-    public static void ClearNode(object slot) => SetNode(slot, null);
+    public static void ClearNode(GraphSlotBase slot) => SetNode(slot, null);
 
     /// <summary>這個欄位能不能接這個內嵌內容 / 資產。跨 pack 或跨結果型別在這裡擋下。</summary>
-    public static bool AcceptsBody(object slot, object body)
-        => body is GraphNodeContent node && (slot as GraphSlotBase)?.AcceptsBody(node) == true;
+    public static bool AcceptsBody(GraphSlotBase slot, object body)
+        => body is GraphNodeContent node && slot?.AcceptsBody(node) == true;
 
-    public static bool AcceptsAsset(object slot, UnityEngine.Object asset)
-        => (slot as GraphSlotBase)?.AcceptsAsset(asset as UnityEngine.ScriptableObject) == true;
+    public static bool AcceptsAsset(GraphSlotBase slot, UnityEngine.Object asset)
+        => slot?.AcceptsAsset(asset as UnityEngine.ScriptableObject) == true;
 
     /// <summary>這個欄位能不能接這個具名Token。動作與目錄欄位一律不能。</summary>
-    public static bool AcceptsToken(object slot, GraphToken endpoint)
-        => endpoint != null && (slot as GraphSlotBase)?.AcceptsToken(endpoint) == true;
+    public static bool AcceptsToken(GraphSlotBase slot, GraphToken endpoint)
+        => endpoint != null && slot?.AcceptsToken(endpoint) == true;
 
-    public static object GetDefault(object slot) => (slot as FormulaSlotBase)?.DefaultObject;
+    public static object GetDefault(GraphSlotBase slot) => (slot as FormulaSlotBase)?.DefaultObject;
 
     /// <summary>常數框該畫哪個型別。欄位沒特別宣告就是結果型別；fallback 給非 FormulaSlot 的呼叫端。</summary>
-    public static Type DefaultEditType(object slot, Type fallback)
+    public static Type DefaultEditType(GraphSlotBase slot, Type fallback)
         => (slot as FormulaSlotBase)?.DefaultEditType ?? fallback;
 
-    public static void SetDefault(object slot, object value)
+    public static void SetDefault(GraphSlotBase slot, object value)
     {
         if (slot is FormulaSlotBase fsb) fsb.DefaultObject = value;
     }

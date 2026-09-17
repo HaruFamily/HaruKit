@@ -343,7 +343,8 @@ public partial class HaruGraphWindow
         return true;
     }
 
-    private void CutLink(HGLink link) => CutLink(link?.InputPort?.InputSlot ?? link?.ParentRow?.InputSlot);
+    // 線的輸入端一律走 Port：命中測試（LinkAt）已經要求兩端都解析得到，走不到沒有 Port 的線。
+    private void CutLink(HGLink link) => CutLink(link?.InputPort?.InputSlot);
 
     private void CutLink(GraphSlotBase slot)
     {
@@ -376,7 +377,7 @@ public partial class HaruGraphWindow
     {
         if (carrier == null) return false;
         foreach (var slot in SlotsInCurrentGraph())
-            if (slot is GraphSlotBase graphSlot && ReferenceEquals(graphSlot.Node, carrier)) return true;
+            if (ReferenceEquals(slot?.Node, carrier)) return true;
         return focus.Kind == HGFocusKind.Asset && focus.AssetHostSlot != null
             && ReferenceEquals(focus.AssetHostSlot.Node, carrier);
     }
