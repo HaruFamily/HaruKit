@@ -43,7 +43,7 @@ public class HGFocus : IOrphanPool
 
     // Root 焦點：文件工作副本本身（＝HGModel.Data）。
     // 群組清單每次都從它現讀，新增／刪除 root 不必回頭修焦點。
-    public object Data;
+    public IGraphDocument Data;
 
     // 資產焦點：HostSlot 是合成出來的槽，內容＝資產內容的工作副本
     public UnityEngine.Object AssetObject;
@@ -74,7 +74,7 @@ public class HGFocus : IOrphanPool
             var roots = new List<object>();
             if (Kind == HGFocusKind.Root)
             {
-                if ((Data as IGraphDocument)?.Roots is IList groups)
+                if (Data?.Roots is IList groups)
                     foreach (var g in groups)
                         if (g != null) roots.Add(g);
                 return roots;
@@ -102,7 +102,7 @@ public class HGFocus : IOrphanPool
                 case HGFocusKind.Action:
                     return ActionHeadTitle(ActionSlot);
                 case HGFocusKind.Root:
-                    return $"全部{HGGraph.RootNoun(Data as IGraphDocument)}";
+                    return $"全部{HGGraph.RootNoun(Data)}";
                 case HGFocusKind.Asset:
                     if (Token != null) return $"資產 {AssetObject?.name} ／ Token {Token.Name ?? "（未命名）"}";
                     return AssetObject != null ? $"資產 {AssetObject.name}" : "資產";

@@ -62,11 +62,12 @@ public class HGModel
 {
     // Owner 不限 ScriptableObject：Hierarchy 上掛 LogicGraph 的 MonoBehaviour 也能編。
     public UnityEngine.Object Owner { get; private set; }
-    public object Data { get; private set; }        // 圖的工作副本（IGraphDocument）
+    public IGraphDocument Data { get; private set; } // 圖的工作副本
     public Type PackType { get; private set; }
+    public string DocumentId => documentBinding?.DocumentId;
 
     /// <summary>工作副本的圖契約。所有 root／時機操作都經過它，編輯器不認識具體圖型別。</summary>
-    public IGraphDocument Doc => Data as IGraphDocument;
+    public IGraphDocument Doc => Data;
 
     /// <summary>可建立或跳轉的 root 識別值。過濾由 <see cref="IGraphDocument.RootKeys"/> 決定（含 Owner 的允許集合）。</summary>
     // 快取在這一層而不是選單那一層：兩個選單入口共用同一份，不會有一邊漏過濾。
@@ -85,17 +86,27 @@ public class HGModel
 
     // ===== 綁定 =====
 
-    /// <summary>在任意 SO 上找出可編輯的圖欄位（<see cref="IGraphDocument"/>）；找不到回 null。</summary>
+    /// <summary>在任意 SO 上找出唯一可編輯的圖欄位（<see cref="IGraphDocument"/>）；零個或多個都回 null。</summary>
     public static FieldInfo FindSystemField(UnityEngine.Object owner)
         => owner == null ? null : FindSystemField(owner.GetType());
 
-    /// <summary>只看型別就能判斷支不支援，掃描專案時不必先載入資產。</summary>
+    /// <summary>只看型別就能判斷是否有唯一 legacy 圖欄位，掃描專案時不必先載入資產。</summary>
     public static FieldInfo FindSystemField(Type ownerType)
+        => FindSystemField(ownerType, out _);
+
+    private static FieldInfo FindSystemField(Type ownerType, out int candidateCount)
     {
+        candidateCount = 0;
         if (ownerType == null) return null;
+        FieldInfo candidate = null;
         foreach (var f in HGReflect.Fields(ownerType))
-            if (typeof(IGraphDocument).IsAssignableFrom(f.FieldType)) return f;
-        return null;
+        {
+            if (!typeof(IGraphDocument).IsAssignableFrom(f.FieldType)) continue;
+            candidateCount++;
+            if (candidateCount > 1) return null;
+            candidate = f;
+        }
+        return candidate;
     }
 
     public static bool CanEdit(UnityEngine.Object owner) => FindSystemField(owner) != null;
@@ -109,15 +120,19 @@ public class HGModel
     {
         Owner = owner;
         documentBinding = binding;
-        systemField = binding == null ? FindSystemField(owner) : null;
+        int candidateCount = 0;
+        systemField = binding == null ? FindSystemField(owner?.GetType(), out candidateCount) : null;
         if (binding == null && systemField == null)
         {
-            Debug.LogError($"[GraphKit] '{(owner != null ? owner.name : "null")}' 沒有可編輯的圖欄位，無法編輯。");
+            string reason = candidateCount > 1
+                ? "有多個圖欄位；請用 OpenForDocument 指定要編輯的文件。"
+                : "沒有可編輯的圖欄位。";
+            Debug.LogError($"[GraphKit] '{(owner != null ? owner.name : "null")}' {reason}");
             return false;
         }
 
         Reload();
-        if (Data is not IGraphDocument doc)
+        if (Data == null)
         {
             Debug.LogError($"[GraphKit] '{(owner != null ? owner.name : "null")}' 的圖文件取不到內容，無法編輯。");
             return false;
@@ -132,7 +147,7 @@ public class HGModel
     /// <summary>從 Owner 重新抓一份工作副本（開啟與「取消」共用）。</summary>
     public void Reload()
     {
-        object live;
+        IGraphDocument live;
         if (documentBinding != null)
         {
             if (!TryReadBoundDocument(out var bound) && !TryCreateBoundDocument(out bound))
@@ -146,25 +161,20 @@ public class HGModel
         }
         else
         {
-            live = systemField.GetValue(Owner);
+            live = systemField.GetValue(Owner) as IGraphDocument;
             if (live == null)
-                live = Activator.CreateInstance(systemField.FieldType);
+                live = Activator.CreateInstance(systemField.FieldType) as IGraphDocument;
         }
         Data = DeepCopy(live);
         Dirty = false;
         ClearHistory();
     }
 
-    private object DeepCopy(object system)
+    private IGraphDocument DeepCopy(IGraphDocument document)
     {
-        if (system == null)
+        if (document == null)
         {
             Debug.LogError("[GraphKit] 無法建立圖的工作副本，來源為 null。");
-            return null;
-        }
-        if (system is not IGraphDocument document)
-        {
-            Debug.LogError("[GraphKit] 無法建立圖的工作副本，來源不是 IGraphDocument。");
             return null;
         }
 
@@ -174,8 +184,9 @@ public class HGModel
             return boundCopy;
         }
 
-        var copy = document.DeepCopy();
-        if (copy == null) Debug.LogError("[GraphKit] 圖的 DeepCopy 失敗，已停止編輯以避免直接修改 Owner。");
+        var copy = document.DeepCopy() as IGraphDocument;
+        if (copy == null || ReferenceEquals(copy, document))
+            Debug.LogError("[GraphKit] 圖的 DeepCopy 失敗或回傳原實例，已停止編輯以避免直接修改 Owner。");
         return copy;
     }
 
@@ -193,13 +204,13 @@ public class HGModel
     /// <summary>一步復原的內容。兩個欄位只有一個有值，另一個是 null＝這一步沒動它。</summary>
     private sealed class HGStep
     {
-        public object Graph;                          // 圖的工作副本快照
+        public IGraphDocument Graph;                  // 圖的工作副本快照
         public object Catalogs;                       // Owner 上的目錄快照（型別由 ICatalogOwner 自己決定）
     }
 
     private readonly List<HGStep> undoStack = new();
     private readonly List<HGStep> redoStack = new();
-    private object baseline;                          // 圖在上一次記錄點的狀態（＝本次修改前的狀態）
+    private IGraphDocument baseline;                  // 圖在上一次記錄點的狀態（＝本次修改前的狀態）
     private double lastPushTime;
     private double lastCatalogPush;                   // 上一個目錄步的時間，只給目錄步之間的合併用
 
@@ -325,15 +336,9 @@ public class HGModel
     {
         var toStore = DeepCopy(Data);
         if (toStore == null) return false;
-        if (toStore is not IGraphDocument doc)
-        {
-            Debug.LogError("[GraphKit] 圖的工作副本不是可編輯的圖，Owner 未寫入。");
-            return false;
-        }
-
-        doc.MarkDirty();
-        doc.Verify();
-        if (!doc.IsValidated)
+        toStore.MarkDirty();
+        toStore.Verify();
+        if (!toStore.IsValidated)
         {
             Debug.LogError("[GraphKit] Core Verify 未通過，Owner 未寫入。請查看 Console 的 Core 驗證訊息。");
             return false;
@@ -341,7 +346,7 @@ public class HGModel
 
         if (documentBinding != null)
         {
-            if (!TryWriteBoundDocument(doc)) return false;
+            if (!TryWriteBoundDocument(toStore)) return false;
         }
         else
         {

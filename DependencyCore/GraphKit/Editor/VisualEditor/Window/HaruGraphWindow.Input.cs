@@ -502,6 +502,7 @@ public partial class HaruGraphWindow
         if (next == null) return;
         EnsureHeadIds(next);
 
+        ClearPortInteractionState();
         focus = next;
         if (model != null) model.TrackChanges = next.Kind != HGFocusKind.Asset;
         inlineName.Cancel();

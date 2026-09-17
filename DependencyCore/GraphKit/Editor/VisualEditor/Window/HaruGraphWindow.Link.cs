@@ -30,13 +30,13 @@ public partial class HaruGraphWindow
     /// <summary>Rebuild all generation-local Port adapters and discard every old hit/compatibility reference.</summary>
     private void RebuildPorts()
     {
-        EndLink();
-        inputPortClickPort = null;
+        ClearPortInteractionState();
         graphGeneration++;
         graph.Ports.Clear();
         graph.PortsByKey.Clear();
+        graph.PrimaryOutputs.Clear();
 
-        var context = new HGPortBuildContext(graph, graphGeneration, graph.Ports, graph.PortsByKey);
+        var context = new HGPortBuildContext(graph, graphGeneration, graph.Ports, graph.PortsByKey, graph.PrimaryOutputs);
         foreach (var node in graph.Nodes)
         {
             foreach (var row in HGGraph.AllRows(node.Rows))
@@ -68,8 +68,15 @@ public partial class HaruGraphWindow
             () => row.Locked || node.InLockedSubtree);
         var policy = new HGDelegatePortPolicy(
             () => true,
-            source => source != null && source.Accepts(row.InputSlot)
-                && !WouldCreateCycle(row.InputSlot, source.CycleRoot));
+            checkAcceptance: source =>
+            {
+                if (source == null) return HGPortConnectionResult.MissingBinding;
+                HGPortConnectionResult sourceResult = HGPortConnection.CheckSourceAcceptance(source, row.InputSlot);
+                if (sourceResult != HGPortConnectionResult.Allowed) return sourceResult;
+                return WouldCreateCycle(row.InputSlot, source.CycleRoot)
+                    ? HGPortConnectionResult.WouldCreateCycle
+                    : HGPortConnectionResult.Allowed;
+            });
         context.AddInput(InputKey(row), row.InputSlot, policy, presentation);
     }
 
@@ -80,8 +87,9 @@ public partial class HaruGraphWindow
             () => PortRect(node.OutputPort),
             () => !node.IsRoot && !node.Hidden && node.HasOutputPort,
             () => node.InLockedSubtree);
-        var source = new HGDelegatePortSource(node.Carrier, CycleRoot(node), input => SourceAccepts(node, input));
-        context.AddOutput(OutputKey(node), source, new HGDelegatePortPolicy(() => true), presentation);
+        var source = new HGDelegatePortSource(node.Carrier, CycleRoot(node), input => SourceAccepts(node, input),
+            input => SourceAcceptance(node, input));
+        context.AddOutput(OutputKey(node), source, new HGDelegatePortPolicy(() => true), presentation, true);
     }
 
     private void AddCellOutputPort(HGPortBuildContext context, HGNodeView node, HGRow row)
@@ -92,8 +100,11 @@ public partial class HaruGraphWindow
             () => !node.Hidden && !row.Hidden,
             () => row.Locked || node.InLockedSubtree);
         var source = new HGDelegatePortSource(row.OutputNode, row.OutputNode,
-            input => input.AcceptsBody(row.OutputNode?.BodyObject));
-        context.AddOutput(OutputKey(row), source, new HGDelegatePortPolicy(() => true), presentation);
+            input => input.AcceptsBody(row.OutputNode?.BodyObject),
+            input => row.OutputNode?.BodyObject is GraphNodeContent body
+                ? input.AcceptsBody(body) ? HGPortConnectionResult.Allowed : HGPortConnectionResult.IncompatibleType
+                : HGPortConnectionResult.MissingBinding);
+        context.AddOutput(OutputKey(row), source, new HGDelegatePortPolicy(() => true), presentation, true);
     }
 
     private void AddAggregatePort(HGPortBuildContext context, HGNodeView node, HGRow row)
@@ -102,18 +113,59 @@ public partial class HaruGraphWindow
             () => row.InputPortPos,
             () => Rect.zero,
             () => !node.Hidden && row.Collapsed && HasConnectedElement(row),
-            () => true);
+            () => false);
         context.AddAggregate(new HGPortKey(row.OwnerNodeId, row.Path, HGPortRole.Aggregate), presentation);
     }
 
     private void ResolveLinkPorts()
     {
+        graph.Diagnostics.RemoveAll(diagnostic => diagnostic.Code.StartsWith("graphkit.port-resolution.", StringComparison.Ordinal));
         foreach (var link in graph.Links)
         {
-            graph.PortsByKey.TryGetValue(InputKey(link.ParentRow), out link.InputPort);
-            HGPortKey outputKey = link.TargetRow != null ? OutputKey(link.TargetRow) : OutputKey(link.Target);
-            graph.PortsByKey.TryGetValue(outputKey, out link.OutputPort);
+            link.InputPort = null;
+            link.OutputPort = null;
+            if (link.ParentRow == null || !graph.PortsByKey.TryGetValue(InputKey(link.ParentRow), out var input)
+                || input.Generation != graphGeneration)
+            {
+                AddPortResolutionDiagnostic("input-unresolved", "連線的輸入接點無法在目前圖形中定位。",
+                    link.ParentRow?.OwnerNodeId, link.ParentRow?.Path);
+                continue;
+            }
+
+            link.InputPort = input;
+            GraphNode source = link.TargetRow?.OutputNode ?? link.Target?.Carrier;
+            if (source == null)
+            {
+                AddPortResolutionDiagnostic("output-unresolved", "連線的來源載體無法在目前圖形中定位。",
+                    link.ParentRow.OwnerNodeId, link.ParentRow.Path);
+                continue;
+            }
+
+            if (!graph.PrimaryOutputs.TryGetValue(source, out var output) || output.Generation != graphGeneration)
+            {
+                AddPortResolutionDiagnostic("primary-output-missing", "連線來源沒有可用的主要輸出接點。",
+                    source.Id, null);
+                continue;
+            }
+
+            link.OutputPort = output;
         }
+    }
+
+    private void AddPortResolutionDiagnostic(string kind, string message, string nodeId, string fieldPath)
+    {
+        string code = "graphkit.port-resolution." + kind;
+        var location = new GraphDiagnosticLocation(model.DocumentId, focus?.Id, nodeId: nodeId, fieldPath: fieldPath);
+        foreach (var diagnostic in graph.Diagnostics)
+        {
+            if (diagnostic.Code != code || diagnostic.Severity != GraphDiagnosticSeverity.Error) continue;
+            GraphDiagnosticLocation existing = diagnostic.Location;
+            if (existing.DocumentId == location.DocumentId && existing.FocusId == location.FocusId
+                && existing.NodeId == location.NodeId && existing.TokenId == location.TokenId
+                && existing.FieldPath == location.FieldPath) return;
+        }
+        graph.Diagnostics.Add(new GraphDiagnostic(code, GraphDiagnosticSeverity.Error, message, location,
+            "重建圖形或確認擴充接點已註冊主要輸出。"));
     }
 
     private static object CycleRoot(HGNodeView node)
@@ -123,20 +175,44 @@ public partial class HaruGraphWindow
     }
 
     private bool SourceAccepts(HGNodeView source, GraphSlotBase input)
+        => SourceAcceptance(source, input) == HGPortConnectionResult.Allowed;
+
+    private HGPortConnectionResult SourceAcceptance(HGNodeView source, GraphSlotBase input)
     {
-        if (source?.Carrier == null || input == null) return false;
-        if (source.IsAssetNode) return CanAssignAsset(input, source.Asset);
-        if (source.IsTokenNode) return input.AcceptsToken(source.Token);
+        if (source?.Carrier == null || input == null) return HGPortConnectionResult.MissingBinding;
+        if (source.IsAssetNode)
+        {
+            if (source.Asset == null) return HGPortConnectionResult.MissingBinding;
+            return CanAssignAsset(input, source.Asset)
+                ? HGPortConnectionResult.Allowed
+                : HGPortConnectionResult.IncompatibleType;
+        }
+        if (source.IsTokenNode)
+        {
+            if (source.Token == null) return HGPortConnectionResult.MissingBinding;
+            return input.AcceptsToken(source.Token)
+                ? HGPortConnectionResult.Allowed
+                : HGPortConnectionResult.IncompatibleFamily;
+        }
         if (source.IsCatalogNode)
-            return (input as CatalogSlotBase)?.AcceptsCatalogObject(source.Carrier.CatalogObject) == true;
+        {
+            if (source.Carrier.CatalogObject == null) return HGPortConnectionResult.MissingBinding;
+            if (input is not CatalogSlotBase catalogSlot) return HGPortConnectionResult.IncompatibleFamily;
+            return catalogSlot.AcceptsCatalogObject(source.Carrier.CatalogObject)
+                ? HGPortConnectionResult.Allowed
+                : HGPortConnectionResult.DomainRejected;
+        }
 
         if (source.IsPlaceholder)
         {
             Type sourceKind = RepresentativeSlotType(source);
-            return sourceKind == null || sourceKind == input.GetType();
+            return sourceKind == null || sourceKind == input.GetType()
+                ? HGPortConnectionResult.Allowed
+                : HGPortConnectionResult.IncompatibleFamily;
         }
 
-        return source.Obj is GraphNodeContent body && input.AcceptsBody(body);
+        if (source.Obj is not GraphNodeContent body) return HGPortConnectionResult.MissingBinding;
+        return input.AcceptsBody(body) ? HGPortConnectionResult.Allowed : HGPortConnectionResult.IncompatibleType;
     }
 
     private HGPort PortFor(HGRow row) => graph != null && graph.PortsByKey.TryGetValue(InputKey(row), out var port) ? port : null;
@@ -155,6 +231,14 @@ public partial class HaruGraphWindow
         linking = false;
         linkPort = null;
         linkCompatiblePorts.Clear();
+    }
+
+    /// <summary>Invalidates generation-local Port references before the graph, focus, or working copy changes.</summary>
+    private void ClearPortInteractionState()
+    {
+        EndLink();
+        inputPortClickPort = null;
+        inputPortClickStart = Vector2.zero;
     }
 
     private void RebuildLinkCompatibility()
@@ -225,15 +309,37 @@ public partial class HaruGraphWindow
 
     private HGNodeView OwnerNodeOfPort(HGPort port)
     {
+        if (port?.Presentation is IHGPortPresentationLocator locator && !string.IsNullOrEmpty(locator.NodeId))
+            return NodeOfId(locator.NodeId);
         if (port?.Presentation is IHGPortPresentationAnchor anchor) return anchor.Node;
         if (port?.Presentation.Owner is HGNodeView node) return node;
         return port?.Presentation.Owner is HGRow row ? OwnerOfRow(row) : null;
     }
 
-    private static HGRow OwnerRowOfPort(HGPort port)
+    private HGRow OwnerRowOfPort(HGPort port)
     {
+        if (port?.Presentation is IHGPortPresentationLocator locator
+            && !string.IsNullOrEmpty(locator.NodeId) && !string.IsNullOrEmpty(locator.FieldPath))
+            return RowOf(locator.NodeId, locator.FieldPath);
         if (port?.Presentation is IHGPortPresentationAnchor anchor) return anchor.Row;
         return port?.Presentation.Owner as HGRow;
+    }
+
+    private HGNodeView NodeOfId(string nodeId)
+    {
+        if (graph == null || string.IsNullOrEmpty(nodeId)) return null;
+        foreach (var node in graph.Nodes)
+            if (node.Id == nodeId) return node;
+        return null;
+    }
+
+    private HGRow RowOf(string nodeId, string path)
+    {
+        HGNodeView node = NodeOfId(nodeId);
+        if (node == null) return null;
+        foreach (var row in HGGraph.AllRows(node.Rows))
+            if (row.Path == path) return row;
+        return null;
     }
 
     private HGNodeView OwnerOfRow(HGRow target)

@@ -69,10 +69,11 @@ public class HGReport
         return found;
     }
 
-    /// <summary>Replaces rebuild-scoped metadata diagnostics without duplicating them across repaints.</summary>
-    public void ReplaceMetadataDiagnostics(IEnumerable<GraphDiagnostic> diagnostics)
+    /// <summary>Replaces rebuild-scoped view diagnostics without duplicating them across repaints.</summary>
+    public void ReplaceGraphViewDiagnostics(IEnumerable<GraphDiagnostic> diagnostics)
     {
-        Issues.RemoveAll(issue => issue.Code.StartsWith("graphkit.metadata.", StringComparison.Ordinal));
+        Issues.RemoveAll(issue => issue.Code.StartsWith("graphkit.metadata.", StringComparison.Ordinal)
+            || issue.Code.StartsWith("graphkit.port-resolution.", StringComparison.Ordinal));
         if (diagnostics == null) return;
         foreach (var diagnostic in diagnostics)
         {

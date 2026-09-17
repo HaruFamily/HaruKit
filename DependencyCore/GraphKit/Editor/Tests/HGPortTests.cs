@@ -42,9 +42,55 @@ public class HGPortTests
         Assert.That(graph.Ports[0].Key.Role, Is.EqualTo(HGPortRole.Input));
         Assert.That(graph.Ports[0].Generation, Is.EqualTo(4));
         Assert.That(build.AddOutput(new HGPortKey("output", "", HGPortRole.Output),
-            new HGDelegatePortSource(null, null, _ => true), new HGDelegatePortPolicy(() => true), presentation),
+            new HGDelegatePortSource(null, null, _ => true), new HGDelegatePortPolicy(() => true), presentation, true),
             Is.False);
         Assert.That(build.LastResult, Is.EqualTo(HGPortBuildResult.InvalidBinding));
+    }
+
+    [Test]
+    public void BuildContextExposesReadOnlyNodeFieldAndPortSnapshots()
+    {
+        var graph = new HGGraphView();
+        var node = new HGNodeView { Id = "node", Pos = new Vector2(10f, 20f) };
+        var row = new HGRow { OwnerNodeId = "node", Path = "/value", Kind = HGRowKind.InputPort };
+        node.Rows.Add(row);
+        graph.Nodes.Add(node);
+        var build = new HGPortBuildContext(graph, 4);
+        var key = new HGPortKey("node", "/value", HGPortRole.Input);
+
+        Assert.That(build.Nodes, Has.Count.EqualTo(1));
+        Assert.That(build.Nodes[0].Id, Is.EqualTo("node"));
+        Assert.That(build.Fields, Has.Count.EqualTo(1));
+        Assert.That(build.Fields[0].InputAnchor.NodeId, Is.EqualTo("node"));
+        var presentation = new HGDelegatePortPresentation(new object(), build.Fields[0].InputAnchor,
+            () => Vector2.zero, () => Rect.zero, () => true, () => false);
+        var locator = (IHGPortPresentationLocator)presentation;
+        Assert.That(locator.NodeId, Is.EqualTo("node"));
+        Assert.That(locator.FieldPath, Is.EqualTo("/value"));
+        var providerKey = new HGPortKey("provider", "/adapter", HGPortRole.Input);
+        Assert.That(build.AddInput(providerKey, new TestSlot(), new HGDelegatePortPolicy(() => true), presentation), Is.True);
+        Assert.That(build.TryGetDescriptor(providerKey, out var port), Is.True);
+        Assert.That(port.Anchor.NodeId, Is.EqualTo("node"));
+        Assert.That(port.Anchor.FieldPath, Is.EqualTo("/value"));
+        Assert.That(port.IsPrimaryOutput, Is.False);
+    }
+
+    [Test]
+    public void RegistryRequiresOneExplicitPrimaryOutputPerSource()
+    {
+        var registry = new HGPortRegistry(4);
+        var source = new GraphNode();
+        var first = new HGPortKey("node", "/first", HGPortRole.Output);
+        var second = new HGPortKey("node", "/second", HGPortRole.Output);
+        var portSource = new HGDelegatePortSource(source, source, _ => true);
+
+        Assert.That(registry.AddOutput(first, portSource, new HGDelegatePortPolicy(() => true), Presentation(new object()), true), Is.True);
+        Assert.That(registry.TryGetPrimaryOutputDescriptor(source, out var primary), Is.True);
+        Assert.That(primary.Key, Is.EqualTo(first));
+        Assert.That(primary.IsPrimaryOutput, Is.True);
+        Assert.That(registry.AddOutput(second, portSource, new HGDelegatePortPolicy(() => true), Presentation(new object()), true), Is.False);
+        Assert.That(registry.LastResult, Is.EqualTo(HGPortBuildResult.DuplicatePrimaryOutput));
+        Assert.That(registry.Descriptors, Has.Count.EqualTo(1));
     }
 
     [Test]
@@ -105,6 +151,52 @@ public class HGPortTests
     }
 
     [Test]
+    public void ConnectionCoordinatorPreservesDetailedPolicyRejection()
+    {
+        const int generation = 5;
+        var slot = new TestSlot();
+        var input = new HGPort(new HGPortKey("input", "/value", HGPortRole.Input), new HGInputPortBinding(slot),
+            new HGDelegatePortPolicy(() => true, checkAcceptance: _ => HGPortConnectionResult.DomainRejected),
+            Presentation(new object()), generation);
+        var output = new HGPort(new HGPortKey("output", "/value", HGPortRole.Output),
+            new HGOutputPortBinding(new HGDelegatePortSource(new GraphNode(), null, _ => true)),
+            new HGDelegatePortPolicy(() => true), Presentation(new object()), generation);
+
+        Assert.That(HGPortConnection.Check(input, output, generation),
+            Is.EqualTo(HGPortConnectionResult.DomainRejected));
+    }
+
+    [Test]
+    public void ConnectionCoordinatorRejectsSameRoleAggregateAndHiddenPorts()
+    {
+        const int generation = 5;
+        var input = new HGPort(new HGPortKey("input", "/value", HGPortRole.Input), new HGInputPortBinding(new TestSlot()),
+            new HGDelegatePortPolicy(() => true), Presentation(new object()), generation);
+        var secondInput = new HGPort(new HGPortKey("other", "/value", HGPortRole.Input), new HGInputPortBinding(new TestSlot()),
+            new HGDelegatePortPolicy(() => true), Presentation(new object()), generation);
+        var output = new HGPort(new HGPortKey("output", "", HGPortRole.Output),
+            new HGOutputPortBinding(new HGDelegatePortSource(new GraphNode(), null, _ => true)),
+            new HGDelegatePortPolicy(() => true), new HGDelegatePortPresentation(new object(), () => Vector2.zero, () => Rect.zero,
+                () => false, () => false), generation);
+
+        Assert.That(HGPortConnection.Check(input, secondInput, generation), Is.EqualTo(HGPortConnectionResult.SameRole));
+        Assert.That(HGPortConnection.Check(input, AggregatePort(generation), generation),
+            Is.EqualTo(HGPortConnectionResult.AggregateOnly));
+        Assert.That(HGPortConnection.Check(input, output, generation), Is.EqualTo(HGPortConnectionResult.Hidden));
+    }
+
+    [Test]
+    public void SourceAcceptancePreservesDetailedRejection()
+    {
+        var slot = new TestSlot();
+        var source = new HGDelegatePortSource(null, null, _ => false,
+            _ => HGPortConnectionResult.IncompatibleFamily);
+
+        Assert.That(HGPortConnection.CheckSourceAcceptance(source, slot),
+            Is.EqualTo(HGPortConnectionResult.IncompatibleFamily));
+    }
+
+    [Test]
     public void TypedDocumentBindingClonesAndWritesOnlyItsDocumentType()
     {
         var owner = ScriptableObject.CreateInstance<TestDocumentOwner>();
@@ -120,6 +212,28 @@ public class HGPortTests
         Assert.That(copy, Is.Not.SameAs(source));
         Assert.That(binding.TryWrite(owner, copy), Is.True);
         Assert.That(owner.Document, Is.SameAs(copy));
+
+        UnityEngine.Object.DestroyImmediate(owner);
+    }
+
+    [Test]
+    public void LegacyDocumentDiscoveryRejectsMultipleCandidates()
+    {
+        Assert.That(HGModel.FindSystemField(typeof(TestDocumentOwner)), Is.Not.Null);
+        Assert.That(HGModel.FindSystemField(typeof(TestMultiDocumentOwner)), Is.Null);
+    }
+
+    [Test]
+    public void ModelBindsAnIsolatedTypedWorkingDocument()
+    {
+        var owner = ScriptableObject.CreateInstance<TestDocumentOwner>();
+        owner.Document = new TestDocument();
+        var model = new HGModel();
+
+        Assert.That(model.Bind(owner), Is.True);
+        Assert.That(model.Data, Is.TypeOf<TestDocument>());
+        Assert.That(model.Data, Is.Not.SameAs(owner.Document));
+        Assert.That(model.Doc, Is.SameAs(model.Data));
 
         UnityEngine.Object.DestroyImmediate(owner);
     }
@@ -199,7 +313,7 @@ public class HGPortTests
         var failingView = HGGraph.Build(new HGModel(), new object[] { new TestValueOwner() }, null, "test", "Test",
             metadata: new TestMetadataProvider(new HGNodeDescriptor(typeof(TestValueOwner), new[] { failing }), null));
         var report = new HGReport();
-        report.ReplaceMetadataDiagnostics(failingView.Diagnostics);
+        report.ReplaceGraphViewDiagnostics(failingView.Diagnostics);
 
         Assert.That(failingView.Nodes[0].Rows, Has.Count.EqualTo(1));
         Assert.That(failingView.Diagnostics, Has.Count.EqualTo(1));
@@ -292,6 +406,29 @@ public class HGPortTests
         Assert.Throws<ArgumentException>(() => new GraphDiagnostic("", GraphDiagnosticSeverity.Error, "Invalid value"));
     }
 
+    [Test]
+    public void ReportReplacesPortResolutionDiagnosticsWithoutRemovingStructuralIssues()
+    {
+        var report = new HGReport();
+        report.Issues.Add(new HGIssue(new GraphDiagnostic("graphkit.slot.invalid", GraphDiagnosticSeverity.Error,
+            "Structural failure"), "Slot", null, null, null));
+        report.ReplaceGraphViewDiagnostics(new[]
+        {
+            new GraphDiagnostic("graphkit.port-resolution.input-unresolved", GraphDiagnosticSeverity.Error,
+                "Input unresolved", new GraphDiagnosticLocation(focusId: "focus", fieldPath: "/input")),
+        });
+        report.ReplaceGraphViewDiagnostics(new[]
+        {
+            new GraphDiagnostic("graphkit.metadata.visibility-failed", GraphDiagnosticSeverity.Warning,
+                "Visibility failed", new GraphDiagnosticLocation(fieldPath: "/field")),
+        });
+
+        Assert.That(report.Issues, Has.Count.EqualTo(2));
+        Assert.That(report.Issues.Exists(issue => issue.Code == "graphkit.slot.invalid"), Is.True);
+        Assert.That(report.Issues.Exists(issue => issue.Code == "graphkit.port-resolution.input-unresolved"), Is.False);
+        Assert.That(report.Issues.Exists(issue => issue.Code == "graphkit.metadata.visibility-failed"), Is.True);
+    }
+
     private static HGPort AggregatePort(int generation, string owner = "aggregate")
         => new HGPort(new HGPortKey(owner, "/items", HGPortRole.Aggregate),
             HGAggregatePortBinding.Instance,
@@ -364,6 +501,12 @@ public class HGPortTests
     private sealed class TestDocumentOwner : ScriptableObject
     {
         public TestDocument Document;
+    }
+
+    private sealed class TestMultiDocumentOwner : ScriptableObject
+    {
+        public TestDocument First;
+        public TestDocument Second;
     }
 
     private sealed class TestValueOwner

@@ -47,6 +47,8 @@ public partial class HaruGraphWindow : EditorWindow
     private HGEditorExtensionContext sessionContext = HGEditorExtensionContext.Default;
     private HGEditorExtensionContext activeContext = HGEditorExtensionContext.Default;
     private HGDocumentBinding sessionBinding;
+    [SerializeField] private bool usesExplicitToolEntry;
+    private bool requiresToolReopenAfterReload;
 
     /// <summary>目前這張圖怎麼稱呼它的 root。選單、提示與 log 都用它組字，編輯器不寫死領域用詞。</summary>
     private string RootNoun => HGGraph.RootNoun(model?.Doc);
@@ -434,7 +436,6 @@ public partial class HaruGraphWindow : EditorWindow
             ? new HGGraphView()
             : HGGraph.Build(model, focus.Roots, OrphansOfCurrentFocus(), focus.Id, focus.HeadTitle,
                 listCollapse, noteOpenId, noteCollapsed, focus.HeadCarrier, orphanKindHints, activeContext.Metadata);
-        (focus.Kind == HGFocusKind.Asset ? assetReport : report).ReplaceMetadataDiagnostics(graph.Diagnostics);
         if (graph.Normalized)
         {
             if (focus.Kind == HGFocusKind.Asset) MarkAssetContentChanged();
@@ -442,11 +443,12 @@ public partial class HaruGraphWindow : EditorWindow
             LiveVerify();
         }
 
-        ResolveDiagnosticLocations(focus.Kind == HGFocusKind.Asset ? assetReport : report);
-
         ApplyVisibility();
         MarkCatalogPorts();
         RebuildPorts();
+        var targetReport = focus.Kind == HGFocusKind.Asset ? assetReport : report;
+        targetReport.ReplaceGraphViewDiagnostics(graph.Diagnostics);
+        ResolveDiagnosticLocations(targetReport);
         if (pendingCenterTarget != null) { CenterOn(pendingCenterTarget); pendingCenterTarget = null; }
     }
 
@@ -842,14 +844,14 @@ public partial class HaruGraphWindow : EditorWindow
             if (focus.AssetHostSlot == null) return;
             assetReport = HGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
             AddExtensionDiagnostics(assetReport);
-            assetReport.ReplaceMetadataDiagnostics(graph?.Diagnostics);
+            assetReport.ReplaceGraphViewDiagnostics(graph?.Diagnostics);
             assetVerifiedOnce = true;
             return;
         }
 
         report = HGValidator.Run(model);
         AddExtensionDiagnostics(report);
-        report.ReplaceMetadataDiagnostics(graph?.Diagnostics);
+        report.ReplaceGraphViewDiagnostics(graph?.Diagnostics);
         verifiedOnce = true;
     }
 
@@ -994,6 +996,7 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private void AfterHistorySwap(HGStepKind step)
     {
+        ClearPortInteractionState();
         // 只退回目錄的那一步不換圖，焦點與選取要留著——那一步在使用者眼裡只是左欄的一列變回來。
         if (step != HGStepKind.Catalogs)
         {

@@ -25,6 +25,8 @@ public partial class HaruGraphWindow
         {
             window.sessionContext = requested;
             window.activeContext = HGEditorExtensionContext.Default;
+            window.usesExplicitToolEntry = !ReferenceEquals(requested, HGEditorExtensionContext.Default);
+            window.requiresToolReopenAfterReload = false;
             window.graphDirty = true;
             window.Repaint();
             return;
@@ -59,6 +61,8 @@ public partial class HaruGraphWindow
         var window = OpenWindow();
         window.sessionContext = HGEditorExtensionContext.Default;
         window.activeContext = HGEditorExtensionContext.Default;
+        window.usesExplicitToolEntry = false;
+        window.requiresToolReopenAfterReload = false;
         window.graphDirty = true;
         window.Repaint();
     }
@@ -157,11 +161,21 @@ public partial class HaruGraphWindow
     {
         var previous = sessionContext;
         var previousBinding = sessionBinding;
+        bool previousExplicitEntry = usesExplicitToolEntry;
+        bool previousReopenRequirement = requiresToolReopenAfterReload;
         sessionContext = context ?? HGEditorExtensionContext.Default;
         sessionBinding = null;
-        if (BindInSession(owner)) return true;
+        requiresToolReopenAfterReload = false;
+        if (BindInSession(owner))
+        {
+            usesExplicitToolEntry = !ReferenceEquals(sessionContext, HGEditorExtensionContext.Default);
+            requiresToolReopenAfterReload = false;
+            return true;
+        }
         sessionContext = previous;
         sessionBinding = previousBinding;
+        usesExplicitToolEntry = previousExplicitEntry;
+        requiresToolReopenAfterReload = previousReopenRequirement;
         return false;
     }
 
@@ -171,22 +185,37 @@ public partial class HaruGraphWindow
         if (binding == null) return false;
         var previousContext = sessionContext;
         var previousBinding = sessionBinding;
+        bool previousExplicitEntry = usesExplicitToolEntry;
+        bool previousReopenRequirement = requiresToolReopenAfterReload;
         sessionContext = context ?? HGEditorExtensionContext.Default;
         sessionBinding = binding;
-        if (BindInSession(owner)) return true;
+        if (BindInSession(owner))
+        {
+            usesExplicitToolEntry = true;
+            requiresToolReopenAfterReload = false;
+            return true;
+        }
         sessionContext = previousContext;
         sessionBinding = previousBinding;
+        usesExplicitToolEntry = previousExplicitEntry;
+        requiresToolReopenAfterReload = previousReopenRequirement;
         return false;
     }
 
     /// <summary>在目前 session 內切換 owner；不支援時只讓目前 owner 退回 default provider。</summary>
     private bool BindInSession(UnityEngine.Object owner)
     {
+        if (requiresToolReopenAfterReload && sessionBinding == null)
+        {
+            ShowNotification(new GUIContent("Tool 接入已因重載失效，請從原 Tool 重新開啟節點圖。"));
+            return false;
+        }
         if (HasUnsavedWork && !EditorUtility.DisplayDialog(
                 "尚未儲存", $"'{(model?.Owner != null ? model.Owner.name : "?")}' 有未儲存的修改，切換後會遺失。要繼續嗎？", "捨棄並切換", "取消"))
             return false;
 
         returnFocus = null;
+        ClearPortInteractionState();
         ClearAssetDirty();
         assetReport = new HGReport();
         assetVerifiedOnce = false;
@@ -242,6 +271,11 @@ public partial class HaruGraphWindow
         // 鎖定時整個不動作：不換對象、不下鑽資產、也不記待切換。
         // 擋在最前面而不是逐條判斷——這個視窗跟外部選取有關的入口只有這一個，擋這裡就全涵蓋。
         if (locked) return;
+        if (requiresToolReopenAfterReload && sessionBinding == null)
+        {
+            ShowNotification(new GUIContent("Tool 接入已因重載失效，請從原 Tool 重新開啟節點圖。"));
+            return;
+        }
 
         if (Selection.activeObject is ScriptableObject asset && IsSharedAsset(asset))
         {
@@ -332,9 +366,12 @@ public partial class HaruGraphWindow
     /// <summary>清除工作副本與互動狀態，保留視窗的閒置三欄版型。</summary>
     private void ReturnToIdle()
     {
+        ClearPortInteractionState();
         model = null;
         activeContext = HGEditorExtensionContext.Default;
         sessionBinding = null;
+        usesExplicitToolEntry = false;
+        requiresToolReopenAfterReload = false;
         focus = new HGFocus();
         graph = null;
         graphDirty = true;
@@ -372,6 +409,7 @@ public partial class HaruGraphWindow
 
     private void OnEnable()
     {
+        if (usesExplicitToolEntry && sessionBinding == null) requiresToolReopenAfterReload = true;
         sessionContext ??= HGEditorExtensionContext.Default;
         activeContext ??= HGEditorExtensionContext.Default;
         saveChangesMessage = $"{HGGraph.DefaultWindowTitle} 有未儲存的修改。是否在關閉前存檔？";
@@ -415,6 +453,7 @@ public partial class HaruGraphWindow
 
     public override void DiscardChanges()
     {
+        ClearPortInteractionState();
         if (focus.Kind == HGFocusKind.Asset) ExitAsset();
         if (model?.Dirty == true)
         {
@@ -443,6 +482,7 @@ public partial class HaruGraphWindow
         {
             assetReport = HGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
             AddExtensionDiagnostics(assetReport);
+            assetReport.ReplaceGraphViewDiagnostics(graph?.Diagnostics);
             assetVerifiedOnce = true;
             assetReportStale = false;
             if (assetReport.ErrorCount > 0) console.RevealErrors();
@@ -452,6 +492,7 @@ public partial class HaruGraphWindow
 
         report = HGValidator.Run(model, includeMissingTypes: true);
         AddExtensionDiagnostics(report);
+        report.ReplaceGraphViewDiagnostics(graph?.Diagnostics);
         verifiedOnce = true;
         reportStale = false;
         if (report.ErrorCount > 0) console.RevealErrors();
@@ -503,6 +544,7 @@ public partial class HaruGraphWindow
         if (model.Dirty && !EditorUtility.DisplayDialog(
                 "捨棄修改", "會丟掉自上次存檔以來的所有修改，確定嗎？", "捨棄", "繼續編輯"))
             return;
+        ClearPortInteractionState();
         model.Reload();
         // 重抓工作副本＝焦點抓的是舊資料，直接回到時機畫布（不回去的話畫面會空白）。
         focus = AllRootsFocus();

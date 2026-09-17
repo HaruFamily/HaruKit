@@ -74,21 +74,41 @@ data contracts and are not renamed as routine cleanup.
 ## Editor Integration
 
 - `HaruGraphWindow.OpenFor(owner)` keeps the legacy convenience path and finds
-  one `IGraphDocument` field on the owner.
+  exactly one `IGraphDocument` field on the owner. It rejects ambiguous owners;
+  Tools must use `OpenForDocument` when an owner has multiple documents.
 - `HaruGraphWindow.OpenForDocument(owner, binding)` opens the exact document
   selected by a Tool. The binding supplies typed read, create, clone, and write
   delegates; GraphKit keeps the working copy, Undo, validation, and persistence
   transaction.
 - Tool-specific editor extensions are passed through
-  `HGEditorExtensionContext`. A provider adds ports with `AddInput`,
+   `HGEditorExtensionContext`. A provider adds ports with `AddInput`,
   `AddOutput`, or `AddAggregate`; the build scope supplies the generation and
   rejects duplicate or incomplete endpoints.
+- During that build, a provider can query the read-only `Nodes`, `Fields`, and
+  `Ports` snapshots or resolve one `HGPortDescriptor` by key. These snapshots
+  expose stable ids and current geometry, never `HGNodeView`, `HGRow`, or the
+  mutable Port indexes.
+- Build a custom `HGDelegatePortPresentation` from an `HGPortAnchor` snapshot
+  to participate in node-local snapping and row lookup without retaining an
+  Editor view object. A presentation without an anchor remains a global-only
+  endpoint.
+- An output that represents the persisted source for a `GraphNode` must be
+  registered with `isPrimaryOutput: true`. There can be exactly one primary
+  output per source; visual aliases stay non-primary, and link rebuilding uses
+  the explicit primary mapping rather than registration order.
 - `HGPortConnection.Check` is the shared compatibility result for rendered
   ports. `CheckInputSource` applies the same input acceptance rules to direct
   Asset, Token, and Catalog drops that do not yet have a `GraphNode` carrier.
+- A Tool policy can implement `IHGPortConnectionPolicy` to return a specific
+  `HGPortConnectionResult`, such as `DomainRejected` or `WouldCreateCycle`.
+  Existing `IHGPortPolicy.CanAccept` implementations remain supported and map
+  a false result to `Rejected`.
+- A Tool source can implement `IHGPortSourceAcceptance`, or use the optional
+  detailed delegate on `HGDelegatePortSource`, so the same result survives Port
+  linking and direct Asset, Token, or Catalog drops.
 - `HGDocumentSession<TDocument>` is the public non-window transaction for a
-  Tool that needs a cloned document, generation-scoped connect/disconnect,
-  undo/redo, commit, and cancel. Pair it with `HGPortRegistry` to register
+  Tool that needs a cloned document, generation-scoped connect/disconnect/
+  replace-source/delete-node commands, undo/redo, commit, and cancel. Pair it with `HGPortRegistry` to register
   bounded custom Ports without receiving a mutable `HGGraphView`.
 - A Tool may provide `IHGEditorDiagnosticProvider` through its explicit
   extension context. Runtime Owners with project rules can additionally expose
@@ -131,11 +151,23 @@ if (HGDocumentSession<MyDocument>.TryOpen(owner, binding, out var session))
 }
 ```
 
+`ReplaceSource` takes a registered input key and an accepted source whose
+`GraphNode` is already reachable from the session document roots, tokens, or
+candidate pool.
+
+`DeleteNode` accepts a document-owned carrier, disconnects every current user,
+removes it from any inline owner and candidate pool, and preserves its direct
+child sources as candidate roots. Rebuild the registry after it changes the
+session generation.
+
 An `IHGEditorExtensionProvider` receives an `HGPortBuildContext` while the
 window builds its current generation. Register custom ports with `AddInput`,
 `AddOutput`, or `AddAggregate`; do not access the obsolete `Graph` escape
-hatch. A custom port may be a visual alias for an existing `GraphNode`, but it
-must not claim to persist a separate output identity.
+hatch. Use its read-only `Nodes`, `Fields`, `Ports`, and descriptor lookups to
+anchor an extension without retaining Editor view objects. A custom port may be
+a visual alias for an existing `GraphNode`, but it must not claim to persist a
+separate output identity or replace that node's already registered primary
+output.
 
 For Tool-owned node data, provide an `IHGEditorMetadataProvider`. A complete
 `HGNodeDescriptor` replaces reflection for that node type. Register a custom

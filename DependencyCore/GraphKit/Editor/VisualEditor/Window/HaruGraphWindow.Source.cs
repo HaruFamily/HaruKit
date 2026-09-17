@@ -193,14 +193,22 @@ public partial class HaruGraphWindow
         => slot != null && asset is ScriptableObject scriptable && slot.AcceptsAsset(scriptable);
 
     private static IHGPortSource AssetDropSource(UnityEngine.Object asset)
-        => new HGDelegatePortSource(null, null, input => CanAssignAsset(input, asset));
+        => new HGDelegatePortSource(null, null, input => CanAssignAsset(input, asset), input =>
+            asset is ScriptableObject scriptable && input.AcceptsAsset(scriptable)
+                ? HGPortConnectionResult.Allowed
+                : asset == null ? HGPortConnectionResult.MissingBinding : HGPortConnectionResult.IncompatibleType);
 
     private static IHGPortSource TokenDropSource(GraphToken endpoint)
-        => new HGDelegatePortSource(null, endpoint?.Slot, input => input.AcceptsToken(endpoint));
+        => new HGDelegatePortSource(null, endpoint?.Slot, input => input.AcceptsToken(endpoint), input =>
+            endpoint == null ? HGPortConnectionResult.MissingBinding
+            : input.AcceptsToken(endpoint) ? HGPortConnectionResult.Allowed : HGPortConnectionResult.IncompatibleFamily);
 
     private static IHGPortSource CatalogDropSource(GraphNodeContent catalog)
         => new HGDelegatePortSource(null, null,
-            input => (input as CatalogSlotBase)?.AcceptsCatalogObject(catalog) == true);
+            input => (input as CatalogSlotBase)?.AcceptsCatalogObject(catalog) == true,
+            input => catalog == null ? HGPortConnectionResult.MissingBinding
+            : input is not CatalogSlotBase slot ? HGPortConnectionResult.IncompatibleFamily
+            : slot.AcceptsCatalogObject(catalog) ? HGPortConnectionResult.Allowed : HGPortConnectionResult.DomainRejected);
 
     private void ShowNodeSourceSelector(HGNodeView node, Rect selector)
     {

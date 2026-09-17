@@ -36,6 +36,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public List<GraphDiagnostic> Diagnostics = new();
         public bool Normalized;
         public Dictionary<HGPortKey, HGPort> PortsByKey = new();
+        public Dictionary<GraphNode, HGPort> PrimaryOutputs = new();
 
         // 同一個載體被多個欄位指到＝共用來源：只畫一個節點，連線各自一條。GraphNode 沒有覆寫 Equals，預設就是參考比對。
         public Dictionary<GraphNode, HGNodeView> ByCarrier = new();
