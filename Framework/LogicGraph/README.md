@@ -1,5 +1,7 @@
 # LogicGraph
 
+Current package version: `2.0.0` (Unity 2021.3+).
+
 LogicGraph is a Unity UPM framework for authoring and executing serialized
 action graphs. It provides timing-based action dispatch, typed formulas, named
 formula tokens, reusable ScriptableObject graphs, validation, deep copying,
@@ -24,6 +26,8 @@ or action behavior.
   references, cycles, and Unity object references.
 - The node editor comes from GraphKit and has no Odin dependency; LogicGraph
   contributes only the Inspector drawer that opens it.
+- All timing groups appear on one canvas. A timing group is one root node whose
+  body is an ordered action list, so sources can be shared across timings.
 
 ## Requirements
 
@@ -37,10 +41,15 @@ Unity Package Manager cannot resolve either Git dependency from this package
 manifest. Install both before LogicGraph; otherwise Unity compilation fails by
 design rather than silently disabling LogicGraph features.
 
-GraphKit holds the graph carrier, the editor contracts, and the node editor
-window. LogicGraph adds timing dispatch, asynchronous execution, and the
-generic slot and asset bodies on top of them. Both packages share the
-`HaruFamily.Framework.LogicGraph` namespace, so a consumer needs one `using`.
+GraphKit holds the graph carrier, editor contracts, metadata attributes, deep
+copy, and node editor. LogicGraph adds timing dispatch, asynchronous execution,
+and generic action/formula slots and assets. The namespaces are intentionally
+separate:
+
+```csharp
+using HaruFamily.DependencyCore.GraphKit;
+using HaruFamily.Framework.LogicGraph;
+```
 
 Odin Inspector and Serializer are not required.
 
@@ -82,6 +91,7 @@ Define the types that give the framework its domain meaning:
 
 ```csharp
 using Cysharp.Threading.Tasks;
+using HaruFamily.DependencyCore.GraphKit;
 using HaruFamily.Framework.LogicGraph;
 
 [HGNode("Write message")]
@@ -111,7 +121,9 @@ The package also provides graph-only presentation attributes such as
 
 ## Graph Model
 
-An `ActionSlot<TPack>` is an action graph entry point. A
+An `ActionTimingGroup<TTiming, TPack>` is a root node containing an ordered list
+of `ActionSlot<TPack>` values. An `ActionSlot<TPack>` is an action graph entry
+point. A
 `FormulaSlot<TResult, TAsset, TFormula, TPack>` evaluates a value and always
 has a default fallback. Both slots reference a `GraphNode` when they use a
 non-constant source.
@@ -129,6 +141,11 @@ be unique within a formula family, while different families may use the same
 name. Formula slots resolve token values through `TokenTable<TPack>`, which
 also applies asset parameter bindings and prevents recursive resolution.
 
+The formula family is the concrete Slot type, not only `TResult`. Two Slot
+types that both return `string` remain separate families and may each define a
+Token with the same name. Token values are evaluated on every request; they are
+not memoized.
+
 Asset tokens form the asset's parameter interface. A node that references
 an asset can retain the asset's defaults or provide a constant or graph-based
 binding for each token.
@@ -140,14 +157,18 @@ serialized `LogicGraph<,>` field. It can open the graph and, when its owner
 implements `IGraphOwner`, run validation.
 
 Call `MarkDirty()` after changing a graph through code. In the Editor, call
-`Verify()` after authoring changes. A successful validation marks the graph as
-executable; `TriggerAction` and `CreateTokenTable` refuse to run an unvalidated
-graph. Empty formula slots are valid constant values. Empty enabled action
-slots and incompatible or cyclic graph links are validation errors.
+`Verify(owner)` after authoring changes; pass the owner when it implements
+`IExternalTokenKeys` so string-based external Token references are checked. A
+successful validation marks the graph as executable; `TriggerAction` and
+`CreateTokenTable` refuse to run an unvalidated graph. Empty formula slots are
+valid constant values. Empty enabled action slots, duplicate timing groups,
+invalid Token endpoints, incompatible asset bindings, and graph or asset cycles
+are validation errors. Incomplete content reachable only through a disabled
+node is reported as a warning.
 
-The editor also revalidates `IGraphOwner` ScriptableObjects when leaving
-Edit Mode. Failures are reported in the Console, and invalid graphs remain
-blocked from runtime execution.
+The editor also revalidates opted-in owners when leaving Edit Mode. Failures are
+reported in the Console; this sweep does not block entering Play Mode, but
+invalid graphs remain blocked from runtime execution.
 
 ## Runtime Use
 
@@ -159,7 +180,8 @@ await actionSystem.TriggerAction(MyTiming.BeforeExecute, context);
 
 Each call creates a fresh `TokenTable<TPack>`. Token values are evaluated on
 each request rather than cached, so formulas may safely depend on the current
-execution context.
+execution context. Disabled or incompatible formula sources return the Slot's
+default value; disabled or incompatible actions are skipped.
 
 To construct runtime-local state from a shared serialized graph, use:
 
@@ -189,3 +211,9 @@ as action execution.
 
 The graph carrier, the editor contracts, the `[HG*]` attributes, deep copy, and
 the node editor window all live in GraphKit.
+
+## Tests
+
+`Editor/Tests/GraphDeepCopyTests.cs` covers polymorphic graphs, lists, shared
+references, cycles, Unity object references, carrier sharing, and Token
+reevaluation. Run it as an EditMode test in Unity Test Runner.

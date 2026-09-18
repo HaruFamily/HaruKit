@@ -1,12 +1,14 @@
 # HaruKit Tools AssetPipeline
 
+Current package version: `2.0.0` (Unity 2021.3+).
+
 Editor-only UPM package for ordered asset processing. It has no Runtime assembly
 and does not enter player builds.
 
-The package is a **framework only**. It provides the pipeline asset, the asset
-group model, the formula families, and the validator. The concrete steps and
-formulas that actually touch your project live in the consuming project, so
-adding a pipeline step never requires editing this package.
+The package is a **framework only**. It provides the pipeline asset, Catalog
+model, synchronous formula families, action/Slot bases, and validator. Concrete
+steps and formulas that touch project assets live in the consuming project, so
+adding a pipeline step does not require editing this package.
 
 ## Requirements
 
@@ -39,22 +41,16 @@ node editor.
 
 ## Flow
 
-起點：在 `AssetPipeline` 設定 Prototype 資產群組與節點圖上的動作清單。
-
-前一步：節點圖卡片上的「驗證」檢查兩層。節點圖層（`GraphVerifier`）看動作內容完不完整、
-公式型別相不相容、具名Token有沒有重名或循環，以及 **dynamic key 的產出者有沒有
-排在讀取者之前**；資產群組層看 prototype key 有沒有對應群組、群組是不是空的。
-通過後建立目前序列化資料的驗證快照。
-
-當前：「執行管線」僅在快照仍有效時啟用；確認 dialog 通過後，**執行當下會再跑一次
-`GraphVerifier`**，有錯就不執行並把原因列進 Console 與 log，通過才嚴格依節點圖
-root 底下的動作順序執行。圖上序列化的驗證旗標不是執行閘門——它跟著資料存檔，
-換一版程式或在編輯器外改過資產之後不代表現在仍然通過。
-
-下一步：動作可讀 Prototype／Dynamic key；產出 dynamic key 的動作實作
-`IDynamicKeyProducer`，讀取的公式實作 `IDynamicKeyReader`。
-
-終點：依 `dynamicClearTiming` 保留或清除 Dynamic 資產，儲存修改並顯示 log。
+1. 在 AssetPipeline 視窗的目錄庫建立資產群組，或把 Project 資產拖進既有群組。
+2. 在節點圖建立 `PrototypeAssetCatalog` 讀取既有群組，或建立
+   `DynamicAssetCatalog` 接收前面動作產生的資產。
+3. Catalog 底下的每個 ListCell 可接一個 packed filter；未接時輸出完整 Catalog。
+   一般公式欄位接 ListCell 的輸出，而不是直接接 Catalog 容器。
+4. 產出資產的動作使用 `CatalogOutputSlot.Write(...)` 寫入 Dynamic Catalog。
+   `reset` 決定這次寫入先清空或繼續累積；Prototype Catalog 是唯讀的，不能接產出端。
+5. 驗證會檢查動作與公式相容性、Token、Catalog 結構、Prototype 群組引用，以及
+   Dynamic Catalog 是否先寫後讀。Prototype Catalog 隨時可讀，不受動作順序限制。
+6. 「執行管線」在執行前再次驗證，通過後依 root 動作清單順序同步執行並輸出報告。
 
 ## Editing
 
@@ -65,9 +61,9 @@ Inspector 把這個欄位畫成一張卡片（`GraphDrawer`）：左緣色條是
 只有「開啟節點圖編輯器」與「驗證」兩個入口，圖的內容不在 Inspector 展開。資產
 群組與維護操作收在下方的折疊分區裡。
 
-一個欄位（`FormulaAsset_*`）可以是常數、接一顆內嵌公式節點，或指向一個具名Token。
-舊版的 `data` / `assetData` 三態由 `GraphNode.Kind` 取代；舊的 AssetSource 模式
-改成「接一顆讀 `AssetPipelineSource` 的葉節點公式」。
+一個公式欄位可以是常數、接一顆內嵌公式節點、指向具名Token，或接到 Catalog
+ListCell 的輸出。AssetPipeline 不提供共用公式／動作資產節點；Slot 的
+`AssetBaseType` 為空。目錄本身不是公式，也不能直接接到一般公式欄位。
 
 順序仍然是唯一真相：節點圖只換了編輯方式，動作依然嚴格照清單順序跑。
 
@@ -76,7 +72,8 @@ Inspector 把這個欄位畫成一張卡片（`GraphDrawer`）：左緣色條是
 新增一個動作或公式**不需要改這個套件**。在使用端專案的 Editor 資料夾裡：
 
 ```csharp
-using HaruFamily.Framework.LogicGraph;
+using System;
+using HaruFamily.DependencyCore.GraphKit;
 using HaruFamily.Tools.AssetPipeline;
 
 [HGNode("我的動作", "做一件事", "動作")]
@@ -92,16 +89,19 @@ public class MyAction : ActionBase
 }
 ```
 
-- 動作繼承 `ActionBase`；產出 dynamic key 的再實作 `IDynamicKeyProducer`。
-- 公式繼承對應族的基底（`Formula_Int`、`Formula_Object`…）；讀 key 的再實作
-  `IPrototypeKeyReader` / `IDynamicKeyReader`，驗證器才看得到它讀了什麼。
-- `AssetPipeline.current`、`Report`、`ReportFormulaWarning`、`RegisterDynamicAssets`
-  是給動作用的公開 API。
+- 動作繼承 `ActionBase` 並覆寫同步的 `Execute()`。
+- 公式繼承對應族的基底（`Formula_Int`、`Formula_Object` 等）並覆寫同步求值。
+- 讀舊式 prototype key 的公式實作 `IPrototypeKeyReader`；新圖優先使用
+  `PrototypeAssetCatalog` 與目錄庫的穩定 id。
+- 需要輸出資產給後續動作時，在動作上宣告 `CatalogOutputSlot`，並呼叫
+  `output.Write(assets)`；不要自行維護 Dynamic Catalog 的生命週期。
+- `AssetPipeline.current`、`Report` 與 `ReportFormulaWarning` 是給動作用的公開 API。
 
 ## Package Contents
 
-- `Node` / `Slot`：節點基底、欄位基底、動作頭端
-- `Graph` / `GraphVerifier`：`IGraphDocument` 實作與驗證（含 dynamic key 時序）
+- `Node` / `Slot`：同步動作與公式基底、欄位基底、動作頭端
+- `Graph` / `GraphVerifier`：`IGraphDocument` 實作與驗證（含 Dynamic Catalog 時序）
+- `AssetCatalog`：Prototype／Dynamic Catalog、ListCell 與產出 Slot
 - `FormulaAsset_*`：族宣告與欄位容器（Bool / Float / Int / String / Folder /
   Object / AudioClip / GameObject / TextAsset）
 - `AssetPipeline*`：管線資產、資產群組、群組批次執行、Inspector
@@ -112,7 +112,12 @@ public class MyAction : ActionBase
 與 v1 不相容**：`IPipelineAsset` 清單換成節點圖、`FormulaAssetBase` 換成
 `FormulaSlotBase` 子類。既有的 v1 序列化資料需要重建，沒有自動遷移。型別名前綴移除也不提供 `MovedFrom` 相容層，現有節點圖資料須重建。
 
-## Current Limit
+## Tests And Limits
+
+`Tests/Editor/GraphVerifierTests.cs` covers Catalog compatibility, Prototype
+references, Dynamic Catalog read/write ordering, disabled actions, and invalid
+Slots. `GraphKitCrossToolSessionTests.cs` verifies that the package consumes
+GraphKit's public session API. Run both as EditMode tests in Unity Test Runner.
 
 執行期仍使用 static `AssetPipeline.current` 與 report handler，因此不支援同時
 執行多條管線。

@@ -1,5 +1,7 @@
 # GraphKit
 
+Current package version: `1.1.0` (Unity 2021.3+).
+
 GraphKit is a Unity UPM framework for authoring serialized node graphs. It
 provides the graph carrier, the non-generic contracts an editor needs to walk a
 graph, and a complete IMGUI node editor. It defines no execution semantics: it
@@ -27,6 +29,9 @@ consumer; it is not required here.
 - `FormulaSlotBase` and `ActionSlotBase` are zero-field non-generic bases, so a
   consumer can add generic execution subclasses without changing the serialized
   format.
+- `CatalogSlotBase`, `CatalogCellBase`, and the catalog contracts support
+  container-style nodes whose inline cells provide typed outputs. GraphKit owns
+  only the structure; the consuming Tool owns catalog data and evaluation.
 - `GraphDeepCopy` preserves polymorphic `SerializeReference` graphs, shared
   references, cycles, and Unity object references.
 - The included editor window uses GraphKit attributes only and has no Odin
@@ -72,6 +77,10 @@ in `HaruFamily.DependencyCore.GraphKit.Editor`. Serialized type identities are
 data contracts and are not renamed as routine cleanup.
 
 ## Editor Integration
+
+The editor always works on a deep-copied document. Save validates and writes a
+new copy back to the owner; Cancel discards the working copy. Undo/Redo and Port
+handles are scoped to that document session and its current generation.
 
 - `HaruGraphWindow.OpenFor(owner)` keeps the legacy convenience path and finds
   exactly one `IGraphDocument` field on the owner. It rejects ambiguous owners;
@@ -247,9 +256,14 @@ These are in-memory Owner round-trips; Unity asset serialization and GUI gesture
 still require the documented manual checks. AssetPipeline's test assembly also
 consumes the public window commands without GraphKit friend-assembly access.
 
-## Validation Status
+## Tests And Validation
 
-The public API examples have static source coverage. Unity compilation,
-EditMode execution, and visual interaction validation remain environment-run
-steps; see the GraphKit core implementation report for the current T/U case
-status.
+`Editor/Tests` covers the public Port model, metadata and custom drawers,
+diagnostics, document sessions, ownership/generation guards, source replacement,
+node deletion, commit validation, and public window commands. AssetPipeline's
+Editor tests also consume GraphKit through its public API without friend-assembly
+access.
+
+These tests are intended for Unity Test Runner EditMode. GUI gestures, asset
+serialization round-trips, and visual layout still require validation in a Unity
+project that installs the package.
