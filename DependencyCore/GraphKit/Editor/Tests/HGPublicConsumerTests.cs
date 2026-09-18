@@ -277,6 +277,68 @@ public sealed class HGPublicConsumerTests
     }
 
     [Test]
+    public void PublicSession_KeepsSharedSourceOutOfTheCandidatePoolUntilItsLastUserDisconnects()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        owner.B = ConsumerDocument.Create();
+        owner.B.Root.Items.Add(new ConsumerSlot());
+        var binding = new HGDocumentBinding<ConsumerDocument>("Consumer.B", target => ((ConsumerOwner)target).B,
+            (target, document) => ((ConsumerOwner)target).B = document, ConsumerDocument.Create);
+        var presentation = new HGDelegatePortPresentation(new object(), () => Vector2.zero, () => Rect.zero,
+            () => true, () => false);
+        var firstKey = new HGPortKey("consumer", "/root/first", HGPortRole.Input);
+        var secondKey = new HGPortKey("consumer", "/root/second", HGPortRole.Input);
+        var outputKey = new HGPortKey("consumer", "/source", HGPortRole.Output);
+
+        Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, binding, out var session), Is.True);
+        var shared = session.Document.Orphans[0];
+        var firstRegistry = session.CreatePortRegistry();
+        Assert.That(firstRegistry.AddInput(firstKey, session.Document.Root.Items[0], AcceptsSource(session.Document.Root.Items[0]), presentation), Is.True);
+        Assert.That(firstRegistry.AddOutput(outputKey, Source(shared), new HGDelegatePortPolicy(() => true), presentation), Is.True);
+        Assert.That(session.Connect(firstRegistry, outputKey, firstKey), Is.EqualTo(HGSessionCommandResult.Changed));
+
+        var secondRegistry = session.CreatePortRegistry();
+        Assert.That(secondRegistry.AddInput(secondKey, session.Document.Root.Items[1], AcceptsSource(session.Document.Root.Items[1]), presentation), Is.True);
+        Assert.That(secondRegistry.AddOutput(outputKey, Source(shared), new HGDelegatePortPolicy(() => true), presentation), Is.True);
+        Assert.That(session.Connect(secondRegistry, outputKey, secondKey), Is.EqualTo(HGSessionCommandResult.Changed));
+
+        var disconnectRegistry = session.CreatePortRegistry();
+        Assert.That(disconnectRegistry.AddInput(firstKey, session.Document.Root.Items[0], AcceptsSource(session.Document.Root.Items[0]), presentation), Is.True);
+        Assert.That(session.Disconnect(disconnectRegistry, firstKey), Is.EqualTo(HGSessionCommandResult.Changed));
+        Assert.That(session.Document.Root.Items[1].Node, Is.SameAs(shared));
+        Assert.That(session.Document.Orphans.Contains(shared), Is.False);
+
+        UnityEngine.Object.DestroyImmediate(owner);
+    }
+
+    [Test]
+    public void PublicSession_RejectsDetailedSourceFailureWithoutCreatingUndoOrDirtyState()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        owner.B = ConsumerDocument.Create();
+        var binding = new HGDocumentBinding<ConsumerDocument>("Consumer.B", target => ((ConsumerOwner)target).B,
+            (target, document) => ((ConsumerOwner)target).B = document, ConsumerDocument.Create);
+        var inputKey = new HGPortKey("consumer", "/root/input", HGPortRole.Input);
+        var presentation = new HGDelegatePortPresentation(new object(), () => Vector2.zero, () => Rect.zero,
+            () => true, () => false);
+
+        Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, binding, out var session), Is.True);
+        var source = session.Document.Orphans[0];
+        var registry = session.CreatePortRegistry();
+        Assert.That(registry.AddInput(inputKey, session.Document.Root.Items[0], AcceptsSource(session.Document.Root.Items[0]), presentation), Is.True);
+        var rejected = new HGDelegatePortSource(source, source, _ => false,
+            _ => HGPortConnectionResult.IncompatibleFamily);
+
+        Assert.That(session.ReplaceSource(registry, inputKey, rejected), Is.EqualTo(HGSessionCommandResult.Rejected));
+        Assert.That(session.Document.Root.Items[0].Node, Is.Null);
+        Assert.That(session.Document.Orphans, Contains.Item(source));
+        Assert.That(session.IsDirty, Is.False);
+        Assert.That(session.CanUndo, Is.False);
+
+        UnityEngine.Object.DestroyImmediate(owner);
+    }
+
+    [Test]
     public void PublicSession_PreservesDirtyWorkingCopyWhenCommitValidationFails()
     {
         var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
@@ -310,6 +372,12 @@ public sealed class HGPublicConsumerTests
 
         UnityEngine.Object.DestroyImmediate(owner);
     }
+
+    private static HGDelegatePortPolicy AcceptsSource(ConsumerSlot input)
+        => new HGDelegatePortPolicy(() => true, source => source.Accepts(input));
+
+    private static HGDelegatePortSource Source(GraphNode node)
+        => new HGDelegatePortSource(node, node, _ => true);
 
     private sealed class ConsumerOwner : ScriptableObject
     {

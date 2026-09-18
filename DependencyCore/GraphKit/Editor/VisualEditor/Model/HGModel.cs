@@ -19,9 +19,6 @@ public class HGToken
     /// <summary>族身份（＝Slot 型別）。撞名判定與候選過濾都用它。</summary>
     public Type FamilyType => Token?.FamilyType;
 
-    [Obsolete("Use FamilyType.")]
-    public Type Kind => FamilyType;
-
     // 走端點自己的 Slot：同結果型別的不同族（String / Key）在清單裡才分得出來。
     public string TypeName => HGReflect.SlotKindName(Token?.Slot);
 }
@@ -34,15 +31,6 @@ public class HGRootGroupView
     public object Root;
     public object RootKey;
     public IList Items;
-}
-
-/// <summary>Legacy Timing-shaped root view retained for existing Editor consumers.</summary>
-[Obsolete("Use HGRootGroupView.")]
-public class HGTimingGroup
-{
-    public object Group;
-    public object Timing;
-    public IList Actions;
 }
 
 /// <summary>一步 Undo／Redo 實際換掉了什麼。呼叫端靠它決定要不要重建畫布與焦點。</summary>
@@ -76,8 +64,6 @@ public class HGModel
     /// <summary>可建立或跳轉的 root 識別值。過濾由 session root adapter 決定。</summary>
     // 快取在這一層而不是選單那一層：兩個選單入口共用同一份，不會有一邊漏過濾。
     public IReadOnlyList<object> AvailableRootKeys { get; private set; }
-    [Obsolete("Use AvailableRootKeys.")]
-    public IReadOnlyList<object> TimingValues => AvailableRootKeys;
     public bool Dirty { get; private set; }
     public bool TrackChanges { get; set; } = true;
 
@@ -437,13 +423,8 @@ public class HGModel
 
     // ===== Root groups =====
 
-    [Obsolete("Use ReadRootGroups through the session root adapter.")]
-    public IList RootGroups => Doc?.Roots;
-
     /// <summary>Root 項目欄位的型別。空 root 時也要建得出新項目，所以問契約而不是從現有內容推。</summary>
     public Type RootItemSlotType => rootAdapter.ItemType(Doc);
-    [Obsolete("Use RootItemSlotType.")]
-    public Type ActionSlotType => RootItemSlotType;
 
     public List<HGRootGroupView> ReadRootGroups()
     {
@@ -520,44 +501,6 @@ public class HGModel
 
         public object CreateItem(IGraphDocument document) => HGReflect.CreateInstance(ItemType(document));
     }
-
-#pragma warning disable CS0618
-    [Obsolete("Use ReadRootGroups.")]
-    public List<HGTimingGroup> ReadGroups()
-    {
-        var result = new List<HGTimingGroup>();
-        foreach (var root in ReadRootGroups())
-            result.Add(new HGTimingGroup { Group = root.Root, Timing = root.RootKey, Actions = root.Items });
-        return result;
-    }
-
-    [Obsolete("Use HasRoot.")]
-    public bool HasGroup(object timing) => HasRoot(timing);
-
-    [Obsolete("Use AddRoot.")]
-    public HGTimingGroup AddGroup(object timing)
-    {
-        var root = AddRoot(timing);
-        return root == null ? null : new HGTimingGroup
-        {
-            Group = root.Root,
-            Timing = root.RootKey,
-            Actions = root.Items,
-        };
-    }
-
-    [Obsolete("Use RemoveRoot.")]
-    public void RemoveGroup(HGTimingGroup group)
-        => RemoveRoot(group == null ? null : new HGRootGroupView
-        {
-            Root = group.Group,
-            RootKey = group.Timing,
-            Items = group.Actions,
-        });
-#pragma warning restore CS0618
-
-    [Obsolete("Use NewRootItem.")]
-    public object NewActionSlot(IList actionList) => NewRootItem(actionList);
 
     /// <summary>
     /// 本 pack 的所有公式族：(結果型別, 具體 Slot 型別)。掃專案裡所有具體 FormulaSlot 子類，

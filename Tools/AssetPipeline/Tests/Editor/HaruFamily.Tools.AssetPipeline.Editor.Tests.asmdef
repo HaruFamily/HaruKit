@@ -4,6 +4,8 @@
   "references": [
     "HaruFamily.Tools.AssetPipeline.Editor",
     "HaruFamily.DependencyCore.GraphKit",
+    "HaruFamily.DependencyCore.GraphKit.Editor",
+    "HaruFamily.Framework.LogicGraph",
     "UnityEditor.TestRunner",
     "UnityEngine.TestRunner"
   ],

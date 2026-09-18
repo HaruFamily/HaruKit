@@ -86,8 +86,8 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
                 // 直接呼叫端點的 Slot 會繞過兩者。
                 var endpoint = _node.Token;
                 if (endpoint == null || string.IsNullOrEmpty(endpoint.Name)) return _default;
-                if (tokens == null || !tokens.Has(Kind, endpoint.Name)) return _default;
-                return await tokens.Resolve<TResult>(Kind, endpoint.Name, pack);
+                if (tokens == null || !tokens.Has(FamilyType, endpoint.Name)) return _default;
+                return await tokens.Resolve<TResult>(FamilyType, endpoint.Name, pack);
             }
             default:
                 return _default;   // Empty：編輯中的空節點，存檔驗證會擋，runtime 走保底值續跑。

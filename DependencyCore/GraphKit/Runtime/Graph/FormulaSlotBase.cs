@@ -20,9 +20,6 @@ public abstract class FormulaSlotBase : GraphSlotBase
     // 用 GetType() 而不是另外宣告一個 enum／字串：族本來就是「哪一種 Slot」，多一層宣告就多一處會對不上。
     public Type FamilyType => GetType();
 
-    [Obsolete("Use FamilyType.")]
-    public Type Kind => FamilyType;
-
     /// <summary>不分型別存取預設值，供編輯器輸入框讀寫。</summary>
     public abstract object DefaultObject { get; set; }
 

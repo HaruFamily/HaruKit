@@ -19,9 +19,6 @@ public enum HGFocusKind
     // 排在最後而不是接在 Action 後面：其他 Kind 的數值不動，既有比較與紀錄不受影響。
     Root,
 
-    [Obsolete("Use Root.")]
-    Timing = Root,
-
     /// <summary>下鑽進一個具名Token的內部。端點是頭端，它的取值欄位就是這張畫布唯一的來源接點。</summary>
     Token,
 }
@@ -35,8 +32,6 @@ public class HGFocus : IOrphanPool
     // 型別是 object：識別值是什麼由 IGraphDocument 的實作決定，這裡只做相等比較與顯示。
     private object rootKey;
     public object RootKey { get => rootKey; set => rootKey = value; }
-    [Obsolete("Use RootKey.")]
-    public object Timing { get => rootKey; set => rootKey = value; }
     public IList ActionList;
     public int ActionIndex = -1;
     public GraphSlotBase ActionSlot;

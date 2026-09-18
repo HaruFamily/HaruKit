@@ -118,8 +118,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public Vector2 OutputPortPosition => new Vector2(Pos.x + HGGraph.PortRadius,
             Pos.y + HGGraph.HeaderHeight * 0.5f);
 
-        [Obsolete("Use OutputPortPosition.")]
-        public Vector2 OutputPort => OutputPortPosition;
     }
 
     /// <summary>節點上的一列。形狀走 <see cref="Kind"/>，掛了什麼走 payload 欄位，兩者不互相推導。</summary>
@@ -203,14 +201,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public Rect ScreenRect;
         public Vector2 InputPortPosition;
 
-        [Obsolete("Use InputPortPosition.")]
-        public Vector2 InputPortPos { get => InputPortPosition; set => InputPortPosition = value; }
-
         /// <summary>左側輸出接點的圖面座標。只有 InputOutputPort 有意義。</summary>
         public Vector2 OutputPortPosition;
-
-        [Obsolete("Use OutputPortPosition.")]
-        public Vector2 OutputPortPos { get => OutputPortPosition; set => OutputPortPosition = value; }
 
         /// <summary>
         /// 這一列掛著一個欄位。<b>payload 判定，與 <see cref="Kind"/> 無關</b>——
@@ -224,8 +216,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// <summary>右側輸入接點是否可見：折疊起來的列不算，否則會接到看不見的東西。</summary>
         public bool IsInputPortVisible => HasInputPort && !Hidden;
 
-        [Obsolete("Use IsInputPortVisible. Connection acceptance remains HGPort policy responsibility.")]
-        public bool IsLinkable => IsInputPortVisible;
     }
 
     public class HGLink
@@ -239,17 +229,11 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// <summary>提供端所在的節點。目標是容器上的一格時，這裡是那顆<b>容器</b>。</summary>
         public HGNodeView OutputOwner;
 
-        [Obsolete("Use OutputOwner.")]
-        public HGNodeView Target { get => OutputOwner; set => OutputOwner = value; }
-
         /// <summary>目標是容器上的一格（InputOutputPort）時的那一列；null＝接在節點 Header 的輸出接點。</summary>
         public HGRow TargetRow;
 
         /// <summary>接收端所在的節點。父節點被收起來時線也要跟著不畫，否則會留一條從空白處拉出的線。</summary>
         public HGNodeView InputOwner;
-
-        [Obsolete("Use InputOwner.")]
-        public HGNodeView Owner { get => InputOwner; set => InputOwner = value; }
 
         /// <summary>待解析的目標載體。容器可能比指著它的欄位更晚走到，所以解析留到建圖最後一趟。</summary>
         public GraphNode PendingCarrier;

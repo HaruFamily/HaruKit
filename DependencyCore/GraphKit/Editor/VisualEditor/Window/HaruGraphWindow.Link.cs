@@ -122,33 +122,29 @@ public partial class HaruGraphWindow
         graph.Diagnostics.RemoveAll(diagnostic => diagnostic.Code.StartsWith("graphkit.port-resolution.", StringComparison.Ordinal));
         foreach (var link in graph.Links)
         {
-            link.InputPort = null;
-            link.OutputPort = null;
-            if (link.ParentRow == null || !graph.PortsByKey.TryGetValue(InputKey(link.ParentRow), out var input)
-                || input.Generation != graphGeneration)
+            HGLinkPortResolution resolution = HGLinkPortResolver.Resolve(link, graph.PortsByKey, graph.PrimaryOutputs,
+                graphGeneration);
+            if (resolution == HGLinkPortResolution.InputUnresolved)
             {
                 AddPortResolutionDiagnostic("input-unresolved", "連線的輸入接點無法在目前圖形中定位。",
                     link.ParentRow?.OwnerNodeId, link.ParentRow?.Path);
                 continue;
             }
 
-            link.InputPort = input;
             GraphNode source = link.TargetRow?.OutputNode ?? link.OutputOwner?.Carrier;
-            if (source == null)
+            if (resolution == HGLinkPortResolution.OutputUnresolved)
             {
                 AddPortResolutionDiagnostic("output-unresolved", "連線的來源載體無法在目前圖形中定位。",
                     link.ParentRow.OwnerNodeId, link.ParentRow.Path);
                 continue;
             }
 
-            if (!graph.PrimaryOutputs.TryGetValue(source, out var output) || output.Generation != graphGeneration)
+            if (resolution == HGLinkPortResolution.PrimaryOutputMissing)
             {
                 AddPortResolutionDiagnostic("primary-output-missing", "連線來源沒有可用的主要輸出接點。",
                     source.Id, null);
                 continue;
             }
-
-            link.OutputPort = output;
         }
     }
 

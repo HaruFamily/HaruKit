@@ -83,8 +83,9 @@ public sealed class HGDocumentSession<TDocument>
         GraphNode previous = input.InputSlot.Node;
         if (previous == null) return HGSessionCommandResult.NoChange;
         if (!CaptureUndo()) return HGSessionCommandResult.Rejected;
+        List<GraphNode> orphanPool = FindOrphanPool(input.InputSlot);
         input.InputSlot.SetNode(null);
-        ReturnUnreferenced(previous);
+        ReturnUnreferenced(previous, orphanPool);
         Changed();
         return HGSessionCommandResult.Changed;
     }

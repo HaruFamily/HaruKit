@@ -158,21 +158,6 @@ public static class HGReflect
         return node;
     }
 
-    /// <summary>相容既有呼叫端的模式碼：0 常數／空槽、1 公式或動作（含編輯中空節點）、2 資產、3 具名Token。</summary>
-    [Obsolete("Use GraphSlotBase.Node?.Kind to preserve the distinction between an unlinked Slot and an Empty carrier.")]
-    public static int UseType(GraphSlotBase slot)
-    {
-        var node = GetNode(slot);
-        if (node == null) return 0;
-        return node.Kind switch
-        {
-            NodeKind.Asset => 2,
-            NodeKind.Token => 3,
-            NodeKind.Catalog => 5,
-            _ => 1,   // Inline 與 Empty 都畫成來源節點，Empty 由驗證擋存檔
-        };
-    }
-
     public static object GetFormula(GraphSlotBase slot)
     {
         var node = GetNode(slot);

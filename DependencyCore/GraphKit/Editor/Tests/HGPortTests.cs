@@ -19,18 +19,15 @@ public class HGPortTests
         Assert.That(output, Is.Not.EqualTo(first));
     }
 
-#pragma warning disable CS0618
     [Test]
-    public void BuildContextRejectsPortFromOldGeneration()
+    public void RegistryRejectsPortFromOldGeneration()
     {
-        var graph = new HGGraphView();
-        var build = new HGPortBuildContext(graph, 4);
+        var registry = new HGPortRegistry(4);
 
-        Assert.That(build.Add(AggregatePort(3)), Is.False);
-        Assert.That(build.Add(AggregatePort(4)), Is.True);
-        Assert.That(graph.Ports, Has.Count.EqualTo(1));
+        Assert.That(registry.Add(AggregatePort(3)), Is.False);
+        Assert.That(registry.Add(AggregatePort(4)), Is.True);
+        Assert.That(registry.Ports, Has.Count.EqualTo(1));
     }
-#pragma warning restore CS0618
 
     [Test]
     public void RoleSpecificBuilderAssignsGenerationAndRejectsIncompletePorts()
@@ -85,36 +82,30 @@ public class HGPortTests
     }
 
     [Test]
-    public void CatalogSlotWritesToCatalogHonorsLegacyIsOutputOverride()
+    public void CatalogSlotWritesToCatalogUsesItsOwnOverride()
     {
-        Assert.That(new LegacyCatalogSlot().WritesToCatalog, Is.False);
+        Assert.That(new TestCatalogSlot().WritesToCatalog, Is.False);
     }
 
     [Test]
-    public void LinkOwnersExposeRoleSpecificAliases()
+    public void LinkOwnersExposeRoleSpecificEndpoints()
     {
         var input = new HGNodeView();
         var output = new HGNodeView();
         var link = new HGLink { InputOwner = input, OutputOwner = output };
 
-#pragma warning disable CS0618
-        Assert.That(link.Owner, Is.SameAs(input));
-        Assert.That(link.Target, Is.SameAs(output));
-#pragma warning restore CS0618
+        Assert.That(link.InputOwner, Is.SameAs(input));
+        Assert.That(link.OutputOwner, Is.SameAs(output));
     }
 
     [Test]
-    public void SlotAndTokenExposeFamilyTypeAliases()
+    public void SlotAndTokenExposeFamilyType()
     {
         var slot = new TestFormulaSlot();
         var token = new GraphToken("value", slot);
 
         Assert.That(slot.FamilyType, Is.EqualTo(typeof(TestFormulaSlot)));
         Assert.That(token.FamilyType, Is.EqualTo(typeof(TestFormulaSlot)));
-#pragma warning disable CS0618
-        Assert.That(slot.Kind, Is.EqualTo(slot.FamilyType));
-        Assert.That(token.Kind, Is.EqualTo(token.FamilyType));
-#pragma warning restore CS0618
     }
 
     [Test]
@@ -246,6 +237,41 @@ public class HGPortTests
     }
 
     [Test]
+    public void DocumentRootAdapterKeepsNonSlotRootsAndFixedItemsReadable()
+    {
+        var document = new NonSlotDocument();
+        var firstRoot = new NonSlotRoot { Items = new[] { 3, 5 } };
+        document.Roots.Add(firstRoot);
+        var adapter = HGModel.HGDocumentRootAdapter.Instance;
+
+        var roots = adapter.ReadRoots(document);
+
+        Assert.That(roots, Has.Count.EqualTo(1));
+        Assert.That(roots[0].Root, Is.SameAs(firstRoot));
+        Assert.That(roots[0].Items, Is.SameAs(firstRoot.Items));
+        Assert.That(roots[0].Items.IsFixedSize, Is.True);
+        Assert.That(adapter.CreateItem(document), Is.EqualTo(0));
+        Assert.That(adapter.AddRoot(document, "second").Root, Is.TypeOf<NonSlotRoot>());
+        Assert.That(adapter.RemoveRoot(document, firstRoot), Is.True);
+        Assert.That(adapter.RemoveRoot(document, firstRoot), Is.False);
+    }
+
+    [Test]
+    public void ListItemSourceRejectsStructuralChangesForArraysButAllowsValueWrites()
+    {
+        var values = new[] { 1, 2 };
+        var source = new HGListItemSource(values, typeof(int));
+
+        Assert.That(source.CanEditStructure, Is.False);
+        Assert.That(source.Add(3), Is.False);
+        Assert.That(source.Insert(0, 3), Is.False);
+        Assert.That(source.RemoveAt(0), Is.False);
+        Assert.That(source.Move(0, 1), Is.False);
+        Assert.That(source.Set(1, 7), Is.True);
+        Assert.That(values, Is.EqualTo(new[] { 1, 7 }));
+    }
+
+    [Test]
     public void TokenFreeDocumentBindsWithoutAnITokenOwner()
     {
         var owner = ScriptableObject.CreateInstance<TestDocumentOwner>();
@@ -342,6 +368,42 @@ public class HGPortTests
         Assert.That(aggregate.CanStart, Is.False);
         Assert.That(HGPortConnection.Check(input, aggregate, generation), Is.EqualTo(HGPortConnectionResult.AggregateOnly));
         Assert.That(HGPortConnection.Check(aggregate, input, generation), Is.EqualTo(HGPortConnectionResult.AggregateOnly));
+    }
+
+    [Test]
+    public void LinkPortResolverUsesCustomPrimaryOutputAndClassifiesUnresolvedEndpoints()
+    {
+        const int generation = 6;
+        var inputRow = new HGRow { OwnerNodeId = "input", Path = "/value" };
+        var source = new GraphNode();
+        source.EnsureId();
+        var input = new HGPort(new HGPortKey("input", "/value", HGPortRole.Input), new HGInputPortBinding(new TestSlot()),
+            new HGDelegatePortPolicy(() => true), Presentation(new object()), generation);
+        var output = new HGPort(new HGPortKey("provider", "/custom", HGPortRole.Output),
+            new HGOutputPortBinding(new HGDelegatePortSource(source, source, _ => true)),
+            new HGDelegatePortPolicy(() => true), Presentation(new object()), generation, true);
+        var ports = new Dictionary<HGPortKey, HGPort> { [input.Key] = input, [output.Key] = output };
+        var primaryOutputs = new Dictionary<GraphNode, HGPort> { [source] = output };
+        var resolved = new HGLink { ParentRow = inputRow, OutputOwner = new HGNodeView { Carrier = source } };
+
+        Assert.That(HGLinkPortResolver.Resolve(resolved, ports, primaryOutputs, generation),
+            Is.EqualTo(HGLinkPortResolution.Resolved));
+        Assert.That(resolved.InputPort, Is.SameAs(input));
+        Assert.That(resolved.OutputPort, Is.SameAs(output));
+
+        var missingInput = new HGLink { ParentRow = new HGRow { OwnerNodeId = "missing", Path = "/value" } };
+        Assert.That(HGLinkPortResolver.Resolve(missingInput, ports, primaryOutputs, generation),
+            Is.EqualTo(HGLinkPortResolution.InputUnresolved));
+
+        var missingSource = new HGLink { ParentRow = inputRow };
+        Assert.That(HGLinkPortResolver.Resolve(missingSource, ports, primaryOutputs, generation),
+            Is.EqualTo(HGLinkPortResolution.OutputUnresolved));
+
+        var missingPrimary = new HGLink { ParentRow = inputRow, OutputOwner = new HGNodeView { Carrier = source } };
+        Assert.That(HGLinkPortResolver.Resolve(missingPrimary, ports, new Dictionary<GraphNode, HGPort>(), generation),
+            Is.EqualTo(HGLinkPortResolution.PrimaryOutputMissing));
+        Assert.That(missingPrimary.InputPort, Is.SameAs(input));
+        Assert.That(missingPrimary.OutputPort, Is.Null);
     }
 
     [Test]
@@ -502,6 +564,25 @@ public class HGPortTests
         HGGraph.Build(new HGModel(), new object[] { new TestValueOwner() }, null, "test", "Test", metadata: metadata);
 
         Assert.That(drawer.MeasuredWidth, Is.EqualTo(200f));
+    }
+
+    [Test]
+    public void MetadataProvidersKeepTheirDrawersScopedToTheirOwnContext()
+    {
+        var firstDrawer = new TestValueDrawer();
+        var secondDrawer = new TestValueDrawer();
+        var field = HGFieldDescriptor.Create<TestValueOwner, int>("count", target => target.Count,
+            (target, value) => target.Count = value);
+        var descriptor = new HGNodeDescriptor(typeof(TestValueOwner), new[] { field });
+
+        var first = HGGraph.Build(new HGModel(), new object[] { new TestValueOwner() }, null, "first", "First",
+            metadata: new TestMetadataProvider(descriptor, firstDrawer));
+        var second = HGGraph.Build(new HGModel(), new object[] { new TestValueOwner() }, null, "second", "Second",
+            metadata: new TestMetadataProvider(descriptor, secondDrawer));
+
+        Assert.That(first.Nodes[0].Rows[0].ValueDrawer, Is.SameAs(firstDrawer));
+        Assert.That(second.Nodes[0].Rows[0].ValueDrawer, Is.SameAs(secondDrawer));
+        Assert.That(first.Nodes[0].Rows[0].ValueDrawer, Is.Not.SameAs(second.Nodes[0].Rows[0].ValueDrawer));
     }
 
     [Test]
@@ -792,17 +873,14 @@ public class HGPortTests
         public override void SetNode(GraphNode value) => node = value;
     }
 
-    private sealed class LegacyCatalogSlot : CatalogSlotBase
+    private sealed class TestCatalogSlot : CatalogSlotBase
     {
         private GraphNode node;
         public override GraphNode Node => node;
         public override void SetNode(GraphNode value) => node = value;
         public override bool AcceptsCatalogObject(GraphNodeContent pack) => false;
 
-#pragma warning disable CS0618
-        [Obsolete("Use WritesToCatalog.")]
-        public override bool IsOutput => false;
-#pragma warning restore CS0618
+        public override bool WritesToCatalog => false;
     }
 
     private sealed class TestFormulaSlot : FormulaSlotBase
@@ -875,6 +953,38 @@ public class HGPortTests
     private sealed class TestListOwner
     {
         public List<int> Values;
+    }
+
+    private sealed class NonSlotRoot
+    {
+        public int[] Items;
+    }
+
+    private sealed class NonSlotDocument : IGraphDocument
+    {
+        public List<GraphNode> Orphans { get; } = new();
+        public IList Roots { get; } = new ArrayList();
+        public bool IsValidated { get; private set; }
+        public Type PackType => null;
+        public Type ItemSlotType => typeof(int);
+        public string RootChip => "";
+        public string RootNoun => "Root";
+        public HGCapabilities Capabilities => HGCapabilities.None;
+        public string WindowTitle => "Non-slot roots";
+
+        public void MarkDirty() => IsValidated = false;
+        public void Verify() => IsValidated = true;
+        public object DeepCopy() => new NonSlotDocument();
+        public IReadOnlyList<object> RootKeys(UnityEngine.Object owner) => new object[] { "first", "second" };
+        public object KeyOf(object root) => root;
+        public string TitleOf(object root) => "Root";
+        public IList ItemsOf(object root) => (root as NonSlotRoot)?.Items;
+        public object AddRoot(object key)
+        {
+            var root = new NonSlotRoot { Items = Array.Empty<int>() };
+            Roots.Add(root);
+            return root;
+        }
     }
 
     private sealed class TestDocument : IGraphDocument

@@ -1,3 +1,7 @@
+using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("HaruFamily.DependencyCore.GraphKit.Editor.Tests")]
+
 namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
@@ -291,6 +295,41 @@ public static class HGPortConnection
         => Check(first, second, generation) == HGPortConnectionResult.Allowed;
 }
 
+internal enum HGLinkPortResolution
+{
+    Resolved,
+    InputUnresolved,
+    OutputUnresolved,
+    PrimaryOutputMissing,
+}
+
+/// <summary>Resolves generation-local link endpoints after built-in and Tool-owned Ports have registered.</summary>
+internal static class HGLinkPortResolver
+{
+    public static HGLinkPortResolution Resolve(HGLink link, IReadOnlyDictionary<HGPortKey, HGPort> portsByKey,
+        IReadOnlyDictionary<GraphNode, HGPort> primaryOutputs, int generation)
+    {
+        if (link == null) return HGLinkPortResolution.InputUnresolved;
+        link.InputPort = null;
+        link.OutputPort = null;
+        if (link.ParentRow == null || portsByKey == null || !portsByKey.TryGetValue(InputKey(link.ParentRow), out HGPort input)
+            || input.Generation != generation)
+            return HGLinkPortResolution.InputUnresolved;
+
+        link.InputPort = input;
+        GraphNode source = link.TargetRow?.OutputNode ?? link.OutputOwner?.Carrier;
+        if (source == null) return HGLinkPortResolution.OutputUnresolved;
+        if (primaryOutputs == null || !primaryOutputs.TryGetValue(source, out HGPort output) || output.Generation != generation)
+            return HGLinkPortResolution.PrimaryOutputMissing;
+
+        link.OutputPort = output;
+        return HGLinkPortResolution.Resolved;
+    }
+
+    private static HGPortKey InputKey(HGRow row)
+        => new HGPortKey(row?.OwnerNodeId, row?.Path, HGPortRole.Input);
+}
+
 public sealed class HGInputPortBinding : IHGInputPortBinding
 {
     public GraphSlotBase InputSlot { get; }
@@ -512,7 +551,7 @@ public sealed class HGPortRegistry
         return false;
     }
 
-    /// <summary>Add one legacy adapter. Duplicate and incomplete ports are rejected without mutating the view.</summary>
+    /// <summary>Registers an explicitly constructed Port after validation.</summary>
     public bool Add(HGPort port)
     {
         LastResult = Validate(port);
@@ -559,14 +598,10 @@ public sealed class HGPortRegistry
 /// <summary>Bounded Port adapter seam exposed to an explicitly supplied extension provider.</summary>
 public sealed class HGPortBuildContext
 {
-    private readonly HGGraphView graph;
     private readonly HGPortRegistry registry;
     private readonly List<HGNodeViewInfo> nodes;
     private readonly List<HGFieldViewInfo> fields;
 
-    /// <summary>Legacy mutable view access. New providers must use role-specific registration and query methods.</summary>
-    [Obsolete("Use the role-specific Add methods and query methods instead of mutating the graph view.")]
-    public HGGraphView Graph => graph;
     public int Generation => registry.Generation;
     public HGPortBuildResult LastResult => registry.LastResult;
     public IReadOnlyList<HGNodeViewInfo> Nodes => nodes;
@@ -575,7 +610,7 @@ public sealed class HGPortBuildContext
 
     public HGPortBuildContext(HGGraphView graph, int generation)
     {
-        this.graph = graph ?? throw new ArgumentNullException(nameof(graph));
+        if (graph == null) throw new ArgumentNullException(nameof(graph));
         registry = new HGPortRegistry(generation, graph.Ports, graph.PortsByKey, graph.PrimaryOutputs);
         (nodes, fields) = BuildViewInfo(graph);
     }
@@ -583,7 +618,6 @@ public sealed class HGPortBuildContext
     internal HGPortBuildContext(HGGraphView graph, int generation, List<HGPort> ports,
         Dictionary<HGPortKey, HGPort> byKey, Dictionary<GraphNode, HGPort> primaryOutputs)
     {
-        this.graph = graph;
         registry = new HGPortRegistry(generation, ports, byKey, primaryOutputs);
         (nodes, fields) = BuildViewInfo(graph);
     }
@@ -604,10 +638,6 @@ public sealed class HGPortBuildContext
         => registry.TryGetDescriptor(key, out descriptor);
     public bool TryGetPrimaryOutputDescriptor(GraphNode source, out HGPortDescriptor descriptor)
         => registry.TryGetPrimaryOutputDescriptor(source, out descriptor);
-
-    /// <summary>Add one legacy adapter. Duplicate and incomplete ports are rejected without mutating the view.</summary>
-    [Obsolete("Use AddInput, AddOutput, or AddAggregate with the bounded query methods.")]
-    public bool Add(HGPort port) => registry.Add(port);
 
     private static (List<HGNodeViewInfo> nodes, List<HGFieldViewInfo> fields) BuildViewInfo(HGGraphView graph)
     {

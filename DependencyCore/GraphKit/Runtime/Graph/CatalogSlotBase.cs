@@ -14,13 +14,7 @@ namespace HaruFamily.DependencyCore.GraphKit
 public abstract class CatalogSlotBase : GraphSlotBase
 {
     /// <summary>方向：true＝擁有者往裡面寫，false＝從裡面讀。</summary>
-#pragma warning disable CS0618
-    public virtual bool WritesToCatalog => IsOutput;
-#pragma warning restore CS0618
-
-    /// <summary>舊的目錄方向名稱。</summary>
-    [System.Obsolete("Use WritesToCatalog.")]
-    public virtual bool IsOutput => true;
+    public virtual bool WritesToCatalog => true;
 
     /// <summary>
     /// 這一格收不收得下<b>這一顆</b>包。

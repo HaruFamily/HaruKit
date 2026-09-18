@@ -176,7 +176,9 @@ public sealed class HGFieldDescriptor
         try
         {
             value = CreateMissing?.Invoke(target);
-            return value != null && TryWrite(target, value, out exception);
+            if (value == null || Write == null) return false;
+            Write(target, value);
+            return true;
         }
         catch (Exception caught)
         {
