@@ -31,6 +31,8 @@ public class HGRootGroupView
     public object Root;
     public object RootKey;
     public IList Items;
+    /// <summary>Stable Tool-defined identity for keys other than strings, enums and scalar values.</summary>
+    public string StableId;
 }
 
 /// <summary>一步 Undo／Redo 實際換掉了什麼。呼叫端靠它決定要不要重建畫布與焦點。</summary>
@@ -74,6 +76,7 @@ public class HGModel
 
     // 建不出參數列的那些參數只吼一次：EnsureAssetBindings 每次重建圖都會跑，不去重會洗版。
     private readonly HashSet<string> loggedUnbindableParameters = new();
+    private readonly Dictionary<object, string> transientRootIds = new(HGRefComparer.Instance);
 
     // ===== 綁定 =====
 
@@ -110,6 +113,7 @@ public class HGModel
     public bool Bind(UnityEngine.Object owner, HGDocumentBinding binding, IHGRootAdapter rootAdapter = null)
     {
         Owner = owner;
+        transientRootIds.Clear();
         documentBinding = binding;
         this.rootAdapter = rootAdapter ?? HGDocumentRootAdapter.Instance;
         int candidateCount = 0;
@@ -185,8 +189,31 @@ public class HGModel
 
         var copy = document.DeepCopy() as IGraphDocument;
         if (copy == null || ReferenceEquals(copy, document))
+        {
             Debug.LogError("[GraphKit] 圖的 DeepCopy 失敗或回傳原實例，已停止編輯以避免直接修改 Owner。");
+            return null;
+        }
         return copy;
+    }
+
+    internal Action CaptureRollback()
+    {
+        var copy = DeepCopy(Data);
+        if (copy == null) return null;
+        var undo = undoStack.ToArray();
+        var redo = redoStack.ToArray();
+        var previousBaseline = baseline;
+        double push = lastPushTime, catalogPush = lastCatalogPush;
+        bool dirty = Dirty;
+        return () =>
+        {
+            Data = copy;
+            undoStack.Clear(); undoStack.AddRange(undo);
+            redoStack.Clear(); redoStack.AddRange(redo);
+            baseline = previousBaseline;
+            lastPushTime = push; lastCatalogPush = catalogPush;
+            Dirty = dirty;
+        };
     }
 
     // ===== Undo / Redo（整份工作副本快照）=====
@@ -333,6 +360,16 @@ public class HGModel
     /// <summary>先以 Core 規則驗證副本；通過後才寫回 Owner。</summary>
     public bool Save()
     {
+        try { return SaveCore(); }
+        catch (Exception exception)
+        {
+            Debug.LogError($"[GraphKit] 文件 '{DocumentId}' 保存失敗，工作副本與歷程保留：{exception.Message}");
+            return false;
+        }
+    }
+
+    private bool SaveCore()
+    {
         var toStore = DeepCopy(Data);
         if (toStore == null) return false;
         toStore.MarkDirty();
@@ -429,6 +466,30 @@ public class HGModel
     public List<HGRootGroupView> ReadRootGroups()
     {
         return new List<HGRootGroupView>(rootAdapter.ReadRoots(Doc) ?? Array.Empty<HGRootGroupView>());
+    }
+
+    /// <summary>Separates persisted root identity from its display title and collection index.</summary>
+    public string RootId(object root)
+    {
+        if (Doc != null)
+        {
+            foreach (var view in ReadRootGroups())
+            {
+                if (!ReferenceEquals(view.Root, root)) continue;
+                if (!string.IsNullOrWhiteSpace(view.StableId)) return "root:tool:" + Uri.EscapeDataString(view.StableId);
+                object key = view.RootKey;
+                if (key is string text) return "root:string:" + Uri.EscapeDataString(text);
+                if (key is Enum value) return "root:" + key.GetType().FullName + ":" + value.ToString("D");
+                if (key is Guid guid) return "root:guid:" + guid.ToString("N");
+                if (key != null && (key.GetType().IsPrimitive || key is decimal))
+                    return "root:" + key.GetType().FullName + ":" + Convert.ToString(key, System.Globalization.CultureInfo.InvariantCulture);
+                throw new InvalidOperationException("Root adapter must provide StableId for non-scalar keys.");
+            }
+            throw new InvalidOperationException("Root is not owned by the active root adapter.");
+        }
+        if (!transientRootIds.TryGetValue(root, out var id))
+            transientRootIds.Add(root, id = "root:transient:" + Guid.NewGuid().ToString("N"));
+        return id;
     }
 
     /// <summary>這個識別值是否已經有 root（識別值不可重複，新增選單靠它決定哪些還能選）。</summary>

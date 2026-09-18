@@ -28,6 +28,7 @@ public sealed class HGDocumentSession<TDocument>
     where TDocument : class, IGraphDocument
 {
     private readonly HGDocumentBinding<TDocument> binding;
+    private readonly HGEditorExtensionContext context;
     private readonly List<TDocument> undo = new List<TDocument>();
     private readonly List<TDocument> redo = new List<TDocument>();
 
@@ -38,28 +39,51 @@ public sealed class HGDocumentSession<TDocument>
     public bool IsDirty { get; private set; }
     public bool CanUndo => undo.Count > 0;
     public bool CanRedo => redo.Count > 0;
+    public GraphDiagnostic LastDiagnostic { get; private set; }
 
-    private HGDocumentSession(Object owner, HGDocumentBinding<TDocument> binding, TDocument document)
+    private HGDocumentSession(Object owner, HGDocumentBinding<TDocument> binding, TDocument document,
+        HGEditorExtensionContext context)
     {
         Owner = owner;
         this.binding = binding;
         Document = document;
+        this.context = context ?? HGEditorExtensionContext.Default;
     }
 
     public static bool TryOpen(Object owner, HGDocumentBinding<TDocument> binding, out HGDocumentSession<TDocument> session)
+        => TryOpen(owner, binding, HGEditorExtensionContext.Default, out session, out _);
+
+    public static bool TryOpen(Object owner, HGDocumentBinding<TDocument> binding, HGEditorExtensionContext context,
+        out HGDocumentSession<TDocument> session, out GraphDiagnostic diagnostic)
     {
         session = null;
-        if (owner == null || binding == null) return false;
-        if (!binding.TryRead(owner, out IGraphDocument live) && !binding.TryCreate(out live)) return false;
-        if (!binding.TryClone(live, out IGraphDocument copy) || copy is not TDocument document) return false;
-        session = new HGDocumentSession<TDocument>(owner, binding, document);
-        return true;
+        diagnostic = null;
+        try
+        {
+            if (owner == null || binding == null) throw new InvalidOperationException("Owner and binding are required.");
+            if (!binding.TryRead(owner, out IGraphDocument live) && !binding.TryCreate(out live))
+                throw new InvalidOperationException("The document could not be read or created.");
+            if (!binding.TryClone(live, out IGraphDocument copy) || copy is not TDocument document)
+                throw new InvalidOperationException("Clone must return an isolated document of the bound type.");
+            context ??= HGEditorExtensionContext.Default;
+            if (!context.Supports(owner, document)) throw new InvalidOperationException("The provider does not support this document.");
+            session = new HGDocumentSession<TDocument>(owner, binding, document, context);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            diagnostic = Failure("open", binding?.DocumentId, exception.Message);
+            return false;
+        }
     }
 
     /// <summary>Creates a registry for this exact document and generation. Rebuild it after every successful mutation.</summary>
     public HGPortRegistry CreatePortRegistry() => new HGPortRegistry(Generation, this);
 
     public HGSessionCommandResult Connect(HGPortRegistry registry, HGPortKey first, HGPortKey second)
+        => Guard(() => ConnectCore(registry, first, second));
+
+    private HGSessionCommandResult ConnectCore(HGPortRegistry registry, HGPortKey first, HGPortKey second)
     {
         if (!TryGetConnection(registry, first, second, out HGPort input, out HGPort output, out var result)) return result;
         return ReplaceInputSource(input, output.Source);
@@ -67,6 +91,13 @@ public sealed class HGDocumentSession<TDocument>
 
     /// <summary>Replaces one registered input with a document-owned source through the normal session transaction.</summary>
     public HGSessionCommandResult ReplaceSource(HGPortRegistry registry, HGPortKey inputKey, IHGPortSource source)
+        => ReconnectInput(registry, inputKey, source);
+
+    /// <summary>Changes one input reference, rather than replacing the referenced carrier's content.</summary>
+    public HGSessionCommandResult ReconnectInput(HGPortRegistry registry, HGPortKey inputKey, IHGPortSource source)
+        => Guard(() => ReconnectInputCore(registry, inputKey, source));
+
+    private HGSessionCommandResult ReconnectInputCore(HGPortRegistry registry, HGPortKey inputKey, IHGPortSource source)
     {
         if (!IsCurrentRegistry(registry)) return HGSessionCommandResult.StaleGeneration;
         if (!registry.TryGet(inputKey, out HGPort input) || !input.IsInput || input.InputSlot == null)
@@ -75,19 +106,24 @@ public sealed class HGDocumentSession<TDocument>
     }
 
     public HGSessionCommandResult Disconnect(HGPortRegistry registry, HGPortKey key)
+        => Guard(() => DisconnectCore(registry, key));
+
+    private HGSessionCommandResult DisconnectCore(HGPortRegistry registry, HGPortKey key)
     {
         if (!IsCurrentRegistry(registry)) return HGSessionCommandResult.StaleGeneration;
         if (!registry.TryGet(key, out HGPort input) || !input.IsInput || input.InputSlot == null)
             return HGSessionCommandResult.Rejected;
+        if (!Owns(input.InputSlot) || input.Presentation.Locked || !input.Presentation.Visible)
+            return HGSessionCommandResult.Rejected;
 
         GraphNode previous = input.InputSlot.Node;
         if (previous == null) return HGSessionCommandResult.NoChange;
-        if (!CaptureUndo()) return HGSessionCommandResult.Rejected;
-        List<GraphNode> orphanPool = FindOrphanPool(input.InputSlot);
-        input.InputSlot.SetNode(null);
-        ReturnUnreferenced(previous, orphanPool);
-        Changed();
-        return HGSessionCommandResult.Changed;
+        return Apply(() =>
+        {
+            List<GraphNode> orphanPool = FindOrphanPool(input.InputSlot);
+            input.InputSlot.SetNode(null);
+            ReturnUnreferenced(previous, orphanPool);
+        });
     }
 
     public HGSessionCommandResult Undo()
@@ -115,8 +151,18 @@ public sealed class HGDocumentSession<TDocument>
     }
 
     public HGSessionCommandResult Commit()
+        => Guard(CommitCore, HGSessionCommandResult.WriteFailed);
+
+    private HGSessionCommandResult CommitCore()
     {
+        if (Owner == null) return HGSessionCommandResult.WriteFailed;
         if (!TryClone(Document, out TDocument toStore)) return HGSessionCommandResult.WriteFailed;
+        foreach (var diagnostic in CollectDiagnostics(toStore))
+            if (diagnostic.Severity == GraphDiagnosticSeverity.Error)
+            {
+                LastDiagnostic = diagnostic;
+                return HGSessionCommandResult.ValidationFailed;
+            }
         toStore.MarkDirty();
         toStore.Verify();
         if (!toStore.IsValidated) return HGSessionCommandResult.ValidationFailed;
@@ -125,7 +171,7 @@ public sealed class HGDocumentSession<TDocument>
         if (Owner is Component component && component.gameObject.scene.IsValid())
             EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
         AssetDatabase.SaveAssets();
-        Document = toStore;
+        // Keep the editing copy isolated from the instance passed to the Owner setter.
         undo.Clear();
         redo.Clear();
         IsDirty = false;
@@ -134,6 +180,9 @@ public sealed class HGDocumentSession<TDocument>
     }
 
     public HGSessionCommandResult Cancel()
+        => Guard(CancelCore);
+
+    private HGSessionCommandResult CancelCore()
     {
         if (!binding.TryRead(Owner, out IGraphDocument live) || !binding.TryClone(live, out IGraphDocument copy)
             || copy is not TDocument document) return HGSessionCommandResult.Rejected;
@@ -159,8 +208,10 @@ public sealed class HGDocumentSession<TDocument>
             result = HGSessionCommandResult.Rejected;
             return false;
         }
-        if (HGPortConnection.Check(a, b, Generation) != HGPortConnectionResult.Allowed)
+        var acceptance = HGPortConnection.Check(a, b, Generation);
+        if (acceptance != HGPortConnectionResult.Allowed)
         {
+            LastDiagnostic = Failure("connection", DocumentId, acceptance.ToString());
             result = HGSessionCommandResult.Rejected;
             return false;
         }
@@ -175,29 +226,106 @@ public sealed class HGDocumentSession<TDocument>
 
     private HGSessionCommandResult ReplaceInputSource(HGPort input, IHGPortSource source)
     {
-        if (HGPortConnection.CheckInputSource(input, source, Generation) != HGPortConnectionResult.Allowed)
+        if (!Owns(input.InputSlot)) return HGSessionCommandResult.Rejected;
+        var acceptance = HGPortConnection.CheckInputSource(input, source, Generation);
+        if (acceptance != HGPortConnectionResult.Allowed)
+        {
+            LastDiagnostic = Failure("connection", DocumentId, acceptance.ToString());
             return HGSessionCommandResult.Rejected;
+        }
 
         GraphNode next = source.OutputNode;
         if (!IsDocumentOwned(next)) return HGSessionCommandResult.Rejected;
         if (ReferenceEquals(input.InputSlot.Node, next)) return HGSessionCommandResult.NoChange;
 
-        if (!CaptureUndo()) return HGSessionCommandResult.Rejected;
-        GraphNode previous = input.InputSlot.Node;
-        List<GraphNode> orphanPool = FindOrphanPool(input.InputSlot);
-        input.InputSlot.SetNode(next);
-        RemoveFromOrphanPools(next);
-        ReturnUnreferenced(previous, orphanPool);
-        Changed();
-        return HGSessionCommandResult.Changed;
+        return Apply(() =>
+        {
+            GraphNode previous = input.InputSlot.Node;
+            List<GraphNode> orphanPool = FindOrphanPool(input.InputSlot);
+            input.InputSlot.SetNode(next);
+            RemoveFromOrphanPools(next);
+            ReturnUnreferenced(previous, orphanPool);
+        });
     }
+
+    /// <summary>Edits a descriptor field in the current working document as one undoable command.</summary>
+    public HGSessionCommandResult EditValue(object target, HGFieldDescriptor field, object value)
+        => Guard(() =>
+        {
+            if (!Owns(target) || field == null || field.ReadOnly) return HGSessionCommandResult.Rejected;
+            if (Equals(field.Read(target), value)) return HGSessionCommandResult.NoChange;
+            return Apply(() =>
+            {
+                if (!field.TryWrite(target, value, out var error))
+                    throw error ?? new ArgumentException("Value does not match the descriptor.");
+            });
+        });
+
+    /// <summary>Replaces carrier content while retaining its identity, layout and all compatible references.</summary>
+    public HGSessionCommandResult ReplaceSource(GraphNode carrier, HGCarrierSource source)
+        => Guard(() =>
+        {
+            if (!IsDocumentOwned(carrier) || source == null || !source.IsValid) return HGSessionCommandResult.Rejected;
+            if (source.Token != null && !Owns(source.Token)) return HGSessionCommandResult.Rejected;
+            if (source.Matches(carrier)) return HGSessionCommandResult.NoChange;
+            var slots = new List<GraphSlotBase>();
+            var visited = new HashSet<object>(HGRefComparer.Instance);
+            foreach (var root in Document.Roots) slots.AddRange(HGModel.WalkSlots(root, visited));
+            foreach (var token in DocumentTokens()) slots.AddRange(HGModel.WalkSlots(token, visited));
+            foreach (var pool in OrphanPools())
+                foreach (var node in pool) slots.AddRange(HGModel.WalkSlots(node, visited));
+            foreach (var slot in slots)
+                if (ReferenceEquals(slot.Node, carrier) && !source.Accepts(slot)) return HGSessionCommandResult.Rejected;
+            var shared = new HashSet<object>(ReferenceComparer.Instance);
+            foreach (var slot in slots)
+                if (slot.Node != null) shared.Add(slot.Node);
+            foreach (var token in DocumentTokens()) shared.Add(token);
+            foreach (var pool in OrphanPools())
+                foreach (var node in pool) shared.Add(node);
+            var pending = new Queue<GraphNode>();
+            var direct = new HashSet<GraphNode>();
+            CollectDirectChildren(source.Content, direct, new HashSet<object>(ReferenceComparer.Instance));
+            foreach (var node in direct) pending.Enqueue(node);
+            var inspected = new HashSet<GraphNode>();
+            while (pending.Count > 0)
+            {
+                var node = pending.Dequeue();
+                if (!inspected.Add(node)) continue;
+                if (IsDocumentOwned(node)) { shared.Add(node); continue; }
+                direct.Clear();
+                var references = new HashSet<object>(ReferenceComparer.Instance);
+                CollectDirectChildren(node.BodyObject, direct, references);
+                CollectDirectChildren(node.CatalogObject, direct, references);
+                CollectDirectChildren(node.Bindings, direct, references);
+                foreach (var child in direct) pending.Enqueue(child);
+            }
+            return Apply(() =>
+            {
+                var children = new HashSet<GraphNode>();
+                CollectDirectChildren(carrier.BodyObject, children, new HashSet<object>(ReferenceComparer.Instance));
+                CollectDirectChildren(carrier.CatalogObject, children, new HashSet<object>(ReferenceComparer.Instance));
+                CollectDirectChildren(carrier.Bindings, children, new HashSet<object>(ReferenceComparer.Instance));
+                var pool = FindOrphanPool(carrier);
+                source.Apply(carrier, shared);
+                foreach (var input in HGModel.WalkSlots(carrier, new HashSet<object>(HGRefComparer.Instance)))
+                    if (input.Node != null && !ReferenceEquals(input.Node, carrier)) RemoveFromOrphanPools(input.Node);
+                foreach (var child in children) ReturnUnreferenced(child, pool);
+            });
+        });
 
     /// <summary>Deletes a document-owned carrier, disconnects its users, and returns direct child sources to the candidate pool.</summary>
     public HGSessionCommandResult DeleteNode(GraphNode node)
+        => Guard(() => DeleteNodeCore(node));
+
+    private HGSessionCommandResult DeleteNodeCore(GraphNode node)
     {
         if (node == null || !IsDocumentOwned(node))
             return HGSessionCommandResult.Rejected;
-        if (!CaptureUndo()) return HGSessionCommandResult.Rejected;
+        return Apply(() => DeleteOwnedNode(node));
+    }
+
+    private void DeleteOwnedNode(GraphNode node)
+    {
         List<GraphNode> orphanPool = FindOrphanPool(node);
 
         var children = new HashSet<GraphNode>();
@@ -220,22 +348,44 @@ public sealed class HGDocumentSession<TDocument>
 
         foreach (GraphNode child in children)
             if (!ReferenceEquals(child, node)) ReturnUnreferenced(child, orphanPool);
-        Changed();
-        return HGSessionCommandResult.Changed;
     }
 
-    private bool CaptureUndo()
+    private HGSessionCommandResult Apply(Action mutation)
     {
-        if (!TryClone(Document, out TDocument snapshot)) return false;
-        undo.Add(snapshot);
-        redo.Clear();
-        return true;
+        if (!TryClone(Document, out TDocument snapshot)) return HGSessionCommandResult.Rejected;
+        bool dirty = IsDirty;
+        try
+        {
+            mutation();
+            Document.MarkDirty();
+            undo.Add(snapshot);
+            redo.Clear();
+            IsDirty = true;
+            Generation++;
+            return HGSessionCommandResult.Changed;
+        }
+        catch (Exception exception)
+        {
+            Document = snapshot;
+            IsDirty = dirty;
+            Generation++;
+            LastDiagnostic = Failure("mutation", DocumentId, exception.Message);
+            return HGSessionCommandResult.Rejected;
+        }
     }
 
     private bool TryClone(TDocument source, out TDocument copy)
     {
         copy = null;
-        return binding.TryClone(source, out IGraphDocument cloned) && (copy = cloned as TDocument) != null;
+        try
+        {
+            return binding.TryClone(source, out IGraphDocument cloned) && (copy = cloned as TDocument) != null;
+        }
+        catch (Exception exception)
+        {
+            LastDiagnostic = Failure("clone", DocumentId, exception.Message);
+            return false;
+        }
     }
 
     private void ReturnUnreferenced(GraphNode node, List<GraphNode> preferredPool = null)
@@ -396,11 +546,153 @@ public sealed class HGDocumentSession<TDocument>
         return false;
     }
 
-    private void Changed()
+    private bool Owns(object value)
     {
-        Document.MarkDirty();
-        IsDirty = true;
-        Generation++;
+        if (value == null) return false;
+        var visited = new HashSet<object>(ReferenceComparer.Instance);
+        foreach (object root in Document.Roots)
+            if (ReferencesObject(root, value, visited)) return true;
+        foreach (GraphToken token in DocumentTokens())
+            if (ReferencesObject(token, value, visited)) return true;
+        foreach (var pool in OrphanPools())
+            if (ReferencesObject(pool, value, visited)) return true;
+        return false;
+    }
+
+    public IReadOnlyList<GraphDiagnostic> CollectDiagnostics() => CollectDiagnostics(Document).AsReadOnly();
+
+    private List<GraphDiagnostic> CollectDiagnostics(IGraphDocument document)
+    {
+        var diagnostics = new List<GraphDiagnostic>();
+        context.CollectDiagnostics(Owner, document, diagnostics);
+        return diagnostics;
+    }
+
+    private HGSessionCommandResult Guard(Func<HGSessionCommandResult> command,
+        HGSessionCommandResult failure = HGSessionCommandResult.Rejected)
+    {
+        LastDiagnostic = null;
+        try
+        {
+            var result = command();
+            if (LastDiagnostic == null && result != HGSessionCommandResult.Changed && result != HGSessionCommandResult.NoChange)
+                LastDiagnostic = Failure("command", DocumentId, result.ToString());
+            return result;
+        }
+        catch (Exception exception)
+        {
+            LastDiagnostic = Failure("command", DocumentId, exception.Message);
+            return failure;
+        }
+    }
+
+    private static GraphDiagnostic Failure(string operation, string documentId, string message)
+        => new GraphDiagnostic("graphkit.session." + operation + "-failed", GraphDiagnosticSeverity.Error, message,
+            new GraphDiagnosticLocation(documentId: documentId));
+}
+
+/// <summary>Generation-scoped commands using the actual window transaction and rebuild pipeline.</summary>
+public sealed class HGWindowSession
+{
+    private readonly HaruGraphWindow window;
+    private readonly HGModel model;
+    internal HGWindowSession(HaruGraphWindow window, HGModel model) { this.window = window; this.model = model; }
+    public HGWindowSnapshot Query() => window != null ? window.QueryDocument(model) : null;
+    public IReadOnlyList<GraphDiagnostic> Validate()
+        => window != null ? window.ValidateDocument(model) : new[]
+        {
+            new GraphDiagnostic("graphkit.session.closed", GraphDiagnosticSeverity.Error, "The window has been closed."),
+        };
+    public HGSessionCommandResult Connect(int generation, HGPortKey first, HGPortKey second)
+        => window != null ? window.ConnectDocument(model, generation, first, second) : HGSessionCommandResult.Rejected;
+    public HGSessionCommandResult Disconnect(int generation, HGPortKey input)
+        => window != null ? window.DisconnectDocument(model, generation, input) : HGSessionCommandResult.Rejected;
+    public HGSessionCommandResult EditValue(int generation, string nodeId, string fieldPath, object value)
+        => window != null ? window.EditDocumentValue(model, generation, nodeId, fieldPath, value) : HGSessionCommandResult.Rejected;
+    public HGSessionCommandResult Undo() => window != null ? window.DocumentHistory(model, false) : HGSessionCommandResult.Rejected;
+    public HGSessionCommandResult Redo() => window != null ? window.DocumentHistory(model, true) : HGSessionCommandResult.Rejected;
+    public HGSessionCommandResult Commit() => window != null ? window.CommitDocument(model) : HGSessionCommandResult.Rejected;
+    public HGSessionCommandResult Cancel() => window != null ? window.CancelDocument(model) : HGSessionCommandResult.Rejected;
+}
+
+public readonly struct HGWindowLink
+{
+    public HGPortKey Input { get; }
+    public HGPortKey Output { get; }
+    internal HGWindowLink(HGPortKey input, HGPortKey output) { Input = input; Output = output; }
+}
+
+public sealed class HGWindowSnapshot
+{
+    public int Generation { get; }
+    public bool IsDirty { get; }
+    public IReadOnlyList<HGPortDescriptor> Ports { get; }
+    public IReadOnlyList<HGNodeViewInfo> Nodes { get; }
+    public IReadOnlyList<HGWindowLink> Links { get; }
+    internal HGWindowSnapshot(int generation, List<HGPortDescriptor> ports, List<HGNodeViewInfo> nodes,
+        List<HGWindowLink> links, bool dirty)
+    { Generation = generation; Ports = ports.AsReadOnly(); Nodes = nodes.AsReadOnly(); Links = links.AsReadOnly(); IsDirty = dirty; }
+}
+
+/// <summary>Explicit carrier content; no arbitrary mutation callback can take over the transaction.</summary>
+public sealed class HGCarrierSource
+{
+    private readonly NodeKind kind;
+    private readonly GraphNodeContent content;
+    internal GraphNodeContent Content => content;
+    private readonly ScriptableObject asset;
+    internal GraphToken Token { get; }
+    internal bool IsValid => kind switch
+    {
+        NodeKind.Inline or NodeKind.Catalog => content != null,
+        NodeKind.Asset => asset is IGraphAsset,
+        NodeKind.Token => Token != null,
+        _ => false,
+    };
+
+    private HGCarrierSource(NodeKind kind, GraphNodeContent content = null, ScriptableObject asset = null, GraphToken token = null)
+    { this.kind = kind; this.content = content; this.asset = asset; Token = token; }
+
+    public static HGCarrierSource Body(GraphNodeContent body) => new(NodeKind.Inline, body);
+    public static HGCarrierSource Catalog(GraphNodeContent catalog) => new(NodeKind.Catalog, catalog);
+    public static HGCarrierSource Asset(ScriptableObject asset) => new(NodeKind.Asset, asset: asset);
+    public static HGCarrierSource NamedToken(GraphToken token) => new(NodeKind.Token, token: token);
+
+    internal bool Accepts(GraphSlotBase slot) => kind switch
+    {
+        NodeKind.Inline => slot.AcceptsBody(content),
+        NodeKind.Catalog => slot is CatalogSlotBase catalog && catalog.AcceptsCatalogObject(content),
+        NodeKind.Asset => slot.AcceptsAsset(asset),
+        NodeKind.Token => slot.AcceptsToken(Token),
+        _ => false,
+    };
+
+    internal bool Matches(GraphNode carrier) => carrier.Kind == kind && (kind switch
+    {
+        NodeKind.Inline => ReferenceEquals(carrier.BodyObject, content),
+        NodeKind.Catalog => ReferenceEquals(carrier.CatalogObject, content),
+        NodeKind.Asset => carrier.AssetObject == asset,
+        NodeKind.Token => ReferenceEquals(carrier.Token, Token),
+        _ => false,
+    });
+
+    internal void Apply(GraphNode carrier, IEnumerable<object> shared)
+    {
+        if (kind == NodeKind.Token) { carrier.SetToken(Token); return; }
+        if (kind == NodeKind.Asset)
+        {
+            var parameters = AssetGraphSchema.Read(asset, out var duplicates);
+            if (duplicates.Count > 0) throw new InvalidOperationException("Asset has duplicate parameter identities.");
+            carrier.Bindings.RemoveAll(binding => binding?.Slot == null || !parameters.Exists(parameter =>
+                parameter.Name == binding.Name && parameter.Slot.FamilyType == binding.Slot.FamilyType));
+            carrier.SetAsset(asset);
+            return;
+        }
+        var copy = GraphDeepCopy.Copy(content, shared);
+        if (copy == null || ReferenceEquals(copy, content)) throw new InvalidOperationException("Source clone failed.");
+        HGModel.ResetNodeIds(copy, shared);
+        if (kind == NodeKind.Inline) carrier.SetBody(copy);
+        else carrier.SetCatalog(copy);
     }
 }
 }

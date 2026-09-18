@@ -582,14 +582,25 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
             if (row.Descriptor != null && row.Target != null)
             {
-                EditorGUI.BeginDisabledGroup(row.Locked || row.Descriptor.ReadOnly);
-                EditorGUI.BeginChangeCheck();
-                var value = DrawDescriptorValue(fieldRect, row);
-                if (EditorGUI.EndChangeCheck() && !row.Locked && !row.Descriptor.ReadOnly)
+                fieldRect = HGGraph.ValueFieldRect(rowRect, row);
+                if (!string.IsNullOrEmpty(row.DrawerError))
                 {
-                    if (row.Descriptor.TryWrite(row.Target, value, out _)) AfterValueEdit();
+                    GUI.Label(fieldRect, new GUIContent("無法編輯", row.DrawerError));
+                    return;
                 }
-                EditorGUI.EndDisabledGroup();
+                using (new EditorGUI.DisabledScope(row.Locked || row.Descriptor.ReadOnly))
+                {
+                    EditorGUI.BeginChangeCheck();
+                    object value = null;
+                    bool succeeded = false;
+                    try { value = DrawDescriptorValue(fieldRect, row); succeeded = true; }
+                    catch (Exception exception) { ReportDrawerFailure(row, exception.Message); }
+                    bool changed = EditorGUI.EndChangeCheck();
+                    if (succeeded && changed && !row.Locked && !row.Descriptor.ReadOnly)
+                    {
+                        EditDescriptorValue(row, value);
+                    }
+                }
                 return;
             }
 
@@ -624,6 +635,94 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             var result = row.ValueDrawer.Draw(rect, context, current);
             if (result.Changed) GUI.changed = true;
             return result.Value;
+        }
+
+        private void ReportDrawerFailure(HGRow row, string message)
+        {
+            row.DrawerError = message;
+            drawerFailures[row.OwnerNodeId + "#" + row.Path] = message;
+            graph.Diagnostics.Add(new GraphDiagnostic("graphkit.metadata.drawer-failed", GraphDiagnosticSeverity.Error,
+                message, new GraphDiagnosticLocation(model.DocumentId, focus?.Id, nodeId: row.OwnerNodeId, fieldPath: row.Path)));
+            var target = focus.Kind == HGFocusKind.Asset ? assetReport : report;
+            target.ReplaceGraphViewDiagnostics(graph.Diagnostics);
+        }
+
+        private HGSessionCommandResult EditDescriptorValue(HGRow row, object value)
+        {
+            if (row?.Descriptor == null || row.Locked || row.Descriptor.ReadOnly) return HGSessionCommandResult.Rejected;
+            try
+            {
+                if (Equals(row.Descriptor.Read(row.Target), value)) return HGSessionCommandResult.NoChange;
+            }
+            catch (Exception exception)
+            {
+                ReportDrawerFailure(row, exception.Message);
+                return HGSessionCommandResult.Rejected;
+            }
+            if (!TryMutateContent(() =>
+            {
+                if (!row.Descriptor.TryWrite(row.Target, value, out var error))
+                    throw error ?? new ArgumentException("Drawer result does not match the field contract.");
+                if (BreakInvalidPackLinks() > 0) ShowNotification(new GUIContent("已斷開接不上的連線"));
+            }, out var message))
+            {
+                ReportDrawerFailure(row, message);
+                return HGSessionCommandResult.Rejected;
+            }
+            Invalidate();
+            return HGSessionCommandResult.Changed;
+        }
+
+        private bool TryMutateContent(Action mutation, out string error, bool breakUndoMerge = true)
+        {
+            error = null;
+            Action restoreDocument = null;
+            Action restoreAssetHistory = null;
+            HGAssetSnapshot assetSnapshot = null;
+            bool wasAssetDirty = assetDirty, wasAssetContentDirty = assetContentDirty;
+            string originalTokenId = focus.Kind == HGFocusKind.Token ? focus.Token?.Id : null;
+            try
+            {
+                restoreDocument = model.CaptureRollback();
+                if (restoreDocument == null) throw new InvalidOperationException("Cannot capture a transaction snapshot.");
+                if (focus.Kind == HGFocusKind.Asset)
+                {
+                    assetSnapshot = CaptureAssetState();
+                    restoreAssetHistory = assetHistory.CaptureRollback();
+                    if (assetSnapshot == null) throw new InvalidOperationException("Cannot capture an asset snapshot.");
+                }
+                if (breakUndoMerge) BreakUndoMerge();
+                mutation();
+                return true;
+            }
+            catch (Exception exception)
+            {
+                if (restoreDocument != null)
+                {
+                    restoreDocument();
+                    if (focus.Kind != HGFocusKind.Asset)
+                    {
+                        var token = string.IsNullOrEmpty(originalTokenId) ? null : FindToken(originalTokenId);
+                        focus = token != null ? new HGFocus { Kind = HGFocusKind.Token, Token = token } : AllRootsFocus();
+                    }
+                }
+                if (assetSnapshot != null)
+                {
+                    string tokenId = focus.Token?.Id;
+                    focus.AssetHostSlot.SetNode(assetSnapshot.Root);
+                    focus.AssetOrphans = assetSnapshot.Orphans;
+                    focus.AssetTokens = assetSnapshot.Tokens;
+                    focus.Token = assetSnapshot.Tokens.Find(token => token.Id == tokenId);
+                    restoreAssetHistory?.Invoke();
+                    assetDirty = wasAssetDirty;
+                    assetContentDirty = wasAssetContentDirty;
+                }
+                model.OrphanHead = focus.Head;
+                ClearPortInteractionState();
+                graphDirty = true;
+                error = exception.Message;
+                return false;
+            }
         }
 
         /// <summary>值欄位改完的收尾。</summary>

@@ -37,6 +37,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public bool Normalized;
         public Dictionary<HGPortKey, HGPort> PortsByKey = new();
         public Dictionary<GraphNode, HGPort> PrimaryOutputs = new();
+        public Dictionary<GraphSlotBase, HGPort> PrimaryInputs = new();
 
         // 同一個載體被多個欄位指到＝共用來源：只畫一個節點，連線各自一條。GraphNode 沒有覆寫 Equals，預設就是參考比對。
         public Dictionary<GraphNode, HGNodeView> ByCarrier = new();
@@ -192,6 +193,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public int LabelWidthUnits;
         public float LabelWidthRatio;
         public bool Normalized;
+        public string DrawerError;
 
         // 排版結果（每次重畫填）
         public float LocalY;
@@ -314,17 +316,21 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             IReadOnlyDictionary<string, Type> orphanHints = null, IHGEditorMetadataProvider metadata = null)
         {
             var view = new HGGraphView();
+            try
+            {
 
             // 每次重建都重新登記 id → 載體，座標與備註的讀寫才找得到人。
             model.ClearCarriers();
 
             // 一顆 HEAD 都沒有仍要往下走：時機畫布可能還沒建任何時機節點，但候選節點得畫得出來。
+            var rootIds = new HashSet<string>();
             foreach (var root in roots ?? Array.Empty<object>())
             {
                 if (root == null) continue;
                 var rootNode = root is GraphSlotBase rootSlot
                     ? MakeHeadNode(model, rootSlot, focusId, headTitle, headCarrier)
                     : MakeGroupNode(model, root, metadata, view.Diagnostics);
+                if (!rootIds.Add(rootNode.Id)) throw new InvalidOperationException("Duplicate root identity: " + rootNode.Id);
                 Collect(model, rootNode, view, 0, listCollapse, false, false, metadata, view.Diagnostics);
             }
 
@@ -352,7 +358,20 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 foreach (var row in AllRows(node.Rows))
                     if (row.Normalized) view.Normalized = true;
             AutoLayout(model, view);
+            foreach (var node in view.Nodes)
+                foreach (var row in AllRows(node.Rows))
+                    if (!string.IsNullOrEmpty(row.DrawerError))
+                        view.Diagnostics.Add(new GraphDiagnostic("graphkit.metadata.drawer-failed", GraphDiagnosticSeverity.Error,
+                            row.DrawerError, new GraphDiagnosticLocation(nodeId: node.Id, fieldPath: row.Path)));
             return view;
+            }
+            catch (Exception exception)
+            {
+                var failed = new HGGraphView();
+                failed.Diagnostics.Add(new GraphDiagnostic("graphkit.build.failed", GraphDiagnosticSeverity.Error,
+                    exception.Message, new GraphDiagnosticLocation(model?.DocumentId, focusId)));
+                return failed;
+            }
         }
 
         // ===== 節點建立 =====
@@ -381,7 +400,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         }
 
         /// <summary>時機群組節點的識別碼。識別值本身就是身分，不可重複，所以不必再配流水號。</summary>
-        public static string GroupHeadId(HGModel model, object group) => "head:tim:" + GroupTitle(model, group);
+        public static string GroupHeadId(HGModel model, object group) => "head:" + model.RootId(group);
 
         public static string GroupTitle(HGModel model, object group)
             => model?.Doc?.TitleOf(group) ?? $"（未指定{RootNoun(model?.Doc)}）";
@@ -767,6 +786,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 foreach (var field in descriptor.Fields)
                 {
                     string fieldPath = path + "/" + field.Id;
+                    try
+                    {
                     if (!field.TryGetVisibility(obj, out bool visible, out var exception))
                     {
                         diagnostics?.Add(new GraphDiagnostic("graphkit.metadata.visibility-failed", GraphDiagnosticSeverity.Error,
@@ -864,6 +885,13 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     };
                     ApplyDescriptorPresentation(valueRow, field);
                     into.Add(valueRow);
+                    }
+                    catch (Exception exception)
+                    {
+                        diagnostics?.Add(new GraphDiagnostic("graphkit.metadata.field-failed", GraphDiagnosticSeverity.Error,
+                            obj.GetType().FullName + "." + field.Id + ": " + exception.Message,
+                            new GraphDiagnosticLocation(fieldPath: fieldPath)));
+                    }
                 }
                 return;
             }
@@ -1191,12 +1219,26 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         private static float DescriptorHeight(HGRow row, float nodeWidth)
         {
             if (row.Descriptor == null || row.ValueDrawer == null) return RowHeight;
+            try
+            {
+                float width = ValueFieldRect(new Rect(0f, 0f, nodeWidth, RowHeight), row).width;
+                float height = row.ValueDrawer.Measure(new HGValueDrawerContext(row.Descriptor, row.Target, row.Locked), width);
+                if (float.IsNaN(height) || float.IsInfinity(height)) throw new InvalidOperationException("Drawer returned an invalid height.");
+                return Mathf.Max(RowHeight, height + 3f);
+            }
+            catch (Exception exception)
+            {
+                row.DrawerError = exception.Message;
+                return RowHeight;
+            }
+        }
 
-            float labelWidth = LabelWidthOf(nodeWidth, row.LabelWidthUnits, row.LabelWidthRatio);
-            float fieldWidth = Mathf.Max(20f, nodeWidth - labelWidth - 20f);
-            float height = row.ValueDrawer.Measure(new HGValueDrawerContext(row.Descriptor, row.Target, row.Locked), fieldWidth);
-            if (float.IsNaN(height) || float.IsInfinity(height)) return RowHeight;
-            return Mathf.Max(RowHeight, height + 3f);
+        internal static Rect ValueFieldRect(Rect rect, HGRow row)
+        {
+            float inset = 20f + (row.IsItem ? ListDeleteWidth : 0f);
+            float left = row.HideLabel ? 4f + row.LeftPad + row.Depth * IndentWidth
+                : LabelWidthOf(rect.width, row.LabelWidthUnits, row.LabelWidthRatio);
+            return new Rect(rect.x + left, rect.y + 1f, Mathf.Max(20f, rect.width - left - inset), rect.height - 3f);
         }
 
         /// <summary>把整個子樹壓到同一條列上並標記隱藏；高度保留是為了讓接點落在標題列中心。</summary>

@@ -145,6 +145,7 @@ public partial class HaruGraphWindow : EditorWindow
     // 候選池裡的空節點屬於哪一族（值＝代表性的 Slot 型別）。key 是載體 Id，所以撐得過 Undo 與重建圖。
     // 純編輯期提示，不進資料：視窗關掉就沒了，那顆節點退回一般空節點。
     private readonly Dictionary<string, Type> orphanKindHints = new();
+    private readonly Dictionary<string, string> drawerFailures = new();
     // 選取用 id 記，節點物件每次重建圖都會換一份。
     private readonly HashSet<string> selectedIds = new();
     // 空註解框是暫態：只跟著這一顆被選取的節點活著，不寫進資料。
@@ -433,10 +434,35 @@ public partial class HaruGraphWindow : EditorWindow
         model.OrphanHead = focus.Head;
 
         // 一顆 HEAD 都沒有也要建：時機畫布可能還沒有任何時機節點，但候選節點仍要畫出來。
-        graph = focus.Kind == HGFocusKind.None
-            ? new HGGraphView()
-            : HGGraph.Build(model, focus.Roots, OrphansOfCurrentFocus(), focus.Id, focus.HeadTitle,
-                listCollapse, noteOpenId, noteCollapsed, focus.HeadCarrier, orphanKindHints, activeContext.Metadata);
+        HGGraphView built = null;
+        if (activeContext.Metadata == null)
+            built = BuildCurrentGraph();
+        else if (!TryMutateContent(() =>
+        {
+            built = BuildCurrentGraph();
+            foreach (var diagnostic in built.Diagnostics)
+                if (diagnostic.Code == "graphkit.build.failed" || diagnostic.Code == "graphkit.metadata.factory-failed"
+                    || diagnostic.Code == "graphkit.metadata.field-failed")
+                    throw new InvalidOperationException(diagnostic.Message);
+        }, out var buildError, false))
+        {
+            var failure = new HGGraphView();
+            if (built != null) failure.Diagnostics.AddRange(built.Diagnostics);
+            if (failure.Diagnostics.Count == 0)
+                failure.Diagnostics.Add(new GraphDiagnostic("graphkit.build.failed", GraphDiagnosticSeverity.Error, buildError));
+            built = failure;
+            graphDirty = false;
+        }
+        graph = built;
+        foreach (var node in graph.Nodes)
+            foreach (var row in HGGraph.AllRows(node.Rows))
+                if (drawerFailures.TryGetValue(node.Id + "#" + row.Path, out var error))
+                {
+                    row.DrawerError = error;
+                    graph.Diagnostics.Add(new GraphDiagnostic("graphkit.metadata.drawer-failed", GraphDiagnosticSeverity.Error,
+                        error, new GraphDiagnosticLocation(model.DocumentId, focus?.Id, nodeId: node.Id, fieldPath: row.Path),
+                        "修正 Tool drawer 後，從正式入口重新開啟文件。"));
+                }
         if (graph.Normalized)
         {
             if (focus.Kind == HGFocusKind.Asset) MarkAssetContentChanged();
@@ -452,6 +478,11 @@ public partial class HaruGraphWindow : EditorWindow
         ResolveDiagnosticLocations(targetReport);
         if (pendingCenterTarget != null) { CenterOn(pendingCenterTarget); pendingCenterTarget = null; }
     }
+
+    private HGGraphView BuildCurrentGraph()
+        => focus.Kind == HGFocusKind.None ? new HGGraphView()
+            : HGGraph.Build(model, focus.Roots, OrphansOfCurrentFocus(), focus.Id, focus.HeadTitle,
+                listCollapse, noteOpenId, noteCollapsed, focus.HeadCarrier, orphanKindHints, activeContext.Metadata);
 
     /// <summary>
     /// 套用 Slot 的分支收合。圖一律建到底再標記，因為「有沒有別的欄位在用」要走完整張圖才算得準；

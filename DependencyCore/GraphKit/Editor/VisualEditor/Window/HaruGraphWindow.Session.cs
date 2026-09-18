@@ -55,6 +55,105 @@ public partial class HaruGraphWindow
         window.BindDocument(owner, binding, context ?? HGEditorExtensionContext.Default);
     }
 
+    /// <summary>Returns bounded commands for this binding. Handles expire when the window binds another document.</summary>
+    public HGWindowSession GetDocumentCommands()
+        => model == null ? null : new HGWindowSession(this, model);
+
+    internal HGWindowSnapshot QueryDocument(HGModel expected)
+    {
+        if (!ReferenceEquals(model, expected) || model?.Owner == null) return null;
+        EnsureGraph();
+        var ports = new List<HGPortDescriptor>();
+        var nodes = new List<HGNodeViewInfo>();
+        var links = new List<HGWindowLink>();
+        foreach (var port in graph.Ports)
+            ports.Add(new HGPortDescriptor(port, port.IsOutput && graph.PrimaryOutputs.TryGetValue(port.Source.OutputNode, out var primary)
+                && ReferenceEquals(primary, port)));
+        foreach (var node in graph.Nodes) nodes.Add(new HGNodeViewInfo(node));
+        foreach (var link in graph.Links)
+            if (link.InputPort != null && link.OutputPort != null)
+                links.Add(new HGWindowLink(link.InputPort.Key, link.OutputPort.Key));
+        return new HGWindowSnapshot(graphGeneration, ports, nodes, links, focus.Kind == HGFocusKind.Asset ? assetDirty : model.Dirty);
+    }
+
+    internal HGSessionCommandResult ConnectDocument(HGModel expected, int generation, HGPortKey first, HGPortKey second)
+    {
+        if (QueryDocument(expected) == null || generation != graphGeneration) return HGSessionCommandResult.StaleGeneration;
+        if (!graph.PortsByKey.TryGetValue(first, out var a) || !graph.PortsByKey.TryGetValue(second, out var b))
+            return HGSessionCommandResult.Rejected;
+        return TryConnectPorts(a, b) switch
+        {
+            PortCommandResult.Changed => HGSessionCommandResult.Changed,
+            PortCommandResult.NoChange => HGSessionCommandResult.NoChange,
+            _ => HGSessionCommandResult.Rejected,
+        };
+    }
+
+    internal HGSessionCommandResult DisconnectDocument(HGModel expected, int generation, HGPortKey key)
+    {
+        if (QueryDocument(expected) == null || generation != graphGeneration) return HGSessionCommandResult.StaleGeneration;
+        if (!graph.PortsByKey.TryGetValue(key, out var port) || !port.IsInput || port.Presentation.Locked || !port.Presentation.Visible)
+            return HGSessionCommandResult.Rejected;
+        return CutLink(port.InputSlot) switch
+        {
+            PortCommandResult.Changed => HGSessionCommandResult.Changed,
+            PortCommandResult.NoChange => HGSessionCommandResult.NoChange,
+            _ => HGSessionCommandResult.Rejected,
+        };
+    }
+
+    internal HGSessionCommandResult EditDocumentValue(HGModel expected, int generation, string nodeId, string fieldPath, object value)
+    {
+        if (QueryDocument(expected) == null || generation != graphGeneration) return HGSessionCommandResult.StaleGeneration;
+        var node = NodeOfId(nodeId);
+        if (node == null || node.InLockedSubtree) return HGSessionCommandResult.Rejected;
+        return EditDescriptorValue(RowOf(nodeId, fieldPath), value);
+    }
+
+    internal HGSessionCommandResult DocumentHistory(HGModel expected, bool redo)
+    {
+        if (!ReferenceEquals(model, expected)) return HGSessionCommandResult.StaleGeneration;
+        return (redo ? DoRedo() : DoUndo()) ? HGSessionCommandResult.Changed : HGSessionCommandResult.NoChange;
+    }
+
+    internal HGSessionCommandResult CommitDocument(HGModel expected)
+    {
+        if (QueryDocument(expected) == null) return HGSessionCommandResult.StaleGeneration;
+        bool saved = focus.Kind == HGFocusKind.Asset ? SaveAsset(false) : DoSave(false);
+        if (!saved) return HGSessionCommandResult.ValidationFailed;
+        ClearPortInteractionState();
+        graphDirty = true;
+        return HGSessionCommandResult.Changed;
+    }
+
+    internal IReadOnlyList<GraphDiagnostic> ValidateDocument(HGModel expected)
+    {
+        var diagnostics = new List<GraphDiagnostic>();
+        if (QueryDocument(expected) == null)
+        {
+            diagnostics.Add(new GraphDiagnostic("graphkit.session.stale", GraphDiagnosticSeverity.Error,
+                "The window is no longer bound to this document."));
+            return diagnostics.AsReadOnly();
+        }
+        DoVerify(true);
+        foreach (var issue in Rep.Issues) diagnostics.Add(issue.Diagnostic);
+        return diagnostics.AsReadOnly();
+    }
+
+    internal HGSessionCommandResult CancelDocument(HGModel expected)
+    {
+        if (!ReferenceEquals(model, expected) || model?.Owner == null) return HGSessionCommandResult.StaleGeneration;
+        if (focus.Kind == HGFocusKind.Asset) return HGSessionCommandResult.Rejected;
+        ClearPortInteractionState();
+        model.Reload();
+        focus = AllRootsFocus();
+        selectedIds.Clear();
+        graphDirty = true;
+        DoVerify(true);
+        UpdateUnsavedState();
+        return HGSessionCommandResult.Changed;
+    }
+
     [MenuItem("PinTools/HaruGraph")]
     public static void OpenFromMenu()
     {
@@ -221,6 +320,7 @@ public partial class HaruGraphWindow
         assetVerifiedOnce = false;
         assetReportStale = false;
         model = new HGModel();
+        drawerFailures.Clear();
         if (!model.Bind(owner, sessionBinding))
         {
             model = null;

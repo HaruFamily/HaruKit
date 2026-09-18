@@ -12,6 +12,39 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
     public sealed class GraphKitCrossToolSessionTests
     {
         [Test]
+        public void PublicWindowCommandsAreBoundToTheSelectedToolDocument()
+        {
+            var logicOwner = ScriptableObject.CreateInstance<LogicOwner>();
+            var pipelineOwner = ScriptableObject.CreateInstance<AssetPipeline>();
+            var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+            try
+            {
+                logicOwner.Graph = new LogicGraph<CrossTiming, CrossPack>();
+                pipelineOwner.graph = new Graph();
+                var logicBinding = new HGDocumentBinding<LogicGraph<CrossTiming, CrossPack>>("LogicGraph.Cross",
+                    owner => ((LogicOwner)owner).Graph, (owner, graph) => ((LogicOwner)owner).Graph = graph);
+                var pipelineBinding = new HGDocumentBinding<Graph>("AssetPipeline.Graph",
+                    owner => ((AssetPipeline)owner).graph, (owner, graph) => ((AssetPipeline)owner).graph = graph);
+                Assert.That(window.BindDocument(logicOwner, logicBinding, ContextFor<LogicGraph<CrossTiming, CrossPack>>(HGCapabilities.Tokens)), Is.True);
+                HGWindowSession old = window.GetDocumentCommands();
+                Assert.That(old.Query(), Is.Not.Null);
+                Assert.That(window.BindDocument(pipelineOwner, pipelineBinding, ContextFor<Graph>(HGCapabilities.Catalogs)), Is.True);
+                Assert.That(old.Query(), Is.Null);
+                Assert.That(old.Commit(), Is.EqualTo(HGSessionCommandResult.StaleGeneration));
+                HGWindowSnapshot current = window.GetDocumentCommands().Query();
+                Assert.That(current, Is.Not.Null);
+                Assert.That(current.IsDirty, Is.False);
+            }
+            finally
+            {
+                window.GetDocumentCommands()?.Cancel();
+                UnityEngine.Object.DestroyImmediate(window);
+                UnityEngine.Object.DestroyImmediate(logicOwner);
+                UnityEngine.Object.DestroyImmediate(pipelineOwner);
+            }
+        }
+
+        [Test]
         public void ExplicitSessionsKeepLogicGraphPipelineAndConsumerScopesIndependent()
         {
             var logicOwner = ScriptableObject.CreateInstance<LogicOwner>();

@@ -35,6 +35,9 @@ public partial class HaruGraphWindow
         graph.Ports.Clear();
         graph.PortsByKey.Clear();
         graph.PrimaryOutputs.Clear();
+        graph.PrimaryInputs.Clear();
+
+        foreach (var node in graph.Nodes) UpdateRowGeometry(node, node.Rows);
 
         var context = new HGPortBuildContext(graph, graphGeneration, graph.Ports, graph.PortsByKey, graph.PrimaryOutputs);
         foreach (var node in graph.Nodes)
@@ -55,7 +58,20 @@ public partial class HaruGraphWindow
                 AddNodeOutputPort(context, node);
         }
 
-        activeContext.Provider.AddPorts(context);
+        try
+        {
+            activeContext.Provider.AddPorts(context);
+            graph.Diagnostics.AddRange(context.Diagnostics);
+        }
+        catch (Exception exception)
+        {
+            graph.Ports.Clear();
+            graph.PortsByKey.Clear();
+            graph.PrimaryInputs.Clear();
+            graph.PrimaryOutputs.Clear();
+            graph.Diagnostics.Add(new GraphDiagnostic("graphkit.provider.ports-failed", GraphDiagnosticSeverity.Error,
+                exception.Message, new GraphDiagnosticLocation(model.DocumentId, focus?.Id)));
+        }
         ResolveLinkPorts();
     }
 
@@ -123,7 +139,7 @@ public partial class HaruGraphWindow
         foreach (var link in graph.Links)
         {
             HGLinkPortResolution resolution = HGLinkPortResolver.Resolve(link, graph.PortsByKey, graph.PrimaryOutputs,
-                graphGeneration);
+                graphGeneration, graph.PrimaryInputs);
             if (resolution == HGLinkPortResolution.InputUnresolved)
             {
                 AddPortResolutionDiagnostic("input-unresolved", "連線的輸入接點無法在目前圖形中定位。",
@@ -432,28 +448,47 @@ public partial class HaruGraphWindow
 
         var slot = linkPort.InputSlot;
         if (slot == null) return;
-        BreakUndoMerge();
-        PreserveVisibleNodePositions();
-        GraphNode carrier = NewSource(slot);
-        if ((slot as CatalogSlotBase)?.CreateDefaultCatalog() is GraphNodeContent pack) carrier.SetCatalog(pack);
-        else if ((slot as FormulaSlotBase)?.CreateDefaultBody() is GraphNodeContent body) carrier.SetBody(body);
-        carrier.Pos = SnapToGrid(graphMouse);
+        if (!TryMutateContent(() =>
+        {
+            PreserveVisibleNodePositions();
+            GraphNode carrier = NewSource(slot);
+            if ((slot as CatalogSlotBase)?.CreateDefaultCatalog() is GraphNodeContent pack) carrier.SetCatalog(pack);
+            else if ((slot as FormulaSlotBase)?.CreateDefaultBody() is GraphNodeContent body) carrier.SetBody(body);
+            carrier.Pos = SnapToGrid(graphMouse);
+        }, out var error))
+        {
+            ShowNotification(new GUIContent(error));
+            return;
+        }
         Invalidate();
         Repaint();
     }
 
     private PortCommandResult TryConnectPorts(HGPort first, HGPort second)
     {
-        if (HGPortConnection.Check(first, second, graphGeneration) != HGPortConnectionResult.Allowed)
+        var acceptance = HGPortConnection.Check(first, second, graphGeneration);
+        if (acceptance != HGPortConnectionResult.Allowed)
+        {
+            ShowNotification(new GUIContent("無法接線：" + acceptance));
             return PortCommandResult.Rejected;
+        }
         HGPort input = first.IsInput ? first : second;
         HGPort output = first.IsOutput ? first : second;
         if (input.InputSlot == null || output.Source?.OutputNode == null) return PortCommandResult.Rejected;
+        if (!graph.PrimaryInputs.ContainsKey(input.InputSlot)
+            || !graph.ByCarrier.ContainsKey(output.Source.OutputNode) && !graph.CellRows.ContainsKey(output.Source.OutputNode))
+            return PortCommandResult.Rejected;
         if (ReferenceEquals(input.InputSlot.Node, output.Source.OutputNode)) return PortCommandResult.NoChange;
 
-        BreakUndoMerge();
-        PreserveVisibleNodePositions();
-        AttachSource(input.InputSlot, output.Source.OutputNode);
+        if (!TryMutateContent(() =>
+        {
+            PreserveVisibleNodePositions();
+            AttachSource(input.InputSlot, output.Source.OutputNode);
+        }, out var error))
+        {
+            ShowNotification(new GUIContent(error));
+            return PortCommandResult.Rejected;
+        }
         Invalidate();
         return PortCommandResult.Changed;
     }
@@ -464,8 +499,15 @@ public partial class HaruGraphWindow
     private PortCommandResult CutLink(GraphSlotBase slot)
     {
         if (slot?.Node == null) return PortCommandResult.NoChange;
-        PreserveVisibleNodePositions();
-        AttachSource(slot, null);
+        if (!TryMutateContent(() =>
+        {
+            PreserveVisibleNodePositions();
+            AttachSource(slot, null);
+        }, out var error))
+        {
+            ShowNotification(new GUIContent(error));
+            return PortCommandResult.Rejected;
+        }
         Invalidate();
         return PortCommandResult.Changed;
     }

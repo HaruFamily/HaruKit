@@ -66,8 +66,18 @@ public interface IHGEditorExtensionProvider
     /// <summary>Collects optional Tool diagnostics without making GraphKit depend on any Tool assembly.</summary>
         public void CollectDiagnostics(Object owner, IGraphDocument document, List<GraphDiagnostic> diagnostics)
         {
-            if (Provider is IHGEditorDiagnosticProvider provider)
-                provider.CollectDiagnostics(owner, document, diagnostics);
+            if (Provider is not IHGEditorDiagnosticProvider provider) return;
+            var collected = new List<GraphDiagnostic>();
+            try
+            {
+                provider.CollectDiagnostics(owner, document, collected);
+                diagnostics.AddRange(collected);
+            }
+            catch (Exception exception)
+            {
+                diagnostics.Add(new GraphDiagnostic("graphkit.provider.diagnostics-failed", GraphDiagnosticSeverity.Error,
+                    Provider.GetType().FullName + ": " + exception.Message));
+            }
         }
 
         /// <summary>Returns Tool-declared capabilities, or the document's legacy declaration when no profile is supplied.</summary>

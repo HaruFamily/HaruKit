@@ -94,6 +94,21 @@ public class HGAssetHistory
 
     /// <summary>套用快照之後由視窗回報新的 baseline（＝套用後現場再抄一份），歷程才不會跟活資料共用參考。</summary>
     public void Rebase(HGAssetSnapshot current) => baseline = current;
+
+    internal System.Action CaptureRollback()
+    {
+        var undo = undoStack.ToArray();
+        var redo = redoStack.ToArray();
+        var previousBaseline = baseline;
+        double push = lastPushTime;
+        return () =>
+        {
+            undoStack.Clear(); undoStack.AddRange(undo);
+            redoStack.Clear(); redoStack.AddRange(redo);
+            baseline = previousBaseline;
+            lastPushTime = push;
+        };
+    }
 }
 
 }

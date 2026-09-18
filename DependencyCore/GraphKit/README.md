@@ -17,10 +17,10 @@ consumer; it is not required here.
   edge.
 - `GraphToken` is a named token with its own canvas and candidate pool.
   Referencing nodes store the object, never a name string.
-- `IGraphHead` / `IOrphanPool` / `ITokenOwner` / `IGraphDocument` are the
-  contracts the editor walks. The default editor metadata adapter uses
-  reflection for arbitrary POCO fields and GraphKit attributes; document and
-  graph traversal use the contracts directly.
+- `IGraphHead` / `IOrphanPool` / `ITokenOwner` / `IGraphDocument` expose carrier
+  and document access. Arbitrary POCO traversal, default metadata and deep copies
+  retain reflection at their adapters; known Slot and carrier operations use
+  the contracts directly.
 - Root wording comes from the document, not the editor: `RootChip` is the badge
   on the root node, `RootNoun` is the word the editor drops into menus, hints,
   and logs. No domain term is hard-coded in the window.
@@ -77,8 +77,9 @@ data contracts and are not renamed as routine cleanup.
   exactly one `IGraphDocument` field on the owner. It rejects ambiguous owners;
   Tools must use `OpenForDocument` when an owner has multiple documents.
 - `HaruGraphWindow.OpenForDocument(owner, binding)` opens the exact document
-  selected by a Tool. The binding supplies typed read, create, clone, and write
-  delegates; GraphKit keeps the working copy, Undo, validation, and persistence
+  selected by a Tool. The binding supplies typed read, optional create, and write
+  delegates; cloning uses the document's `DeepCopy` with type and alias checks.
+  GraphKit keeps the working copy, Undo, validation, and persistence
   transaction.
 - Tool-specific editor extensions are passed through
    `HGEditorExtensionContext`. A provider adds ports with `AddInput`,
@@ -92,10 +93,16 @@ data contracts and are not renamed as routine cleanup.
   to participate in node-local snapping and row lookup without retaining an
   Editor view object. A presentation without an anchor remains a global-only
   endpoint.
-- An output that represents the persisted source for a `GraphNode` must be
-  registered with `isPrimaryOutput: true`. There can be exactly one primary
-  output per source; visual aliases stay non-primary, and link rebuilding uses
-  the explicit primary mapping rather than registration order.
+- Each persisted source has one primary output, initially registered with
+  `isPrimaryOutput: true`. Link rebuilding uses this mapping; visual aliases
+  do not become primary merely because they were registered later.
+- A provider can add a presentation with `AddInputAlias` / `AddOutputAlias`, then
+  explicitly select it with `SelectPrimaryInput` / `SelectPrimaryOutput`. One
+  explicit selection per Slot/source replaces the built-in default; a second
+  selection is rejected. Input links resolve by Slot identity, not the alias key.
+  `CreatePresentation(existingKey, offset)` follows current geometry, visibility
+  and locking without exposing a mutable view. Custom bindings in a window must
+  already be part of the built graph (use a Slot descriptor for custom fields).
 - `HGPortConnection.Check` is the shared compatibility result for rendered
   ports. `CheckInputSource` applies the same input acceptance rules to direct
   Asset, Token, and Catalog drops that do not yet have a `GraphNode` carrier.
@@ -113,6 +120,13 @@ data contracts and are not renamed as routine cleanup.
   that exact session and generation, so it cannot be submitted to another
   document session. This registers bounded custom Ports without receiving a
   mutable `HGGraphView`.
+- `window.GetDocumentCommands()` returns an `HGWindowSession` for the actual
+  window pipeline. Its immutable `Query()` snapshot contains generation, nodes,
+  ports and resolved link keys. Connect/disconnect, descriptor value edits,
+  undo/redo, validation, commit and document cancellation use the same routes as
+  the window UI. Rebinding the window invalidates the command object. This is
+  the integration entry for Tools extending the visual editor; the non-window
+  `HGDocumentSession<TDocument>` owns an independent editing history.
 - A Tool may provide `IHGEditorDiagnosticProvider` through its explicit
   extension context. Runtime Owners with project rules can additionally expose
   `IGraphDomainDiagnostics`; both return `GraphDiagnostic` pure data rather
@@ -155,9 +169,23 @@ if (HGDocumentSession<MyDocument>.TryOpen(owner, binding, out var session))
 }
 ```
 
-`ReplaceSource` takes a registered input key and an accepted source whose
+`ReconnectInput` takes a registered input key and an accepted source whose
 `GraphNode` is already reachable from the session document roots, tokens, or
-candidate pool.
+candidate pool. Both input and source must belong to the current working copy;
+a current registry cannot authorize a foreign or stale Slot. The input-key
+`ReplaceSource` overload forwards to `ReconnectInput` for source compatibility.
+
+`ReplaceSource(carrier, HGCarrierSource)` changes the content of a document-owned
+carrier in place. Body, Catalog, Asset and NamedToken source descriptions retain
+the carrier id, position, note and inbound references; incompatible users reject
+the transaction. Asset parameter bindings are retained by family plus name.
+
+Pass an extension context to the diagnostic overload of `TryOpen` to use the
+same provider for `CollectDiagnostics()` and commit validation. `LastDiagnostic`
+explains a rejected/failed command. Mutation failures restore the working-copy
+snapshot and history, and advance generation to invalidate references to the
+discarded copy. Commit never turns the editing document into the Owner instance.
+Owner setters and filesystem writes remain external effects, not an ACID transaction.
 
 `DeleteNode` accepts a document-owned carrier, disconnects every current user,
 removes it from any inline owner and candidate pool, and preserves its direct
@@ -170,15 +198,30 @@ window builds its current generation. Register custom ports with `AddInput`,
 legacy `Add(HGPort)` adapter. Use its read-only `Nodes`, `Fields`, `Ports`, and
 descriptor lookups to anchor an extension without retaining Editor view
 objects. A custom port may be a visual alias for an existing `GraphNode`, but it
-must not claim to persist a separate output identity or replace that node's
-already registered primary output.
+must not claim to persist a separate output identity. Use explicit primary
+selection to make that alias the endpoint used after rebuild:
+
+```csharp
+var presentation = context.CreatePresentation(existingOutputKey, new Vector2(12, 0));
+if (context.AddOutputAlias(existingOutputKey, customOutputKey, presentation))
+    context.SelectPrimaryOutput(customOutputKey);
+```
+
+Root titles are display text, never identity. String, enum, Guid and scalar root
+keys have typed stable ids. Other key types must provide `HGRootGroupView.StableId`
+through their root adapter. IDs must remain stable across clones/reorder/reopen;
+duplicate identities or missing non-scalar identities are build diagnostics.
 
 For Tool-owned node data, provide an `IHGEditorMetadataProvider`. A complete
 `HGNodeDescriptor` replaces reflection for that node type. Register a custom
 `IHGValueDrawer` for a value type whose control is not supplied by
 `HGValueField`; its `Measure` and `Draw` methods receive the same descriptor
 context and width, and the returned `HGValueDrawerResult` is written through
-the descriptor transaction.
+the descriptor transaction. Derive from `HGValueDrawer<T>` for a typed value
+argument; use the object interface only at the adapter boundary. HideLabel and
+list insets use the same geometry for measurement and drawing. Drawer failures
+show a disabled field and a diagnostic, rather than throwing on every repaint;
+after fixing a drawer, reopen through the Tool entry to clear its failure state.
 
 ```csharp
 public sealed class PercentDrawer : IHGValueDrawer
@@ -196,11 +239,13 @@ nodes, or window objects. Runtime owner rules can use `IGraphDomainDiagnostics`
 instead. GraphKit runs these providers during bind, live validation, and commit
 validation.
 
-`Editor/Tests/HGPublicConsumerTests.cs` is the compile-time third-consumer
-example: it opens document B, registers custom input/output ports, exercises
-generation rejection and undo/redo, commits/reopens/cancels, reports a domain
-diagnostic, and supplies typed metadata with a custom value drawer without
-implementation-model access.
+`Editor/Tests/HGPublicConsumerTests.cs` contains public-only consumer sources for
+both non-window and actual window commands. The window case registers aliases
+through the real provider, selects primary endpoints, rebuilds links, edits a
+descriptor value with Undo/Redo, blocks domain errors, and commits/rebinds/cancels.
+These are in-memory Owner round-trips; Unity asset serialization and GUI gestures
+still require the documented manual checks. AssetPipeline's test assembly also
+consumes the public window commands without GraphKit friend-assembly access.
 
 ## Validation Status
 

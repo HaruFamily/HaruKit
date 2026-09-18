@@ -10,6 +10,203 @@ using UnityEngine;
 public sealed class HGPublicConsumerTests
 {
     [Test]
+    public void WindowConsumerRebuildsCustomEndpointsAndCommitsUndoableValuesThroughPublicCommands()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            owner.A = ConsumerDocument.Create();
+            owner.B = ConsumerDocument.Create();
+            string sourceId = owner.B.Orphans[0].Id;
+            var provider = new WindowConsumerProvider(sourceId);
+            var context = new HGEditorExtensionContext(provider, provider, new HGEditorProfile(HGCapabilities.None));
+            Assert.That(window.BindDocument(owner, Binding(), context), Is.True);
+            var commands = window.GetDocumentCommands();
+            var before = commands.Query();
+            Assert.That(commands.Connect(before.Generation, provider.Output, provider.Input), Is.EqualTo(HGSessionCommandResult.Changed));
+            var connected = commands.Query();
+            Assert.That(connected.Links.Count, Is.EqualTo(1));
+            Assert.That(connected.Links[0].Input, Is.EqualTo(provider.Input));
+            Assert.That(connected.Links[0].Output, Is.EqualTo(provider.Output));
+            Assert.That(commands.Disconnect(before.Generation, provider.Input), Is.EqualTo(HGSessionCommandResult.StaleGeneration));
+            Assert.That(commands.EditValue(connected.Generation, sourceId, "/Percent", new ConsumerPercent(0.75f)),
+                Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Redo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            provider.Reject = true;
+            var liveErrors = commands.Validate();
+            Assert.That(System.Linq.Enumerable.Any(liveErrors, issue => issue.Code == "consumer.rejected"
+                && issue.Location.NodeId == sourceId && issue.Location.FieldPath == "/Percent"), Is.True);
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
+            Assert.That(owner.B.Root.Items[0].Node, Is.Null);
+            provider.Reject = false;
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(((ConsumerBody)owner.B.Root.Items[0].Node.BodyObject).Percent.Value, Is.EqualTo(0.75f));
+            Assert.That(owner.A.Root.Items[0].Node, Is.Null);
+            var saved = commands.Query();
+            Assert.That(commands.Disconnect(saved.Generation, provider.Input), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Cancel(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Query().Links[0].Output, Is.EqualTo(provider.Output));
+            Assert.That(window.BindDocument(owner, Binding(), context), Is.True);
+            Assert.That(commands.Query(), Is.Null);
+            commands = window.GetDocumentCommands();
+            Assert.That(commands.Query().Links[0].Input, Is.EqualTo(provider.Input));
+            var reloaded = commands.Query();
+            Assert.That(commands.Disconnect(reloaded.Generation, provider.Input), Is.EqualTo(HGSessionCommandResult.Changed));
+            reloaded = commands.Query();
+            Assert.That(commands.Connect(reloaded.Generation, provider.Input, provider.Output), Is.EqualTo(HGSessionCommandResult.Changed));
+            commands.Cancel();
+        }
+        finally
+        {
+            window.GetDocumentCommands()?.Cancel();
+            UnityEngine.Object.DestroyImmediate(window);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+    }
+
+    [Test]
+    public void CommitKeepsTheSameSessionIsolatedForFurtherEditsAndCancel()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            var binding = Binding();
+            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, binding, out var session), Is.True);
+            var key = new HGPortKey("root", "/input", HGPortRole.Input);
+            var registry = session.CreatePortRegistry();
+            registry.AddInput(key, session.Document.Root.Items[0], AcceptsSource(session.Document.Root.Items[0]), ConsumerPresentation());
+            Assert.That(session.ReconnectInput(registry, key, Source(session.Document.Orphans[0])), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(session.Document, Is.Not.SameAs(owner.B));
+            Assert.That(session.Document.Root.Items[0], Is.Not.SameAs(owner.B.Root.Items[0]));
+            registry = session.CreatePortRegistry();
+            registry.AddInput(key, session.Document.Root.Items[0], AcceptsSource(session.Document.Root.Items[0]), ConsumerPresentation());
+            Assert.That(session.Disconnect(registry, key), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(owner.B.Root.Items[0].Node, Is.Not.Null);
+            Assert.That(session.Cancel(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(session.Document.Root.Items[0].Node, Is.Not.Null);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void CurrentRegistryCannotMutateLiveForeignDetachedOrStaleSlots()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.A = ConsumerDocument.Create();
+            owner.B = ConsumerDocument.Create();
+            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, Binding(), out var session), Is.True);
+            var stale = session.Document.Root.Items[0];
+            session.Cancel();
+            foreach (var slot in new[] { owner.A.Root.Items[0], owner.B.Root.Items[0], new ConsumerSlot(), stale })
+            {
+                var source = session.Document.Orphans[0];
+                var before = new GraphNode(new ConsumerBody());
+                slot.SetNode(before);
+                var key = new HGPortKey("root", "/input", HGPortRole.Input);
+                var registry = session.CreatePortRegistry();
+                registry.AddInput(key, slot, AcceptsSource(slot), ConsumerPresentation());
+                Assert.That(session.ReconnectInput(registry, key, Source(source)), Is.EqualTo(HGSessionCommandResult.Rejected));
+                Assert.That(session.Disconnect(registry, key), Is.EqualTo(HGSessionCommandResult.Rejected));
+                Assert.That(slot.Node, Is.SameAs(before));
+                Assert.That(session.Document.Orphans, Contains.Item(source));
+                Assert.That(session.IsDirty, Is.False);
+                Assert.That(session.CanUndo, Is.False);
+            }
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void SetterFailureRestoresDocumentAndPreservesRedoWithoutWritingOwner()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, Binding(), out var session), Is.True);
+            var field = HGFieldDescriptor.Create<ConsumerBody, ConsumerPercent>("Percent", x => x.Percent,
+                (x, value) => x.Percent = value);
+            var body = (ConsumerBody)session.Document.Orphans[0].BodyObject;
+            session.EditValue(body, field, new ConsumerPercent(0.5f));
+            session.Undo();
+            body = (ConsumerBody)session.Document.Orphans[0].BodyObject;
+            var failing = HGFieldDescriptor.Create<ConsumerBody, ConsumerPercent>("Percent", x => x.Percent,
+                (x, value) => { x.Percent = value; throw new InvalidOperationException("setter failed"); });
+            int generation = session.Generation;
+            Assert.That(session.EditValue(body, failing, new ConsumerPercent(1f)), Is.EqualTo(HGSessionCommandResult.Rejected));
+            Assert.That(((ConsumerBody)session.Document.Orphans[0].BodyObject).Percent.Value, Is.Zero);
+            Assert.That(session.CanRedo, Is.True);
+            Assert.That(session.Generation, Is.GreaterThan(generation));
+            Assert.That(session.LastDiagnostic.Code, Is.EqualTo("graphkit.session.mutation-failed"));
+            Assert.That(((ConsumerBody)owner.B.Orphans[0].BodyObject).Percent.Value, Is.Zero);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void CarrierReplacementPreservesIdentityAndAllSharedReferences()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            var carrier = owner.B.Orphans[0];
+            owner.B.Root.Items[0].SetNode(carrier);
+            var second = new ConsumerSlot();
+            second.SetNode(carrier);
+            owner.B.Root.Items.Add(second);
+            carrier.Note = "retain";
+            carrier.Pos = new Vector2(40, 80);
+            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, Binding(), out var session), Is.True);
+            carrier = session.Document.Root.Items[0].Node;
+            string id = carrier.Id;
+            var sharedChild = session.Document.Orphans[1];
+            var newInput = new ConsumerSlot();
+            newInput.SetNode(sharedChild);
+            Assert.That(session.ReplaceSource(carrier, HGCarrierSource.Body(new ConsumerBody { Percent = new ConsumerPercent(0.8f), Input = newInput })),
+                Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(session.Document.Root.Items[1].Node, Is.SameAs(carrier));
+            Assert.That(carrier.Id, Is.EqualTo(id));
+            Assert.That(carrier.Note, Is.EqualTo("retain"));
+            Assert.That(carrier.Pos, Is.EqualTo(new Vector2(40, 80)));
+            Assert.That(((ConsumerBody)carrier.BodyObject).Percent.Value, Is.EqualTo(0.8f));
+            Assert.That(((ConsumerBody)carrier.BodyObject).Input.Node, Is.SameAs(sharedChild));
+            Assert.That(session.Document.Orphans.Contains(sharedChild), Is.False);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void SessionUsesTheSameProviderDiagnosticsForLiveAndCommit()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, Binding(), new HGEditorExtensionContext(new ConsumerProvider()),
+                out var session, out _), Is.True);
+            var live = session.CollectDiagnostics()[0];
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
+            Assert.That(session.LastDiagnostic.Code, Is.EqualTo(live.Code));
+            Assert.That(session.LastDiagnostic.Location.FieldPath, Is.EqualTo(live.Location.FieldPath));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    private static HGDocumentBinding<ConsumerDocument> Binding()
+        => new("Consumer.B", target => ((ConsumerOwner)target).B,
+            (target, document) => ((ConsumerOwner)target).B = document, ConsumerDocument.Create);
+
+    private static HGDelegatePortPresentation ConsumerPresentation()
+        => new(new object(), () => Vector2.zero, () => Rect.zero, () => true, () => false);
+
+    [Test]
     public void PublicSession_ConnectsCommitsAndCancelsWithoutLeakingAcrossDocuments()
     {
         var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
@@ -448,6 +645,39 @@ public sealed class HGPublicConsumerTests
         }
     }
 
+    private sealed class WindowConsumerProvider : IHGEditorExtensionProvider, IHGEditorMetadataProvider, IHGEditorDiagnosticProvider
+    {
+        private readonly string sourceId;
+        private readonly ConsumerProvider metadata = new();
+        public bool Reject;
+        public HGPortKey Input { get; private set; }
+        public HGPortKey Output { get; private set; }
+        public WindowConsumerProvider(string sourceId) { this.sourceId = sourceId; }
+        public bool Supports(UnityEngine.Object owner, IGraphDocument document) => document is ConsumerDocument;
+        public void AddPorts(HGPortBuildContext context)
+        {
+            HGPortKey input = default, output = default;
+            foreach (var port in context.Ports)
+            {
+                if (port.Key.Role == HGPortRole.Input && port.Key.OwnerId.StartsWith("head:")) input = port.Key;
+                if (port.Key.Role == HGPortRole.Output && port.Key.OwnerId == sourceId) output = port.Key;
+            }
+            Input = new HGPortKey(input.OwnerId, "/custom-input", HGPortRole.Input);
+            Output = new HGPortKey(sourceId, "/custom-output", HGPortRole.Output);
+            if (!context.AddInputAlias(input, Input, context.CreatePresentation(input, new Vector2(-12, 0)))
+                || !context.AddOutputAlias(output, Output, context.CreatePresentation(output, new Vector2(12, 0)))
+                || !context.SelectPrimaryInput(Input) || !context.SelectPrimaryOutput(Output))
+                throw new InvalidOperationException("Consumer endpoint registration failed.");
+        }
+        public bool TryGetNodeDescriptor(Type type, out HGNodeDescriptor descriptor) => metadata.TryGetNodeDescriptor(type, out descriptor);
+        public bool TryGetValueDrawer(Type type, out IHGValueDrawer drawer) => metadata.TryGetValueDrawer(type, out drawer);
+        public void CollectDiagnostics(UnityEngine.Object owner, IGraphDocument document, List<GraphDiagnostic> diagnostics)
+        {
+            if (Reject) diagnostics.Add(new GraphDiagnostic("consumer.rejected", GraphDiagnosticSeverity.Error,
+                "Consumer rejects this value.", new GraphDiagnosticLocation(nodeId: sourceId, fieldPath: "/Percent")));
+        }
+    }
+
     [Serializable]
     private sealed class ConsumerDocument : IGraphDocument, ITokenOwner
     {
@@ -504,6 +734,7 @@ public sealed class HGPublicConsumerTests
         private GraphNode node;
         public override GraphNode Node => node;
         public override void SetNode(GraphNode value) => node = value;
+        public override bool AcceptsBody(GraphNodeContent value) => value is ConsumerBody;
     }
 
     [Serializable]
@@ -538,11 +769,11 @@ public sealed class HGPublicConsumerTests
         }
     }
 
-    private sealed class ConsumerPercentDrawer : IHGValueDrawer
+    private sealed class ConsumerPercentDrawer : HGValueDrawer<ConsumerPercent>
     {
-        public float Measure(in HGValueDrawerContext context, float width) => 18f;
+        public override float Measure(in HGValueDrawerContext context, float width) => 18f;
 
-        public HGValueDrawerResult Draw(Rect rect, in HGValueDrawerContext context, object value)
+        public override HGValueDrawerResult DrawValue(Rect rect, in HGValueDrawerContext context, ConsumerPercent value)
             => new HGValueDrawerResult(true, new ConsumerPercent(0.75f));
     }
 

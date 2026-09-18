@@ -73,7 +73,9 @@ public class HGReport
     public void ReplaceGraphViewDiagnostics(IEnumerable<GraphDiagnostic> diagnostics)
     {
         Issues.RemoveAll(issue => issue.Code.StartsWith("graphkit.metadata.", StringComparison.Ordinal)
-            || issue.Code.StartsWith("graphkit.port-resolution.", StringComparison.Ordinal));
+            || issue.Code.StartsWith("graphkit.port-resolution.", StringComparison.Ordinal)
+            || issue.Code.StartsWith("graphkit.port.", StringComparison.Ordinal)
+            || issue.Code == "graphkit.build.failed" || issue.Code == "graphkit.provider.ports-failed");
         if (diagnostics == null) return;
         foreach (var diagnostic in diagnostics)
         {

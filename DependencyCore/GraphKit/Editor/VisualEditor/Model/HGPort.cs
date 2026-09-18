@@ -38,8 +38,8 @@ public readonly struct HGPortKey : IEquatable<HGPortKey>
         unchecked
         {
             int hash = 17;
-            hash = hash * 31 + OwnerId.GetHashCode();
-            hash = hash * 31 + Path.GetHashCode();
+            hash = hash * 31 + (OwnerId?.GetHashCode() ?? 0);
+            hash = hash * 31 + (Path?.GetHashCode() ?? 0);
             return hash * 31 + (int)Role;
         }
     }
@@ -136,7 +136,7 @@ public readonly struct HGPortDescriptor
     public bool CanStart { get; }
     public bool IsPrimaryOutput { get; }
 
-    internal HGPortDescriptor(HGPort port)
+    internal HGPortDescriptor(HGPort port, bool? primaryOutput = null)
     {
         Key = port.Key;
         string nodeId = port.Presentation is IHGPortPresentationLocator locator
@@ -149,7 +149,7 @@ public readonly struct HGPortDescriptor
         IsVisible = port.Presentation.Visible;
         IsLocked = port.Presentation.Locked;
         CanStart = port.CanStart;
-        IsPrimaryOutput = port.IsPrimaryOutput;
+        IsPrimaryOutput = primaryOutput ?? port.IsPrimaryOutput;
     }
 }
 
@@ -222,7 +222,7 @@ public sealed class HGPort
     public IHGPortSource Source => (Binding as IHGOutputPortBinding)?.Source;
     public bool IsInput => Binding is IHGInputPortBinding;
     public bool IsOutput => Binding is IHGOutputPortBinding;
-    public bool CanStart => Presentation.Visible && !Presentation.Locked && Policy.CanStart;
+    public bool CanStart => Binding is not IHGAggregatePortBinding && Presentation.Visible && !Presentation.Locked && Policy.CanStart;
 }
 
 /// <summary>Outcome shared by link highlighting, snapping and the final connection attempt.</summary>
@@ -242,12 +242,19 @@ public enum HGPortConnectionResult
     WouldCreateCycle,
     UnsupportedOperation,
     Rejected,
+    ProviderFailed,
 }
 
 /// <summary>Non-UI connection coordinator shared by dragging, snapping and direct tests.</summary>
 public static class HGPortConnection
 {
     public static HGPortConnectionResult Check(HGPort first, HGPort second, int generation)
+    {
+        try { return CheckPair(first, second, generation); }
+        catch (Exception) { return HGPortConnectionResult.ProviderFailed; }
+    }
+
+    private static HGPortConnectionResult CheckPair(HGPort first, HGPort second, int generation)
     {
         if (first == null || second == null) return HGPortConnectionResult.InvalidEndpoint;
         if (first.Generation != generation || second.Generation != generation)
@@ -271,6 +278,12 @@ public static class HGPortConnection
 
     /// <summary>Checks an external source with the same acceptance path used by a rendered Output Port.</summary>
     public static HGPortConnectionResult CheckInputSource(HGPort input, IHGPortSource source, int generation)
+    {
+        try { return CheckInput(input, source, generation); }
+        catch (Exception) { return HGPortConnectionResult.ProviderFailed; }
+    }
+
+    private static HGPortConnectionResult CheckInput(HGPort input, IHGPortSource source, int generation)
     {
         if (input == null || !input.IsInput) return HGPortConnectionResult.InvalidEndpoint;
         if (input.Generation != generation) return HGPortConnectionResult.StaleGeneration;
@@ -307,13 +320,18 @@ internal enum HGLinkPortResolution
 internal static class HGLinkPortResolver
 {
     public static HGLinkPortResolution Resolve(HGLink link, IReadOnlyDictionary<HGPortKey, HGPort> portsByKey,
-        IReadOnlyDictionary<GraphNode, HGPort> primaryOutputs, int generation)
+        IReadOnlyDictionary<GraphNode, HGPort> primaryOutputs, int generation,
+        IReadOnlyDictionary<GraphSlotBase, HGPort> primaryInputs = null)
     {
         if (link == null) return HGLinkPortResolution.InputUnresolved;
         link.InputPort = null;
         link.OutputPort = null;
-        if (link.ParentRow == null || portsByKey == null || !portsByKey.TryGetValue(InputKey(link.ParentRow), out HGPort input)
-            || input.Generation != generation)
+        HGPort input = null;
+        if (link.ParentRow?.InputSlot != null && primaryInputs != null)
+            primaryInputs.TryGetValue(link.ParentRow.InputSlot, out input);
+        if (input == null && link.ParentRow != null && portsByKey != null)
+            portsByKey.TryGetValue(InputKey(link.ParentRow), out input);
+        if (input == null || input.Generation != generation)
             return HGLinkPortResolution.InputUnresolved;
 
         link.InputPort = input;
@@ -462,13 +480,17 @@ public sealed class HGPortRegistry
     private readonly List<HGPort> ports;
     private readonly Dictionary<HGPortKey, HGPort> byKey;
     private readonly Dictionary<GraphNode, HGPort> primaryOutputs;
+    private readonly Dictionary<GraphSlotBase, HGPort> primaryInputs;
+    private readonly HashSet<GraphNode> selectedOutputs = new();
+    private readonly HashSet<GraphSlotBase> selectedInputs = new();
     private readonly List<HGPortDescriptor> descriptors = new();
     private readonly Dictionary<HGPortKey, HGPortDescriptor> descriptorsByKey = new();
     public int Generation { get; }
     internal object Scope { get; }
     public HGPortBuildResult LastResult { get; private set; } = HGPortBuildResult.None;
-    public IReadOnlyList<HGPort> Ports => ports;
-    public IReadOnlyList<HGPortDescriptor> Descriptors => descriptors;
+    internal bool Reject(HGPortBuildResult result) { LastResult = result; return false; }
+    public IReadOnlyList<HGPort> Ports => ports.AsReadOnly();
+    public IReadOnlyList<HGPortDescriptor> Descriptors => descriptors.AsReadOnly();
 
     public HGPortRegistry(int generation)
         : this(generation, null, new List<HGPort>(), new Dictionary<HGPortKey, HGPort>(), new Dictionary<GraphNode, HGPort>())
@@ -481,19 +503,22 @@ public sealed class HGPortRegistry
     }
 
     internal HGPortRegistry(int generation, List<HGPort> ports,
-        Dictionary<HGPortKey, HGPort> byKey, Dictionary<GraphNode, HGPort> primaryOutputs)
-        : this(generation, null, ports, byKey, primaryOutputs)
+        Dictionary<HGPortKey, HGPort> byKey, Dictionary<GraphNode, HGPort> primaryOutputs,
+        Dictionary<GraphSlotBase, HGPort> primaryInputs = null)
+        : this(generation, null, ports, byKey, primaryOutputs, primaryInputs)
     {
     }
 
     private HGPortRegistry(int generation, object scope, List<HGPort> ports,
-        Dictionary<HGPortKey, HGPort> byKey, Dictionary<GraphNode, HGPort> primaryOutputs)
+        Dictionary<HGPortKey, HGPort> byKey, Dictionary<GraphNode, HGPort> primaryOutputs,
+        Dictionary<GraphSlotBase, HGPort> primaryInputs = null)
     {
         Generation = generation;
         Scope = scope;
         this.ports = ports ?? throw new ArgumentNullException(nameof(ports));
         this.byKey = byKey ?? throw new ArgumentNullException(nameof(byKey));
         this.primaryOutputs = primaryOutputs ?? throw new ArgumentNullException(nameof(primaryOutputs));
+        this.primaryInputs = primaryInputs ?? new Dictionary<GraphSlotBase, HGPort>();
     }
 
     public bool AddInput(HGPortKey key, GraphSlotBase inputSlot, IHGPortPolicy policy,
@@ -554,14 +579,61 @@ public sealed class HGPortRegistry
     /// <summary>Registers an explicitly constructed Port after validation.</summary>
     public bool Add(HGPort port)
     {
-        LastResult = Validate(port);
-        if (LastResult != HGPortBuildResult.Added) return false;
+        HGPortDescriptor descriptor;
+        try
+        {
+            LastResult = Validate(port);
+            if (LastResult != HGPortBuildResult.Added) return false;
+            // Evaluate Tool getters before publishing any part of the registration.
+            descriptor = new HGPortDescriptor(port);
+        }
+        catch (Exception)
+        {
+            LastResult = HGPortBuildResult.InvalidBinding;
+            return false;
+        }
         ports.Add(port);
         byKey.Add(port.Key, port);
         if (port.IsPrimaryOutput) primaryOutputs.Add(port.Source.OutputNode, port);
-        var descriptor = new HGPortDescriptor(port);
+        if (port.IsInput && !primaryInputs.ContainsKey(port.InputSlot)) primaryInputs.Add(port.InputSlot, port);
         descriptors.Add(descriptor);
         descriptorsByKey.Add(port.Key, descriptor);
+        return true;
+    }
+
+    /// <summary>Selects one explicit input presentation, replacing the built-in default.</summary>
+    public bool SelectPrimaryInput(HGPortKey key)
+    {
+        if (!byKey.TryGetValue(key, out var port) || !port.IsInput) return false;
+        if (!selectedInputs.Add(port.InputSlot)) { LastResult = HGPortBuildResult.DuplicatePrimaryInput; return false; }
+        primaryInputs[port.InputSlot] = port;
+        return true;
+    }
+
+    /// <summary>Selects one explicit output presentation, replacing the built-in default.</summary>
+    public bool SelectPrimaryOutput(HGPortKey key)
+    {
+        if (!byKey.TryGetValue(key, out var port) || !port.IsOutput) return false;
+        if (selectedOutputs.Contains(port.Source.OutputNode)) { LastResult = HGPortBuildResult.DuplicatePrimaryOutput; return false; }
+        var updates = new List<(int index, HGPortDescriptor descriptor)>();
+        try
+        {
+            for (int i = 0; i < descriptors.Count; i++)
+            {
+                var candidate = byKey[descriptors[i].Key];
+                if (!candidate.IsOutput || !ReferenceEquals(candidate.Source.OutputNode, port.Source.OutputNode)) continue;
+                updates.Add((i, new HGPortDescriptor(candidate, ReferenceEquals(candidate, port))));
+            }
+        }
+        catch (Exception) { LastResult = HGPortBuildResult.InvalidBinding; return false; }
+        selectedOutputs.Add(port.Source.OutputNode);
+        primaryOutputs[port.Source.OutputNode] = port;
+        foreach (var update in updates)
+        {
+            descriptors[update.index] = update.descriptor;
+            descriptorsByKey[update.descriptor.Key] = update.descriptor;
+        }
+        LastResult = HGPortBuildResult.Added;
         return true;
     }
 
@@ -601,39 +673,94 @@ public sealed class HGPortBuildContext
     private readonly HGPortRegistry registry;
     private readonly List<HGNodeViewInfo> nodes;
     private readonly List<HGFieldViewInfo> fields;
+    private readonly HashSet<GraphSlotBase> allowedInputs;
+    private readonly HashSet<GraphNode> allowedOutputs;
+    private readonly List<GraphDiagnostic> diagnostics = new();
+    internal IReadOnlyList<GraphDiagnostic> Diagnostics => diagnostics;
 
     public int Generation => registry.Generation;
     public HGPortBuildResult LastResult => registry.LastResult;
-    public IReadOnlyList<HGNodeViewInfo> Nodes => nodes;
-    public IReadOnlyList<HGFieldViewInfo> Fields => fields;
+    public IReadOnlyList<HGNodeViewInfo> Nodes => nodes.AsReadOnly();
+    public IReadOnlyList<HGFieldViewInfo> Fields => fields.AsReadOnly();
     public IReadOnlyList<HGPortDescriptor> Ports => registry.Descriptors;
 
     public HGPortBuildContext(HGGraphView graph, int generation)
     {
         if (graph == null) throw new ArgumentNullException(nameof(graph));
-        registry = new HGPortRegistry(generation, graph.Ports, graph.PortsByKey, graph.PrimaryOutputs);
+        registry = new HGPortRegistry(generation, graph.Ports, graph.PortsByKey, graph.PrimaryOutputs, graph.PrimaryInputs);
         (nodes, fields) = BuildViewInfo(graph);
     }
 
     internal HGPortBuildContext(HGGraphView graph, int generation, List<HGPort> ports,
         Dictionary<HGPortKey, HGPort> byKey, Dictionary<GraphNode, HGPort> primaryOutputs)
     {
-        registry = new HGPortRegistry(generation, ports, byKey, primaryOutputs);
+        registry = new HGPortRegistry(generation, ports, byKey, primaryOutputs, graph.PrimaryInputs);
         (nodes, fields) = BuildViewInfo(graph);
+        allowedInputs = new HashSet<GraphSlotBase>();
+        allowedOutputs = new HashSet<GraphNode>();
+        foreach (var node in graph.Nodes)
+        {
+            if (node.Carrier != null) allowedOutputs.Add(node.Carrier);
+            foreach (var row in HGGraph.AllRows(node.Rows))
+            {
+                if (row.InputSlot != null) allowedInputs.Add(row.InputSlot);
+                if (row.OutputNode != null) allowedOutputs.Add(row.OutputNode);
+            }
+        }
     }
 
     public bool AddInput(HGPortKey key, GraphSlotBase inputSlot, IHGPortPolicy policy,
         IHGPortPresentation presentation)
-        => registry.AddInput(key, inputSlot, policy, presentation);
+    {
+        if (allowedInputs != null && !allowedInputs.Contains(inputSlot))
+            return Record(key, registry.Reject(HGPortBuildResult.ForeignBinding));
+        return Record(key, registry.AddInput(key, inputSlot, policy, presentation));
+    }
 
     public bool AddOutput(HGPortKey key, IHGPortSource source, IHGPortPolicy policy,
         IHGPortPresentation presentation, bool isPrimaryOutput = false)
-        => registry.AddOutput(key, source, policy, presentation, isPrimaryOutput);
+    {
+        if (allowedOutputs != null && (source == null || !allowedOutputs.Contains(source.OutputNode)))
+            return Record(key, registry.Reject(HGPortBuildResult.ForeignBinding));
+        return Record(key, registry.AddOutput(key, source, policy, presentation, isPrimaryOutput));
+    }
 
     public bool AddAggregate(HGPortKey key, IHGPortPresentation presentation, IHGPortPolicy policy = null)
-        => registry.AddAggregate(key, presentation, policy);
+        => Record(key, registry.AddAggregate(key, presentation, policy));
 
-    public bool TryGet(HGPortKey key, out HGPort port) => registry.TryGet(key, out port);
+    internal bool TryGet(HGPortKey key, out HGPort port) => registry.TryGet(key, out port);
+
+    /// <summary>Creates a view-free presentation that follows current layout, visibility and locking.</summary>
+    public IHGPortPresentation CreatePresentation(HGPortKey existing, Vector2 offset)
+    {
+        if (!registry.TryGet(existing, out var port)) throw new ArgumentException("Unknown endpoint.", nameof(existing));
+        var anchor = new HGPortDescriptor(port).Anchor;
+        return new HGDelegatePortPresentation(new object(), anchor,
+            () => port.Presentation.Position + offset,
+            () => { var rect = port.Presentation.HitRect; rect.position += offset; return rect; },
+            () => port.Presentation.Visible, () => port.Presentation.Locked);
+    }
+
+    /// <summary>Adds a presentation of an existing input without exposing its view or policy.</summary>
+    public bool AddInputAlias(HGPortKey existing, HGPortKey key, IHGPortPresentation presentation)
+        => Record(key, registry.TryGet(existing, out var port) && port.IsInput
+            && registry.AddInput(key, port.InputSlot, port.Policy, presentation));
+
+    /// <summary>Adds a presentation of an existing source without exposing its view or policy.</summary>
+    public bool AddOutputAlias(HGPortKey existing, HGPortKey key, IHGPortPresentation presentation)
+        => Record(key, registry.TryGet(existing, out var port) && port.IsOutput
+            && registry.AddOutput(key, port.Source, port.Policy, presentation));
+
+    public bool SelectPrimaryInput(HGPortKey key) => Record(key, registry.SelectPrimaryInput(key));
+    public bool SelectPrimaryOutput(HGPortKey key) => Record(key, registry.SelectPrimaryOutput(key));
+
+    private bool Record(HGPortKey key, bool accepted)
+    {
+        if (!accepted) diagnostics.Add(new GraphDiagnostic("graphkit.port.registration-rejected", GraphDiagnosticSeverity.Error,
+            "Port " + key + " was rejected: " + registry.LastResult + ". Binding must belong to the current graph.",
+            new GraphDiagnosticLocation(nodeId: key.OwnerId, fieldPath: key.Path)));
+        return accepted;
+    }
     public bool TryGetDescriptor(HGPortKey key, out HGPortDescriptor descriptor)
         => registry.TryGetDescriptor(key, out descriptor);
     public bool TryGetPrimaryOutputDescriptor(GraphNode source, out HGPortDescriptor descriptor)
@@ -663,5 +790,7 @@ public enum HGPortBuildResult
     DuplicatePrimaryOutput,
     MissingOwner,
     InvalidBinding,
+    DuplicatePrimaryInput,
+    ForeignBinding,
 }
 }

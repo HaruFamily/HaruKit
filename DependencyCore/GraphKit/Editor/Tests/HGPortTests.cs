@@ -230,6 +230,16 @@ public class HGPortTests
         Assert.That(model.HasRoot(first), Is.True);
         Assert.That(model.HasRoot(second), Is.True);
         Assert.That(model.HasRoot(new SameLabelRootKey()), Is.False);
+        var rootObjects = new List<object>();
+        var ids = new HashSet<string>();
+        foreach (var root in model.ReadRootGroups())
+        {
+            rootObjects.Add(root.Root);
+            Assert.That(ids.Add(HGGraph.GroupHeadId(model, root.Root)), Is.True);
+        }
+        var built = HGGraph.Build(model, rootObjects, null, "roots", "Roots");
+        Assert.That(built.Nodes.Count, Is.EqualTo(4));
+        Assert.That(built.Diagnostics, Is.Empty);
         model.AddRoot(second);
         Assert.That(adapter.AddedKey, Is.SameAs(second));
 
@@ -539,6 +549,44 @@ public class HGPortTests
     }
 
     [Test]
+    public void HiddenLabelDrawerMeasuresTheActualDrawWidthAndReportsMeasureFailure()
+    {
+        var field = HGFieldDescriptor.Create<TestValueOwner, int>("count", target => target.Count,
+            (target, value) => target.Count = value, hideLabel: true);
+        var drawer = new TestValueDrawer();
+        var metadata = new TestMetadataProvider(new HGNodeDescriptor(typeof(TestValueOwner), new[] { field }), drawer);
+        var view = HGGraph.Build(new HGModel(), new object[] { new TestValueOwner() }, null, "test", "Test", metadata: metadata);
+        var row = view.Nodes[0].Rows[0];
+        Assert.That(drawer.MeasuredWidth, Is.EqualTo(HGGraph.ValueFieldRect(new Rect(0, 0, 300, row.Height), row).width));
+        Assert.That(drawer.MeasuredWidth, Is.EqualTo(276f));
+        metadata = new TestMetadataProvider(new HGNodeDescriptor(typeof(TestValueOwner), new[] { field }), new ThrowingDrawer());
+        view = HGGraph.Build(new HGModel(), new object[] { new TestValueOwner() }, null, "test", "Test", metadata: metadata);
+        Assert.That(view.Diagnostics.Exists(issue => issue.Code == "graphkit.metadata.drawer-failed"), Is.True);
+        Assert.That(view.Nodes[0].Rows[0].DrawerError, Is.Not.Empty);
+    }
+
+    [Test]
+    public void RegistryRemainsAtomicWhenPresentationThrowsAndCollectionsAreReadOnly()
+    {
+        var registry = new HGPortRegistry(1);
+        var key = new HGPortKey("node", "/input", HGPortRole.Input);
+        var broken = new HGDelegatePortPresentation(new object(), () => throw new InvalidOperationException("position"),
+            () => Rect.zero, () => true, () => false);
+        Assert.That(registry.AddInput(key, new TestSlot(), new HGDelegatePortPolicy(() => true), broken), Is.False);
+        Assert.That(registry.Ports, Is.Empty);
+        Assert.That(registry.TryGet(key, out _), Is.False);
+        Assert.That(registry.Descriptors, Is.Empty);
+        Assert.Throws<NotSupportedException>(() => ((IList<HGPort>)registry.Ports).Clear());
+        Assert.That(typeof(HGPortBuildContext).GetMethod("TryGet", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance), Is.Null);
+    }
+
+    private sealed class ThrowingDrawer : IHGValueDrawer
+    {
+        public float Measure(in HGValueDrawerContext context, float width) => throw new InvalidOperationException("measure");
+        public HGValueDrawerResult Draw(Rect rect, in HGValueDrawerContext context, object value) => throw new InvalidOperationException("draw");
+    }
+
+    [Test]
     public void DescriptorCarriesExistingRowPresentationMetadata()
     {
         var field = HGFieldDescriptor.Create<TestValueOwner, int>("count", target => target.Count,
@@ -786,7 +834,8 @@ public class HGPortTests
         {
             if (rootKeys == null || rootKeys.Length == 0) rootKeys = new object[] { "custom" };
             foreach (object key in rootKeys)
-                roots.Add(new HGRootGroupView { Root = new object(), RootKey = key, Items = items });
+                roots.Add(new HGRootGroupView { Root = new object(), RootKey = key, Items = items,
+                    StableId = key is SameLabelRootKey ? Guid.NewGuid().ToString("N") : null });
             Root = roots[0].Root;
         }
 

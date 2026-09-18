@@ -175,8 +175,10 @@ public sealed class HGFieldDescriptor
         exception = null;
         try
         {
-            value = CreateMissing?.Invoke(target);
-            if (value == null || Write == null) return false;
+            value = null;
+            if (CreateMissing == null || Write == null) return false;
+            value = CreateMissing(target);
+            if (value == null) throw new InvalidOperationException("The field factory returned null.");
             Write(target, value);
             return true;
         }
@@ -215,7 +217,7 @@ public sealed class HGNodeDescriptor
             if (!ids.Add(field.Id)) throw new ArgumentException($"Duplicate field id '{field.Id}'.", nameof(fields));
             copy.Add(field);
         }
-        Fields = copy;
+        Fields = copy.AsReadOnly();
     }
 }
 
@@ -261,5 +263,19 @@ public interface IHGValueDrawer
 {
     float Measure(in HGValueDrawerContext context, float width);
     HGValueDrawerResult Draw(Rect rect, in HGValueDrawerContext context, object value);
+}
+
+/// <summary>Typed drawing adapter; runtime type checks stay at the editor boundary.</summary>
+public abstract class HGValueDrawer<T> : IHGValueDrawer
+{
+    public abstract float Measure(in HGValueDrawerContext context, float width);
+    public abstract HGValueDrawerResult DrawValue(Rect rect, in HGValueDrawerContext context, T value);
+
+    public HGValueDrawerResult Draw(Rect rect, in HGValueDrawerContext context, object value)
+    {
+        if (value is T typed) return DrawValue(rect, context, typed);
+        if (value == null && default(T) is null) return DrawValue(rect, context, default);
+        throw new ArgumentException("Drawer value does not match " + typeof(T).FullName);
+    }
 }
 }
