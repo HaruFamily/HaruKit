@@ -4,8 +4,8 @@ Current package version: `1.1.0` (Unity 2021.3+).
 
 GraphKit is a Unity UPM framework for authoring serialized node graphs. It
 provides the graph carrier, the non-generic contracts an editor needs to walk a
-graph, and a complete IMGUI node editor. It defines no execution semantics: it
-does not know what a node does, when it runs, or what it returns.
+graph, and a complete IMGUI node editor. It does not schedule or evaluate nodes;
+optional execution observation records the lifecycle reported by a consumer.
 
 Any domain can expose an `IGraphDocument` through a serialized field or an
 explicit editor-side `HGDocumentBinding<TDocument>`. `LogicGraph` is one such
@@ -143,6 +143,54 @@ handles are scoped to that document session and its current generation.
 
 ## Public API Patterns
 
+### Execution observation and Hold
+
+`IGraphExecutionDocument` optionally exposes a `GraphExecutionSource` and an
+`ExecutionRevision`. Runtime copies should share the source while retaining the
+revision of their own content. GraphKit's source/session/visit types use standard
+`Task` and `CancellationToken`; they do not depend on LogicGraph or UniTask.
+
+An observer calls `source.Observe()` and disposes the returned lease when done.
+A consumer starts a `GraphExecutionSession` for one execution chain, then reports
+each invocation with `session.Enter(new GraphExecutionNodeKey(nodeId, scope))`.
+Await `visit.WaitAsync()` **before** executing the body, and report `Complete()`,
+`Fail(exception)` or `Cancel()` afterwards. Dispose unfinished visits/sessions.
+These APIs are main-thread APIs; token cancellation may originate elsewhere, but
+consumer continuations and lifecycle reports must return to the main thread.
+
+Holds belong to a specific session. Prepared Holds are consumed by the next
+execution with the matching revision, not broadcast to every runtime copy.
+Snapshots distinguish not visited, holding, running, completed, failed and
+cancelled, including counts for repeated/overlapping visits. Scope-qualified
+keys keep asset-internal nodes separate from caller nodes. Sources retain 32
+finished sessions and never evict active sessions. The final observer leaving
+releases Holds; explicit cancellation ends the chain instead of resuming it.
+
+The window automatically observes documents exposing this capability. During
+Play, select **準備下一次執行**, set node Holds, then trigger the consumer's graph.
+The next execution is selected automatically; subsequent executions remain
+independent and can be selected from the execution panel. `Ⅱ` arms Hold; `▶`
+releases it, with a lit background while actually waiting. Closing the observer
+releases its Holds when no other observer remains. Leaving Play or reloading
+assemblies cancels observed chains. Holds/history are transient; after Domain
+Reload reopen the document through its Tool entry and prepare Holds again.
+
+Header controls use `●` enabled / `○` disabled. Controls appear on hover or
+selection, with disabled and armed Hold indicators remaining visible. Comment
+icons do not remain visible in the collapsed toolbar; expanded comments remain
+in the node body. Control slots keep fixed widths. A single strip under the
+24px Header shows errors first, then selected execution state, then editor
+warnings: red error/failure, amber Hold/warning, cyan running, muted green
+completed, neutral not-visited/cancelled. Tooltips retain the detailed reason.
+Unsaved documents, mismatched revisions or replaced asset roots suppress live
+colors/new Holds; release/cancel controls remain available. The strip does not
+replace node identity colors, selection borders or field-level diagnostics.
+An execution reporting `graphkit.execution.node-id-missing` also suppresses the
+projection: save the authored graph before creating runtime copies, rather than
+mistaking an unmapped node for a node that never executed.
+
+### Document commands
+
 Use one typed binding per document field. The document id is stable within its
 owner, so separate bindings keep their working copies, undo histories, and
 commits separate.
@@ -160,6 +208,49 @@ HaruGraphWindow.OpenForDocument(owner, binding, extensions);
 Use a second binding with a different `DocumentId` and getter/setter for a
 second document on the same owner. Do not route either document through legacy
 field discovery when the Tool knows which field it is editing.
+
+### Commit safety
+
+Window document saves (including legacy field bindings) and non-window sessions
+check the Owner for missing `SerializeReference` types and compare the live
+document reference with the baseline captured at open, successful write, or
+cancel. A replaced document returns `HGSessionCommandResult.Conflict`; the
+working copy and its history remain available. Preserve any edits you need
+before cancelling to adopt the latest Owner document. Validation is followed by
+another Owner check immediately before writing.
+
+Reference checks do not detect in-place changes to the same document instance.
+Tools with other editing entry points can supply a document-scoped revision:
+
+```csharp
+var binding = new HGDocumentBinding<MyDocument>(
+    "MyTool.GraphB",
+    owner => ((MyOwner)owner).GraphB,
+    (owner, document) => ((MyOwner)owner).GraphB = document,
+    create: MyDocument.Create,
+    readRevision: owner => ((MyOwner)owner).GraphBRevision.ToString());
+```
+
+Every external in-place edit must update that revision. Its getter must be pure;
+do not use an Owner-wide dirty flag, which also changes for unrelated fields or
+catalogs. The original constructor remains available without a revision reader.
+
+The binding setter must assign the supplied document reference, without mutating
+the previous document or unrelated Owner data. It must also accept `null` when
+recovering a document that was initially absent. If it fails, GraphKit attempts
+to restore the original reference and reads it back. Unconfirmed recovery emits
+`graphkit.commit.recovery-required` and blocks subsequent commits until the
+Owner has been inspected/repaired and explicitly reloaded. This compensation is
+not a rollback of arbitrary setter side effects or disk writes. Persistence
+failures keep the working copy/history; the Owner may already hold the new
+document, so inspect the diagnostic before retrying.
+
+Non-window sessions expose failures through `LastDiagnostic`. Window commands
+return the failure category and expose the last commit diagnostic through
+`Validate()`; the UI displays it in the Console. Failed reloads preserve the
+working copy and history. Non-window Undo keeps the latest 40 steps, with each
+successful mutation being one step; window history retains its existing merge
+policy.
 
 For non-window commands, open a public working-copy session. Create the
 registry through that session, because Ports and all handles are valid only for

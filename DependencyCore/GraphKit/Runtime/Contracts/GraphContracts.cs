@@ -188,6 +188,13 @@ public interface ICatalogOwner
     void RestoreCatalogs(object snapshot);
 }
 
+/// <summary>Optional observation capability. Copies share a source, but retain their own document revision.</summary>
+public interface IGraphExecutionDocument
+{
+    GraphExecutionSource ExecutionSource { get; }
+    string ExecutionRevision { get; }
+}
+
 /// <summary>
 /// 一張可編輯的圖對編輯器的完整形狀。編輯器靠這個介面在 Owner 身上找到要編的欄位，
 /// 不認識任何具體的圖型別，所以同一套編輯器可以編不同領域的圖；具名 Token 是選用的

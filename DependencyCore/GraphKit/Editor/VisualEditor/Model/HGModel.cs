@@ -68,9 +68,11 @@ public class HGModel
     public IReadOnlyList<object> AvailableRootKeys { get; private set; }
     public bool Dirty { get; private set; }
     public bool TrackChanges { get; set; } = true;
+    public GraphDiagnostic LastCommitDiagnostic { get; internal set; }
 
     private FieldInfo systemField;                    // Owner 上放 LogicGraph 的欄位
     private HGDocumentBinding documentBinding;
+    private HGDocumentCommitGuard commitGuard;
     private IHGRootAdapter rootAdapter = HGDocumentRootAdapter.Instance;
     private readonly Dictionary<ScriptableObject, List<AssetParameterDefinition>> assetParameterCache = new();
 
@@ -127,7 +129,7 @@ public class HGModel
             return false;
         }
 
-        Reload();
+        if (!TryReload()) return false;
         if (Data == null)
         {
             Debug.LogError($"[GraphKit] '{(owner != null ? owner.name : "null")}' 的圖文件取不到內容，無法編輯。");
@@ -148,29 +150,60 @@ public class HGModel
 
 
     /// <summary>從 Owner 重新抓一份工作副本（開啟與「取消」共用）。</summary>
-    public void Reload()
+    public void Reload() => TryReload();
+
+    internal bool TryReadOwnerDocument(out IGraphDocument document, out string error)
     {
-        IGraphDocument live;
-        if (documentBinding != null)
+        document = null;
+        error = null;
+        if (Owner == null) return false;
+        try
         {
-            if (!TryReadBoundDocument(out var bound) && !TryCreateBoundDocument(out bound))
-            {
-                Data = null;
-                Dirty = false;
-                ClearHistory();
-                return;
-            }
-            live = bound;
+            if (documentBinding != null) return documentBinding.TryRead(Owner, out document);
+            document = systemField?.GetValue(Owner) as IGraphDocument;
+            return document != null;
         }
-        else
+        catch (Exception exception) { error = exception.Message; return false; }
+    }
+
+    internal bool TryReload()
+    {
+        try
         {
-            live = systemField.GetValue(Owner) as IGraphDocument;
-            if (live == null)
-                live = Activator.CreateInstance(systemField.FieldType) as IGraphDocument;
+            if (Owner == null) throw new InvalidOperationException("Owner 已不存在。");
+            var binding = documentBinding ?? new HGDocumentBinding<IGraphDocument>(
+                $"{systemField.DeclaringType?.FullName}.{systemField.Name}",
+                owner => systemField.GetValue(owner) as IGraphDocument,
+                (owner, document) => systemField.SetValue(owner, document),
+                () => Activator.CreateInstance(systemField.FieldType) as IGraphDocument);
+            binding.TryRead(Owner, out var live);
+            var nextGuard = new HGDocumentCommitGuard(Owner, binding, live);
+            if (live == null && !binding.TryCreate(out live))
+                throw new InvalidOperationException("文件無法讀取或建立。");
+            var copy = DeepCopy(live);
+            if (copy == null) return false;
+            var nextBaseline = DeepCopy(copy);
+            if (nextBaseline == null) return false;
+
+            Data = copy;
+            commitGuard = nextGuard;
+            LastCommitDiagnostic = null;
+            Dirty = false;
+            undoStack.Clear();
+            redoStack.Clear();
+            baseline = nextBaseline;
+            lastPushTime = 0d;
+            lastCatalogPush = 0d;
+            return true;
         }
-        Data = DeepCopy(live);
-        Dirty = false;
-        ClearHistory();
+        catch (Exception exception)
+        {
+            LastCommitDiagnostic = new GraphDiagnostic("graphkit.commit.reload-failed", GraphDiagnosticSeverity.Error,
+                "文件重載失敗，目前工作副本與歷程保留：" + exception.Message,
+                new GraphDiagnosticLocation(documentId: DocumentId));
+            Debug.LogError($"[GraphKit] 文件 '{DocumentId}' 重載失敗，目前工作副本與歷程保留：{exception.Message}");
+            return false;
+        }
     }
 
     private IGraphDocument DeepCopy(IGraphDocument document)
@@ -348,21 +381,16 @@ public class HGModel
         return HGStepKind.Catalogs;
     }
 
-    private void ClearHistory()
-    {
-        undoStack.Clear();
-        redoStack.Clear();
-        baseline = Data != null ? DeepCopy(Data) : null;
-        lastPushTime = 0d;
-        lastCatalogPush = 0d;
-    }
-
     /// <summary>先以 Core 規則驗證副本；通過後才寫回 Owner。</summary>
     public bool Save()
     {
+        LastCommitDiagnostic = null;
         try { return SaveCore(); }
         catch (Exception exception)
         {
+            LastCommitDiagnostic = new GraphDiagnostic("graphkit.commit.save-failed", GraphDiagnosticSeverity.Error,
+                "文件保存失敗，工作副本與歷程保留：" + exception.Message,
+                new GraphDiagnosticLocation(documentId: DocumentId));
             Debug.LogError($"[GraphKit] 文件 '{DocumentId}' 保存失敗，工作副本與歷程保留：{exception.Message}");
             return false;
         }
@@ -370,6 +398,9 @@ public class HGModel
 
     private bool SaveCore()
     {
+        if (commitGuard == null) return false;
+        LastCommitDiagnostic = commitGuard.Check();
+        if (LastCommitDiagnostic != null) return false;
         var toStore = DeepCopy(Data);
         if (toStore == null) return false;
         toStore.MarkDirty();
@@ -380,13 +411,10 @@ public class HGModel
             return false;
         }
 
-        if (documentBinding != null)
+        if (!commitGuard.TryWrite(toStore, out var failure))
         {
-            if (!TryWriteBoundDocument(toStore)) return false;
-        }
-        else
-        {
-            systemField.SetValue(Owner, toStore);
+            LastCommitDiagnostic = failure;
+            return false;
         }
         EditorUtility.SetDirty(Owner);
         if (Owner is Component component && component.gameObject.scene.IsValid())
@@ -394,34 +422,6 @@ public class HGModel
         AssetDatabase.SaveAssets();
         Dirty = false;
         return true;
-    }
-
-    private bool TryReadBoundDocument(out IGraphDocument document)
-    {
-        try
-        {
-            return documentBinding.TryRead(Owner, out document);
-        }
-        catch (Exception exception)
-        {
-            Debug.LogError($"[GraphKit] 讀取文件 '{documentBinding.DocumentId}' 失敗：{exception.Message}");
-            document = null;
-            return false;
-        }
-    }
-
-    private bool TryCreateBoundDocument(out IGraphDocument document)
-    {
-        try
-        {
-            return documentBinding.TryCreate(out document);
-        }
-        catch (Exception exception)
-        {
-            Debug.LogError($"[GraphKit] 建立文件 '{documentBinding.DocumentId}' 失敗：{exception.Message}");
-            document = null;
-            return false;
-        }
     }
 
     private bool TryCloneBoundDocument(IGraphDocument document, out IGraphDocument clone)
@@ -439,22 +439,6 @@ public class HGModel
 
         Debug.LogError($"[GraphKit] 文件 '{documentBinding.DocumentId}' 的工作副本型別不符或與來源共用實例。");
         clone = null;
-        return false;
-    }
-
-    private bool TryWriteBoundDocument(IGraphDocument document)
-    {
-        try
-        {
-            if (documentBinding.TryWrite(Owner, document)) return true;
-        }
-        catch (Exception exception)
-        {
-            Debug.LogError($"[GraphKit] 寫入文件 '{documentBinding.DocumentId}' 失敗：{exception.Message}");
-            return false;
-        }
-
-        Debug.LogError($"[GraphKit] 文件 '{documentBinding.DocumentId}' 的工作副本型別不符，Owner 未寫入。");
         return false;
     }
 

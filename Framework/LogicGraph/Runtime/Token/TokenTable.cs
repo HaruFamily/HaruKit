@@ -3,6 +3,7 @@ namespace HaruFamily.Framework.LogicGraph
 using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 
@@ -15,6 +16,21 @@ using HaruFamily.DependencyCore.GraphKit;
 /// </summary>
 public class TokenTable<TPack>
 {
+    internal GraphExecutionSession Execution;
+    internal string ExecutionScope = "";
+    internal CancellationToken ExecutionCancellation;
+
+    internal GraphNodeExecution EnterNode(GraphNode node)
+    {
+        ExecutionCancellation.ThrowIfCancellationRequested();
+        if (Execution == null) return null;
+        if (string.IsNullOrEmpty(node?.Id))
+        {
+            Execution.ReportUnmappedNode(ExecutionScope);
+            return null;
+        }
+        return Execution.Enter(new GraphExecutionNodeKey(node.Id, ExecutionScope));
+    }
     private readonly Dictionary<(Type, string), FormulaSlotBase> _slots = new();
     private readonly HashSet<(Type, string)> _inFlight = new();
     // 覆蓋表也以（族, 名稱）為鍵：資產參數同名不同族可以並存，只用名稱當鍵會讓後到的那個靜默被丟掉。
@@ -28,7 +44,14 @@ public class TokenTable<TPack>
     internal static TokenTable<TPack> CreateAssetScope(ScriptableObject asset,
         IReadOnlyList<NamedFormulaSlot> bindings, TokenTable<TPack> caller)
     {
-        var table = new TokenTable<TPack> { _caller = caller };
+        var table = new TokenTable<TPack>
+        {
+            _caller = caller,
+            Execution = caller?.Execution,
+            ExecutionCancellation = caller?.ExecutionCancellation ?? default,
+            ExecutionScope = "asset:" + asset.GetInstanceID(),
+        };
+        if (asset is IGraphAsset graphAsset) table.Execution?.RegisterScope(table.ExecutionScope, graphAsset.Root);
         foreach (var parameter in AssetGraphSchema.ReadCached(asset))
             table.Register(parameter.Name, parameter.Slot);
         if (bindings != null)

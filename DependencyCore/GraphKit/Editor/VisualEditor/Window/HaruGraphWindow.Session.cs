@@ -120,7 +120,9 @@ public partial class HaruGraphWindow
     {
         if (QueryDocument(expected) == null) return HGSessionCommandResult.StaleGeneration;
         bool saved = focus.Kind == HGFocusKind.Asset ? SaveAsset(false) : DoSave(false);
-        if (!saved) return HGSessionCommandResult.ValidationFailed;
+        if (!saved) return model.LastCommitDiagnostic != null && focus.Kind != HGFocusKind.Asset
+            ? HGDocumentCommitGuard.ResultOf(model.LastCommitDiagnostic)
+            : HGSessionCommandResult.ValidationFailed;
         ClearPortInteractionState();
         graphDirty = true;
         return HGSessionCommandResult.Changed;
@@ -137,6 +139,8 @@ public partial class HaruGraphWindow
         }
         DoVerify(true);
         foreach (var issue in Rep.Issues) diagnostics.Add(issue.Diagnostic);
+        if (focus.Kind != HGFocusKind.Asset && model.LastCommitDiagnostic != null)
+            diagnostics.Add(model.LastCommitDiagnostic);
         return diagnostics.AsReadOnly();
     }
 
@@ -145,7 +149,7 @@ public partial class HaruGraphWindow
         if (!ReferenceEquals(model, expected) || model?.Owner == null) return HGSessionCommandResult.StaleGeneration;
         if (focus.Kind == HGFocusKind.Asset) return HGSessionCommandResult.Rejected;
         ClearPortInteractionState();
-        model.Reload();
+        if (!model.TryReload()) return HGSessionCommandResult.Rejected;
         focus = AllRootsFocus();
         selectedIds.Clear();
         graphDirty = true;
@@ -510,6 +514,9 @@ public partial class HaruGraphWindow
 
     private void OnEnable()
     {
+        EditorApplication.update += UpdateExecutionView;
+        EditorApplication.playModeStateChanged += ExecutionPlayModeChanged;
+        AssemblyReloadEvents.beforeAssemblyReload += CancelObservedExecutions;
         if (usesExplicitToolEntry && sessionBinding == null) requiresToolReopenAfterReload = true;
         sessionContext ??= HGEditorExtensionContext.Default;
         activeContext ??= HGEditorExtensionContext.Default;
@@ -524,6 +531,13 @@ public partial class HaruGraphWindow
 
     private void OnDisable()
     {
+        EditorApplication.update -= UpdateExecutionView;
+        EditorApplication.playModeStateChanged -= ExecutionPlayModeChanged;
+        AssemblyReloadEvents.beforeAssemblyReload -= CancelObservedExecutions;
+        executionObservation?.Dispose();
+        executionObservation = null;
+        executionSource = null;
+        selectedExecution = null;
         console.SavePrefs();
         EditorPrefs.SetFloat(PrefLeftWidth, leftWidth);
         EditorPrefs.SetFloat(PrefTokenSection, tokenSectionHeight);
@@ -558,7 +572,8 @@ public partial class HaruGraphWindow
         if (focus.Kind == HGFocusKind.Asset) ExitAsset();
         if (model?.Dirty == true)
         {
-            model.Reload();
+            if (!model.TryReload())
+                throw new InvalidOperationException("文件重載失敗，保留未儲存內容並取消關閉。請查看 Unity Console。");
             focus = AllRootsFocus();
             graphDirty = true;
         }
@@ -603,6 +618,7 @@ public partial class HaruGraphWindow
 
     private bool DoSave(bool showDialog = true)
     {
+        model.LastCommitDiagnostic = null;
         DoVerify(true);
         if (!report.CanSave)
         {
@@ -617,8 +633,14 @@ public partial class HaruGraphWindow
         }
         if (!model.Save())
         {
+            if (model.LastCommitDiagnostic != null)
+            {
+                report.Issues.Add(new HGIssue(model.LastCommitDiagnostic, "文件提交", null, null, null));
+                console.RevealErrors();
+            }
             if (showDialog)
-                ShowNotification(new GUIContent("無法存檔：Core 驗證未通過，Owner 未寫入。詳見 Unity Console"));
+                ShowNotification(new GUIContent(model.LastCommitDiagnostic?.Message
+                    ?? "無法存檔：Core 驗證未通過，Owner 未寫入。詳見 Unity Console"));
             return false;
         }
         // Owner 的引用內容變了，反向索引跟著失效。下次要用時才重算，這裡不掃。
@@ -646,7 +668,11 @@ public partial class HaruGraphWindow
                 "捨棄修改", "會丟掉自上次存檔以來的所有修改，確定嗎？", "捨棄", "繼續編輯"))
             return;
         ClearPortInteractionState();
-        model.Reload();
+        if (!model.TryReload())
+        {
+            ShowNotification(new GUIContent("文件重載失敗，目前修改保留。請查看 Unity Console。"));
+            return;
+        }
         // 重抓工作副本＝焦點抓的是舊資料，直接回到時機畫布（不回去的話畫面會空白）。
         focus = AllRootsFocus();
         selectedIds.Clear();

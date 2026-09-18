@@ -71,7 +71,16 @@ public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
         var target = Root?.GetBody<FormulaBase<T, TPack>>();
         if (target == null) return default;
         var tokens = TokenTable<TPack>.CreateAssetScope(this, bindings, caller);
-        return await target.Evaluate(pack, tokens);
+        using var visit = tokens.EnterNode(Root);
+        try
+        {
+            if (visit != null) await visit.WaitAsync();
+            var result = await target.Evaluate(pack, tokens);
+            visit?.Complete();
+            return result;
+        }
+        catch (OperationCanceledException) { visit?.Cancel(); throw; }
+        catch (Exception exception) { visit?.Fail(exception); throw; }
     }
 
     public override List<GraphNode> Orphans

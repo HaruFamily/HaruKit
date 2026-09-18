@@ -45,7 +45,15 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAss
             return;
         }
         var tokens = TokenTable<TPack>.CreateAssetScope(this, bindings, caller);
-        await action.Execute(pack, tokens);
+        using var visit = tokens.EnterNode(Root);
+        try
+        {
+            if (visit != null) await visit.WaitAsync();
+            await action.Execute(pack, tokens);
+            visit?.Complete();
+        }
+        catch (OperationCanceledException) { visit?.Cancel(); throw; }
+        catch (Exception exception) { visit?.Fail(exception); throw; }
     }
 
     /// <summary>本資產的候選節點清單。僅視覺化編輯器使用。</summary>

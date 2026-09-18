@@ -243,6 +243,93 @@ public class GraphDeepCopyTests
 
     private sealed class CloneAsset : ScriptableObject { }
 
+    [Test]
+    public async Task ExecutionObservesFormulaAndTokenVisitsInTheSameChain()
+    {
+        var formula = new GraphNode(new CountingFormula());
+        formula.EnsureId();
+        var tokenSlot = new TestSlot();
+        tokenSlot.SetNode(formula);
+        var token = new GraphToken("value", tokenSlot);
+        var reference = new GraphNode();
+        reference.SetToken(token);
+        reference.EnsureId();
+        var input = new TestSlot();
+        input.SetNode(reference);
+        var graph = ExecutionGraph(input, out var action);
+        graph.Tokens.Add(token);
+        using var observation = graph.ExecutionSource.Observe();
+        var key = new GraphExecutionNodeKey(formula.Id);
+        graph.ExecutionSource.SetHoldForNextExecution(key, graph.ExecutionRevision, true);
+        var running = graph.TriggerAction(TestTiming.Start, default).AsTask();
+        try
+        {
+            var session = graph.ExecutionSource.Sessions[0];
+            Assert.That(session.Query(key).State, Is.EqualTo(GraphExecutionState.Holding));
+            Assert.That(session.Query(new GraphExecutionNodeKey(action.Id)).State, Is.EqualTo(GraphExecutionState.Running));
+            Assert.That(session.Query(new GraphExecutionNodeKey(reference.Id)).State, Is.EqualTo(GraphExecutionState.Running));
+            session.SetHold(key, false);
+            await running;
+            Assert.That(session.Query(key).Completed, Is.EqualTo(2));
+            Assert.That(session.Query(new GraphExecutionNodeKey(reference.Id)).Completed, Is.EqualTo(2));
+            Assert.That(session.Query(new GraphExecutionNodeKey(action.Id)).Completed, Is.EqualTo(1));
+        }
+        finally { graph.CancelObservedExecutions(); }
+    }
+
+    [Test]
+    public async Task ExecutionPropagatesThroughAssetRootsWithAQualifiedScope()
+    {
+        var asset = ScriptableObject.CreateInstance<TestFormulaAsset>();
+        var root = new GraphNode(new CountingFormula());
+        root.EnsureId();
+        asset.SetRoot(root);
+        var reference = new GraphNode();
+        reference.SetAsset(asset);
+        reference.EnsureId();
+        var input = new TestSlot();
+        input.SetNode(reference);
+        var graph = ExecutionGraph(input, out _);
+        using var observation = graph.ExecutionSource.Observe();
+        var key = new GraphExecutionNodeKey(root.Id, "asset:" + asset.GetInstanceID());
+        graph.ExecutionSource.SetHoldForNextExecution(key, graph.ExecutionRevision, true);
+        var running = graph.TriggerAction(TestTiming.Start, default).AsTask();
+        try
+        {
+            var session = graph.ExecutionSource.Sessions[0];
+            Assert.That(session.Query(key).State, Is.EqualTo(GraphExecutionState.Holding));
+            Assert.That(session.Query(new GraphExecutionNodeKey(root.Id)).State, Is.EqualTo(GraphExecutionState.NotVisited));
+            session.SetHold(key, false);
+            await running;
+            Assert.That(session.Query(key).Completed, Is.EqualTo(2));
+            Assert.That(session.Query(new GraphExecutionNodeKey(reference.Id)).Completed, Is.EqualTo(2));
+        }
+        finally { graph.CancelObservedExecutions(); UnityEngine.Object.DestroyImmediate(asset); }
+    }
+
+    private static LogicGraph<TestTiming, TestPack> ExecutionGraph(TestSlot input, out GraphNode action)
+    {
+        action = new GraphNode(new EvaluateTwice { Value = input });
+        action.EnsureId();
+        var slot = new ActionSlot<TestPack>();
+        slot.SetNode(action);
+        var graph = new LogicGraph<TestTiming, TestPack>();
+        graph.ActionGroups.Add(new ActionTimingGroup<TestTiming, TestPack> { Timing = TestTiming.Start, Actions = new() { slot } });
+        graph.MarkValidated();
+        return graph;
+    }
+
+    [Serializable]
+    private sealed class EvaluateTwice : ActionBase<TestPack>
+    {
+        public TestSlot Value;
+        protected override async UniTask OnExecute(TestPack pack, TokenTable<TestPack> tokens)
+        {
+            await Value.Evaluate(pack, tokens);
+            await Value.Evaluate(pack, tokens);
+        }
+    }
+
     private enum TestTiming { Start }
 
     private struct TestPack { }

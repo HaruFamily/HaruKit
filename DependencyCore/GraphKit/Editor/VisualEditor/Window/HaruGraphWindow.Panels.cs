@@ -479,9 +479,6 @@ public partial class HaruGraphWindow
     }
 
     private const float CellCornerRadius = 3f;
-    // 問題色條壓在 Header 上緣。厚度不跟 NodeBottomPad 綁：那是排版留白，這是狀態標記，
-    // 要在縮小後還看得見就得比留白厚。上限是圓角半徑，再厚左右上角就開始出現直邊。
-    private const float IssueBarHeight = 5f;
 
 
     /// <summary>

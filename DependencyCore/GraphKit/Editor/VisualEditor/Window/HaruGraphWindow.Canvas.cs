@@ -17,10 +17,13 @@ public partial class HaruGraphWindow
     {
         HGStyles.Fill(r, HGStyles.Canvas);
 
+        RefreshExecutionSource();
         var header = new Rect(r.x, r.y, r.width, HeaderHeight);
+        float executionHeight = executionSource != null || !string.IsNullOrEmpty(executionReadError) ? HGExecutionPanel.Height : 0f;
+        float headingHeight = HeaderHeight + executionHeight;
 
-        float consoleH = console.LayoutHeight(r.height - HeaderHeight - 80f);
-        canvasRect = new Rect(r.x, r.y + HeaderHeight, r.width, r.height - HeaderHeight - consoleH);
+        float consoleH = console.LayoutHeight(r.height - headingHeight - 80f);
+        canvasRect = new Rect(r.x, r.y + headingHeight, r.width, r.height - headingHeight - consoleH);
         var consoleRect = new Rect(r.x, canvasRect.yMax, r.width, consoleH);
         var consoleHandle = new Rect(consoleRect.x, consoleRect.y - 3f, consoleRect.width, ResizeHandleWidth);
 
@@ -28,6 +31,7 @@ public partial class HaruGraphWindow
 
         DrawCanvas(canvasRect);
         HGFocusHeaderPanel.Draw(header, FocusHeaderView(), inlineName);
+        if (executionHeight > 0f) DrawExecutionPanel(new Rect(r.x, header.yMax, r.width, executionHeight));
         console.Draw(consoleRect, ConsoleView(), JumpTo);
         DrawResizeGrip(consoleHandle, false, console.IsResizing);
     }
@@ -423,7 +427,7 @@ public partial class HaruGraphWindow
 
     /// <summary>
     /// Header 右上角的註解開關：加了圓角方底＝註解框開著，淡的 ✎ ＝收起來了。
-    /// 刻意不用圓形——圓形在這張圖裡專屬於接點，形狀不共用才不會誤讀。
+    /// 鉛筆只在操作區展開時顯示，與 Enable 的實心／空心圓區分。
     /// 收起有內容的註解時 ✎ 保持亮的，才分得出「收起來但有東西」和「根本沒寫」。
     /// </summary>
     /// <summary>註解輸入框的固定名稱：IMGUI 的控制項 id 是按繪製順序發的，收掉一個框會讓後面的框接手同一個 id。</summary>
@@ -440,33 +444,41 @@ public partial class HaruGraphWindow
         GUIUtility.keyboardControl = 0;
     }
 
-    private static bool DrawNoteToggle(Rect r, bool open, bool hasNote)
+    private static bool DrawNoteToggle(Rect r, bool open, bool hasNote, bool visible)
     {
-        if (open) HGStyles.RoundedFill(r, HGStyles.HeaderOverlay, 2f);
-        GUI.Label(r, "✎", open || hasNote ? HGStyles.HeaderButton : HGStyles.HeaderButtonDim);
-        return GUI.Button(r, new GUIContent("",
-            open ? "收起註解（內容保留）" : hasNote ? "展開註解" : "加上註解"), GUIStyle.none);
+        if (visible)
+        {
+            if (open) HGStyles.RoundedFill(r, HGStyles.HeaderOverlay, 2f);
+            GUI.Label(r, "✎", open || hasNote ? HGStyles.HeaderButton : HGStyles.HeaderButtonDim);
+        }
+        using (new EditorGUI.DisabledScope(!visible))
+            return GUI.Button(r, new GUIContent("", !visible ? "" :
+                open ? "收起註解（內容保留）" : hasNote ? "展開註解" : "加上註解"), GUIStyle.none);
     }
 
-    /// <summary>
-    /// Header 右上角的停用開關：停用中＝圓角方底 + 亮的暫停圖示，啟用中＝淡的暫停圖示。
-    /// 和註解開關同一套語彙，一樣刻意避開圓形——圓形在這張圖裡專屬於接點。
-    /// </summary>
-    private static readonly GUIContent DisableFallbackIcon = new("||");
-    private static GUIContent disableIcon;
-
-    private static bool DrawDisableToggle(Rect r, bool disabled, int users)
+    /// <summary>Enable uses filled/empty circles inside the Header, away from the edge-mounted connection Ports.</summary>
+    private static bool DrawEnableToggle(Rect r, bool enabled, int users, bool visible)
     {
-        if (disabled) HGStyles.RoundedFill(r, HGStyles.HeaderOverlay, 2f);
-        disableIcon ??= EditorGUIUtility.IconContent("d_PauseButton On");
-        GUI.Label(r, disableIcon?.image != null ? disableIcon : DisableFallbackIcon,
-            disabled ? HGStyles.HeaderButton : HGStyles.HeaderButtonDim);
-
+        if (visible) GUI.Label(r, enabled ? "●" : "○", HGStyles.HeaderButton);
         // 載體是共用單位，停用一顆被多個欄位指著的節點會同時影響全部引用處，講清楚才不會變成遠端的靜默行為。
-        string tip = disabled
+        string tip = !enabled
             ? (users > 1 ? $"已停用：{users} 個欄位改用保底值。點一下啟用" : "已停用：引用它的欄位改用保底值。點一下啟用")
             : (users > 1 ? $"停用這顆節點（{users} 個欄位會一起改用保底值）" : "停用這顆節點，引用它的欄位改用保底值");
-        return GUI.Button(r, new GUIContent("", tip), GUIStyle.none);
+        using (new EditorGUI.DisabledScope(!visible))
+            return GUI.Button(r, new GUIContent("", visible ? tip : ""), GUIStyle.none);
+    }
+
+    private static bool DrawHoldToggle(Rect rect, bool held, bool waiting, bool visible, bool canToggle)
+    {
+        if (visible)
+        {
+            if (waiting) HGStyles.RoundedFill(rect, HGStyles.Warning, 2f);
+            GUI.Label(rect, held ? "▶" : "Ⅱ", held ? HGStyles.HeaderButton : HGStyles.HeaderButtonDim);
+        }
+        string tooltip = held ? "解除 Hold；已抵達的呼叫繼續執行" : "設定 Hold；抵達此節點時先等待";
+        if (!canToggle) tooltip = "請在 Play Mode 選擇可控制的執行鏈，並使用相符的已儲存文件。";
+        using (new EditorGUI.DisabledScope(!visible || !canToggle))
+            return GUI.Button(rect, new GUIContent("", visible ? tooltip : ""), GUIStyle.none);
     }
 
     /// <summary>
@@ -521,27 +533,38 @@ public partial class HaruGraphWindow
         HeaderColors(node, out Color headerFrom, out Color headerTo);
         HGStyles.HeaderFill(header, headerFrom, headerTo, NodeCornerRadius);
 
-        // Header 由右往左排：停用 → 註解 ✎ → 結果型別 chip，剩下的寬度全給名稱區（＝換來源的按鈕）。
-        // 節點層級的問題鋪成 Header 底圖的一部份；參數列層級的問題直接把該列標紅。
+        // 固定保留操作區寬度；Hover／選取只改可見性，不讓名稱與 chip 在游標下移動。
+        // 節點問題與執行狀態共用 Header 下緣色帶；參數列問題仍標在列上。
         // 資產／空節點自己沒有物件，問題掛在父欄位上，改查父欄位才看得到。
         object issueTarget = node.Obj
             ?? (node.IsAssetNode || node.IsTokenNode || node.IsPlaceholder ? node.ParentSlot : null);
         bool hasNodeIssue = Rep.HasIssue(issueTarget, out bool nodeError);
+        bool showHeaderActions = rect.Contains(Event.current.mousePosition) || selectedIds.Contains(node.Id);
+        var execution = NodeExecution(node);
 
         float headerRight = rect.xMax - 4f;
 
-        // 停用開關固定在右上角。HEAD 沒有：它的載體是頭端物件，沒有 GraphNode 可停用。
+        // HEAD 不是可執行的 GraphNode，不顯示 Enable／Hold。
         if (node.Carrier != null)
         {
-            var disableToggle = new Rect(headerRight - 14f, rect.y + 3f, 14f, 14f);
-            if (DrawDisableToggle(disableToggle, node.Carrier.Disabled, CarrierUsers(node.Carrier)))
+            if (executionSource != null)
+            {
+                var holdToggle = new Rect(headerRight - 14f, rect.y + 3f, 14f, 14f);
+                bool held = NodeHasHold(node);
+                bool canToggle = held || !string.IsNullOrEmpty(node.Carrier.Id) && ExecutionMatchesView
+                    && EditorApplication.isPlaying && selectedExecution?.IsFinished != true;
+                if (DrawHoldToggle(holdToggle, held, execution.HasValue && execution.Value.Waiting > 0, showHeaderActions || held, canToggle)) ToggleNodeHold(node);
+                headerRight = holdToggle.x - 3f;
+            }
+            var enableToggle = new Rect(headerRight - 14f, rect.y + 3f, 14f, 14f);
+            if (DrawEnableToggle(enableToggle, !node.Carrier.Disabled, CarrierUsers(node.Carrier), showHeaderActions || node.Carrier.Disabled))
             {
                 BreakUndoMerge();
                 model.SetNodeDisabled(node.Id, !node.Carrier.Disabled);
                 Invalidate();       // 停用改的是資料，不是視覺狀態
                 Repaint();
             }
-            headerRight = disableToggle.x - 3f;
+            headerRight = enableToggle.x - 3f;
         }
 
         // 註解開關排在停用鈕左邊，Token與資產葉節點也有。
@@ -549,7 +572,7 @@ public partial class HaruGraphWindow
         if (!node.IsRoot)
         {
             var noteToggle = new Rect(headerRight - 14f, rect.y + 3f, 14f, 14f);
-            if (DrawNoteToggle(noteToggle, node.NoteOpen, !string.IsNullOrWhiteSpace(node.Tips)))
+            if (DrawNoteToggle(noteToggle, node.NoteOpen, !string.IsNullOrWhiteSpace(node.Tips), showHeaderActions))
             {
                 // 收起只是收起：內容留在載體上，再打開原封不動。
                 if (node.NoteOpen)
@@ -662,14 +685,16 @@ public partial class HaruGraphWindow
         if (node.InDisabledSubtree || node.InLockedSubtree)
             HGStyles.RoundedFill(rect, HGStyles.DisabledVeil, NodeCornerRadius);
 
-        // 問題色條：貼在節點頂緣、壓在 Header 上，紅＝錯誤、琥珀＝警告。
-        // 放頂端不放底緣：單行 Formula 與空 Node 的 body 只有 3～11px，底緣那條在它們身上等於整個下半截。
-        // Header 高度固定，色條在任何節點上都是同一條。
-        if (hasNodeIssue)
+        var statusColor = HGNodeStatus.ColorOf(hasNodeIssue, nodeError, execution);
+        if (statusColor.HasValue)
         {
-            var issueBar = new Rect(rect.x, rect.y, rect.width, IssueBarHeight);
-            HGStyles.TopStripeFill(issueBar, nodeError ? HGStyles.Error : HGStyles.Warning, NodeCornerRadius);
-            GUI.Label(issueBar, new GUIContent("", nodeError ? "此節點有錯誤，詳見 Console" : "此節點有警告，詳見 Console"));
+            // Reserve Header space rather than covering rows; keep at least two screen pixels when zoomed out.
+            float stripHeight = Mathf.Clamp(2f / zoom, HGNodeStatus.StripHeight, 6f);
+            var statusBar = new Rect(rect.x + 1f, header.yMax - stripHeight, rect.width - 2f, stripHeight);
+            HGStyles.Fill(statusBar, statusColor.Value);
+            string statusTip = execution.HasValue ? HGNodeStatus.Describe(execution.Value) : "";
+            if (hasNodeIssue) statusTip += nodeError ? "\n此節點有錯誤，詳見 Console" : "\n此節點有警告，詳見 Console";
+            GUI.Label(statusBar, new GUIContent("", statusTip));
         }
 
         bool selected = selectedIds.Contains(node.Id);

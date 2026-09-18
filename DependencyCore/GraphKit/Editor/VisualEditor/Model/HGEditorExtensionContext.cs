@@ -114,22 +114,36 @@ public abstract class HGDocumentBinding
     public abstract bool TryCreate(out IGraphDocument document);
     public abstract bool TryClone(IGraphDocument document, out IGraphDocument clone);
     public abstract bool TryWrite(Object owner, IGraphDocument document);
+
+    /// <summary>Optional document-scoped revision for in-place external edits. Reading it must have no side effects.</summary>
+    public virtual string ReadRevision(Object owner) => null;
+
+    // Recovery restores only the selected document reference, never unrelated Owner state.
+    internal virtual bool TryRestore(Object owner, IGraphDocument document) => TryWrite(owner, document);
 }
 
-/// <summary>Typed document adapter for Tools that know the exact document field they intend to edit.</summary>
+/// <summary>
+/// Typed document adapter. The setter assigns the supplied reference (including null during recovery),
+/// without mutating the previous document or unrelated Owner data. Revision reads must be document-scoped and side-effect free.
+/// </summary>
 public sealed class HGDocumentBinding<TDocument> : HGDocumentBinding
     where TDocument : class, IGraphDocument
 {
     private readonly Func<Object, TDocument> read;
     private readonly Func<TDocument> create;
     private readonly Action<Object, TDocument> write;
+    private readonly Func<Object, string> readRevision;
 
     public HGDocumentBinding(string documentId, Func<Object, TDocument> read, Action<Object, TDocument> write,
-        Func<TDocument> create = null) : base(documentId)
+        Func<TDocument> create = null) : this(documentId, read, write, create, null) { }
+
+    public HGDocumentBinding(string documentId, Func<Object, TDocument> read, Action<Object, TDocument> write,
+        Func<TDocument> create, Func<Object, string> readRevision) : base(documentId)
     {
         this.read = read ?? throw new ArgumentNullException(nameof(read));
         this.write = write ?? throw new ArgumentNullException(nameof(write));
         this.create = create;
+        this.readRevision = readRevision;
     }
 
     public override bool TryRead(Object owner, out IGraphDocument document)
@@ -154,6 +168,15 @@ public sealed class HGDocumentBinding<TDocument> : HGDocumentBinding
     {
         if (owner == null || document is not TDocument typed) return false;
         write(owner, typed);
+        return true;
+    }
+
+    public override string ReadRevision(Object owner) => readRevision?.Invoke(owner);
+
+    internal override bool TryRestore(Object owner, IGraphDocument document)
+    {
+        if (owner == null || (document != null && document is not TDocument)) return false;
+        write(owner, (TDocument)document);
         return true;
     }
 }

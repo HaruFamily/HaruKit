@@ -39,7 +39,7 @@ public static class HGStyles
     public static readonly Color NodeNote = new(0.26f, 0.26f, 0.26f);
     public static readonly Color NodeNoteBorder = new(0.62f, 0.62f, 0.62f);
 
-    // Header 是唯一帶色相的節點元素。暖色是會執行或求值的動態邏輯，冷色是可重用的靜態引用。
+    // Header 底色表示身分；下緣共用色帶另表達驗證與執行狀態。
     // 五種身分分開色相與明度，縮小或色弱時仍可辨識。
     public static readonly Color HeaderAction = new(0.722f, 0.231f, 0.451f);  // 洋紅 #B83B73
     public static readonly Color HeaderFormula = new(0.750f, 0.520f, 0.200f); // 琥珀 #BF8533
@@ -95,6 +95,10 @@ public static class HGStyles
     public static readonly Color InputPortError = new(1f, 0.42f, 0.42f);
     public static readonly Color Error = new(1f, 0.42f, 0.42f);
     public static readonly Color Warning = new(1f, 0.78f, 0.34f);
+    public static readonly Color ExecutionNotVisited = new(0.20f, 0.22f, 0.23f);
+    public static readonly Color ExecutionRunning = new(0.25f, 0.86f, 1f);
+    public static readonly Color ExecutionCompleted = new(0.34f, 0.65f, 0.43f);
+    public static readonly Color ExecutionCancelled = new(0.55f, 0.57f, 0.60f);
 
     private static GUIStyle nodeTitle, nodeDesc, focusTitle, rowLabel, rowLabelError, chip, nodeChip, slotChip, inputPortGlyph, headerButton, headerButtonDim, overlayTitle, panelHeader, consoleRow, tiny, listIndex, listAdd;
 

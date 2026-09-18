@@ -507,6 +507,65 @@ public class HGPortTests
             new[] { descriptor, descriptor }));
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ModelCommitGuardsExplicitAndLegacyBindingsAgainstOwnerReplacement(bool legacy)
+    {
+        var owner = ScriptableObject.CreateInstance<TestDocumentOwner>();
+        try
+        {
+            owner.Document = new TestDocument();
+            var model = new HGModel();
+            var binding = new HGDocumentBinding<TestDocument>("Document", x => ((TestDocumentOwner)x).Document,
+                (x, document) => ((TestDocumentOwner)x).Document = document);
+            Assert.That(legacy ? model.Bind(owner) : model.Bind(owner, binding), Is.True);
+            model.MarkDirty();
+            var working = model.Data;
+            var external = new TestDocument();
+            owner.Document = external;
+            Assert.That(model.Save(), Is.False);
+            Assert.That(model.LastCommitDiagnostic.Code, Is.EqualTo("graphkit.commit.owner-changed"));
+            Assert.That(model.Data, Is.SameAs(working));
+            Assert.That(owner.Document, Is.SameAs(external));
+            Assert.That(model.Dirty, Is.True);
+            Assert.That(model.CanUndo, Is.True);
+            Assert.That(model.TryReload(), Is.True);
+            Assert.That(model.Save(), Is.True);
+            Assert.That(model.Save(), Is.True);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void ModelFailedReloadKeepsWorkingCopyHistoryAndConflictBaseline()
+    {
+        var owner = ScriptableObject.CreateInstance<TestDocumentOwner>();
+        try
+        {
+            owner.Document = new TestDocument();
+            bool failRead = false;
+            var binding = new HGDocumentBinding<TestDocument>("Document",
+                x => failRead ? throw new InvalidOperationException("read failed") : ((TestDocumentOwner)x).Document,
+                (x, document) => ((TestDocumentOwner)x).Document = document);
+            var model = new HGModel();
+            Assert.That(model.Bind(owner, binding), Is.True);
+            model.MarkDirty();
+            var working = model.Data;
+            owner.Document = new TestDocument();
+            failRead = true;
+            UnityEngine.TestTools.LogAssert.Expect(LogType.Error,
+                "[GraphKit] 文件 'Document' 重載失敗，目前工作副本與歷程保留：read failed");
+            Assert.That(model.TryReload(), Is.False);
+            Assert.That(model.Data, Is.SameAs(working));
+            Assert.That(model.Dirty, Is.True);
+            Assert.That(model.CanUndo, Is.True);
+            failRead = false;
+            Assert.That(model.Save(), Is.False);
+            Assert.That(model.LastCommitDiagnostic.Code, Is.EqualTo("graphkit.commit.owner-changed"));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
     [Test]
     public void DescriptorRejectsInvalidWritesWithoutChangingTheTarget()
     {

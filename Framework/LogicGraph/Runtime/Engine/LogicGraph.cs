@@ -4,16 +4,17 @@ using Cysharp.Threading.Tasks;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit;
 
 #if UNITY_EDITOR
 using UnityEditor;
-using HaruFamily.DependencyCore.GraphKit;
 #endif
 
 
 [Serializable]
-public partial class LogicGraph<TTiming, TPack> : IGraphDocument, ITokenOwner
+public partial class LogicGraph<TTiming, TPack> : IGraphDocument, ITokenOwner, IGraphExecutionDocument
 where TTiming : Enum
 {
     [SerializeReference]
@@ -95,6 +96,14 @@ where TTiming : Enum
     }
 
     [NonSerialized] private bool _hasLoggedValidationFailure;
+    [NonSerialized] private GraphExecutionSource executionSource;
+    [NonSerialized] private string executionRevision;
+    [NonSerialized] private List<GraphExecutionSession> activeExecutions;
+    [NonSerialized] private int executionInstance;
+    private static int nextExecutionInstance;
+
+    public GraphExecutionSource ExecutionSource => executionSource ??= new GraphExecutionSource();
+    public string ExecutionRevision => executionRevision ??= Guid.NewGuid().ToString("N");
 
     public bool IsValidated => _validated;
 
@@ -102,6 +111,7 @@ where TTiming : Enum
     {
         _validated = false;
         _hasLoggedValidationFailure = false;
+        executionRevision = Guid.NewGuid().ToString("N");
     }
 
     /// <summary>執行期標記已驗證。僅供程式建立且已自行驗證的空圖或資料；編輯器內容一律走 Verify()，勿用此繞過驗證閘。</summary>
@@ -116,6 +126,8 @@ where TTiming : Enum
             Debug.LogError("[LogicGraph] DeepCopy 失敗，回傳空動作集。");
             return new LogicGraph<TTiming, TPack>();
         }
+        copy.executionSource = ExecutionSource;
+        copy.executionRevision = ExecutionRevision;
         return copy;
     }
 
@@ -169,7 +181,11 @@ where TTiming : Enum
         return new List<ActionSlot<TPack>>();
     }
 
-    public async UniTask TriggerAction(TTiming timing, TPack pack)
+    public UniTask TriggerAction(TTiming timing, TPack pack)
+        => TriggerAction(timing, pack, CancellationToken.None);
+
+    /// <summary>Runs one chain. The caller supplies lifetime cancellation; observation never freezes other chains.</summary>
+    public async UniTask TriggerAction(TTiming timing, TPack pack, CancellationToken cancellationToken, string executionName = null)
     {
         if (!_validated)
         {
@@ -182,8 +198,44 @@ where TTiming : Enum
         }
         var tokens = CreateTokenTable();
         var actions = GetActions(timing);
-        foreach (var a in actions)
-            if (a != null) await a.Execute(pack, tokens);
+        cancellationToken.ThrowIfCancellationRequested();
+        tokens.ExecutionCancellation = cancellationToken;
+        GraphExecutionSession execution = null;
+        if (ExecutionSource.IsObserved)
+        {
+            if (executionInstance == 0) executionInstance = Interlocked.Increment(ref nextExecutionInstance);
+            execution = ExecutionSource.Begin(executionName ?? $"實例 {executionInstance} · {timing}", ExecutionRevision, cancellationToken);
+            tokens.Execution = execution;
+            tokens.ExecutionCancellation = execution.CancellationToken;
+            (activeExecutions ??= new List<GraphExecutionSession>()).Add(execution);
+        }
+        try
+        {
+            foreach (var a in actions)
+            {
+                tokens.ExecutionCancellation.ThrowIfCancellationRequested();
+                if (a != null) await a.Execute(pack, tokens);
+            }
+            tokens.ExecutionCancellation.ThrowIfCancellationRequested();
+            execution?.Complete();
+        }
+        catch (OperationCanceledException) { execution?.Dispose(); throw; }
+        catch (Exception) { execution?.Fail(); throw; }
+        finally
+        {
+            if (execution != null)
+            {
+                execution.Dispose();
+                activeExecutions.Remove(execution);
+            }
+        }
+    }
+
+    /// <summary>Releases observed waits when this runtime graph instance is retired. Other copies remain independent.</summary>
+    public void CancelObservedExecutions()
+    {
+        if (activeExecutions == null) return;
+        foreach (var execution in activeExecutions.ToArray()) execution.Cancel();
     }
 }
 

@@ -77,6 +77,33 @@ For reproducible builds, pin the package URL to a release tag or commit.
 
 ## Integration
 
+### Optional execution observation
+
+LogicGraph implements GraphKit's `IGraphExecutionDocument`. `DeepCopy()` preserves
+the shared observation source and content revision without sharing execution
+state. Each observed `TriggerAction` call creates one independent session. The
+Action/Formula Slot entries await Hold before executing node content; token and
+asset scopes carry the session through nested evaluations. Asset roots have
+their own visits under `asset:<instance id>`, while bindings evaluate in the
+caller's scope. Standalone token-table queries outside `TriggerAction` do not
+automatically create a timing execution session.
+
+The existing two-argument `TriggerAction` remains available. Call the overload
+`TriggerAction(timing, pack, cancellationToken, executionName)` to provide a
+lifetime and a readable execution label. On retirement, `CancelObservedExecutions()`
+cancels observed sessions of **that graph instance**, not other runtime copies.
+Cancellation propagates to the awaiting caller; callers must unwind their own
+work. Node bodies with long-running operations should also implement their own
+cooperative cancellation. Observation never changes global time or freezes the
+world. Disabled nodes are not entered or held.
+
+Observation fields are nonserialized. `MarkDirty()` advances the document's
+observation revision; existing runtime copies retain their prior revision, so
+the editor can reject a mismatched live projection. No execution sessions are
+recorded when the source has no observers.
+
+### Domain types
+
 Define the types that give the framework its domain meaning:
 
 1. Create a timing enum and an execution-context type for `TPack`.

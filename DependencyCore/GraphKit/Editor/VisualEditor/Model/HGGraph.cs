@@ -247,7 +247,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
     public static class HGGraph
     {
         public const float RowHeight = 20f;
-        public const float HeaderHeight = 20f;
+        public const float HeaderHeight = 24f;
         public const float PortRadius = 7f;
         public const float PortDiameter = PortRadius * 2f;
         public const float GridSize = 20f;

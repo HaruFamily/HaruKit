@@ -105,6 +105,19 @@ public class ActionSlot<TPack> : ActionSlotBase
         // 停用與空槽走同一條路：都不執行。企劃可以關掉一段動作而不必拆線。
         if (_node == null || _node.Disabled) return;
 
+        using var visit = tokens?.EnterNode(_node);
+        try
+        {
+            if (visit != null) await visit.WaitAsync();
+            await ExecuteCore(pack, tokens);
+            visit?.Complete();
+        }
+        catch (OperationCanceledException) { visit?.Cancel(); throw; }
+        catch (Exception exception) { visit?.Fail(exception); throw; }
+    }
+
+    private async UniTask ExecuteCore(TPack pack, TokenTable<TPack> tokens)
+    {
         switch (_node.Kind)
         {
             case NodeKind.Inline:

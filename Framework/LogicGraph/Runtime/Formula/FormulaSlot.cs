@@ -66,6 +66,20 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
         // 停用與空槽走同一條路：都回保底值。
         if (_node.Disabled) return _default;
 
+        using var visit = tokens?.EnterNode(_node);
+        try
+        {
+            if (visit != null) await visit.WaitAsync();
+            var result = await EvaluateCore(pack, tokens);
+            visit?.Complete();
+            return result;
+        }
+        catch (OperationCanceledException) { visit?.Cancel(); throw; }
+        catch (Exception exception) { visit?.Fail(exception); throw; }
+    }
+
+    private async UniTask<TResult> EvaluateCore(TPack pack, TokenTable<TPack> tokens)
+    {
         switch (_node.Kind)
         {
             case NodeKind.Inline:

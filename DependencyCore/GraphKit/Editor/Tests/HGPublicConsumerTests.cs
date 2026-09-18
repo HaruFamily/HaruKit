@@ -199,6 +199,202 @@ public sealed class HGPublicConsumerTests
         finally { UnityEngine.Object.DestroyImmediate(owner); }
     }
 
+    [Test]
+    public void ConcurrentSessionsRejectStaleCommitAndCancelAdoptsTheLatestOwner()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, Binding(), out var first), Is.True);
+            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, Binding(), out var second), Is.True);
+            var field = HGFieldDescriptor.Create<ConsumerBody, ConsumerPercent>("Percent", x => x.Percent,
+                (x, value) => x.Percent = value);
+            Assert.That(second.EditValue(second.Document.Orphans[0].BodyObject, field, new ConsumerPercent(0.5f)),
+                Is.EqualTo(HGSessionCommandResult.Changed));
+            owner.A = ConsumerDocument.Create(); // An unrelated document is not a conflict.
+            Assert.That(first.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            var saved = owner.B;
+            Assert.That(second.Commit(), Is.EqualTo(HGSessionCommandResult.Conflict));
+            Assert.That(second.LastDiagnostic.Code, Is.EqualTo("graphkit.commit.owner-changed"));
+            Assert.That(owner.B, Is.SameAs(saved));
+            Assert.That(second.IsDirty, Is.True);
+            Assert.That(second.CanUndo, Is.True);
+            Assert.That(((ConsumerBody)second.Document.Orphans[0].BodyObject).Percent.Value, Is.EqualTo(0.5f));
+            Assert.That(second.Cancel(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(second.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void RevisionDetectsInPlaceChangesAndRebasesAfterCommitAndCancel()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            int revision = 0;
+            var binding = new HGDocumentBinding<ConsumerDocument>("B", x => ((ConsumerOwner)x).B,
+                (x, document) => { ((ConsumerOwner)x).B = document; revision++; },
+                create: null, readRevision: _ => revision.ToString());
+            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, binding, out var session), Is.True);
+            var live = owner.B;
+            ((ConsumerBody)live.Orphans[0].BodyObject).Percent = new ConsumerPercent(0.8f);
+            revision++;
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Conflict));
+            Assert.That(owner.B, Is.SameAs(live));
+            Assert.That(session.Cancel(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(((ConsumerBody)session.Document.Orphans[0].BodyObject).Percent.Value, Is.EqualTo(0.8f));
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [TestCase(false, false)]
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    public void FailedAssignmentPreservesDocumentAndHistoryIncludingNull(bool initiallyNull, bool throwAfterAssignment)
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = initiallyNull ? null : ConsumerDocument.Create();
+            var original = owner.B;
+            bool fail = true;
+            var binding = new HGDocumentBinding<ConsumerDocument>("B", x => ((ConsumerOwner)x).B,
+                (x, document) =>
+                {
+                    if (fail && !throwAfterAssignment) throw new InvalidOperationException("before assignment");
+                    ((ConsumerOwner)x).B = document;
+                    if (fail) throw new InvalidOperationException("after assignment");
+                }, () => ConsumerDocument.Create());
+            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, binding, out var session), Is.True);
+            var field = HGFieldDescriptor.Create<ConsumerBody, ConsumerPercent>("Percent", x => x.Percent,
+                (x, value) => x.Percent = value);
+            session.EditValue(session.Document.Orphans[0].BodyObject, field, new ConsumerPercent(0.5f));
+            session.EditValue(session.Document.Orphans[0].BodyObject, field, new ConsumerPercent(0.75f));
+            session.Undo();
+            int generation = session.Generation;
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.WriteFailed));
+            Assert.That(session.LastDiagnostic.Code, Is.EqualTo("graphkit.commit.write-failed"));
+            Assert.That(owner.B, Is.SameAs(original));
+            Assert.That(session.IsDirty, Is.True);
+            Assert.That(session.CanUndo, Is.True);
+            Assert.That(session.CanRedo, Is.True);
+            Assert.That(session.Generation, Is.EqualTo(generation));
+            fail = false;
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(((ConsumerBody)owner.B.Orphans[0].BodyObject).Percent.Value, Is.EqualTo(0.5f));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void FailedRecoveryBlocksFurtherWritesUntilExplicitReload()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            var original = owner.B;
+            int writes = 0;
+            bool fail = true;
+            var binding = new HGDocumentBinding<ConsumerDocument>("B", x => ((ConsumerOwner)x).B,
+                (x, document) =>
+                {
+                    writes++;
+                    if (fail && ReferenceEquals(document, original)) throw new InvalidOperationException("recovery failed");
+                    ((ConsumerOwner)x).B = document;
+                    if (fail) throw new InvalidOperationException("write failed");
+                });
+            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, binding, out var session), Is.True);
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.WriteFailed));
+            Assert.That(session.LastDiagnostic.Code, Is.EqualTo("graphkit.commit.recovery-required"));
+            Assert.That(writes, Is.EqualTo(2));
+            fail = false;
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.WriteFailed));
+            Assert.That(writes, Is.EqualTo(2));
+            owner.B = original; // Tool/user repairs Owner before explicitly accepting a new baseline.
+            Assert.That(session.Cancel(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void PublicSessionRetainsOnlyTheLastFortyUndoStepsAndClearsRedoOnBranch()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, Binding(), out var session), Is.True);
+            var field = HGFieldDescriptor.Create<ConsumerBody, ConsumerPercent>("Percent", x => x.Percent,
+                (x, value) => x.Percent = value);
+            for (int i = 1; i <= 45; i++)
+                Assert.That(session.EditValue(session.Document.Orphans[0].BodyObject, field, new ConsumerPercent(i)),
+                    Is.EqualTo(HGSessionCommandResult.Changed));
+            for (int i = 0; i < 40; i++) Assert.That(session.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(session.Undo(), Is.EqualTo(HGSessionCommandResult.NoChange));
+            Assert.That(((ConsumerBody)session.Document.Orphans[0].BodyObject).Percent.Value, Is.EqualTo(5f));
+            Assert.That(session.Redo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            session.EditValue(session.Document.Orphans[0].BodyObject, field, new ConsumerPercent(100f));
+            Assert.That(session.CanRedo, Is.False);
+            Assert.That(session.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(((ConsumerBody)session.Document.Orphans[0].BodyObject).Percent.Value, Is.EqualTo(6f));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void WindowCommandsReportConflictAndKeepEditsUntilCancel()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            string sourceId = owner.B.Orphans[0].Id;
+            var provider = new WindowConsumerProvider(sourceId);
+            var context = new HGEditorExtensionContext(provider, provider, new HGEditorProfile(HGCapabilities.None));
+            Assert.That(window.BindDocument(owner, Binding(), context), Is.True);
+            var commands = window.GetDocumentCommands();
+            var snapshot = commands.Query();
+            Assert.That(commands.Connect(snapshot.Generation, provider.Output, provider.Input), Is.EqualTo(HGSessionCommandResult.Changed));
+            var external = (ConsumerDocument)owner.B.DeepCopy();
+            owner.B = external;
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Conflict));
+            Assert.That(owner.B, Is.SameAs(external));
+            Assert.That(commands.Query().IsDirty, Is.True);
+            Assert.That(System.Linq.Enumerable.Any(commands.Validate(), d => d.Code == "graphkit.commit.owner-changed"), Is.True);
+            Assert.That(commands.Cancel(), Is.EqualTo(HGSessionCommandResult.Changed));
+            var reloaded = commands.Query();
+            Assert.That(reloaded.IsDirty, Is.False);
+            Assert.That(reloaded.Links, Is.Empty);
+            // Cancel adopts the external document, whose root is still unconnected.
+            var diagnostics = commands.Validate();
+            Assert.That(System.Linq.Enumerable.Any(diagnostics, d => d.Code == "graphkit.commit.owner-changed"), Is.False);
+            Assert.That(System.Linq.Enumerable.Any(diagnostics, d => d.Code == "graphkit.root.action-missing"), Is.True);
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
+            reloaded = commands.Query();
+            Assert.That(commands.Connect(reloaded.Generation, provider.Output, provider.Input), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(System.Linq.Enumerable.Select(
+                System.Linq.Enumerable.Where(commands.Validate(), d => d.Severity == GraphDiagnosticSeverity.Error),
+                d => d.Code + ": " + d.Message), Is.Empty);
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(owner.B.Root.Items[0].Node.Id, Is.EqualTo(sourceId));
+        }
+        finally
+        {
+            window.GetDocumentCommands()?.Cancel();
+            UnityEngine.Object.DestroyImmediate(window);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+    }
+
     private static HGDocumentBinding<ConsumerDocument> Binding()
         => new("Consumer.B", target => ((ConsumerOwner)target).B,
             (target, document) => ((ConsumerOwner)target).B = document, ConsumerDocument.Create);

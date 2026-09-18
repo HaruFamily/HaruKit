@@ -18,17 +18,21 @@ public enum HGSessionCommandResult
     StaleGeneration,
     ValidationFailed,
     WriteFailed,
+    Conflict,
 }
 
 /// <summary>
 /// Public working-copy transaction for Tools that need commands without accessing HaruGraphWindow, HGModel, or HGGraphView.
-/// A session owns only its cloned document; Owner data changes exclusively after <see cref="Commit"/> succeeds.
+/// A session owns only its cloned document; only <see cref="Commit"/> attempts to write Owner data.
+/// Failed setters are compensated by restoring the selected document reference; uncertain recovery blocks further commits.
 /// </summary>
 public sealed class HGDocumentSession<TDocument>
     where TDocument : class, IGraphDocument
 {
     private readonly HGDocumentBinding<TDocument> binding;
     private readonly HGEditorExtensionContext context;
+    private HGDocumentCommitGuard commitGuard;
+    private const int UndoLimit = 40;
     private readonly List<TDocument> undo = new List<TDocument>();
     private readonly List<TDocument> redo = new List<TDocument>();
 
@@ -42,12 +46,13 @@ public sealed class HGDocumentSession<TDocument>
     public GraphDiagnostic LastDiagnostic { get; private set; }
 
     private HGDocumentSession(Object owner, HGDocumentBinding<TDocument> binding, TDocument document,
-        HGEditorExtensionContext context)
+        HGEditorExtensionContext context, HGDocumentCommitGuard commitGuard)
     {
         Owner = owner;
         this.binding = binding;
         Document = document;
         this.context = context ?? HGEditorExtensionContext.Default;
+        this.commitGuard = commitGuard;
     }
 
     public static bool TryOpen(Object owner, HGDocumentBinding<TDocument> binding, out HGDocumentSession<TDocument> session)
@@ -61,13 +66,15 @@ public sealed class HGDocumentSession<TDocument>
         try
         {
             if (owner == null || binding == null) throw new InvalidOperationException("Owner and binding are required.");
-            if (!binding.TryRead(owner, out IGraphDocument live) && !binding.TryCreate(out live))
+            binding.TryRead(owner, out IGraphDocument live);
+            var commitGuard = new HGDocumentCommitGuard(owner, binding, live);
+            if (live == null && !binding.TryCreate(out live))
                 throw new InvalidOperationException("The document could not be read or created.");
             if (!binding.TryClone(live, out IGraphDocument copy) || copy is not TDocument document)
                 throw new InvalidOperationException("Clone must return an isolated document of the bound type.");
             context ??= HGEditorExtensionContext.Default;
             if (!context.Supports(owner, document)) throw new InvalidOperationException("The provider does not support this document.");
-            session = new HGDocumentSession<TDocument>(owner, binding, document, context);
+            session = new HGDocumentSession<TDocument>(owner, binding, document, context, commitGuard);
             return true;
         }
         catch (Exception exception)
@@ -155,7 +162,8 @@ public sealed class HGDocumentSession<TDocument>
 
     private HGSessionCommandResult CommitCore()
     {
-        if (Owner == null) return HGSessionCommandResult.WriteFailed;
+        LastDiagnostic = commitGuard.Check();
+        if (LastDiagnostic != null) return HGDocumentCommitGuard.ResultOf(LastDiagnostic);
         if (!TryClone(Document, out TDocument toStore)) return HGSessionCommandResult.WriteFailed;
         foreach (var diagnostic in CollectDiagnostics(toStore))
             if (diagnostic.Severity == GraphDiagnosticSeverity.Error)
@@ -166,7 +174,11 @@ public sealed class HGDocumentSession<TDocument>
         toStore.MarkDirty();
         toStore.Verify();
         if (!toStore.IsValidated) return HGSessionCommandResult.ValidationFailed;
-        if (!binding.TryWrite(Owner, toStore)) return HGSessionCommandResult.WriteFailed;
+        if (!commitGuard.TryWrite(toStore, out var failure))
+        {
+            LastDiagnostic = failure;
+            return HGDocumentCommitGuard.ResultOf(failure);
+        }
         EditorUtility.SetDirty(Owner);
         if (Owner is Component component && component.gameObject.scene.IsValid())
             EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
@@ -184,9 +196,14 @@ public sealed class HGDocumentSession<TDocument>
 
     private HGSessionCommandResult CancelCore()
     {
-        if (!binding.TryRead(Owner, out IGraphDocument live) || !binding.TryClone(live, out IGraphDocument copy)
+        if (Owner == null) return HGSessionCommandResult.Rejected;
+        binding.TryRead(Owner, out IGraphDocument live);
+        var nextGuard = new HGDocumentCommitGuard(Owner, binding, live);
+        if (live == null && !binding.TryCreate(out live)) return HGSessionCommandResult.Rejected;
+        if (!binding.TryClone(live, out IGraphDocument copy)
             || copy is not TDocument document) return HGSessionCommandResult.Rejected;
         Document = document;
+        commitGuard = nextGuard;
         undo.Clear();
         redo.Clear();
         IsDirty = false;
@@ -359,6 +376,7 @@ public sealed class HGDocumentSession<TDocument>
             mutation();
             Document.MarkDirty();
             undo.Add(snapshot);
+            if (undo.Count > UndoLimit) undo.RemoveAt(0);
             redo.Clear();
             IsDirty = true;
             Generation++;

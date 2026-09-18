@@ -49,6 +49,14 @@ public partial class HaruGraphWindow : EditorWindow
     private HGDocumentBinding sessionBinding;
     [SerializeField] private bool usesExplicitToolEntry;
     private bool requiresToolReopenAfterReload;
+    private GraphExecutionSource executionSource;
+    private IDisposable executionObservation;
+    private GraphExecutionSession selectedExecution;
+    private string executionRevision;
+    private string executionReadError;
+    private long lastExecutionId;
+    private bool followNextExecution = true;
+    private double nextExecutionRepaint;
 
     /// <summary>目前這張圖怎麼稱呼它的 root。選單、提示與 log 都用它組字，編輯器不寫死領域用詞。</summary>
     private string RootNoun => HGGraph.RootNoun(model?.Doc);
