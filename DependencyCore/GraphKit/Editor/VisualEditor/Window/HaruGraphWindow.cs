@@ -201,15 +201,16 @@ public partial class HaruGraphWindow : EditorWindow
 
     /// <summary>引用清單只在資產焦點有意義，作為左欄第三區出現（2026-08-20 由整條右欄改成分區）。</summary>
     /// <summary>資產庫與引用區要不要存在。由圖宣告，不從「現在有幾筆資產」推。</summary>
-    private bool HasAssetSection => HGGraph.Has(model?.Doc, HGCapabilities.SharedAssets);
+    private bool HasAssetSection => HGGraph.Has(activeContext, model?.Doc, HGCapabilities.SharedAssets);
 
     /// <summary>Token 庫與 Token 相關的選單項要不要存在。同樣由圖宣告。</summary>
-    private bool HasTokenSection => HGGraph.Has(model?.Doc, HGCapabilities.Tokens);
+    private bool HasTokenSection => model?.Doc is ITokenOwner
+        && HGGraph.Has(activeContext, model.Doc, HGCapabilities.Tokens);
 
     /// <summary>目錄庫要不要存在。能力由圖宣告，內容由 Owner 提供，兩件事分開。</summary>
     // 圖宣告了但 Owner 沒實作 ICatalogOwner 時區塊照出現，面板畫一句說明——
     // 這是使用端接線漏了，靜默收掉區塊只會讓人找不到原因。
-    private bool HasCatalogSection => HGGraph.Has(model?.Doc, HGCapabilities.Catalogs);
+    private bool HasCatalogSection => HGGraph.Has(activeContext, model?.Doc, HGCapabilities.Catalogs);
 
     /// <summary>左欄還有沒有東西可放。沒綁定時維持原版型，閒置畫面不因此改變。</summary>
     // 一區都沒有就整框不畫：空框會讓人一直找「內容為什麼沒出現」，而那個框永遠不會有東西。
@@ -858,6 +859,10 @@ public partial class HaruGraphWindow : EditorWindow
     private void AddExtensionDiagnostics(HGReport target)
     {
         var diagnostics = new List<GraphDiagnostic>();
+        if (HGGraph.Has(activeContext, model?.Doc, HGCapabilities.Tokens) && model.Doc is not ITokenOwner)
+            diagnostics.Add(new GraphDiagnostic("graphkit.capability.tokens-owner-missing", GraphDiagnosticSeverity.Error,
+                "文件宣告了具名 Token 能力，但沒有實作 ITokenOwner。",
+                fix: "移除 Tokens capability，或讓文件實作 ITokenOwner。"));
         activeContext.CollectDiagnostics(model.Owner, model.Doc, diagnostics);
         target.ReplaceExtensionDiagnostics(diagnostics);
     }
@@ -950,9 +955,9 @@ public partial class HaruGraphWindow : EditorWindow
 
         int end = fieldPath.IndexOf(']', prefix.Length);
         if (end < 0 || !int.TryParse(fieldPath.Substring(prefix.Length, end - prefix.Length), out int index)) return false;
-        IList roots = model.Doc?.Roots;
-        if (roots == null || index < 0 || index >= roots.Count) return false;
-        root = roots[index];
+        var groups = model.ReadRootGroups();
+        if (index < 0 || index >= groups.Count) return false;
+        root = groups[index]?.Root;
         return root != null;
     }
 

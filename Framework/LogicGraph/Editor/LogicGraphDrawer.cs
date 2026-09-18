@@ -1,6 +1,7 @@
 namespace HaruFamily.Framework.LogicGraph.Editor
 {
 using System;
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
@@ -27,7 +28,8 @@ public class LogicGraphDrawer : PropertyDrawer
     private static GUIStyle summaryStyle;
     private static GUIStyle statusStyle;
     private static readonly HGEditorExtensionContext GraphContext =
-        new HGEditorExtensionContext(new LogicGraphDiagnosticProvider());
+        new HGEditorExtensionContext(new LogicGraphDiagnosticProvider(), profile: new HGEditorProfile(
+            HGCapabilities.SharedAssets | HGCapabilities.Tokens, new LogicGraphRootAdapter()));
 
     private static readonly Color OkColor = new Color(0.36f, 0.90f, 0.52f);
     private static readonly Color FailColor = new Color(1f, 0.42f, 0.42f);
@@ -201,6 +203,33 @@ public class LogicGraphDrawer : PropertyDrawer
             if (owner is IGraphDomainDiagnostics domain)
                 domain.CollectDiagnostics(document, diagnostics);
         }
+    }
+
+    private sealed class LogicGraphRootAdapter : IHGRootAdapter
+    {
+        private static readonly HGModel.HGDocumentRootAdapter Fallback = HGModel.HGDocumentRootAdapter.Instance;
+
+        public IReadOnlyList<object> RootKeys(IGraphDocument document, UnityEngine.Object owner)
+        {
+            var keys = Fallback.RootKeys(document, owner);
+            if (owner is not ILogicGraphTimingOwner timingOwner || timingOwner.AllowedTimings == null) return keys;
+
+            var filtered = new List<object>(timingOwner.AllowedTimings.Count);
+            foreach (var key in keys)
+                foreach (var allowed in timingOwner.AllowedTimings)
+                    if (Equals(key, allowed))
+                    {
+                        filtered.Add(key);
+                        break;
+                    }
+            return filtered;
+        }
+
+        public IReadOnlyList<HGRootGroupView> ReadRoots(IGraphDocument document) => Fallback.ReadRoots(document);
+        public HGRootGroupView AddRoot(IGraphDocument document, object rootKey) => Fallback.AddRoot(document, rootKey);
+        public bool RemoveRoot(IGraphDocument document, object root) => Fallback.RemoveRoot(document, root);
+        public Type ItemType(IGraphDocument document) => Fallback.ItemType(document);
+        public object CreateItem(IGraphDocument document) => Fallback.CreateItem(document);
     }
 }
 

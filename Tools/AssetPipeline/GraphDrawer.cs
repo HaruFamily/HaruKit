@@ -24,7 +24,8 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
         private static GUIStyle summaryStyle;
         private static GUIStyle statusStyle;
         private static readonly HGEditorExtensionContext GraphContext =
-            new HGEditorExtensionContext(new AssetPipelineGraphProvider());
+            new HGEditorExtensionContext(new AssetPipelineGraphProvider(), profile: new HGEditorProfile(
+                HGCapabilities.Catalogs));
 
         private static readonly Color OkColor = new Color(0.36f, 0.90f, 0.52f);
         private static readonly Color FailColor = new Color(1f, 0.42f, 0.42f);

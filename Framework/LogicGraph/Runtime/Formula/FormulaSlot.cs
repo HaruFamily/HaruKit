@@ -53,7 +53,7 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
     public override bool AcceptsAsset(ScriptableObject asset) => asset is TAsset;
 
     // 只認同族，不認同結果型別：string 同時有 String 與 Key 兩族，收下別族的Token等於從側門繞過那一族的規則。
-    public override bool AcceptsToken(GraphToken endpoint) => endpoint?.Slot?.Kind == Kind;
+    public override bool AcceptsToken(GraphToken endpoint) => endpoint?.Slot?.FamilyType == FamilyType;
 
     /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
     public TResult Default { get => _default; set => _default = value; }

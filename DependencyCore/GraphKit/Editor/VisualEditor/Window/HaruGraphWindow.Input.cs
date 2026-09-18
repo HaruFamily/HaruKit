@@ -531,7 +531,12 @@ public partial class HaruGraphWindow
     private HGFocus AllRootsFocus()
         => model?.Data == null
             ? new HGFocus()
-            : new HGFocus { Kind = HGFocusKind.Root, Data = model.Data };
+            : new HGFocus
+            {
+                Kind = HGFocusKind.Root,
+                Data = model.Data,
+                RootGroupsProvider = model.ReadRootGroups,
+            };
 }
 
 }

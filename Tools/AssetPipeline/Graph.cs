@@ -42,7 +42,7 @@ namespace HaruFamily.Tools.AssetPipeline
     // 找的是「型別實作 IGraphDocument 的欄位」，並對那個欄位 DeepCopy 出工作副本。
     // SO 本身是 UnityEngine.Object，深複製會原樣沿用，取消就救不回來了。
     [Serializable]
-    public class Graph : IGraphDocument
+    public class Graph : IGraphDocument, ITokenOwner
     {
         /// <summary>整張圖唯一的 root 識別值。編輯器只拿它做 Equals 比較與 ToString 顯示。</summary>
         public const string PipelineKey = "Pipeline";

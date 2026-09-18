@@ -604,7 +604,13 @@ public partial class HaruGraphWindow
     {
         if (node?.Obj == null) return;
 
-        int count = model.Doc?.ItemsOf(node.Obj)?.Count ?? 0;
+        int count = 0;
+        foreach (var group in model.ReadRootGroups())
+            if (Equals(group.Root, node.Obj))
+            {
+                count = group.Items?.Count ?? 0;
+                break;
+            }
         if (count > 0)
         {
             RequestConfirm(GraphToWindowRect(new Rect(node.Pos.x, node.Pos.y, node.Width, HGGraph.HeaderHeight)),

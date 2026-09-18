@@ -108,8 +108,11 @@ data contracts and are not renamed as routine cleanup.
   linking and direct Asset, Token, or Catalog drops.
 - `HGDocumentSession<TDocument>` is the public non-window transaction for a
   Tool that needs a cloned document, generation-scoped connect/disconnect/
-  replace-source/delete-node commands, undo/redo, commit, and cancel. Pair it with `HGPortRegistry` to register
-  bounded custom Ports without receiving a mutable `HGGraphView`.
+  replace-source/delete-node commands, undo/redo, commit, and cancel. Create
+  its registry through `session.CreatePortRegistry()`; a registry belongs to
+  that exact session and generation, so it cannot be submitted to another
+  document session. This registers bounded custom Ports without receiving a
+  mutable `HGGraphView`.
 - A Tool may provide `IHGEditorDiagnosticProvider` through its explicit
   extension context. Runtime Owners with project rules can additionally expose
   `IGraphDomainDiagnostics`; both return `GraphDiagnostic` pure data rather
@@ -135,9 +138,10 @@ Use a second binding with a different `DocumentId` and getter/setter for a
 second document on the same owner. Do not route either document through legacy
 field discovery when the Tool knows which field it is editing.
 
-For non-window commands, open a public working-copy session. Ports and all
-handles from a registry are valid only for that session generation; create a
-new registry after every changed command, undo, redo, commit, or cancel.
+For non-window commands, open a public working-copy session. Create the
+registry through that session, because Ports and all handles are valid only for
+its exact document and generation. Create a new registry after every changed
+command, undo, redo, commit, or cancel.
 
 ```csharp
 if (HGDocumentSession<MyDocument>.TryOpen(owner, binding, out var session))
@@ -162,12 +166,12 @@ session generation.
 
 An `IHGEditorExtensionProvider` receives an `HGPortBuildContext` while the
 window builds its current generation. Register custom ports with `AddInput`,
-`AddOutput`, or `AddAggregate`; do not access the obsolete `Graph` escape
-hatch. Use its read-only `Nodes`, `Fields`, `Ports`, and descriptor lookups to
-anchor an extension without retaining Editor view objects. A custom port may be
-a visual alias for an existing `GraphNode`, but it must not claim to persist a
-separate output identity or replace that node's already registered primary
-output.
+`AddOutput`, or `AddAggregate`; do not use the obsolete `Graph` escape hatch or
+legacy `Add(HGPort)` adapter. Use its read-only `Nodes`, `Fields`, `Ports`, and
+descriptor lookups to anchor an extension without retaining Editor view
+objects. A custom port may be a visual alias for an existing `GraphNode`, but it
+must not claim to persist a separate output identity or replace that node's
+already registered primary output.
 
 For Tool-owned node data, provide an `IHGEditorMetadataProvider`. A complete
 `HGNodeDescriptor` replaces reflection for that node type. Register a custom
@@ -194,8 +198,9 @@ validation.
 
 `Editor/Tests/HGPublicConsumerTests.cs` is the compile-time third-consumer
 example: it opens document B, registers custom input/output ports, exercises
-generation rejection and undo/redo, commits/reopens/cancels, and reports a
-domain diagnostic without implementation-model access.
+generation rejection and undo/redo, commits/reopens/cancels, reports a domain
+diagnostic, and supplies typed metadata with a custom value drawer without
+implementation-model access.
 
 ## Validation Status
 

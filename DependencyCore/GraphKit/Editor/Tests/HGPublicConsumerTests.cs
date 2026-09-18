@@ -19,6 +19,7 @@ public sealed class HGPublicConsumerTests
             (target, document) => ((ConsumerOwner)target).B = document, ConsumerDocument.Create);
 
         Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, binding, out var session), Is.True);
+        Assert.That(session.DocumentId, Is.EqualTo("Consumer.B"));
         var registry = session.CreatePortRegistry();
         ConsumerSlot input = session.Document.Root.Items[0];
         GraphNode source = session.Document.Orphans[0];
@@ -32,9 +33,21 @@ public sealed class HGPublicConsumerTests
             new HGDelegatePortPolicy(() => true), presentation), Is.True);
         Assert.That(session.Connect(registry, outputKey, inputKey), Is.EqualTo(HGSessionCommandResult.Changed));
         Assert.That(input.Node, Is.SameAs(source));
+        Assert.That(session.IsDirty, Is.True);
+        Assert.That(session.CanUndo, Is.True);
         Assert.That(session.Document.Orphans, Has.Count.EqualTo(1));
         Assert.That(owner.A.Root.Items[0].Node, Is.Null);
         Assert.That(owner.B.Root.Items[0].Node, Is.Null);
+        var unchangedRegistry = session.CreatePortRegistry();
+        var unchangedInput = session.Document.Root.Items[0];
+        var generationBeforeNoChange = session.Generation;
+        Assert.That(unchangedRegistry.AddInput(inputKey, unchangedInput,
+            new HGDelegatePortPolicy(() => true, port => port.Accepts(unchangedInput)), presentation), Is.True);
+        Assert.That(unchangedRegistry.AddOutput(outputKey,
+            new HGDelegatePortSource(unchangedInput.Node, unchangedInput.Node, _ => true),
+            new HGDelegatePortPolicy(() => true), presentation), Is.True);
+        Assert.That(session.Connect(unchangedRegistry, outputKey, inputKey), Is.EqualTo(HGSessionCommandResult.NoChange));
+        Assert.That(session.Generation, Is.EqualTo(generationBeforeNoChange));
         Assert.That(session.Disconnect(registry, inputKey), Is.EqualTo(HGSessionCommandResult.StaleGeneration));
         Assert.That(session.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
         Assert.That(session.Document.Root.Items[0].Node, Is.Null);
@@ -58,6 +71,7 @@ public sealed class HGPublicConsumerTests
         Assert.That(session.Document.Root.Items[0].Node, Is.Not.Null);
 
         Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+        Assert.That(session.IsDirty, Is.False);
         Assert.That(owner.B.Root.Items[0].Node, Is.Not.Null);
         Assert.That(owner.A.Root.Items[0].Node, Is.Null);
 
@@ -87,6 +101,28 @@ public sealed class HGPublicConsumerTests
     }
 
     [Test]
+    public void PublicExtensionContext_ProvidesTypedConsumerMetadataAndCustomDrawer()
+    {
+        var provider = new ConsumerProvider();
+        var context = new HGEditorExtensionContext(provider, provider, new HGEditorProfile(HGCapabilities.None));
+        var body = new ConsumerBody { Percent = new ConsumerPercent(0.25f), Input = new ConsumerSlot() };
+
+        Assert.That(context.Metadata.TryGetNodeDescriptor(typeof(ConsumerBody), out var descriptor), Is.True);
+        Assert.That(descriptor.Fields, Has.Count.EqualTo(2));
+        Assert.That(context.Metadata.TryGetValueDrawer(typeof(ConsumerPercent), out var drawer), Is.True);
+
+        var field = descriptor.Fields[0];
+        var drawerContext = new HGValueDrawerContext(field, body, false);
+        Assert.That(drawer.Measure(drawerContext, 140f), Is.EqualTo(18f));
+
+        var result = drawer.Draw(new Rect(0f, 0f, 140f, 18f), drawerContext, field.Read(body));
+        Assert.That(result.Changed, Is.True);
+        field.Write(body, result.Value);
+        Assert.That(body.Percent.Value, Is.EqualTo(0.75f));
+        Assert.That(context.Profile.Capabilities, Is.EqualTo(HGCapabilities.None));
+    }
+
+    [Test]
     public void PublicSession_DeleteNodeRemovesInlineCellAndReturnsItsDirectSource()
     {
         var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
@@ -110,6 +146,24 @@ public sealed class HGPublicConsumerTests
         Assert.That(session.Document.Orphans, Contains.Item(copiedSource));
         Assert.That(session.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
         Assert.That(((ConsumerInlineOwner)session.Document.Root.Items[0].Node.BodyObject).ChildNodes, Has.Count.EqualTo(1));
+
+        UnityEngine.Object.DestroyImmediate(owner);
+    }
+
+    [Test]
+    public void PublicSession_DeletesFromATokenFreeDocument()
+    {
+        var owner = ScriptableObject.CreateInstance<TokenFreeConsumerOwner>();
+        owner.Document = TokenFreeConsumerDocument.Create();
+        var binding = new HGDocumentBinding<TokenFreeConsumerDocument>("Consumer.TokenFree",
+            target => ((TokenFreeConsumerOwner)target).Document,
+            (target, document) => ((TokenFreeConsumerOwner)target).Document = document,
+            TokenFreeConsumerDocument.Create);
+
+        Assert.That(HGDocumentSession<TokenFreeConsumerDocument>.TryOpen(owner, binding, out var session), Is.True);
+        Assert.That(session.Document, Is.Not.InstanceOf<ITokenOwner>());
+        Assert.That(session.DeleteNode(session.Document.Orphans[0]), Is.EqualTo(HGSessionCommandResult.Changed));
+        Assert.That(session.Document.Orphans, Is.Empty);
 
         UnityEngine.Object.DestroyImmediate(owner);
     }
@@ -148,27 +202,191 @@ public sealed class HGPublicConsumerTests
         UnityEngine.Object.DestroyImmediate(owner);
     }
 
+    [Test]
+    public void PublicSession_RejectsRegistryFromAnotherDocumentWithTheSameGeneration()
+    {
+        var firstOwner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        var secondOwner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        firstOwner.B = ConsumerDocument.Create();
+        secondOwner.B = ConsumerDocument.Create();
+        var binding = new HGDocumentBinding<ConsumerDocument>("Consumer.B", target => ((ConsumerOwner)target).B,
+            (target, document) => ((ConsumerOwner)target).B = document, ConsumerDocument.Create);
+
+        Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(firstOwner, binding, out var first), Is.True);
+        Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(secondOwner, binding, out var second), Is.True);
+        Assert.That(first.Generation, Is.EqualTo(second.Generation));
+        var registry = first.CreatePortRegistry();
+        var inputKey = new HGPortKey("consumer", "/root/input", HGPortRole.Input);
+        var outputKey = new HGPortKey("consumer", "/source", HGPortRole.Output);
+        var presentation = new HGDelegatePortPresentation(new object(), () => Vector2.zero, () => Rect.zero,
+            () => true, () => false);
+        var source = new GraphNode(new ConsumerBody());
+
+        Assert.That(registry.AddInput(inputKey, first.Document.Root.Items[0],
+            new HGDelegatePortPolicy(() => true, port => port.Accepts(first.Document.Root.Items[0])), presentation), Is.True);
+        Assert.That(registry.AddOutput(outputKey, new HGDelegatePortSource(source, source, _ => true),
+            new HGDelegatePortPolicy(() => true), presentation), Is.True);
+        Assert.That(second.Connect(registry, outputKey, inputKey), Is.EqualTo(HGSessionCommandResult.StaleGeneration));
+        Assert.That(second.Disconnect(registry, inputKey), Is.EqualTo(HGSessionCommandResult.StaleGeneration));
+        Assert.That(second.ReplaceSource(registry, inputKey, new HGDelegatePortSource(source, source, _ => true)),
+            Is.EqualTo(HGSessionCommandResult.StaleGeneration));
+
+        UnityEngine.Object.DestroyImmediate(firstOwner);
+        UnityEngine.Object.DestroyImmediate(secondOwner);
+    }
+
+    [Test]
+    public void PublicSession_RechecksLockedInputBeforeConnectWithoutMutating()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        owner.B = ConsumerDocument.Create();
+        var binding = new HGDocumentBinding<ConsumerDocument>("Consumer.B", target => ((ConsumerOwner)target).B,
+            (target, document) => ((ConsumerOwner)target).B = document, ConsumerDocument.Create);
+
+        Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, binding, out var session), Is.True);
+        Assert.That(session.DocumentId, Is.EqualTo("Consumer.B"));
+        var registry = session.CreatePortRegistry();
+        var input = session.Document.Root.Items[0];
+        var source = session.Document.Orphans[0];
+        var inputKey = new HGPortKey("consumer", "/root/input", HGPortRole.Input);
+        var outputKey = new HGPortKey("consumer", "/source", HGPortRole.Output);
+        bool locked = false;
+        var inputPresentation = new HGDelegatePortPresentation(new object(), () => Vector2.zero, () => Rect.zero,
+            () => true, () => locked);
+        var outputPresentation = new HGDelegatePortPresentation(new object(), () => Vector2.zero, () => Rect.zero,
+            () => true, () => false);
+
+        Assert.That(registry.AddInput(inputKey, input, new HGDelegatePortPolicy(() => true, port => port.Accepts(input)),
+            inputPresentation), Is.True);
+        Assert.That(registry.AddOutput(outputKey, new HGDelegatePortSource(source, source, _ => true),
+            new HGDelegatePortPolicy(() => true), outputPresentation), Is.True);
+        Assert.That(registry.TryGet(inputKey, out var inputPort), Is.True);
+        Assert.That(registry.TryGet(outputKey, out var outputPort), Is.True);
+        Assert.That(HGPortConnection.Check(inputPort, outputPort, session.Generation), Is.EqualTo(HGPortConnectionResult.Allowed));
+
+        locked = true;
+
+        Assert.That(session.Connect(registry, outputKey, inputKey), Is.EqualTo(HGSessionCommandResult.Rejected));
+        Assert.That(input.Node, Is.Null);
+        Assert.That(session.Document.Orphans, Contains.Item(source));
+        Assert.That(session.Generation, Is.EqualTo(0));
+        Assert.That(session.IsDirty, Is.False);
+        Assert.That(session.CanUndo, Is.False);
+
+        UnityEngine.Object.DestroyImmediate(owner);
+    }
+
+    [Test]
+    public void PublicSession_PreservesDirtyWorkingCopyWhenCommitValidationFails()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        owner.B = ConsumerDocument.Create(rejectValidation: true);
+        var binding = new HGDocumentBinding<ConsumerDocument>("Consumer.B", target => ((ConsumerOwner)target).B,
+            (target, document) => ((ConsumerOwner)target).B = document, ConsumerDocument.Create);
+
+        Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, binding, out var session), Is.True);
+        var registry = session.CreatePortRegistry();
+        var input = session.Document.Root.Items[0];
+        var source = session.Document.Orphans[0];
+        var inputKey = new HGPortKey("consumer", "/root/input", HGPortRole.Input);
+        var outputKey = new HGPortKey("consumer", "/source", HGPortRole.Output);
+        var presentation = new HGDelegatePortPresentation(new object(), () => Vector2.zero, () => Rect.zero,
+            () => true, () => false);
+        Assert.That(registry.AddInput(inputKey, input, new HGDelegatePortPolicy(() => true, port => port.Accepts(input)),
+            presentation), Is.True);
+        Assert.That(registry.AddOutput(outputKey, new HGDelegatePortSource(source, source, _ => true),
+            new HGDelegatePortPolicy(() => true), presentation), Is.True);
+        Assert.That(session.Connect(registry, outputKey, inputKey), Is.EqualTo(HGSessionCommandResult.Changed));
+        var workingCopy = session.Document;
+        int generation = session.Generation;
+
+        Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
+        Assert.That(session.Document, Is.SameAs(workingCopy));
+        Assert.That(session.Document.Root.Items[0].Node, Is.SameAs(source));
+        Assert.That(session.IsDirty, Is.True);
+        Assert.That(session.CanUndo, Is.True);
+        Assert.That(session.Generation, Is.EqualTo(generation));
+        Assert.That(owner.B.Root.Items[0].Node, Is.Null);
+
+        UnityEngine.Object.DestroyImmediate(owner);
+    }
+
     private sealed class ConsumerOwner : ScriptableObject
     {
         public ConsumerDocument A;
         public ConsumerDocument B;
     }
 
-    private sealed class ConsumerProvider : IHGEditorExtensionProvider, IHGEditorDiagnosticProvider
+    private sealed class TokenFreeConsumerOwner : ScriptableObject
+    {
+        public TokenFreeConsumerDocument Document;
+    }
+
+    [Serializable]
+    private sealed class TokenFreeConsumerDocument : IGraphDocument
+    {
+        public List<GraphNode> Orphans { get; } = new();
+        public IList Roots => Array.Empty<object>();
+        public bool IsValidated { get; private set; }
+        public Type PackType => typeof(object);
+        public Type ItemSlotType => typeof(ConsumerSlot);
+        public string RootChip => "Test";
+        public string RootNoun => "Test";
+        public HGCapabilities Capabilities => HGCapabilities.None;
+        public string WindowTitle => "Token-free Consumer";
+
+        public static TokenFreeConsumerDocument Create()
+        {
+            var document = new TokenFreeConsumerDocument();
+            document.Orphans.Add(new GraphNode(new ConsumerBody()));
+            return document;
+        }
+
+        public void MarkDirty() => IsValidated = false;
+        public void Verify() => IsValidated = true;
+        public object DeepCopy() => Create();
+        public IReadOnlyList<object> RootKeys(UnityEngine.Object owner) => Array.Empty<object>();
+        public object KeyOf(object root) => null;
+        public string TitleOf(object root) => "";
+        public IList ItemsOf(object root) => null;
+        public object AddRoot(object key) => null;
+    }
+
+    private sealed class ConsumerProvider : IHGEditorExtensionProvider, IHGEditorDiagnosticProvider, IHGEditorMetadataProvider
     {
         public bool Supports(UnityEngine.Object owner, IGraphDocument document) => true;
         public void AddPorts(HGPortBuildContext context) { }
         public void CollectDiagnostics(UnityEngine.Object owner, IGraphDocument document, List<GraphDiagnostic> diagnostics)
             => diagnostics.Add(new GraphDiagnostic("consumer.root.required", GraphDiagnosticSeverity.Error,
                 "Consumer requires a root.", new GraphDiagnosticLocation(fieldPath: "Root")));
+
+        public bool TryGetNodeDescriptor(Type nodeType, out HGNodeDescriptor descriptor)
+        {
+            descriptor = nodeType == typeof(ConsumerBody)
+                ? new HGNodeDescriptor(typeof(ConsumerBody), new HGFieldDescriptor[]
+                {
+                    HGFieldDescriptor.Create<ConsumerBody, ConsumerPercent>("Percent", body => body.Percent,
+                        (body, value) => body.Percent = value),
+                    HGFieldDescriptor.CreateSlot<ConsumerBody, ConsumerSlot>("Input", body => body.Input),
+                })
+                : null;
+            return descriptor != null;
+        }
+
+        public bool TryGetValueDrawer(Type valueType, out IHGValueDrawer drawer)
+        {
+            drawer = valueType == typeof(ConsumerPercent) ? new ConsumerPercentDrawer() : null;
+            return drawer != null;
+        }
     }
 
     [Serializable]
-    private sealed class ConsumerDocument : IGraphDocument
+    private sealed class ConsumerDocument : IGraphDocument, ITokenOwner
     {
         public ConsumerRoot Root = new ConsumerRoot();
         private List<GraphNode> orphans = new List<GraphNode>();
         private List<GraphToken> tokens = new List<GraphToken>();
+        private bool rejectValidation;
         public List<GraphNode> Orphans => orphans;
         public List<GraphToken> Tokens => tokens;
         public bool IsValidated { get; private set; }
@@ -180,9 +398,12 @@ public sealed class HGPublicConsumerTests
         public HGCapabilities Capabilities => HGCapabilities.None;
         public string WindowTitle => "Public Consumer";
 
-        public static ConsumerDocument Create()
+        public static ConsumerDocument Create() => Create(false);
+
+        public static ConsumerDocument Create(bool rejectValidation)
         {
             var document = new ConsumerDocument();
+            document.rejectValidation = rejectValidation;
             document.Root.Items.Add(new ConsumerSlot());
             var source = new GraphNode(new ConsumerBody());
             source.EnsureId();
@@ -194,7 +415,7 @@ public sealed class HGPublicConsumerTests
         }
 
         public void MarkDirty() => IsValidated = false;
-        public void Verify() => IsValidated = true;
+        public void Verify() => IsValidated = !rejectValidation;
         public object DeepCopy() => GraphDeepCopy.Copy(this);
         public IReadOnlyList<object> RootKeys(UnityEngine.Object owner) => new object[] { "root" };
         public object KeyOf(object root) => ReferenceEquals(root, Root) ? "root" : null;
@@ -234,7 +455,27 @@ public sealed class HGPublicConsumerTests
     [Serializable]
     private sealed class ConsumerBody : GraphNodeContent
     {
+        public ConsumerPercent Percent;
         public ConsumerSlot Input;
+    }
+
+    [Serializable]
+    private struct ConsumerPercent
+    {
+        public float Value;
+
+        public ConsumerPercent(float value)
+        {
+            Value = value;
+        }
+    }
+
+    private sealed class ConsumerPercentDrawer : IHGValueDrawer
+    {
+        public float Measure(in HGValueDrawerContext context, float width) => 18f;
+
+        public HGValueDrawerResult Draw(Rect rect, in HGValueDrawerContext context, object value)
+            => new HGValueDrawerResult(true, new ConsumerPercent(0.75f));
     }
 
     [Serializable]

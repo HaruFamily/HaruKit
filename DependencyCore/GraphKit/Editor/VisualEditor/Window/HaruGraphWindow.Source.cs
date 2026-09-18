@@ -279,7 +279,7 @@ public partial class HaruGraphWindow
         {
             foreach (var token in HGModel.ReadTokens(CurrentTokens()))
             {
-                if (slotKind != null ? token.Kind != slotKind : token.ResultType != resultType) continue;
+                if (slotKind != null ? token.FamilyType != slotKind : token.ResultType != resultType) continue;
                 var endpoint = token.Token;
                 options.Add(new HGSourceOption
                 {
@@ -299,7 +299,7 @@ public partial class HaruGraphWindow
         if (node?.ParentSlot != null) return node.ParentSlot;
         if (graph?.Links == null) return null;
         foreach (var link in graph.Links)
-            if (ReferenceEquals(link.Target, node) && link.ParentRow?.InputSlot != null)
+            if (ReferenceEquals(link.OutputOwner, node) && link.ParentRow?.InputSlot != null)
                 return link.ParentRow.InputSlot;
         return null;
     }
@@ -334,7 +334,7 @@ public partial class HaruGraphWindow
         {
             foreach (var link in graph.Links)
             {
-                if (!ReferenceEquals(link.Target, node)) continue;
+                if (!ReferenceEquals(link.OutputOwner, node)) continue;
                 hasLink = true;
                 if (!CanAssignAsset(link.ParentRow, asset)) return false;
             }
@@ -358,7 +358,7 @@ public partial class HaruGraphWindow
         {
             foreach (var link in graph.Links)
             {
-                if (!ReferenceEquals(link.Target, node) || link.ParentRow?.InputSlot == null) continue;
+                if (!ReferenceEquals(link.OutputOwner, node) || link.ParentRow?.InputSlot == null) continue;
                 return link.ParentRow.InputSlot.GetType();
             }
         }
@@ -408,7 +408,7 @@ public partial class HaruGraphWindow
             // 配對鍵是（族, 名稱）：同結果型別的不同族（String / Key）是兩個參數，只比名字會沿用到錯的那筆。
             AssetParameterDefinition match = null;
             foreach (var parameter in parameters)
-                if (parameter.Name == binding?.Name && parameter.Slot?.Kind == binding.Slot?.Kind) { match = parameter; break; }
+                if (parameter.Name == binding?.Name && parameter.Slot?.FamilyType == binding.Slot?.FamilyType) { match = parameter; break; }
 
             bool compatible = binding?.Slot != null && match != null;
             if (compatible) continue;
@@ -645,7 +645,7 @@ public partial class HaruGraphWindow
         {
             foreach (var link in graph.Links)
             {
-                if (!ReferenceEquals(link.Target, node)) continue;
+                if (!ReferenceEquals(link.OutputOwner, node)) continue;
                 hasLink = true;
                 if (link.ParentRow?.InputSlot == null || !link.ParentRow.InputSlot.AcceptsToken(endpoint)) return false;
             }
@@ -654,7 +654,7 @@ public partial class HaruGraphWindow
 
         // 候選池裡沒有連入線的節點：拿代表性 Slot 的族比對；推不出族才退回結果型別（近似，接上去時仍會被擋）。
         Type slotType = RepresentativeSlotType(node);
-        if (slotType != null) return slotType == endpoint.Kind;
+        if (slotType != null) return slotType == endpoint.FamilyType;
         return node?.ResultType == null || node.ResultType == endpoint.ResultType;
     }
 
@@ -1003,7 +1003,7 @@ public partial class HaruGraphWindow
                         + "轉存後資產內這一格會取預設值，請手動改成常數或補上對應的 FormulaSlot 型別。");
                     continue;
                 }
-                parameter = new GraphToken(UniqueParameterName(parameters, source.Name, slot.Kind), slot);
+                parameter = new GraphToken(UniqueParameterName(parameters, source.Name, slot.FamilyType), slot);
                 parameter.EnsureId();
                 parameters.Add(parameter);
                 map[source] = parameter;
@@ -1039,7 +1039,7 @@ public partial class HaruGraphWindow
     {
         var used = new HashSet<string>();
         foreach (var other in scope)
-            if (other != null && other.Kind == kind && !string.IsNullOrEmpty(other.Name))
+            if (other != null && other.FamilyType == kind && !string.IsNullOrEmpty(other.Name))
                 used.Add(other.Name);
 
         string root = string.IsNullOrEmpty(preferred) ? "Param" : preferred;
@@ -1060,7 +1060,7 @@ public partial class HaruGraphWindow
             string name = parameter.Name;
             NamedFormulaSlot binding = null;
             foreach (var current in carrier.Bindings)
-                if (current?.Name == name && current.Slot?.Kind == parameter.Kind) { binding = current; break; }
+                if (current?.Name == name && current.Slot?.FamilyType == parameter.FamilyType) { binding = current; break; }
 
             if (binding?.Slot == null)
             {

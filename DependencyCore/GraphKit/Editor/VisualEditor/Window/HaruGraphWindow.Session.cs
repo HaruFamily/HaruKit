@@ -231,6 +231,7 @@ public partial class HaruGraphWindow
         activeContext = sessionContext.Supports(owner, model.Doc)
             ? sessionContext
             : HGEditorExtensionContext.Default;
+        model.SetRootAdapter(activeContext.Profile?.RootAdapter);
         pendingTarget = null;
 
         focus = new HGFocus();
@@ -690,8 +691,8 @@ public partial class HaruGraphWindow
             return false;
         }
 
-        int useType = HGReflect.UseType(host);
-        if (useType == 2 || useType == 3)
+        var rootCarrier = host.Node;
+        if (rootCarrier?.Kind is NodeKind.Asset or NodeKind.Token)
         {
             if (showDialog)
                 ShowNotification(new GUIContent("無法存檔：資產的內容只能是公式或動作，不能再指向另一個資產或 Token"));
@@ -708,7 +709,7 @@ public partial class HaruGraphWindow
         // 寫回也是一次抄三份：內容裡的Token節點與Token清單必須指到同一批端點物件。
         var pack = new List<object>
         {
-            useType == 1 ? HGReflect.GetNode(host) : null,
+            rootCarrier?.Kind is NodeKind.Inline or NodeKind.Empty ? rootCarrier : null,
             focus.AssetOrphans ?? new List<GraphNode>(),
             focus.AssetTokens ?? new List<GraphToken>(),
         };

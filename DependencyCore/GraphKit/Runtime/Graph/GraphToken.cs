@@ -60,7 +60,10 @@ public class GraphToken : IGraphHead, IOrphanPool
     public Type ResultType => _slot?.ResultType;
 
     /// <summary>族身份（＝Slot 型別）。同名唯一性與拉線相容都看它，不看結果型別。</summary>
-    public Type Kind => _slot?.Kind;
+    public Type FamilyType => _slot?.FamilyType;
+
+    [Obsolete("Use FamilyType.")]
+    public Type Kind => FamilyType;
 
     /// <summary>求值封包型別。Slot 未指定時為 null。</summary>
     public Type PackType => _slot?.PackType;

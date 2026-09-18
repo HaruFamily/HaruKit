@@ -62,9 +62,9 @@ public partial class HaruGraphWindow
     private void AddInputPort(HGPortBuildContext context, HGNodeView node, HGRow row)
     {
         var presentation = new HGDelegatePortPresentation(row, node, row,
-            () => row.InputPortPos,
-            () => PortRect(row.InputPortPos),
-            () => !node.Hidden && row.IsLinkable,
+            () => row.InputPortPosition,
+            () => PortRect(row.InputPortPosition),
+            () => !node.Hidden && row.IsInputPortVisible,
             () => row.Locked || node.InLockedSubtree);
         var policy = new HGDelegatePortPolicy(
             () => true,
@@ -83,8 +83,8 @@ public partial class HaruGraphWindow
     private void AddNodeOutputPort(HGPortBuildContext context, HGNodeView node)
     {
         var presentation = new HGDelegatePortPresentation(node, node, null,
-            () => node.OutputPort,
-            () => PortRect(node.OutputPort),
+            () => node.OutputPortPosition,
+            () => PortRect(node.OutputPortPosition),
             () => !node.IsRoot && !node.Hidden && node.HasOutputPort,
             () => node.InLockedSubtree);
         var source = new HGDelegatePortSource(node.Carrier, CycleRoot(node), input => SourceAccepts(node, input),
@@ -95,8 +95,8 @@ public partial class HaruGraphWindow
     private void AddCellOutputPort(HGPortBuildContext context, HGNodeView node, HGRow row)
     {
         var presentation = new HGDelegatePortPresentation(row, node, row,
-            () => row.OutputPortPos,
-            () => PortRect(row.OutputPortPos),
+            () => row.OutputPortPosition,
+            () => PortRect(row.OutputPortPosition),
             () => !node.Hidden && !row.Hidden,
             () => row.Locked || node.InLockedSubtree);
         var source = new HGDelegatePortSource(row.OutputNode, row.OutputNode,
@@ -110,7 +110,7 @@ public partial class HaruGraphWindow
     private void AddAggregatePort(HGPortBuildContext context, HGNodeView node, HGRow row)
     {
         var presentation = new HGDelegatePortPresentation(row, node, row,
-            () => row.InputPortPos,
+            () => row.InputPortPosition,
             () => Rect.zero,
             () => !node.Hidden && row.Collapsed && HasConnectedElement(row),
             () => false);
@@ -133,7 +133,7 @@ public partial class HaruGraphWindow
             }
 
             link.InputPort = input;
-            GraphNode source = link.TargetRow?.OutputNode ?? link.Target?.Carrier;
+            GraphNode source = link.TargetRow?.OutputNode ?? link.OutputOwner?.Carrier;
             if (source == null)
             {
                 AddPortResolutionDiagnostic("output-unresolved", "連線的來源載體無法在目前圖形中定位。",

@@ -74,7 +74,7 @@ public static class AssetGraphSchema
             // 名字或 Slot 沒填完的端點對外不成立參數；Verify 會另外報，這裡直接略過。
             if (string.IsNullOrEmpty(name) || resultType == null) continue;
             // 撞號看族不看結果型別：同一個結果型別的不同族（String / Key）是兩個參數，不算重複。
-            if (!seen.Add((endpoint.Slot.Kind, name))) { duplicates.Add(name); continue; }
+            if (!seen.Add((endpoint.Slot.FamilyType, name))) { duplicates.Add(name); continue; }
 
             result.Add(new AssetParameterDefinition
             {

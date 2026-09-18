@@ -273,7 +273,7 @@ public partial class HaruGraphWindow
                 if (IsTracedLink(link) != tracedPass) continue;
                 // 停用子樹的線一起壓暗，才看得出整段路徑都不會被求值。
                 DrawGraphLine(link.InputPort.Presentation.Position, link.OutputPort.Presentation.Position,
-                    link.Target.InDisabledSubtree || link.Target.InLockedSubtree, tracedPass,
+                    link.OutputOwner.InDisabledSubtree || link.OutputOwner.InLockedSubtree, tracedPass,
                     link.ParentRow.IsProducedValue);
             }
         }
@@ -290,7 +290,7 @@ public partial class HaruGraphWindow
     /// </summary>
     private bool IsTracedLink(HGLink link)
         => selectedIds.Count > 0
-            && (selectedIds.Contains(link.Target.Id) || selectedIds.Contains(link.ParentRow.OwnerNodeId));
+            && (selectedIds.Contains(link.OutputOwner.Id) || selectedIds.Contains(link.ParentRow.OwnerNodeId));
 
     /// <summary>
     /// 一顆時機節點都還沒有時的入口。有節點之後就不再出現——刻意不在開窗時自動建第一個時機，
@@ -829,8 +829,7 @@ public partial class HaruGraphWindow
         foreach (var port in graph.Ports)
         {
             bool hasBuiltInAnchor = port.Presentation is IHGPortPresentationAnchor anchor
-                ? anchor.Node != null || anchor.Row != null
-                : port.Presentation.Owner is HGRow or HGNodeView;
+                && (anchor.Node != null || anchor.Row != null);
             if (hasBuiltInAnchor || !port.Presentation.Visible) continue;
             Rect rect = PortRect(port.Presentation.Position + pan);
             if (port.IsInput)
@@ -875,11 +874,13 @@ public partial class HaruGraphWindow
         if (linking && IsCompatible(PortFor(row))) return HGStyles.Link;
 
         bool hasIssue = Rep.HasIssue(row.InputSlot, out bool isError);
-        int useType = HGReflect.UseType(row.InputSlot);
+        var contentKind = row.InputSlot.Node?.Kind;
         if (hasIssue && isError) return HGStyles.InputPortError;
         // 輸出接點不分空／接：它的顏色是在講方向，接上與否看得到線。
         if (row.IsProducedValue) return HGStyles.OutputPortColor;
-        return useType == 1 || useType == 2 ? HGStyles.InputPortLive : HGStyles.InputPortEmpty;
+        return contentKind is NodeKind.Inline or NodeKind.Empty or NodeKind.Asset
+            ? HGStyles.InputPortLive
+            : HGStyles.InputPortEmpty;
     }
 
     /// <summary>把每一列的圖面座標（命中測試與接點）更新成目前的節點位置。</summary>
@@ -888,10 +889,10 @@ public partial class HaruGraphWindow
         foreach (var row in rows)
         {
             row.ScreenRect = new Rect(node.Pos.x, node.Pos.y + row.LocalY, node.Width, row.Height);
-            row.InputPortPos = new Vector2(node.Pos.x + node.Width - HGGraph.PortRadius,
+            row.InputPortPosition = new Vector2(node.Pos.x + node.Width - HGGraph.PortRadius,
                 node.Pos.y + row.LocalY + row.Height * 0.5f);
             // 左側輸出貼齊節點左緣，與節點 Header 的輸出接點同一條垂直線。
-            row.OutputPortPos = new Vector2(node.Pos.x + HGGraph.PortRadius,
+            row.OutputPortPosition = new Vector2(node.Pos.x + HGGraph.PortRadius,
                 node.Pos.y + row.LocalY + row.Height * 0.5f);
             UpdateRowGeometry(node, row.Children);
         }

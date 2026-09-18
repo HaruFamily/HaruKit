@@ -56,8 +56,8 @@ public sealed class HGDocumentSession<TDocument>
         return true;
     }
 
-    /// <summary>Creates a registry for this exact document generation. Rebuild it after every successful mutation.</summary>
-    public HGPortRegistry CreatePortRegistry() => new HGPortRegistry(Generation);
+    /// <summary>Creates a registry for this exact document and generation. Rebuild it after every successful mutation.</summary>
+    public HGPortRegistry CreatePortRegistry() => new HGPortRegistry(Generation, this);
 
     public HGSessionCommandResult Connect(HGPortRegistry registry, HGPortKey first, HGPortKey second)
     {
@@ -68,7 +68,7 @@ public sealed class HGDocumentSession<TDocument>
     /// <summary>Replaces one registered input with a document-owned source through the normal session transaction.</summary>
     public HGSessionCommandResult ReplaceSource(HGPortRegistry registry, HGPortKey inputKey, IHGPortSource source)
     {
-        if (registry == null || registry.Generation != Generation) return HGSessionCommandResult.StaleGeneration;
+        if (!IsCurrentRegistry(registry)) return HGSessionCommandResult.StaleGeneration;
         if (!registry.TryGet(inputKey, out HGPort input) || !input.IsInput || input.InputSlot == null)
             return HGSessionCommandResult.Rejected;
         return ReplaceInputSource(input, source);
@@ -76,7 +76,7 @@ public sealed class HGDocumentSession<TDocument>
 
     public HGSessionCommandResult Disconnect(HGPortRegistry registry, HGPortKey key)
     {
-        if (registry == null || registry.Generation != Generation) return HGSessionCommandResult.StaleGeneration;
+        if (!IsCurrentRegistry(registry)) return HGSessionCommandResult.StaleGeneration;
         if (!registry.TryGet(key, out HGPort input) || !input.IsInput || input.InputSlot == null)
             return HGSessionCommandResult.Rejected;
 
@@ -148,7 +148,7 @@ public sealed class HGDocumentSession<TDocument>
         out HGPort output, out HGSessionCommandResult result)
     {
         input = output = null;
-        if (registry == null || registry.Generation != Generation)
+        if (!IsCurrentRegistry(registry))
         {
             result = HGSessionCommandResult.StaleGeneration;
             return false;
@@ -168,6 +168,9 @@ public sealed class HGDocumentSession<TDocument>
         result = HGSessionCommandResult.Changed;
         return true;
     }
+
+    private bool IsCurrentRegistry(HGPortRegistry registry)
+        => registry != null && registry.Generation == Generation && ReferenceEquals(registry.Scope, this);
 
     private HGSessionCommandResult ReplaceInputSource(HGPort input, IHGPortSource source)
     {
@@ -203,7 +206,7 @@ public sealed class HGDocumentSession<TDocument>
 
         foreach (object root in Document.Roots)
             DisconnectNodeUsers(root, node, new HashSet<object>(ReferenceComparer.Instance));
-        foreach (GraphToken token in Document.Tokens)
+        foreach (GraphToken token in DocumentTokens())
         {
             DisconnectNodeUsers(token, node, new HashSet<object>(ReferenceComparer.Instance));
             foreach (GraphNode orphan in token.Orphans)
@@ -245,7 +248,7 @@ public sealed class HGDocumentSession<TDocument>
         var visited = new HashSet<object>(ReferenceComparer.Instance);
         foreach (object root in Document.Roots)
             if (ReferencesNode(root, node, visited)) return true;
-        foreach (GraphToken token in Document.Tokens)
+        foreach (GraphToken token in DocumentTokens())
             if (ReferencesNode(token, node, visited)) return true;
         return false;
     }
@@ -265,9 +268,12 @@ public sealed class HGDocumentSession<TDocument>
     private IEnumerable<List<GraphNode>> OrphanPools()
     {
         yield return Document.Orphans;
-        foreach (GraphToken token in Document.Tokens)
+        foreach (GraphToken token in DocumentTokens())
             yield return token.Orphans;
     }
+
+    private IEnumerable<GraphToken> DocumentTokens()
+        => (Document as ITokenOwner)?.Tokens ?? (IEnumerable<GraphToken>)Array.Empty<GraphToken>();
 
     private void RemoveFromOrphanPools(GraphNode node)
     {
@@ -276,7 +282,7 @@ public sealed class HGDocumentSession<TDocument>
 
     private List<GraphNode> FindOrphanPool(object value)
     {
-        foreach (GraphToken token in Document.Tokens)
+        foreach (GraphToken token in DocumentTokens())
             if (ReferencesObject(token, value, new HashSet<object>(ReferenceComparer.Instance))) return token.Orphans;
         return Document.Orphans;
     }

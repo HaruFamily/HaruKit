@@ -13,7 +13,7 @@ using HaruFamily.DependencyCore.GraphKit;
 
 
 [Serializable]
-public partial class LogicGraph<TTiming, TPack> : IGraphDocument
+public partial class LogicGraph<TTiming, TPack> : IGraphDocument, ITokenOwner
 where TTiming : Enum
 {
     [SerializeReference]
@@ -30,18 +30,10 @@ where TTiming : Enum
 
     Type IGraphDocument.ItemSlotType => typeof(ActionSlot<TPack>);
 
-    // 時機的一切都關在這裡：可選值、允許清單過濾、識別值與顯示名。
-    // 編輯器只拿得到 object，因此換成別種圖時不必動編輯器。
+    // Root key 是所有 TTiming 成員；Owner 的時機限制由 LogicGraph Editor adapter 套用，
+    // 使 GraphKit Runtime 不需認識領域的 AllowedTimings 契約。
     IReadOnlyList<object> IGraphDocument.RootKeys(UnityEngine.Object owner)
     {
-        var allowed = (owner as IGraphOwner)?.AllowedTimings;
-        if (allowed != null)
-        {
-            var filtered = new List<object>(allowed.Count);
-            foreach (var v in allowed) filtered.Add(v);
-            return filtered;
-        }
-
         var values = Enum.GetValues(typeof(TTiming));
         var all = new List<object>(values.Length);
         foreach (var v in values) all.Add(v);

@@ -7,7 +7,7 @@ using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 
 /// <summary>
-/// 一次求值期間的具名Token表：（族, 名稱）→ 端點的取值欄位。族＝<see cref="FormulaSlotBase.Kind"/>。
+/// 一次求值期間的具名Token表：（族, 名稱）→ 端點的取值欄位。族＝<see cref="FormulaSlotBase.FamilyType"/>。
 ///
 /// 名稱唯一性含族，所以同名不同族可以並存（String 的 'X' 與 Key 的 'X' 是兩個Token）；
 /// 查詢一律帶族，取不到就當作沒有這個值。
@@ -36,7 +36,7 @@ public class TokenTable<TPack>
             foreach (var binding in bindings)
             {
                 if (binding == null || !binding.OverrideEnabled || binding.Slot == null || string.IsNullOrEmpty(binding.Name)) continue;
-                var key = (binding.Slot.Kind, binding.Name);
+                var key = (binding.Slot.FamilyType, binding.Name);
                 if (!table._overrides.ContainsKey(key)) table._overrides[key] = binding;
             }
         }
@@ -53,7 +53,7 @@ public class TokenTable<TPack>
     private void Register(string name, FormulaSlotBase slot)
     {
         if (string.IsNullOrEmpty(name) || slot == null) return;
-        var key = (slot.Kind, name);
+        var key = (slot.FamilyType, name);
         if (!_slots.ContainsKey(key)) _slots[key] = slot;
     }
 

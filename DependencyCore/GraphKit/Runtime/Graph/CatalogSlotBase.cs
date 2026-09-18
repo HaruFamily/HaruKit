@@ -7,13 +7,19 @@ namespace HaruFamily.DependencyCore.GraphKit
 // 與 FormulaSlotBase 分家的理由是包不求值。當它還寄生在公式欄位上時，
 // ResultType 回 void、BodyBaseType／AssetBaseType 回 null、DefaultObject 的 setter 是空的、
 // 三個 Accepts 全回 false——七個成員沒有一個說得出真話，而 FormulaSlotBase 還得為它
-// 多開 IsOutput／AcceptsPack／AcceptsCatalogObject／CreateDefaultCatalog 四個只有它會用的 virtual。
+// 多開 WritesToCatalog／AcceptsPack／AcceptsCatalogObject／CreateDefaultCatalog 四個只有它會用的 virtual。
 //
 // 「這一格收不收包」不再需要宣告層的旗標：是不是 CatalogSlotBase 本身就回答了那個問題。
 // 刻意不放序列化欄位，同另外兩個 slot 基底。
 public abstract class CatalogSlotBase : GraphSlotBase
 {
-    /// <summary>方向：true＝擁有者往裡面寫，false＝從裡面讀。只影響畫法（接點與線的顏色）。</summary>
+    /// <summary>方向：true＝擁有者往裡面寫，false＝從裡面讀。</summary>
+#pragma warning disable CS0618
+    public virtual bool WritesToCatalog => IsOutput;
+#pragma warning restore CS0618
+
+    /// <summary>舊的目錄方向名稱。</summary>
+    [System.Obsolete("Use WritesToCatalog.")]
     public virtual bool IsOutput => true;
 
     /// <summary>

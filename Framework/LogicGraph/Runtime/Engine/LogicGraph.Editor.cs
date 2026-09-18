@@ -160,7 +160,7 @@ where TTiming : Enum
             if (endpoint.Slot == null) { Err($"Token '{endpoint.Name ?? "(未命名)"}' 沒有指定結果型別"); continue; }
             if (string.IsNullOrEmpty(endpoint.Name)) { Err($"有一個 {endpoint.ResultType?.Name} Token 沒有名稱"); continue; }
 
-            if (!seen.Add((endpoint.Slot.Kind, endpoint.Name)) && reported.Add(endpoint.Name))
+            if (!seen.Add((endpoint.Slot.FamilyType, endpoint.Name)) && reported.Add(endpoint.Name))
                 Err($"Token 名稱重複：'{endpoint.Name}'（同族內必須唯一）");
         }
     }
@@ -547,7 +547,7 @@ where TTiming : Enum
         var parameterNames = new HashSet<string>();
         foreach (var parameter in parameters)
         {
-            byKey.Add((parameter.Slot.Kind, parameter.Name));
+            byKey.Add((parameter.Slot.FamilyType, parameter.Name));
             parameterNames.Add(parameter.Name);
         }
 
@@ -560,7 +560,7 @@ where TTiming : Enum
                 Err($"資產 '{carrier.AssetObject.name}' 的參數 '{binding.Name}' 沒有 Slot");
                 continue;
             }
-            var bindingKey = (binding.Slot.Kind, binding.Name);
+            var bindingKey = (binding.Slot.FamilyType, binding.Name);
             if (!bindingKeys.Add(bindingKey)) Err($"資產 '{carrier.AssetObject.name}' 的參數綁定重複：'{binding.Name}'");
             if (byKey.Contains(bindingKey)) continue;
             Err(parameterNames.Contains(binding.Name)

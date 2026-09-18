@@ -121,7 +121,7 @@ public static class HGValidator
         foreach (var t in tokens)
         {
             var focus = TokenFocus(t);
-            if (!seen.Add((t.Kind, t.Key)))
+            if (!seen.Add((t.FamilyType, t.Key)))
                 Err(report, "graphkit.token.duplicate", focus, $"Token {t.Key}", "名稱重複",
                     "改成同族內唯一的名稱；撞號時外部只查得到其中一個。", null, t.Token);
 
@@ -145,7 +145,7 @@ public static class HGValidator
                     ActionSlot = slot,
                 };
                 bool disabled = HGReflect.GetDisabled(slot) || (HGReflect.GetNode(slot)?.Disabled ?? false);
-                if (HGReflect.UseType(slot) == 0)
+                if (slot.Node == null)
                     Issue(report, "graphkit.root.action-missing", disabled, focus, $"{g.RootKey} 第 {i + 1} 個動作", "尚未指定 Action 類型",
                         "在空 Action Node 的下拉選單選擇一個 Action。", slot, null);
                 WalkTree(report, model, focus, slot, $"{g.RootKey} 第 {i + 1} 個動作", disabled);
@@ -209,7 +209,7 @@ public static class HGValidator
         foreach (var token in tokens)
         {
             var tokenFocus = AssetTokenFocus(focus, token);
-            if (!seen.Add((token.Kind, token.Key)))
+            if (!seen.Add((token.FamilyType, token.Key)))
                 Err(report, "graphkit.token.duplicate", tokenFocus, $"Token {token.Key}", "名稱重複",
                     "改成這個資產內同族唯一的名稱。", null, token.Token);
             ValidateToken(report, model, tokenFocus, token);
@@ -313,12 +313,13 @@ public static class HGValidator
     {
         if (slot == null || !visited.Add(slot)) return;
 
-        int useType = HGReflect.UseType(slot);
+        var carrier = slot.Node;
+        var contentKind = carrier?.Kind;
 
         // 停用往下傳染：載體停用後整棵子樹都不求值，殘缺一律降成警告。
         disabled = disabled || (HGReflect.GetNode(slot)?.Disabled ?? false);
 
-        if (useType == 1)
+        if (contentKind is NodeKind.Inline or NodeKind.Empty)
         {
             var formula = HGReflect.GetFormula(slot);
             if (formula == null)
@@ -326,12 +327,11 @@ public static class HGValidator
             else
                 WalkNode(report, model, focus, formula, where, visited, disabled);
         }
-        else if (useType == 2)
+        else if (contentKind == NodeKind.Asset)
         {
             var asset = HGReflect.GetAsset(slot);
             if (asset == null)
                 Issue(report, "graphkit.slot.asset-missing", disabled, focus, where, "欄位設為資產，但沒有指定資產", "指定一個資產，或把模式改回常數。", slot, null);
-            var carrier = HGReflect.GetNode(slot);
             ValidateAssetBindings(report, focus, carrier, where);
 
             // 資產內部殘缺在這張畫布上修不了，所以只報一條入口級錯誤讓人跳進去；不報的話會變成
@@ -347,7 +347,7 @@ public static class HGValidator
                             disabled || !binding.OverrideEnabled);
             }
         }
-        else if (useType == 3)
+        else if (contentKind == NodeKind.Token)
         {
             // 端點被刪掉時參照會變 null，這裡看得到；不會像字串 key 一樣留著一個查不到的名字。
             var endpoint = HGReflect.GetToken(slot);
@@ -390,7 +390,7 @@ public static class HGValidator
         var parameterNames = new HashSet<string>();
         foreach (var parameter in parameters)
         {
-            byKey.Add((parameter.Slot.Kind, parameter.Name));
+            byKey.Add((parameter.Slot.FamilyType, parameter.Name));
             parameterNames.Add(parameter.Name);
         }
         var seen = new HashSet<(Type, string)>();
@@ -402,7 +402,7 @@ public static class HGValidator
                 Err(report, "graphkit.asset-binding.slot-missing", focus, where, $"資產參數 '{binding.Name}' 沒有取值欄位", "重新建立這筆綁定。", null, carrier);
                 continue;
             }
-            var key = (binding.Slot.Kind, binding.Name);
+            var key = (binding.Slot.FamilyType, binding.Name);
             if (!seen.Add(key))
                 Err(report, "graphkit.asset-binding.duplicate", focus, where, $"資產參數綁定重複：'{binding.Name}'", "移除重複綁定。", binding.Slot, carrier);
             if (byKey.Contains(key)) continue;
@@ -539,10 +539,10 @@ public static class HGValidator
         Type type = node.GetType();
         if (node is GraphSlotBase slot)
         {
-            int useType = HGReflect.UseType(slot);
-            if (useType == 1)
+            var contentKind = slot.Node?.Kind;
+            if (contentKind is NodeKind.Inline or NodeKind.Empty)
                 CollectDirectAssetReferences(HGReflect.GetFormula(slot), visited, result);
-            else if (useType == 2 && HGReflect.GetAsset(slot) is UnityEngine.Object asset)
+            else if (contentKind == NodeKind.Asset && HGReflect.GetAsset(slot) is UnityEngine.Object asset)
             {
                 result.Add(asset);
                 var carrier = slot.Node;

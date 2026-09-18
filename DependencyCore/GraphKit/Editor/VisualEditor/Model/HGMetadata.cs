@@ -152,20 +152,31 @@ public sealed class HGFieldDescriptor
         }
     }
 
+    /// <summary>Writes a drawer result only when it matches the descriptor contract.</summary>
+    public bool TryWrite(object target, object value, out Exception exception)
+    {
+        exception = null;
+        if (ReadOnly || Write == null || target == null || !AcceptsValue(value)) return false;
+        try
+        {
+            Write(target, value);
+            return true;
+        }
+        catch (Exception caught)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+
     /// <summary>Creates and assigns a missing value only when this descriptor explicitly owns that normalization.</summary>
     public bool TryCreateMissing(object target, out object value, out Exception exception)
     {
+        exception = null;
         try
         {
             value = CreateMissing?.Invoke(target);
-            if (value == null || Write == null)
-            {
-                exception = null;
-                return false;
-            }
-            Write(target, value);
-            exception = null;
-            return true;
+            return value != null && TryWrite(target, value, out exception);
         }
         catch (Exception caught)
         {
@@ -173,6 +184,13 @@ public sealed class HGFieldDescriptor
             exception = caught;
             return false;
         }
+    }
+
+    private bool AcceptsValue(object value)
+    {
+        if (value == null)
+            return !ValueType.IsValueType || Nullable.GetUnderlyingType(ValueType) != null;
+        return (Nullable.GetUnderlyingType(ValueType) ?? ValueType).IsInstanceOfType(value);
     }
 }
 

@@ -18,7 +18,10 @@ public abstract class FormulaSlotBase : GraphSlotBase
     /// 所以「這一格收不收得下那個來源」「Token同不同名」「TokenTable 登記在哪一格」一律看這個，不看結果型別。
     /// </summary>
     // 用 GetType() 而不是另外宣告一個 enum／字串：族本來就是「哪一種 Slot」，多一層宣告就多一處會對不上。
-    public Type Kind => GetType();
+    public Type FamilyType => GetType();
+
+    [Obsolete("Use FamilyType.")]
+    public Type Kind => FamilyType;
 
     /// <summary>不分型別存取預設值，供編輯器輸入框讀寫。</summary>
     public abstract object DefaultObject { get; set; }
@@ -26,7 +29,7 @@ public abstract class FormulaSlotBase : GraphSlotBase
     /// <summary>
     /// 常數框要畫成哪個型別。預設＝結果型別；子類可回別的型別，讓畫不出輸入框的結果型別
     /// （清單這種）仍有一格可編的「沒接線時取什麼」。只影響常數框，不影響拉線相容性——
-    /// chip、候選過濾、Verify 一律看 <see cref="Kind"/>。
+    /// chip、候選過濾、Verify 一律看 <see cref="FamilyType"/>。
     /// </summary>
     public virtual Type DefaultEditType => ResultType;
 

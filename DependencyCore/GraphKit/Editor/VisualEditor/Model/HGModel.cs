@@ -17,7 +17,10 @@ public class HGToken
     public Type ResultType => Token?.ResultType;
 
     /// <summary>族身份（＝Slot 型別）。撞名判定與候選過濾都用它。</summary>
-    public Type Kind => Token?.Kind;
+    public Type FamilyType => Token?.FamilyType;
+
+    [Obsolete("Use FamilyType.")]
+    public Type Kind => FamilyType;
 
     // 走端點自己的 Slot：同結果型別的不同族（String / Key）在清單裡才分得出來。
     public string TypeName => HGReflect.SlotKindName(Token?.Slot);
@@ -34,6 +37,7 @@ public class HGRootGroupView
 }
 
 /// <summary>Legacy Timing-shaped root view retained for existing Editor consumers.</summary>
+[Obsolete("Use HGRootGroupView.")]
 public class HGTimingGroup
 {
     public object Group;
@@ -69,7 +73,7 @@ public class HGModel
     /// <summary>工作副本的圖契約。所有 root／時機操作都經過它，編輯器不認識具體圖型別。</summary>
     public IGraphDocument Doc => Data;
 
-    /// <summary>可建立或跳轉的 root 識別值。過濾由 <see cref="IGraphDocument.RootKeys"/> 決定（含 Owner 的允許集合）。</summary>
+    /// <summary>可建立或跳轉的 root 識別值。過濾由 session root adapter 決定。</summary>
     // 快取在這一層而不是選單那一層：兩個選單入口共用同一份，不會有一邊漏過濾。
     public IReadOnlyList<object> AvailableRootKeys { get; private set; }
     [Obsolete("Use AvailableRootKeys.")]
@@ -79,6 +83,7 @@ public class HGModel
 
     private FieldInfo systemField;                    // Owner 上放 LogicGraph 的欄位
     private HGDocumentBinding documentBinding;
+    private IHGRootAdapter rootAdapter = HGDocumentRootAdapter.Instance;
     private readonly Dictionary<ScriptableObject, List<AssetParameterDefinition>> assetParameterCache = new();
 
     // 建不出參數列的那些參數只吼一次：EnsureAssetBindings 每次重建圖都會跑，不去重會洗版。
@@ -113,13 +118,14 @@ public class HGModel
 
     /// <summary>綁定 Owner 並複製一份工作副本。失敗回 false 並記 Log。</summary>
     public bool Bind(UnityEngine.Object owner)
-        => Bind(owner, null);
+        => Bind(owner, null, null);
 
     /// <summary>以指定的文件 binding 綁定 Owner；未指定時才使用 legacy 欄位探索。</summary>
-    public bool Bind(UnityEngine.Object owner, HGDocumentBinding binding)
+    public bool Bind(UnityEngine.Object owner, HGDocumentBinding binding, IHGRootAdapter rootAdapter = null)
     {
         Owner = owner;
         documentBinding = binding;
+        this.rootAdapter = rootAdapter ?? HGDocumentRootAdapter.Instance;
         int candidateCount = 0;
         systemField = binding == null ? FindSystemField(owner?.GetType(), out candidateCount) : null;
         if (binding == null && systemField == null)
@@ -138,9 +144,16 @@ public class HGModel
             return false;
         }
 
-        PackType = doc.PackType;
-        AvailableRootKeys = doc.RootKeys(owner);
+        PackType = Doc.PackType;
+        AvailableRootKeys = this.rootAdapter.RootKeys(Doc, owner);
         return true;
+    }
+
+    /// <summary>Switches the session root contract after its Tool context has been resolved.</summary>
+    public void SetRootAdapter(IHGRootAdapter adapter)
+    {
+        rootAdapter = adapter ?? HGDocumentRootAdapter.Instance;
+        AvailableRootKeys = rootAdapter.RootKeys(Doc, Owner);
     }
 
 
@@ -424,24 +437,17 @@ public class HGModel
 
     // ===== Root groups =====
 
+    [Obsolete("Use ReadRootGroups through the session root adapter.")]
     public IList RootGroups => Doc?.Roots;
 
     /// <summary>Root 項目欄位的型別。空 root 時也要建得出新項目，所以問契約而不是從現有內容推。</summary>
-    public Type RootItemSlotType => Doc?.ItemSlotType;
+    public Type RootItemSlotType => rootAdapter.ItemType(Doc);
     [Obsolete("Use RootItemSlotType.")]
     public Type ActionSlotType => RootItemSlotType;
 
     public List<HGRootGroupView> ReadRootGroups()
     {
-        var result = new List<HGRootGroupView>();
-        var doc = Doc;
-        if (doc?.Roots == null) return result;
-        foreach (var g in doc.Roots)
-        {
-            if (g == null) continue;
-            result.Add(new HGRootGroupView { Root = g, RootKey = doc.KeyOf(g), Items = doc.ItemsOf(g) });
-        }
-        return result;
+        return new List<HGRootGroupView>(rootAdapter.ReadRoots(Doc) ?? Array.Empty<HGRootGroupView>());
     }
 
     /// <summary>這個識別值是否已經有 root（識別值不可重複，新增選單靠它決定哪些還能選）。</summary>
@@ -455,21 +461,67 @@ public class HGModel
     /// <summary>新增一個 root；已存在同一個識別值則回傳既有的。</summary>
     public HGRootGroupView AddRoot(object rootKey)
     {
-        var doc = Doc;
-        var root = doc?.AddRoot(rootKey);
-        if (root == null) return null;
-
-        return new HGRootGroupView { Root = root, RootKey = doc.KeyOf(root), Items = doc.ItemsOf(root) };
+        return rootAdapter.AddRoot(Doc, rootKey);
     }
 
     public void RemoveRoot(HGRootGroupView root)
     {
-        RootGroups?.Remove(root?.Root);
+        rootAdapter.RemoveRoot(Doc, root?.Root);
     }
 
     /// <summary>建立空的 root 項目；可先加入清單，稍後再由空 Node 選擇型別。</summary>
-    public object NewRootItem(IList items) => HGReflect.CreateInstance(RootItemSlotType);
+    public object NewRootItem(IList items) => rootAdapter.CreateItem(Doc);
 
+    /// <summary>Compatibility adapter for documents that have not supplied a Tool-specific root contract.</summary>
+    public sealed class HGDocumentRootAdapter : IHGRootAdapter
+    {
+        public static HGDocumentRootAdapter Instance { get; } = new();
+
+        public Type ItemType(IGraphDocument document) => document?.ItemSlotType;
+
+        public IReadOnlyList<object> RootKeys(IGraphDocument document, UnityEngine.Object owner)
+            => document?.RootKeys(owner) ?? Array.Empty<object>();
+
+        public IReadOnlyList<HGRootGroupView> ReadRoots(IGraphDocument document)
+        {
+            var roots = new List<HGRootGroupView>();
+            if (document?.Roots == null) return roots;
+            foreach (var root in document.Roots)
+            {
+                if (root == null) continue;
+                roots.Add(new HGRootGroupView
+                {
+                    Root = root,
+                    RootKey = document.KeyOf(root),
+                    Items = document.ItemsOf(root),
+                });
+            }
+            return roots;
+        }
+
+        public HGRootGroupView AddRoot(IGraphDocument document, object rootKey)
+        {
+            var root = document?.AddRoot(rootKey);
+            return root == null ? null : new HGRootGroupView
+            {
+                Root = root,
+                RootKey = document.KeyOf(root),
+                Items = document.ItemsOf(root),
+            };
+        }
+
+        public bool RemoveRoot(IGraphDocument document, object root)
+        {
+            if (document?.Roots == null || root == null) return false;
+            if (!document.Roots.Contains(root)) return false;
+            document.Roots.Remove(root);
+            return true;
+        }
+
+        public object CreateItem(IGraphDocument document) => HGReflect.CreateInstance(ItemType(document));
+    }
+
+#pragma warning disable CS0618
     [Obsolete("Use ReadRootGroups.")]
     public List<HGTimingGroup> ReadGroups()
     {
@@ -502,6 +554,7 @@ public class HGModel
             RootKey = group.Timing,
             Items = group.Actions,
         });
+#pragma warning restore CS0618
 
     [Obsolete("Use NewRootItem.")]
     public object NewActionSlot(IList actionList) => NewRootItem(actionList);
@@ -554,7 +607,7 @@ public class HGModel
             // 配對鍵是（族, 名稱）：同名不同族是兩個參數，只比名字會少長一列。
             NamedFormulaSlot binding = null;
             foreach (var current in carrier.Bindings)
-                if (current?.Name == parameter.Name && current.Slot?.Kind == parameter.Slot?.Kind) { binding = current; break; }
+                if (current?.Name == parameter.Name && current.Slot?.FamilyType == parameter.Slot?.FamilyType) { binding = current; break; }
             if (binding != null) continue;
 
             // 直接用參數自己那格的 Slot 型別，不要拿結果型別去反查族：同一個結果型別可能有多個族
@@ -654,7 +707,7 @@ public class HGModel
             return null;
         }
 
-        var endpoint = new GraphToken(NextTokenName(scope, slot.Kind), slot);
+        var endpoint = new GraphToken(NextTokenName(scope, slot.FamilyType), slot);
         endpoint.EnsureId();
         scope.Add(endpoint);
         MarkDirty();
@@ -683,7 +736,7 @@ public class HGModel
         copy.ResetId();
         copy.EnsureId();
         ResetNodeIds(copy, shared);
-        copy.Name = CopyName(scope, source.Name, copy.Kind);
+        copy.Name = CopyName(scope, source.Name, copy.FamilyType);
 
         scope.Add(copy);
         MarkDirty();
@@ -695,7 +748,7 @@ public class HGModel
     {
         var used = new HashSet<string>();
         foreach (var other in scope ?? new List<GraphToken>())
-            if (other != null && other.Kind == kind && !string.IsNullOrEmpty(other.Name))
+            if (other != null && other.FamilyType == kind && !string.IsNullOrEmpty(other.Name))
                 used.Add(other.Name);
 
         string root = string.IsNullOrEmpty(sourceName) ? "Token" : sourceName;
@@ -718,7 +771,7 @@ public class HGModel
             if (other == null || ReferenceEquals(other, endpoint)) continue;
             // 重名比對以族為準：TokenTable 的登記鍵就是（族, 名稱），
             // 所以同結果型別的不同族（String / Key）可以同名，各自查各自那格。
-            if (other.Name != name || other.Kind != endpoint.Kind) continue;
+            if (other.Name != name || other.FamilyType != endpoint.FamilyType) continue;
             error = $"已存在名為 '{name}' 的 {HGReflect.SlotKindName(other.Slot)} Token。";
             return false;
         }
@@ -733,7 +786,7 @@ public class HGModel
     {
         var used = new HashSet<string>();
         foreach (var other in scope ?? new List<GraphToken>())
-            if (other != null && other.Kind == kind && !string.IsNullOrEmpty(other.Name))
+            if (other != null && other.FamilyType == kind && !string.IsNullOrEmpty(other.Name))
                 used.Add(other.Name);
 
         for (int i = 1; ; i++)

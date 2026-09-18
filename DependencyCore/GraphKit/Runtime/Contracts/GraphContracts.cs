@@ -190,9 +190,10 @@ public interface ICatalogOwner
 
 /// <summary>
 /// 一張可編輯的圖對編輯器的完整形狀。編輯器靠這個介面在 Owner 身上找到要編的欄位，
-/// 不認識任何具體的圖型別，所以同一套編輯器可以編不同領域的圖。
+/// 不認識任何具體的圖型別，所以同一套編輯器可以編不同領域的圖；具名 Token 是選用的
+/// <see cref="ITokenOwner"/> 能力，而非所有文件的必要資料。
 /// </summary>
-public interface IGraphDocument : IOrphanPool, ITokenOwner
+public interface IGraphDocument : IOrphanPool
 {
     /// <summary>畫布上的 HEAD 們。元素型別由實作決定（LogicGraph 給的是時機群組）。</summary>
     IList Roots { get; }
@@ -218,7 +219,7 @@ public interface IGraphDocument : IOrphanPool, ITokenOwner
 
     /// <summary>
     /// 這張畫布可以有哪些 root，以識別值表示（LogicGraph 給的是時機 enum 值）。
-    /// owner 可能進一步縮小範圍，傳 null 代表不過濾。
+    /// 新接入的 Tool 應在 <c>IHGRootAdapter</c> 依 owner 過濾；owner 參數僅保留給舊文件實作。
     /// </summary>
     // 識別值型別由實作決定，編輯器只做相等比較與 ToString()，不假設它是 enum。
     IReadOnlyList<object> RootKeys(UnityEngine.Object owner);

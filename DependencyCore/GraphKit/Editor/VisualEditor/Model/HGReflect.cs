@@ -21,7 +21,15 @@ public static class HGReflect
     private static readonly Dictionary<Type, string> nameCache = new();
     private static readonly Dictionary<Type, int> widthCache = new();
     private static readonly Dictionary<FieldInfo, (int Units, float Ratio)> labelWidthCache = new();
+    private static readonly Dictionary<(Type TargetType, FieldInfo Field), ShowCondition> showConditionCache = new();
     private static readonly HashSet<string> showConditionErrors = new();
+
+    private sealed class ShowCondition
+    {
+        public FieldInfo Field;
+        public MethodInfo Getter;
+        public string Error;
+    }
 
     // ===== 欄位走訪 =====
 
@@ -38,8 +46,9 @@ public static class HGReflect
         for (int i = chain.Count - 1; i >= 0; i--)
             foreach (var f in chain[i].GetFields(Flags))
                 list.Add(f);
-
         fieldCache[type] = list;
+        foreach (var field in list)
+            if (field.IsDefined(typeof(HGShowIfAttribute), false)) GetShowCondition(type, field);
         return list;
     }
 
@@ -150,6 +159,7 @@ public static class HGReflect
     }
 
     /// <summary>相容既有呼叫端的模式碼：0 常數／空槽、1 公式或動作（含編輯中空節點）、2 資產、3 具名Token。</summary>
+    [Obsolete("Use GraphSlotBase.Node?.Kind to preserve the distinction between an unlinked Slot and an Empty carrier.")]
     public static int UseType(GraphSlotBase slot)
     {
         var node = GetNode(slot);
@@ -430,42 +440,66 @@ public static class HGReflect
     /// <summary>取得 [HGShowIf] 的條件；設定錯誤時保持顯示，避免欄位被靜默隱藏。</summary>
     public static bool IsShown(object target, FieldInfo field)
     {
-        var attr = field?.GetCustomAttribute<HGShowIfAttribute>(false);
-        if (attr == null) return true;
+        bool shown = TryIsShown(target, field, out var error);
+        if (!string.IsNullOrEmpty(error)) LogShowConditionError(target, field, error);
+        return shown;
+    }
 
-        if (string.IsNullOrWhiteSpace(attr.ConditionName))
+    /// <summary>Evaluates a cached [HGShowIf] accessor without writing to the Console.</summary>
+    public static bool TryIsShown(object target, FieldInfo field, out string error)
+    {
+        error = null;
+        if (target == null || field == null) return true;
+
+        var condition = GetShowCondition(target.GetType(), field);
+        if (condition == null) return true;
+        if (!string.IsNullOrEmpty(condition.Error))
         {
-            LogShowConditionError(target, field, "條件名稱不可為空。");
+            error = condition.Error;
             return true;
         }
 
-        var conditionField = Find(target?.GetType(), attr.ConditionName);
-        if (conditionField?.FieldType == typeof(bool))
+        try
         {
-            try { return (bool)conditionField.GetValue(target); }
-            catch (Exception e)
+            return condition.Field != null
+                ? (bool)condition.Field.GetValue(target)
+                : (bool)condition.Getter.Invoke(target, null);
+        }
+        catch (Exception e)
+        {
+            error = condition.Field != null ? $"讀取 bool 欄位失敗：{e.Message}" : $"讀取 bool 屬性失敗：{e.Message}";
+            return true;
+        }
+    }
+
+    private static ShowCondition GetShowCondition(Type targetType, FieldInfo field)
+    {
+        var attr = field?.GetCustomAttribute<HGShowIfAttribute>(false);
+        if (attr == null || targetType == null) return null;
+
+        var key = (targetType, field);
+        if (showConditionCache.TryGetValue(key, out var cached)) return cached;
+
+        var condition = new ShowCondition();
+        if (string.IsNullOrWhiteSpace(attr.ConditionName))
+            condition.Error = "條件名稱不可為空。";
+        else
+        {
+            var conditionField = Find(targetType, attr.ConditionName);
+            if (conditionField?.FieldType == typeof(bool)) condition.Field = conditionField;
+            else
             {
-                LogShowConditionError(target, field, $"讀取 bool 欄位失敗：{e.Message}");
-                return true;
+                var property = FindProperty(targetType, attr.ConditionName);
+                var getter = property?.GetGetMethod(true);
+                if (property?.PropertyType == typeof(bool) && property.GetIndexParameters().Length == 0 && getter != null)
+                    condition.Getter = getter;
+                else
+                    condition.Error = $"找不到 bool 欄位或無參數 bool 屬性「{attr.ConditionName}」。";
             }
         }
 
-        var conditionProperty = FindProperty(target?.GetType(), attr.ConditionName);
-        var getter = conditionProperty?.GetGetMethod(true);
-        if (conditionProperty?.PropertyType == typeof(bool)
-            && conditionProperty.GetIndexParameters().Length == 0
-            && getter != null)
-        {
-            try { return (bool)getter.Invoke(target, null); }
-            catch (Exception e)
-            {
-                LogShowConditionError(target, field, $"讀取 bool 屬性失敗：{e.Message}");
-                return true;
-            }
-        }
-
-        LogShowConditionError(target, field, $"找不到 bool 欄位或無參數 bool 屬性「{attr.ConditionName}」。");
-        return true;
+        showConditionCache[key] = condition;
+        return condition;
     }
 
     private static PropertyInfo FindProperty(Type type, string name)

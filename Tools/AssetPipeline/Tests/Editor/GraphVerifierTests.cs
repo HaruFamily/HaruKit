@@ -235,6 +235,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             GraphNode prototype = PrototypeCatalog(out _);
             var slot = new CatalogOutputSlot();
 
+            Assert.That(slot.WritesToCatalog, Is.True);
             Assert.That(slot.AcceptsCatalogObject(written.CatalogObject), Is.True);
             Assert.That(slot.AcceptsCatalogObject(prototype.CatalogObject), Is.False);
             Assert.That(slot.AcceptsCatalogObject(null), Is.False);

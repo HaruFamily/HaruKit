@@ -402,7 +402,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         private void DrawInputPortRow(HGRow row, Rect rowRect)
         {
             var slot = row.InputSlot;
-            int useType = HGReflect.UseType(slot);
+            var contentKind = slot.Node?.Kind;
             bool hasIssue = Rep.HasIssue(slot, out bool isError);
 
             // 由右往左：接點 → chip → ✕ → 常數框。收合鈕已經併進接點自己（見 DrawInputPortGlyph），不另外佔寬。
@@ -461,10 +461,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             }
             else if (row.IsActionSlot)
             {
-                string text = useType switch
+                string text = contentKind switch
                 {
-                    1 => HGReflect.GetFormula(slot) is object f ? HGReflect.TypeName(f.GetType()) : "（空）",
-                    2 => HGReflect.GetAsset(slot) is UnityEngine.Object a ? a.name : "（空資產）",
+                    NodeKind.Inline or NodeKind.Empty => HGReflect.GetFormula(slot) is object f ? HGReflect.TypeName(f.GetType()) : "（空）",
+                    NodeKind.Asset => HGReflect.GetAsset(slot) is UnityEngine.Object a ? a.name : "（空資產）",
                     _ => "（未啟用，從接點拉線指定動作）",
                 };
                 GUI.Label(fieldRect, HGStyles.Elide(text, HGStyles.Tiny, fieldRect.width), HGStyles.Tiny);
@@ -472,7 +472,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             // 輸出格沒有常數模式：沒接線就是沒人收，畫一格可編的保底值只會讓人以為那個值會被用到。
             else if (row.IsProducedValue)
             {
-                string text = useType == 1 && HGReflect.GetFormula(slot) is object target
+                string text = (contentKind is NodeKind.Inline or NodeKind.Empty) && HGReflect.GetFormula(slot) is object target
                     ? $"→ {HGReflect.TypeName(target.GetType())}"
                     : "（未接，產出不會被收走）";
                 string tip = "這一格是產出：執行時由這個步驟寫進接上的節點，不是從它取值。";
@@ -484,13 +484,13 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             {
                 // 這個型別連替代的常數框都沒有。畫「此型別沒有對應的輸入介面」只會讓企劃以為欄位壞了，
                 // 改成直說這一格現在接了什麼；來源仍然只能從接點拉線指定。
-                string text = useType switch
+                string text = contentKind switch
                 {
-                    1 => HGReflect.GetFormula(slot) is object uf ? HGReflect.TypeName(uf.GetType()) : "（空公式）",
-                    2 => HGReflect.GetAsset(slot) is UnityEngine.Object ua ? ua.name : "（空資產）",
-                    3 => HGReflect.GetToken(slot)?.Name is string un && !string.IsNullOrEmpty(un) ? $"（Token {un}）" : "（已接 Token）",
+                    NodeKind.Inline or NodeKind.Empty => HGReflect.GetFormula(slot) is object uf ? HGReflect.TypeName(uf.GetType()) : "（空公式）",
+                    NodeKind.Asset => HGReflect.GetAsset(slot) is UnityEngine.Object ua ? ua.name : "（空資產）",
+                    NodeKind.Token => HGReflect.GetToken(slot)?.Name is string un && !string.IsNullOrEmpty(un) ? $"（Token {un}）" : "（已接 Token）",
                     // 目錄名要向 Owner 查，這一格拿不到；顯示身分就夠，名字在節點本體那兩列看得到。
-                    4 => "（已接目錄）",
+                    NodeKind.Catalog => "（已接目錄）",
                     _ => "（未接，用欄位預設）",
                 };
                 string tip = $"{HGReflect.ResultTypeName(row.ResultType)} 沒有常數保底可編，只能從接點拉線指定來源。";
@@ -507,24 +507,24 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 // 替代型別的 enum 一律畫成按鈕排：欄位上的 [HGEnum] 是為結果型別下的，替代型別借不到；
                 // 按鈕排才吃得到成員的 [HGLabel]，下拉選單只會顯示 CLR 成員名。
                 bool enumButtons = row.ForceEnumButtons || (isSubstitute && editType.IsEnum);
-                string tooltip = useType switch
+                string tooltip = contentKind switch
                 {
-                    0 => null,
+                    null => null,
                     _ when isSubstitute => "已接來源：以接的來源為準，這一格不會被採用",
-                    1 => "已接公式：公式解析失敗時回到這個值",
-                    2 => "已接資產：資產缺內容時回到這個值",
-                    3 => "已接 Token：Token 不存在或循環時回到這個值",
-                    4 => "已接目錄：目錄不存在時回到這個值",
+                    NodeKind.Inline or NodeKind.Empty => "已接公式：公式解析失敗時回到這個值",
+                    NodeKind.Asset => "已接資產：資產缺內容時回到這個值",
+                    NodeKind.Token => "已接 Token：Token 不存在或循環時回到這個值",
+                    NodeKind.Catalog => "已接目錄：目錄不存在時回到這個值",
                     _ => null,
                 };
                 EditorGUI.BeginChangeCheck();
-                var value = useType == 0
+                var value = contentKind == null
                     ? HGValueField.Draw(fieldRect, editType, HGReflect.GetDefault(slot), enumButtons)
                     : HGValueField.DrawMuted(fieldRect, editType, HGReflect.GetDefault(slot), tooltip, enumButtons);
                 if (EditorGUI.EndChangeCheck()) { HGReflect.SetDefault(slot, value); Invalidate(); }
             }
 
-            // 位置要和 UpdateRowGeometry 算的 InputPortPos、HGPort Presentation 一致，
+            // 位置要和 UpdateRowGeometry 算的 InputPortPosition、HGPort Presentation 一致，
             // 否則「看得到的圓」和「接得到的位置」會分岔。
             var inputPortRect = PortRect(PortFor(row).Presentation.Position + pan);
 
@@ -587,8 +587,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 var value = DrawDescriptorValue(fieldRect, row);
                 if (EditorGUI.EndChangeCheck() && !row.Locked && !row.Descriptor.ReadOnly)
                 {
-                    row.Descriptor.Write(row.Target, value);
-                    AfterValueEdit();
+                    if (row.Descriptor.TryWrite(row.Target, value, out _)) AfterValueEdit();
                 }
                 EditorGUI.EndDisabledGroup();
                 return;

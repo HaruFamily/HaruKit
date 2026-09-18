@@ -58,6 +58,7 @@ public class HGFocus : IOrphanPool
     /// 資產的Token仍留在 Asset 焦點裡（只是換一顆頭端），資產的存檔交易因此完全不受影響。
     /// </summary>
     public GraphToken Token;
+    public Func<IReadOnlyList<HGRootGroupView>> RootGroupsProvider;
 
     /// <summary>資產焦點的候選工作副本。存檔才覆寫資產，取消直接丟棄。Token子焦點的候選在端點自己身上。</summary>
     public List<GraphNode> Orphans => Kind == HGFocusKind.Asset && Token == null ? AssetOrphans : null;
@@ -74,7 +75,14 @@ public class HGFocus : IOrphanPool
             var roots = new List<object>();
             if (Kind == HGFocusKind.Root)
             {
-                if (Data?.Roots is IList groups)
+                if (RootGroupsProvider != null)
+                {
+                    var groups = RootGroupsProvider();
+                    if (groups != null)
+                        foreach (var group in groups)
+                            if (group?.Root != null) roots.Add(group.Root);
+                }
+                else if (Data?.Roots is IList groups)
                     foreach (var g in groups)
                         if (g != null) roots.Add(g);
                 return roots;
@@ -210,13 +218,13 @@ public class HGFocus : IOrphanPool
     public static string ActionName(GraphSlotBase actionSlot)
     {
         if (actionSlot == null) return "（空動作）";
-        int useType = HGReflect.UseType(actionSlot);
-        if (useType == 1)
+        var contentKind = actionSlot?.Node?.Kind;
+        if (contentKind is NodeKind.Inline or NodeKind.Empty)
         {
             var f = HGReflect.GetFormula(actionSlot);
             return f != null ? HGReflect.TypeName(f.GetType()) : "（未指定動作）";
         }
-        if (useType == 2)
+        if (contentKind == NodeKind.Asset)
         {
             var a = HGReflect.GetAsset(actionSlot);
             return a != null ? a.name : "（未指定資產）";

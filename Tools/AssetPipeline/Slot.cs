@@ -74,7 +74,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
         public override bool AcceptsAsset(ScriptableObject asset) => false;
 
-        public override bool AcceptsToken(GraphToken endpoint) => endpoint?.Slot?.Kind == Kind;
+        public override bool AcceptsToken(GraphToken endpoint) => endpoint?.Slot?.FamilyType == FamilyType;
 
         /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
         public TResult Default { get => _default; set => _default = value; }

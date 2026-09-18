@@ -145,7 +145,7 @@ namespace HaruFamily.Tools.AssetPipeline
                 if (string.IsNullOrWhiteSpace(endpoint.Name)) errors.Add("assetpipeline.token.name-missing", $"Token[{i}]", "沒有名字。");
                 if (endpoint.Slot == null) { errors.Add("assetpipeline.token.slot-missing", path, "沒有指定型別。"); continue; }
 
-                if (!string.IsNullOrWhiteSpace(endpoint.Name) && !seen.Add((endpoint.Slot.Kind, endpoint.Name)))
+                if (!string.IsNullOrWhiteSpace(endpoint.Name) && !seen.Add((endpoint.Slot.FamilyType, endpoint.Name)))
                     errors.Add("assetpipeline.token.duplicate", path, "與另一個同型別的Token重名。");
 
             CheckSlot(endpoint.Slot, path, errors, new ActionReads(), new HashSet<object>(ReferenceComparer.Instance));
@@ -203,12 +203,12 @@ namespace HaruFamily.Tools.AssetPipeline
                     }
 
                     catalog.SyncCells();
-                    if (catalogSlot.IsOutput && catalog is not DynamicAssetCatalog)
+                    if (catalogSlot.WritesToCatalog && catalog is not DynamicAssetCatalog)
                         errors.Add("assetpipeline.catalog.output-not-dynamic", path, "是產出格，只接得上動態目錄。");
 
                     CheckCatalog(catalog, path, errors);
 
-                    List<AssetCatalogBase> bucket = catalogSlot.IsOutput ? reads.CatalogOutputs : reads.CatalogReads;
+                    List<AssetCatalogBase> bucket = catalogSlot.WritesToCatalog ? reads.CatalogOutputs : reads.CatalogReads;
                     if (!bucket.Contains(catalog)) bucket.Add(catalog);
                     return;
                 }

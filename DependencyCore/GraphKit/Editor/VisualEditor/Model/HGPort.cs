@@ -185,10 +185,10 @@ public readonly struct HGFieldViewInfo
         Kind = row.Kind;
         ResultType = row.ResultType;
         HasInputPort = row.HasInputPort;
-        IsVisible = !node.Hidden && row.IsLinkable;
+        IsVisible = !node.Hidden && row.IsInputPortVisible;
         IsLocked = row.Locked || node.InLockedSubtree;
-        InputAnchor = new HGPortAnchor(NodeId, Path, row.InputPortPos,
-            new Rect(row.InputPortPos - Vector2.one * HGGraph.PortRadius,
+        InputAnchor = new HGPortAnchor(NodeId, Path, row.InputPortPosition,
+            new Rect(row.InputPortPosition - Vector2.one * HGGraph.PortRadius,
                 Vector2.one * HGGraph.PortDiameter));
     }
 }
@@ -426,19 +426,32 @@ public sealed class HGPortRegistry
     private readonly List<HGPortDescriptor> descriptors = new();
     private readonly Dictionary<HGPortKey, HGPortDescriptor> descriptorsByKey = new();
     public int Generation { get; }
+    internal object Scope { get; }
     public HGPortBuildResult LastResult { get; private set; } = HGPortBuildResult.None;
     public IReadOnlyList<HGPort> Ports => ports;
     public IReadOnlyList<HGPortDescriptor> Descriptors => descriptors;
 
     public HGPortRegistry(int generation)
-        : this(generation, new List<HGPort>(), new Dictionary<HGPortKey, HGPort>(), new Dictionary<GraphNode, HGPort>())
+        : this(generation, null, new List<HGPort>(), new Dictionary<HGPortKey, HGPort>(), new Dictionary<GraphNode, HGPort>())
+    {
+    }
+
+    internal HGPortRegistry(int generation, object scope)
+        : this(generation, scope, new List<HGPort>(), new Dictionary<HGPortKey, HGPort>(), new Dictionary<GraphNode, HGPort>())
     {
     }
 
     internal HGPortRegistry(int generation, List<HGPort> ports,
         Dictionary<HGPortKey, HGPort> byKey, Dictionary<GraphNode, HGPort> primaryOutputs)
+        : this(generation, null, ports, byKey, primaryOutputs)
+    {
+    }
+
+    private HGPortRegistry(int generation, object scope, List<HGPort> ports,
+        Dictionary<HGPortKey, HGPort> byKey, Dictionary<GraphNode, HGPort> primaryOutputs)
     {
         Generation = generation;
+        Scope = scope;
         this.ports = ports ?? throw new ArgumentNullException(nameof(ports));
         this.byKey = byKey ?? throw new ArgumentNullException(nameof(byKey));
         this.primaryOutputs = primaryOutputs ?? throw new ArgumentNullException(nameof(primaryOutputs));
@@ -593,6 +606,7 @@ public sealed class HGPortBuildContext
         => registry.TryGetPrimaryOutputDescriptor(source, out descriptor);
 
     /// <summary>Add one legacy adapter. Duplicate and incomplete ports are rejected without mutating the view.</summary>
+    [Obsolete("Use AddInput, AddOutput, or AddAggregate with the bounded query methods.")]
     public bool Add(HGPort port) => registry.Add(port);
 
     private static (List<HGNodeViewInfo> nodes, List<HGFieldViewInfo> fields) BuildViewInfo(HGGraphView graph)
