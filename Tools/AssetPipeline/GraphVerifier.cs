@@ -119,7 +119,8 @@ namespace HaruFamily.Tools.AssetPipeline
                 // 原型來源隨時都有值，不受動作順序影響。
                 foreach (AssetCatalogBase catalog in reads.CatalogReads)
                 {
-                    if (catalog is not DynamicAssetCatalog) continue;
+                    if (catalog is not DynamicAssetCatalog dynamic) continue;
+                    if (dynamic.initialization == DynamicAssetCatalog.InitializationMode.Retain) continue;
                     if (!producedCatalogs.Contains(catalog))
                         errors.Add("assetpipeline.action.dynamic-catalog-read-before-write", path,
                             "讀取動態目錄，但寫入它的動作不在前面。");

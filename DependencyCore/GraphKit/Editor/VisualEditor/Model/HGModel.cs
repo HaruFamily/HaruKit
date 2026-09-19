@@ -674,7 +674,8 @@ public class HGModel
     {
         if (node == null) return null;
         if (node.Kind == NodeKind.Inline && node.BodyObject != null)
-            return HGReflect.FormulaResultType(node.BodyObject.GetType());
+            return node.BodyObject is ITypedFormulaNode formula
+                ? formula.ResultType : HGReflect.FormulaResultType(node.BodyObject.GetType());
         if (node.Kind == NodeKind.Asset && node.AssetObject != null)
             return HGReflect.AssetResultType(node.AssetObject);
         if (node.Kind == NodeKind.Token) return node.Token?.ResultType;

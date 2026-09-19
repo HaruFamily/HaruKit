@@ -70,6 +70,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public bool IsCatalogNode;
         /// <summary>Header 左緣那顆接點畫不畫。沒有任何欄位指得到的包節點沒有它：接不上就不該看得到圓。</summary>
         public bool HasOutputPort = true;
+        /// <summary>Header 接點可接受目前文件的目錄寫入欄位，使用寫入色。</summary>
+        public bool ReceivesCatalogWrites;
         public Type ResultType;               // 資產／Token節點的結果型別
         public string Id;
         public string Title;                  // Header 主文字＝具體型別／Token／資產名稱，節點靠它辨識
@@ -111,9 +113,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public float ContentHeight;
         public float TipsHeight;
         // 換來源的入口是 Header 右端的 ▾；Root HEAD 的來源走它自己的「來源」參數列接點，所以不畫。
-        // 包沒有「換來源」：一格只收一種包，換不出第二個選項，畫一顆點不出東西的 ▾ 只會讓人以為壞了。
-        public bool HasSourceSelector => !IsRoot && !IsCatalogNode
-            && (IsPlaceholder || Obj != null || IsAssetNode || IsTokenNode);
+        // 目錄只開放使用端明確提供的替換種類，不借用 Action／Formula 的型別候選。
+        public bool HasSourceSelector => !IsRoot && (IsCatalogNode
+            ? Obj is IHGCatalogSourceSelector selector && selector.SourceTypes.Count > 1
+            : IsPlaceholder || Obj != null || IsAssetNode || IsTokenNode);
 
         public Rect Rect => new Rect(Pos.x, Pos.y, Width, Height);
         public Vector2 OutputPortPosition => new Vector2(Pos.x + HGGraph.PortRadius,
@@ -561,6 +564,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 ? inline.ResultType
                 : !isAction && slotResultType != null
                 ? slotResultType
+                : obj is ITypedFormulaNode formula
+                ? formula.ResultType
                 : HGReflect.FormulaResultType(obj.GetType());
             var node = new HGNodeView
             {

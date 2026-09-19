@@ -126,6 +126,7 @@ public partial class HaruGraphWindow : EditorWindow
 
     // Header 的 ▾ 落在拖曳抓取區裡，所以仍要分辨拖曳：按下時先記著，放開時沒移動超過門檻才算點擊。
     private HGNodeView titleClickNode;
+    private string headerActionsNodeId;
     private Vector2 titleClickStart;
     private const float TitleClickSlop = 4f;
     /// <summary>Header 右端 ▾ 的寬度。放大到 18px 是因為 0.45 倍縮放下它只剩 8px，再小就按不到。</summary>
@@ -263,8 +264,9 @@ public partial class HaruGraphWindow : EditorWindow
         if (HasLeftColumn) DrawResizeGrip(leftHandle, true, resizingLeftPanel);
 
         drag.DrawAssetGhost();
-        // 放置模式沒有按住按鍵，收不到 MouseDrag；要 MouseMove 殘影才跟得上滑鼠。
-        wantsMouseMove = placingSlot != null;
+        // Header 滑入工具列與放置殘影都需要未按鍵時的滑鼠移動事件。
+        wantsMouseMove = true;
+        wantsMouseEnterLeaveWindow = true;
         drag.DrawTokenGhost();
         drag.DrawCatalogGhost();
         if (placingSlot != null) DrawPlacingGhost();
@@ -279,7 +281,7 @@ public partial class HaruGraphWindow : EditorWindow
             dragListIndex = -1;
             dragListTarget = -1;
         }
-        if (Event.current.type == EventType.MouseDrag || linking || drag.Active
+        if (Event.current.type == EventType.MouseDrag || Event.current.type == EventType.MouseMove || linking || drag.Active
             || placingSlot != null) Repaint();
         ShowPendingConfirm();
         UpdateUnsavedState();

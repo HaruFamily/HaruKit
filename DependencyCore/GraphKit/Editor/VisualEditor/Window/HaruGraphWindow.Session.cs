@@ -59,6 +59,45 @@ public partial class HaruGraphWindow
     public HGWindowSession GetDocumentCommands()
         => model == null ? null : new HGWindowSession(this, model);
 
+    /// <summary>供 Tool 的結果面板沿用目前工作副本，避免定位節點時重新綁定而丟失編輯。</summary>
+    public bool IsBoundToDocument(UnityEngine.Object owner, string documentId)
+        => model != null && model.Owner == owner && model.DocumentId == documentId;
+
+    /// <summary>以穩定 Id 選取並置中目前文件中的節點或內嵌格子；只改視圖。</summary>
+    public bool FocusDocumentNode(string nodeId)
+    {
+        if (model == null || string.IsNullOrEmpty(nodeId)) return false;
+        EnsureGraph();
+        if (graph == null) return false;
+        HGNodeView target = null;
+        foreach (var node in graph.Nodes)
+        {
+            if (node.Id == nodeId) { target = node; break; }
+            foreach (var row in HGGraph.AllRows(node.Rows))
+                if (row.OutputNode?.Id == nodeId) { target = node; break; }
+            if (target != null) break;
+        }
+        if (target == null)
+        {
+            ShowNotification(new GUIContent("目前畫布找不到這個結果節點，可能已刪除或換來源。"));
+            return false;
+        }
+        if (target.Hidden)
+        {
+            slotHidden.Clear();
+            soloRestore.Clear();
+            soloSlotKey = null;
+            graphDirty = true;
+        }
+        selectedIds.Clear();
+        selectedIds.Add(target.Id);
+        pendingCenterTarget = target.Carrier ?? target.Obj;
+        graphDirty = true;
+        Focus();
+        Repaint();
+        return true;
+    }
+
     internal HGWindowSnapshot QueryDocument(HGModel expected)
     {
         if (!ReferenceEquals(model, expected) || model?.Owner == null) return null;

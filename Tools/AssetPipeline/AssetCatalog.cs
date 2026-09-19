@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
+using HaruFamily.DependencyCore.GraphKit.Editor;
 using Object = UnityEngine.Object;
 
 namespace HaruFamily.Tools.AssetPipeline
@@ -18,7 +19,12 @@ namespace HaruFamily.Tools.AssetPipeline
 
         public override FormulaSlotBase InputSlot => filter;
 
-        public object EvaluateObject() => filter.Evaluate(Owner?.Read() ?? new List<Object>());
+        public object EvaluateObject()
+        {
+            object value = filter.Evaluate(Owner?.Read() ?? new List<Object>());
+            AssetPipeline.CurrentAction?.Observe(this, value);
+            return value;
+        }
     }
 
     /// <summary>ListCell 右側的輸入欄位。未接篩選公式時直接回目錄完整資料。</summary>
@@ -28,7 +34,7 @@ namespace HaruFamily.Tools.AssetPipeline
     {
         /// <summary>套用篩選；沒接、停用或型別不符時原樣回整包。</summary>
         public object Evaluate(List<Object> catalog)
-            => (ActiveFilter as IPackedFormula)?.EvaluateObject(catalog) ?? catalog;
+            => ActiveFilter is IFormula formula ? formula.EvaluateObject(catalog) : catalog;
     }
 
     /// <summary>
@@ -37,11 +43,53 @@ namespace HaruFamily.Tools.AssetPipeline
     // 它是目錄不是公式：沒有結果型別、求不出值，任何一般欄位都不能向它取值——值一律從底下的格子取，
     // 指得到它的欄位只有 CatalogSlotBase。
     //
-    // 這一層只管格子；「內容從哪來」由子類各自回答一次 Read()，不在同一個型別上用旗標分岔——
+    // 這一層管理格子與來源替換；「內容從哪來」由子類各自回答一次 Read()，不在同一個型別上用旗標分岔——
     // 分岔過的版本要在 Read、接受寫入、拉線相容與驗證四處各判一次同一件事。
     [Serializable]
-    public abstract class AssetCatalogBase : CatalogNodeShape<List<Object>>, IGraphInlineNodeOwner
+    public abstract class AssetCatalogBase : CatalogNodeShape<List<Object>>, IGraphInlineNodeOwner, IHGCatalogSourceSelector
     {
+        private static readonly IReadOnlyList<Type> sourceTypes = Array.AsReadOnly(new[]
+        {
+            typeof(DynamicAssetCatalog), typeof(PrototypeAssetCatalog),
+        });
+
+        IReadOnlyList<Type> IHGCatalogSourceSelector.SourceTypes => sourceTypes;
+
+        bool IHGCatalogSourceSelector.TryReplaceSource(GraphNode carrier, Type sourceType,
+            IEnumerable<GraphSlotBase> slots, out string error)
+        {
+            error = null;
+            if (carrier == null || !ReferenceEquals(carrier.CatalogObject, this) || slots == null)
+            {
+                error = "目錄來源已變更，請重新開啟選單。";
+                return false;
+            }
+            AssetCatalogBase replacement;
+            if (sourceType == typeof(DynamicAssetCatalog)) replacement = new DynamicAssetCatalog();
+            else if (sourceType == typeof(PrototypeAssetCatalog)) replacement = new PrototypeAssetCatalog();
+            else
+            {
+                error = "不支援這個目錄來源。";
+                return false;
+            }
+            if (sourceType == GetType()) return true;
+
+            // 檢查完整資料引用，不以畫面上可見的線判定；停用與收合的產出線也不能遺漏。
+            foreach (var slot in slots)
+            {
+                if (slot == null || !ReferenceEquals(slot.Node, carrier)) continue;
+                if (slot is CatalogSlotBase catalogSlot && catalogSlot.AcceptsCatalogObject(replacement)) continue;
+                error = "無法切換目錄來源：仍有不相容的 Header 連線，請先解除產出連線。";
+                return false;
+            }
+
+            // 沿用格子載體而非複製，所有下游引用、篩選公式及識別碼才能保持原樣。
+            replacement.Cells.AddRange(Cells);
+            carrier.SetCatalog(replacement);
+            replacement.SyncCells();
+            return true;
+        }
+
         // 不畫成一般參數列：GraphKit 將格子畫成目錄節點內的 ListCell。
         [HGHide]
         [SerializeReference]
@@ -87,17 +135,36 @@ namespace HaruFamily.Tools.AssetPipeline
     /// 動態目錄：動作執行時把產出寫進來，跑到該動作之後才有值。
     /// </summary>
     // 內容是執行期產物，所以 index 與 initialized 都不序列化。
-    // 跨輪次要不要清空由寫入端 CatalogOutputSlot 的 reset 欄位決定，不在這裡依輪次推——
-    // 這一層只看得到「Index 有內容」，而那可能來自同一批的前一次寫入，也可能來自上一輪。
+    // 跨輪次初始化由目錄設定決定；同輪次的寫入重置仍由 CatalogOutputSlot.reset 決定。
     [HGNode("動態目錄", "動作把產出寫進來；跑到寫入的動作之後才有值", "目錄")]
     [Serializable]
     public sealed class DynamicAssetCatalog : AssetCatalogBase
     {
+        public enum InitializationMode
+        {
+            [HGLabel("每次初始化")] EachRun = 0,
+            [HGLabel("跨次保留")] Retain = 1,
+        }
+
+        [HGEnum, HGLabel("初始化"), HGDescription("每次初始化：整條管線執行前清空。跨次保留：保留上一輪的資料。")]
+        public InitializationMode initialization = InitializationMode.EachRun;
+
         [NonSerialized]
         private List<Object> index;
 
         [NonSerialized]
         private bool initialized;
+
+        public bool IsInitialized => initialized;
+        internal void InitializeForRun()
+        {
+            if (initialization == InitializationMode.EachRun) Write(null, true);
+        }
+        internal void RestoreData(List<Object> previous, bool wasInitialized)
+        {
+            index = new List<Object>(previous);
+            initialized = wasInitialized;
+        }
 
         /// <summary>動作把產出寫進來，回傳實際加入幾個。同一次執行可以有多個動作寫進同一顆。</summary>
         public int Write(IEnumerable<Object> assets, bool reset)
@@ -186,8 +253,7 @@ namespace HaruFamily.Tools.AssetPipeline
         private GraphNode _node;
 
         /// <summary>這一次寫入是不是重來：勾了就先清空目錄再寫，沒勾就接上去。</summary>
-        // 「新的一輪開始」沒有任何動作知道，所以由使用者在圖上指定哪一項負責重來。
-        // 預設 false＝累積；一顆目錄有多個寫入端時只有第一個該勾。
+        // 只控制這一次寫入；整輪初始化由 DynamicAssetCatalog.initialization 決定。
         [HGLabel("重來")]
         public bool reset;
 

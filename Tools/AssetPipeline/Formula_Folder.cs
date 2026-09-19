@@ -1,11 +1,12 @@
 using System;
 using UnityEditor;
 using UnityEngine;
+using HaruFamily.DependencyCore.GraphKit;
 
 namespace HaruFamily.Tools.AssetPipeline
 {
     [Serializable]
-    public abstract class Formula_Folder : FormulaBase<DefaultAsset>
+    public abstract class Formula_Folder<TPack> : FormulaBase<DefaultAsset, TPack>
     {
     }
 
@@ -15,29 +16,30 @@ namespace HaruFamily.Tools.AssetPipeline
     // 兩層固定值是既有行為：企劃常常只想打一段路徑，而路徑在專案搬動後會失效，
     // 所以保留「資產優先、路徑備援」而不是二選一。
     [Serializable]
-    public class FormulaAsset_Folder : FormulaSlot<DefaultAsset, Formula_Folder>
+    [UnityEngine.Scripting.APIUpdating.MovedFrom(true, "HaruFamily.Tools.AssetPipeline", "HaruFamily.Tools.AssetPipeline.Editor", "FormulaAsset_Folder")]
+    public class FolderSlot : FormulaSlot<DefaultAsset, Formula_Folder<NullPack>>
     {
         [HideInInspector]
         public string defaultPath = "Assets";
 
-        public FormulaAsset_Folder()
+        public FolderSlot()
         {
             defaultPath = "Assets";
         }
 
-        public FormulaAsset_Folder(DefaultAsset defaultValue) : base(defaultValue)
+        public FolderSlot(DefaultAsset defaultValue) : base(defaultValue)
         {
             defaultPath = string.Empty;
         }
 
-        public FormulaAsset_Folder(string defaultPath)
+        public FolderSlot(string defaultPath)
         {
             this.defaultPath = string.IsNullOrWhiteSpace(defaultPath) ? "Assets" : defaultPath;
         }
 
         protected override DefaultAsset Fallback()
         {
-            DefaultAsset folder = ValidateFolder(_default, "FormulaAsset_Folder 固定值");
+            DefaultAsset folder = ValidateFolder(_default, "FolderSlot 固定值");
             if (folder != null) return folder;
 
             return LoadFolderAtPath(defaultPath);
@@ -56,7 +58,7 @@ namespace HaruFamily.Tools.AssetPipeline
             string normalized = path.Replace("\\", "/");
             if (!AssetDatabase.IsValidFolder(normalized))
             {
-                AssetPipeline.ReportFormulaWarning($"FormulaAsset_Folder 找不到資料夾：{path}");
+                AssetPipeline.ReportFormulaWarning($"FolderSlot 找不到資料夾：{path}");
                 return null;
             }
 
@@ -76,7 +78,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
         public static string GetFolderPath(DefaultAsset folder)
         {
-            DefaultAsset validFolder = ValidateFolder(folder, "FormulaAsset_Folder");
+            DefaultAsset validFolder = ValidateFolder(folder, "FolderSlot");
             if (validFolder == null) return string.Empty;
 
             return AssetDatabase.GetAssetPath(validFolder);

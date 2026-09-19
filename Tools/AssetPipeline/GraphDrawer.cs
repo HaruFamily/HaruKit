@@ -31,6 +31,25 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
         private static readonly Color FailColor = new Color(1f, 0.42f, 0.42f);
         private static readonly Color IdleColor = new Color(0.55f, 0.55f, 0.55f);
 
+        public static void Open(AssetPipeline pipeline)
+            => HaruGraphWindow.OpenForDocument(pipeline, new HGDocumentBinding<Graph>("AssetPipeline.Graph",
+                owner => (owner as AssetPipeline)?.graph,
+                (owner, document) => (owner as AssetPipeline).graph = document,
+                () => new Graph()), GraphContext);
+
+        public static void Navigate(AssetPipeline pipeline, string nodeId)
+        {
+            foreach (var window in Resources.FindObjectsOfTypeAll<HaruGraphWindow>())
+            {
+                if (!window.IsBoundToDocument(pipeline, "AssetPipeline.Graph")) continue;
+                window.FocusDocumentNode(nodeId);
+                return;
+            }
+            Open(pipeline);
+            foreach (var window in Resources.FindObjectsOfTypeAll<HaruGraphWindow>())
+                if (window.IsBoundToDocument(pipeline, "AssetPipeline.Graph")) { window.FocusDocumentNode(nodeId); return; }
+        }
+
         public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
             => Pad + TitleHeight + 2f + SummaryHeight + Gap + ButtonHeight + Pad;
 
@@ -72,13 +91,7 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
                     "節點圖是唯一的編輯入口；Inspector 不展開圖的內容。");
                 if (GUI.Button(openRect, open))
                 {
-                    if (target is AssetPipeline)
-                    {
-                        HaruGraphWindow.OpenForDocument(target, new HGDocumentBinding<Graph>("AssetPipeline.Graph",
-                            owner => (owner as AssetPipeline)?.graph,
-                            (owner, document) => (owner as AssetPipeline).graph = document,
-                            () => new Graph()), GraphContext);
-                    }
+                    if (target is AssetPipeline tool) Open(tool);
                     else HaruGraphWindow.OpenFor(target);
                 }
             }

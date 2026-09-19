@@ -12,6 +12,38 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
     public sealed class GraphKitCrossToolSessionTests
     {
         [Test]
+        public void ResultNavigationKeepsTheCurrentDocumentAndDirtyState()
+        {
+            var owner = ScriptableObject.CreateInstance<AssetPipeline>();
+            var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+            try
+            {
+                ((IGraphDocument)owner.graph).AddRoot(Graph.PipelineKey);
+                var carrier = new GraphNode();
+                carrier.EnsureId();
+                carrier.SetCatalog(new DynamicAssetCatalog());
+                owner.graph.Orphans.Add(carrier);
+                Graph original = owner.graph;
+                var binding = new HGDocumentBinding<Graph>("AssetPipeline.Graph",
+                    value => ((AssetPipeline)value).graph, (value, graph) => ((AssetPipeline)value).graph = graph);
+                Assert.That(window.BindDocument(owner, binding, ContextFor<Graph>(HGCapabilities.Catalogs)), Is.True);
+                var commands = window.GetDocumentCommands();
+                bool dirty = commands.Query().IsDirty;
+
+                Assert.That(window.IsBoundToDocument(owner, "AssetPipeline.Graph"), Is.True);
+                Assert.That(window.FocusDocumentNode(carrier.Id), Is.True);
+                Assert.That(commands.Query().IsDirty, Is.EqualTo(dirty));
+                Assert.That(owner.graph, Is.SameAs(original));
+            }
+            finally
+            {
+                window.GetDocumentCommands()?.Cancel();
+                UnityEngine.Object.DestroyImmediate(window);
+                UnityEngine.Object.DestroyImmediate(owner);
+            }
+        }
+
+        [Test]
         public void PublicWindowCommandsAreBoundToTheSelectedToolDocument()
         {
             var logicOwner = ScriptableObject.CreateInstance<LogicOwner>();

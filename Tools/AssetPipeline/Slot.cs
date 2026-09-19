@@ -24,11 +24,10 @@ namespace HaruFamily.Tools.AssetPipeline
     /// </summary>
     // 對應舊的 FormulaAssetBase：@default → _default，data / assetData 三態 → GraphNode.Kind，
     // formula 欄位 → 載體節點。舊的 AssetSource 模式改成「接一個讀 AssetPipelineSource 的葉節點公式」。
-    // TFormula 的約束是「載體節點 ＋ 會回傳 TResult」兩件事，不是單一基底類別：
-    // Formula_AudioClip 繼承的是 Formula_Object<AudioClip>，靠 IFormula<AudioClip> 才接得上這一格。
+    // 公式家族固定唯一結果與 NullPack；Catalog 結果由 Cell 以相同 TResult 接入。
     [Serializable]
     public abstract class FormulaSlot<TResult, TFormula> : FormulaSlotBase
-        where TFormula : GraphNodeContent, IFormula<TResult>
+        where TFormula : FormulaBase<TResult, NullPack>
     {
         [SerializeField]
         protected TResult _default = default;
@@ -101,6 +100,7 @@ namespace HaruFamily.Tools.AssetPipeline
                         try
                         {
                             object value = cell.EvaluateObject();
+                            if (value == null && default(TResult) is null) return default;
                             return value is TResult typed ? typed : Mismatch("目錄格");
                         }
                         catch (Exception e)
@@ -113,7 +113,7 @@ namespace HaruFamily.Tools.AssetPipeline
                     if (formula == null) return Mismatch("公式");
                     try
                     {
-                        return formula.Evaluate();
+                        return formula.Evaluate(default(NullPack));
                     }
                     catch (Exception e)
                     {
@@ -245,7 +245,7 @@ namespace HaruFamily.Tools.AssetPipeline
         /// 執行這個動作。停用、空槽、型別不符一律跳過。
         /// </summary>
         /// <returns>真的執行了才回 true；跳過回 false，呼叫端才不會把跳過算成成功。</returns>
-        public bool Execute()
+        internal bool Execute(PipelineActionContext context)
         {
             if (_disabled) return false;
             if (_node == null || _node.Disabled) return false;
@@ -262,7 +262,7 @@ namespace HaruFamily.Tools.AssetPipeline
                 return false;
             }
 
-            action.Execute();
+            action.Execute(context);
             return true;
         }
 

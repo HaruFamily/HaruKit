@@ -80,33 +80,41 @@ using HaruFamily.Tools.AssetPipeline;
 [Serializable]
 public class MyAction : ActionBase
 {
-    public FormulaAsset_ObjectList targets = new FormulaAsset_ObjectList();
+    public ObjectListSlot targets = new ObjectListSlot();
 
-    public override void Execute()
+    protected override void OnExecute(PipelineActionContext context)
     {
-        foreach (var target in targets.Evaluate()) { /* … */ }
+        foreach (var target in targets.Evaluate())
+            context.Result.Record(PipelineItemStatus.Collected, target);
     }
 }
 ```
 
-- 動作繼承 `ActionBase` 並覆寫同步的 `Execute()`。
-- 公式繼承對應族的基底（`Formula_Int`、`Formula_Object` 等）並覆寫同步求值。
+- 動作繼承 `ActionBase` 並覆寫同步的 `protected OnExecute(PipelineActionContext context)`。`Execute` 與 `ActionSlot.Execute` 是框架內部入口；由 `RunPipeline()` 管理完整執行流程。
+- 資產修改透過 `context.Assets` 納入交易；失敗使用 `context.Fail(...)`，正常無事可做使用 `context.Skip(...)`。需要停止目前方法時明確 `return`。
+- 交易型別與提交／回復生命週期由 AP 內部管理，使用端不自行建立交易。
+- 公式繼承對應輸出家族並明確指定 Pack，如 `Formula_Int<NullPack>`、`Formula_Object<NullPack>`。
+- 公式統一使用 `FormulaBase<TResult, TPack>`，只覆寫 `protected OnEvaluate(pack)`。一般公式繼承 `Formula_Int<NullPack>`；Catalog 公式繼承 `Formula_Int<List<UnityEngine.Object>>`。`IntSlot` 等輸入槽的 `Evaluate()` 自動提供 NullPack。
+- 每顆公式只有一種 TResult，AudioClip／GameObject／TextAsset 及清單家族同樣覆寫 `OnEvaluate(pack)`。公式求值入口與 Catalog 非泛型派發屬 AP 內部。
+- 具體物件／清單公式不隱式轉成 Object／ObjectList 公式。需要不同輸出時，使用同一 Catalog 的不同 List Cell，例如 GameObject 清單與全部資產清單。
 - 讀舊式 prototype key 的公式實作 `IPrototypeKeyReader`；新圖優先使用
   `PrototypeAssetCatalog` 與目錄庫的穩定 id。
 - 需要輸出資產給後續動作時，在動作上宣告 `CatalogOutputSlot`，並呼叫
   `output.Write(assets)`；不要自行維護 Dynamic Catalog 的生命週期。
-- `AssetPipeline.current`、`Report` 與 `ReportFormulaWarning` 是給動作用的公開 API。
+- `AssetPipeline.current` 與 `CurrentAction` 對使用端唯讀，狀態切換由 AP 管理；`Report` 與 `ReportFormulaWarning` 提供訊息回報。
 
 ## Package Contents
 
 - `Node` / `Slot`：同步動作與公式基底、欄位基底、動作頭端
 - `Graph` / `GraphVerifier`：`IGraphDocument` 實作與驗證（含 Dynamic Catalog 時序）
 - `AssetCatalog`：Prototype／Dynamic Catalog、ListCell 與產出 Slot
-- `FormulaAsset_*`：族宣告與欄位容器（Bool / Float / Int / String / Folder /
+- `Formula_*`：泛型輸出家族與 `*Slot` 欄位容器（Bool / Float / Int / String / Folder /
   Object / AudioClip / GameObject / TextAsset）
 - `AssetPipeline*`：管線資產、資產群組、群組批次執行、Inspector
 
 ## Existing Assets Migration
+
+輸入槽使用 `IntSlot`、`ObjectListSlot`、`FolderSlot` 等名稱；由 `FormulaAsset_*` 改名的型別以 `MovedFrom` 記錄原 namespace／assembly／class。既有欄位名稱、內容與腳本 GUID 保留。升級後需在 Unity 確認既有圖、Token 及欄位資料正常載入；序列化遷移測試與實際資產載入通過前不視為完成驗收。
 
 原始腳本的 `.meta` GUID 保留，`m_Script` 參照仍然有效。但 **v2.0.0 的資料模型
 與 v1 不相容**：`IPipelineAsset` 清單換成節點圖、`FormulaAssetBase` 換成

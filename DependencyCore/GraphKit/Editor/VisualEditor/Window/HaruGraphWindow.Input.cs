@@ -480,10 +480,10 @@ public partial class HaruGraphWindow
 
     private void CenterOn(object slotOrNode)
     {
-        if (graph == null) return;
+        if (graph == null || slotOrNode == null) return;
         foreach (var node in graph.Nodes)
         {
-            bool match = ReferenceEquals(node.Obj, slotOrNode);
+            bool match = ReferenceEquals(node.Obj, slotOrNode) || ReferenceEquals(node.Carrier, slotOrNode);
             if (!match)
                 foreach (var row in HGGraph.AllRows(node.Rows))
                     if (ReferenceEquals(row.InputSlot, slotOrNode)) { match = true; break; }

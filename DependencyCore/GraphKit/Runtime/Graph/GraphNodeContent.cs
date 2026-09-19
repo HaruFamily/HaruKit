@@ -40,9 +40,6 @@ public abstract class ActionNodeShape : ActionNodeShape<NullPack> { }
 [Serializable]
 public abstract class FormulaNodeShape<TResult, TPack> : GraphNodeContent { }
 
-/// <summary>不接收執行期 pack 的公式節點形狀。</summary>
-public abstract class FormulaNodeShape<TResult> : FormulaNodeShape<TResult, NullPack> { }
-
 /// <summary>
 /// 目錄節點的形狀基底：裝一包 T，自己不求值——值一律從底下的格子取。
 /// </summary>

@@ -214,6 +214,12 @@ public partial class HaruGraphWindow
     {
         if (node == null) return;
 
+        if (node.IsCatalogNode)
+        {
+            ShowCatalogSourceSelector(node, selector);
+            return;
+        }
+
         var options = new List<HGSourceOption>();
         object slot = SourceSlot(node);
 
@@ -292,6 +298,41 @@ public partial class HaruGraphWindow
         }
 
         HGTypeCatalog.ShowSourcePicker(selector, options);
+    }
+
+    private void ShowCatalogSourceSelector(HGNodeView node, Rect selector)
+    {
+        if (node.Obj is not IHGCatalogSourceSelector source) return;
+        var options = new List<HGSourceOption>();
+        foreach (var type in source.SourceTypes)
+        {
+            Type captured = type;
+            options.Add(new HGSourceOption
+            {
+                Group = "目錄",
+                Name = HGReflect.TypeName(type),
+                IsCurrent = node.Obj.GetType() == type,
+                Apply = () => ReplaceCatalogSource(node.Carrier, source, captured),
+            });
+        }
+        HGTypeCatalog.ShowSourcePicker(selector, options, "變更目錄來源");
+    }
+
+    private void ReplaceCatalogSource(GraphNode carrier, IHGCatalogSourceSelector source, Type type)
+    {
+        // 選單開啟後可能已換焦點或復原；不能修改舊工作副本上的載體。
+        EnsureGraph();
+        if (graph == null || carrier == null || !graph.ByCarrier.ContainsKey(carrier)
+            || !ReferenceEquals(carrier.CatalogObject, source) || carrier.CatalogObject.GetType() == type) return;
+        if (!source.TryReplaceSource(carrier, type, SlotsInCurrentGraph(), out string error))
+        {
+            ShowNotification(new GUIContent(error));
+            return;
+        }
+        BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        Invalidate();
+        Repaint();
     }
 
     private GraphSlotBase SourceSlot(HGNodeView node)

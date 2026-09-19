@@ -53,14 +53,14 @@ public static class HGStyles
     /// <summary>Header 上的疊層底色（chip、名稱區）。</summary>
     public static readonly Color HeaderOverlay = new(1f, 1f, 1f, 0.14f);
 
-    // 線與接點用明度分層，不用色相：空槽是暗灰、接了東西是亮白、Token保留一點紫相當作唯一例外。
+    // 取值接點用明度分層：空槽暗灰、接上與提供值的接點亮灰白；相容提示使用獨立外圈。
     public static readonly Color Link = new(0.80f, 0.80f, 0.82f);
     public static readonly Color InputPortEmpty = new(0.42f, 0.42f, 0.43f);
     public static readonly Color InputPortLive = new(0.80f, 0.80f, 0.82f);
     public static readonly Color OutputPortLive = new(0.80f, 0.80f, 0.82f);
 
-    // 輸出是唯一方向與其他線相反的連線（擁有者寫進去，不是取值），所以它是明度分層的第二個例外：
-    // 借目錄的青藍，一眼看得出「這條不是取值」。停用與選取仍蓋得過它。
+    // 目錄寫入端、接受寫入的 Header 與寫入連線共用青藍；Cell 的取值輸出不使用此色。
+    // 停用只壓暗，錯誤優先；選取連線仍使用暖金。
     public static readonly Color OutputPortColor = new(0.42f, 0.72f, 0.74f);
 
     public static readonly Color Muted = new(0.74f, 0.74f, 0.75f);

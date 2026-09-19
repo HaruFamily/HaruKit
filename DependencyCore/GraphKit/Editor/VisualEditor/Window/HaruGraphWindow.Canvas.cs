@@ -158,6 +158,9 @@ public partial class HaruGraphWindow
         HandleLinkNavigation(e, clipMouse);
         Vector2 graphMouse = clipMouse / zoom - pan;
         bool mouseInCanvas = r.Contains(e.mousePosition);
+        var headerActionsNode = UpdateHeaderActions(graphMouse, mouseInCanvas);
+        bool overHeaderActions = headerActionsNode != null
+            && HeaderActionsRect(headerActionsNode).Contains(graphMouse) && mouseInCanvas;
 
         if (graph != null)
         {
@@ -170,14 +173,26 @@ public partial class HaruGraphWindow
         {
             if (graph != null)
             {
-                HGNodeView linkTarget = LinkTargetNode(graphMouse);
-                foreach (var node in graph.Nodes)
+                HGPort snappedPort = SnappedCompatiblePort(graphMouse);
+                HGNodeView linkTarget = OwnerNodeOfPort(snappedPort);
+                EventType pointerEvent = e.type;
+                bool shieldPointer = overHeaderActions && (e.isMouse || e.type == EventType.ScrollWheel);
+                // 底層包含直接讀 Event 的列控制項，不能只靠 GUI.enabled 防止穿透。
+                if (shieldPointer) e.type = EventType.Ignore;
+                try
                 {
-                    if (node.Hidden) continue;
-                    DrawNode(node, ReferenceEquals(node, linkTarget));
+                    foreach (var node in graph.Nodes)
+                    {
+                        if (node.Hidden) continue;
+                        DrawNode(node, ReferenceEquals(node, linkTarget), snappedPort);
+                    }
+                    DrawExtensionPorts(snappedPort);
+                    DrawEmptyTimingHint();
                 }
-                DrawExtensionPorts();
-                DrawEmptyTimingHint();
+                finally
+                {
+                    if (shieldPointer) e.type = pointerEvent;
+                }
                 if (boxSelecting)
                 {
                     var box = BoxRect();
@@ -185,6 +200,9 @@ public partial class HaruGraphWindow
                     HGStyles.Fill(visual, new Color(0.42f, 0.78f, 1f, 0.10f));
                     HGStyles.Frame(visual, HGStyles.Link);
                 }
+                if (headerActionsNode != null) DrawHeaderActions(headerActionsNode);
+                // 浮動工具列空白處也攔截指標事件，避免操作穿透到下方節點或畫布。
+                if (overHeaderActions && (e.isMouse || e.type == EventType.ScrollWheel)) e.Use();
             }
         }
         finally
@@ -283,7 +301,7 @@ public partial class HaruGraphWindow
         }
         if (linking && linkPort != null)
         {
-            bool producedValue = OwnerRowOfPort(linkPort)?.IsProducedValue == true;
+            bool producedValue = IsCatalogWritePort(linkPort);
             DrawGraphLine(linkPort.Presentation.Position, LinkPreviewEnd(graphMouse), false, false, producedValue);
         }
         Handles.EndGUI();
@@ -456,7 +474,7 @@ public partial class HaruGraphWindow
                 open ? "收起註解（內容保留）" : hasNote ? "展開註解" : "加上註解"), GUIStyle.none);
     }
 
-    /// <summary>Enable uses filled/empty circles inside the Header, away from the edge-mounted connection Ports.</summary>
+    /// <summary>工具列以實心／空心圓表示啟用狀態。</summary>
     private static bool DrawEnableToggle(Rect r, bool enabled, int users, bool visible)
     {
         if (visible) GUI.Label(r, enabled ? "●" : "○", HGStyles.HeaderButton);
@@ -479,6 +497,101 @@ public partial class HaruGraphWindow
         if (!canToggle) tooltip = "請在 Play Mode 選擇可控制的執行鏈，並使用相符的已儲存文件。";
         using (new EditorGUI.DisabledScope(!visible || !canToggle))
             return GUI.Button(rect, new GUIContent("", visible ? tooltip : ""), GUIStyle.none);
+    }
+
+    private Rect HeaderActionsRect(HGNodeView node)
+    {
+        int count = 1;
+        if (node.Carrier != null) count += executionSource != null ? 2 : 1;
+        float width = count * 20f + 8f;
+        return new Rect(node.Pos.x + node.Width - width, node.Pos.y - 22f, width, 22f);
+    }
+
+    private HGNodeView UpdateHeaderActions(Vector2 graphMouse, bool mouseInCanvas)
+    {
+        string previous = headerActionsNodeId;
+        HGNodeView headerActionsNode = null;
+        if (graph != null && mouseInCanvas && Event.current.type != EventType.MouseLeaveWindow
+            && !linking && dragNode == null && !boxSelecting)
+        {
+            // 工具列緊貼 Header，游標跨越邊界時不會經過讓它收起的空隙。
+            if (previous != null)
+            {
+                foreach (var node in graph.Nodes)
+                {
+                    if (node.Hidden || node.IsRoot || node.Id != previous) continue;
+                    if (HeaderActionsRect(node).Contains(graphMouse) || GUIUtility.hotControl != 0)
+                        headerActionsNode = node;
+                    break;
+                }
+            }
+            if (headerActionsNode == null)
+            {
+                // 與節點繪製順序一致，重疊時只讓最上層節點取得滑入狀態。
+                foreach (var node in graph.Nodes)
+                {
+                    if (node.Hidden) continue;
+                    var body = new Rect(node.Pos, new Vector2(node.Width, node.Height));
+                    if (!body.Contains(graphMouse)) continue;
+                    var header = new Rect(node.Pos, new Vector2(node.Width,
+                        HGGraph.HeaderHeight - HGNodeStatus.StripHeight));
+                    headerActionsNode = !node.IsRoot && header.Contains(graphMouse) ? node : null;
+                }
+            }
+        }
+        headerActionsNodeId = headerActionsNode?.Id;
+        if (previous != headerActionsNodeId || Event.current.type == EventType.MouseMove) Repaint();
+        return headerActionsNode;
+    }
+
+    private void DrawHeaderActions(HGNodeView node)
+    {
+        var area = HeaderActionsRect(node);
+        area.position += pan;
+        var background = HGStyles.NodeBody;
+        background.a = 0.85f;
+        HGStyles.RoundedFill(area, background, 4f);
+        float right = area.xMax - 7f;
+        if (node.Carrier != null)
+        {
+            if (executionSource != null)
+            {
+                var holdToggle = new Rect(right - 14f, area.y + 4f, 14f, 14f);
+                bool held = NodeHasHold(node);
+                var execution = NodeExecution(node);
+                bool canToggle = held || !string.IsNullOrEmpty(node.Carrier.Id) && ExecutionMatchesView
+                    && EditorApplication.isPlaying && selectedExecution?.IsFinished != true;
+                if (DrawHoldToggle(holdToggle, held, execution.HasValue && execution.Value.Waiting > 0, true, canToggle))
+                    ToggleNodeHold(node);
+                right -= 20f;
+            }
+            var enableToggle = new Rect(right - 14f, area.y + 4f, 14f, 14f);
+            if (DrawEnableToggle(enableToggle, !node.Carrier.Disabled, CarrierUsers(node.Carrier), true))
+            {
+                BreakUndoMerge();
+                model.SetNodeDisabled(node.Id, !node.Carrier.Disabled);
+                Invalidate();
+                Repaint();
+            }
+            right -= 20f;
+        }
+        var noteToggle = new Rect(right - 14f, area.y + 4f, 14f, 14f);
+        if (!DrawNoteToggle(noteToggle, node.NoteOpen, !string.IsNullOrWhiteSpace(node.Tips), true)) return;
+        if (node.NoteOpen)
+        {
+            ReleaseNoteFocus(node.Id);
+            noteCollapsed.Add(node.Id);
+            noteOpenId = null;
+        }
+        else
+        {
+            // 空註解框需保持節點選取，才不會被下一幀的自動收合移除。
+            noteCollapsed.Remove(node.Id);
+            noteOpenId = node.Id;
+            selectedIds.Add(node.Id);
+        }
+        graphDirty = true;
+        Repaint();
     }
 
     /// <summary>
@@ -524,7 +637,7 @@ public partial class HaruGraphWindow
         from = to = node.IsActionNode ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
     }
 
-    private void DrawNode(HGNodeView node, bool isLinkTarget)
+    private void DrawNode(HGNodeView node, bool isLinkTarget, HGPort snappedPort)
     {
         var rect = new Rect(node.Pos + pan, new Vector2(node.Width, node.Height));
 
@@ -539,59 +652,16 @@ public partial class HaruGraphWindow
         object issueTarget = node.Obj
             ?? (node.IsAssetNode || node.IsTokenNode || node.IsPlaceholder ? node.ParentSlot : null);
         bool hasNodeIssue = Rep.HasIssue(issueTarget, out bool nodeError);
-        bool showHeaderActions = rect.Contains(Event.current.mousePosition) || selectedIds.Contains(node.Id);
         var execution = NodeExecution(node);
 
         float headerRight = rect.xMax - 4f;
 
-        // HEAD 不是可執行的 GraphNode，不顯示 Enable／Hold。
-        if (node.Carrier != null)
-        {
-            if (executionSource != null)
-            {
-                var holdToggle = new Rect(headerRight - 14f, rect.y + 3f, 14f, 14f);
-                bool held = NodeHasHold(node);
-                bool canToggle = held || !string.IsNullOrEmpty(node.Carrier.Id) && ExecutionMatchesView
-                    && EditorApplication.isPlaying && selectedExecution?.IsFinished != true;
-                if (DrawHoldToggle(holdToggle, held, execution.HasValue && execution.Value.Waiting > 0, showHeaderActions || held, canToggle)) ToggleNodeHold(node);
-                headerRight = holdToggle.x - 3f;
-            }
-            var enableToggle = new Rect(headerRight - 14f, rect.y + 3f, 14f, 14f);
-            if (DrawEnableToggle(enableToggle, !node.Carrier.Disabled, CarrierUsers(node.Carrier), showHeaderActions || node.Carrier.Disabled))
-            {
-                BreakUndoMerge();
-                model.SetNodeDisabled(node.Id, !node.Carrier.Disabled);
-                Invalidate();       // 停用改的是資料，不是視覺狀態
-                Repaint();
-            }
-            headerRight = enableToggle.x - 3f;
-        }
-
-        // 註解開關排在停用鈕左邊，Token與資產葉節點也有。
-        // HEAD 沒有：它的載體是頭端物件（ActionSlot／TokenEntry／資產）而不是 GraphNode，沒有存註解的欄位。
         if (!node.IsRoot)
         {
-            var noteToggle = new Rect(headerRight - 14f, rect.y + 3f, 14f, 14f);
-            if (DrawNoteToggle(noteToggle, node.NoteOpen, !string.IsNullOrWhiteSpace(node.Tips), showHeaderActions))
-            {
-                // 收起只是收起：內容留在載體上，再打開原封不動。
-                if (node.NoteOpen)
-                {
-                    ReleaseNoteFocus(node.Id);
-                    noteCollapsed.Add(node.Id);
-                    noteOpenId = null;
-                }
-                else
-                {
-                    // 空框是暫態，得確保節點被選取，否則下一幀就會被收起來。
-                    noteCollapsed.Remove(node.Id);
-                    noteOpenId = node.Id;
-                    selectedIds.Add(node.Id);
-                }
-                graphDirty = true;      // 純視覺，不算改資料
-                Repaint();
-            }
-            headerRight = noteToggle.x - 3f;
+            var expand = new Rect(headerRight - 14f, rect.y + 3f, 14f, 14f);
+            if (headerActionsNodeId == node.Id) HGStyles.RoundedFill(expand, HGStyles.HeaderOverlay, 2f);
+            GUI.Label(expand, new GUIContent("▴", "滑入 Header 展開工具列"), HGStyles.HeaderButton);
+            headerRight = expand.x - 3f;
         }
 
         if (!string.IsNullOrEmpty(node.Chip))
@@ -603,11 +673,13 @@ public partial class HaruGraphWindow
             headerRight = chipRect.x - 2f;
         }
 
-        // 左端只讓開輸出接點；停用鈕已固定在右上角。
-        float titleInset = node.IsRoot ? 0f : HGGraph.PortDiameter + 2f;
+        // 左端只讓開輸出接點；右端保留工具列提示與 chip。
+        float titleInset = node.IsRoot || !node.HasOutputPort ? 0f : HGGraph.PortDiameter + 2f;
 
         float titleWidth = Mathf.Max(24f, headerRight - rect.x - titleInset);
-        var titleRect = new Rect(rect.x + titleInset, rect.y, titleWidth, HGGraph.HeaderHeight);
+        // Header 下緣固定留給狀態帶；名稱與來源按鈕的繪製、命中共用上方內容區。
+        float headerContentHeight = HGGraph.HeaderHeight - HGNodeStatus.StripHeight;
+        var titleRect = new Rect(rect.x + titleInset, rect.y, titleWidth, headerContentHeight);
         // 命中測試在 zoom clip 外做，所以存 graph space。
         node.TitleRect = new Rect(titleRect.position - pan, titleRect.size);
 
@@ -688,8 +760,8 @@ public partial class HaruGraphWindow
         var statusColor = HGNodeStatus.ColorOf(hasNodeIssue, nodeError, execution);
         if (statusColor.HasValue)
         {
-            // Reserve Header space rather than covering rows; keep at least two screen pixels when zoomed out.
-            float stripHeight = Mathf.Clamp(2f / zoom, HGNodeStatus.StripHeight, 6f);
+            // 固定使用 Header 預留區，不因縮放向上侵入控制項。
+            float stripHeight = HGNodeStatus.StripHeight;
             var statusBar = new Rect(rect.x + 1f, header.yMax - stripHeight, rect.width - 2f, stripHeight);
             HGStyles.Fill(statusBar, statusColor.Value);
             string statusTip = execution.HasValue ? HGNodeStatus.Describe(execution.Value) : "";
@@ -715,7 +787,7 @@ public partial class HaruGraphWindow
         }
 
         HGStyles.RoundedFrame(rect, borderColor, NodeCornerRadius, thickness);
-        DrawNodePorts(node, rect);
+        DrawNodePorts(node, snappedPort);
     }
 
     /// <summary>
@@ -816,8 +888,9 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>外框完成後最後畫接點；圓點完整位於 Node 內側。</summary>
-    private void DrawNodePorts(HGNodeView node, Rect nodeRect)
+    private void DrawNodePorts(HGNodeView node, HGPort snappedPort)
     {
+        bool dim = node.InDisabledSubtree || node.InLockedSubtree || node.Carrier?.Disabled == true;
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
             // 折疊的清單：子列的接點會全部疊在標題列上，所以只在標題列畫一顆代表「裡面有連線」，
@@ -827,43 +900,74 @@ public partial class HaruGraphWindow
                 if (!HasConnectedElement(row)) continue;
                 var aggregateKey = new HGPortKey(row.OwnerNodeId, row.Path, HGPortRole.Aggregate);
                 if (!graph.PortsByKey.TryGetValue(aggregateKey, out var aggregate) || !aggregate.Presentation.Visible) continue;
-                HGStyles.DrawInputPort(PortRect(aggregate.Presentation.Position + pan), HGStyles.InputPortLive);
+                DrawSemanticPort(aggregate, AggregatePortColor(row), dim, snappedPort);
                 continue;
             }
             var inputPort = PortFor(row);
             if (inputPort?.Presentation.Visible != true) continue;
             var inputPortRect = PortRect(inputPort.Presentation.Position + pan);
-            HGStyles.DrawInputPort(inputPortRect, InputPortColor(row));
+            DrawSemanticPort(inputPort, InputPortColor(row), dim || row.Locked || row.InputSlot.Node?.Disabled == true, snappedPort);
             DrawInputPortGlyph(row, inputPortRect);
 
             // InputOutputPort：右側輸入之外，左緣有一顆自己的輸出接點——那一列自己就是一顆載體。
             if (row.OutputNode != null && graph.PortsByKey.TryGetValue(OutputKey(row), out var outputPort)
                 && outputPort.Presentation.Visible)
-                HGStyles.DrawOutputPort(PortRect(outputPort.Presentation.Position + pan), HGStyles.OutputPortColor);
+                DrawSemanticPort(outputPort, PortErrorColor(row.OutputNode.BodyObject, HGStyles.OutputPortLive),
+                    dim || row.Locked || row.OutputNode.Disabled, snappedPort);
         }
 
         if (node.IsRoot || !node.HasOutputPort) return;
         var headerPort = PortFor(node);
         if (headerPort?.Presentation.Visible == true)
-            HGStyles.DrawOutputPort(PortRect(headerPort.Presentation.Position + pan), HGStyles.OutputPortLive);
+            DrawSemanticPort(headerPort, PortErrorColor(node.Obj ?? node.ParentSlot,
+                node.ReceivesCatalogWrites ? HGStyles.OutputPortColor : HGStyles.OutputPortLive), dim, snappedPort);
     }
 
     /// <summary>Ports owned by Tool-specific adapters are drawn without adding a central concrete-type branch.</summary>
-    private void DrawExtensionPorts()
+    private void DrawExtensionPorts(HGPort snappedPort)
     {
         foreach (var port in graph.Ports)
         {
             bool hasBuiltInAnchor = port.Presentation is IHGPortPresentationAnchor anchor
                 && (anchor.Node != null || anchor.Row != null);
             if (hasBuiltInAnchor || !port.Presentation.Visible) continue;
-            Rect rect = PortRect(port.Presentation.Position + pan);
-            if (port.IsInput)
-                HGStyles.DrawInputPort(rect, IsCompatible(port) ? HGStyles.Link : HGStyles.InputPortEmpty);
-            else if (port.IsOutput)
-                HGStyles.DrawOutputPort(rect, IsCompatible(port) ? HGStyles.Link : HGStyles.OutputPortLive);
-            else
-                HGStyles.DrawInputPort(rect, HGStyles.InputPortLive);
+            Color color = IsCatalogWritePort(port) ? HGStyles.OutputPortColor
+                : port.IsInput && port.InputSlot?.Node == null ? HGStyles.InputPortEmpty : HGStyles.OutputPortLive;
+            object issueTarget = port.IsInput ? port.InputSlot
+                : (object)port.Source?.OutputNode?.CatalogObject ?? port.Source?.OutputNode?.BodyObject;
+            var owner = OwnerNodeOfPort(port);
+            bool dim = port.Presentation.Locked || owner?.InDisabledSubtree == true
+                || owner?.InLockedSubtree == true || port.Source?.OutputNode?.Disabled == true;
+            DrawSemanticPort(port, PortErrorColor(issueTarget, color), dim, snappedPort);
         }
+    }
+
+    private bool IsCatalogWritePort(HGPort port)
+    {
+        if (port?.InputSlot is CatalogSlotBase slot) return slot.WritesToCatalog;
+        return port?.Source?.OutputNode is GraphNode carrier && graph != null
+            && graph.ByCarrier.TryGetValue(carrier, out var node) && node.ReceivesCatalogWrites;
+    }
+
+    private Color PortErrorColor(object target, Color color)
+        => target != null && Rep.HasIssue(target, out bool error) && error ? HGStyles.InputPortError : color;
+
+    private void DrawSemanticPort(HGPort port, Color color, bool dim, HGPort snappedPort)
+    {
+        var rect = PortRect(port.Presentation.Position + pan);
+        // 錯誤色保持可讀；停用只壓暗用途色，不換另一種色相。
+        bool hasError = color == HGStyles.InputPortError;
+        if (dim && !hasError) color.a *= 0.45f;
+        if (port.IsOutput) HGStyles.DrawOutputPort(rect, color);
+        else HGStyles.DrawInputPort(rect, color);
+        if (!linking || !IsCompatible(port)) return;
+
+        // 相容與吸附只改外圈，中心保留灰白／寫入青藍／錯誤紅。
+        float thickness = ReferenceEquals(port, snappedPort) ? 2f : 1f;
+        // 固定圖面外擴量，Header 接點的圈不侵入下緣 20～24 的狀態帶。
+        const float inset = 1f;
+        var ring = new Rect(rect.x - inset, rect.y - inset, rect.width + inset * 2f, rect.height + inset * 2f);
+        HGStyles.RoundedFrame(ring, hasError ? HGStyles.InputPortError : HGStyles.Link, ring.width * 0.5f, thickness);
     }
 
     /// <summary>
@@ -895,17 +999,25 @@ public partial class HaruGraphWindow
 
     private Color InputPortColor(HGRow row)
     {
-        // 從 Node 發點拉線時，收得下它的欄位接點先亮起來，使用者不用逐一試。
-        if (linking && IsCompatible(PortFor(row))) return HGStyles.Link;
-
         bool hasIssue = Rep.HasIssue(row.InputSlot, out bool isError);
-        var contentKind = row.InputSlot.Node?.Kind;
         if (hasIssue && isError) return HGStyles.InputPortError;
         // 輸出接點不分空／接：它的顏色是在講方向，接上與否看得到線。
         if (row.IsProducedValue) return HGStyles.OutputPortColor;
-        return contentKind is NodeKind.Inline or NodeKind.Empty or NodeKind.Asset
+        return row.InputSlot.Node != null
             ? HGStyles.InputPortLive
             : HGStyles.InputPortEmpty;
+    }
+
+    private Color AggregatePortColor(HGRow listRow)
+    {
+        bool allWrites = true;
+        foreach (var child in HGGraph.AllRows(listRow.Children))
+        {
+            if (!child.HasSlot) continue;
+            if (Rep.HasIssue(child.InputSlot, out bool error) && error) return HGStyles.InputPortError;
+            if (child.InputSlot.Node != null && !child.IsProducedValue) allWrites = false;
+        }
+        return allWrites ? HGStyles.OutputPortColor : HGStyles.InputPortLive;
     }
 
     /// <summary>把每一列的圖面座標（命中測試與接點）更新成目前的節點位置。</summary>

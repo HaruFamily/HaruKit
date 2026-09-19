@@ -11,6 +11,12 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
         private static readonly Color RunTint = new Color(0.5f, 0.85f, 0.55f);
 
         private SerializedProperty graph;
+        private int selectedStep = -1;
+        private bool showCatalogs;
+        private bool showPreview;
+        private Vector2 resultScroll;
+        private System.Collections.Generic.List<string> recoveryDirectories = new();
+        private double nextRecoveryScan;
 
         private void OnEnable()
         {
@@ -35,6 +41,125 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
             }
 
             DrawLog(pipeline);
+            DrawResults(pipeline);
+            DrawRecovery(pipeline);
+        }
+
+        private void DrawResults(AssetPipeline pipeline)
+        {
+            var run = pipeline.LastRun;
+            if (run != null)
+            {
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField($"最近一次執行 · {run.StartedAt:HH:mm:ss}", EditorStyles.boldLabel);
+                EditorGUILayout.HelpBox(run.Summary, run.Transaction == PipelineTransactionStatus.Committed ? MessageType.Info : MessageType.Warning);
+                resultScroll = EditorGUILayout.BeginScrollView(resultScroll, GUILayout.MaxHeight(420f));
+                foreach (var step in run.Steps)
+                {
+                    EditorGUILayout.BeginHorizontal();
+                    bool open = EditorGUILayout.Foldout(selectedStep == step.Index,
+                        $"{step.Index + 1}. {StepLabel(step.Status)} · {step.Name} · {step.Seconds:0.00}s", true);
+                    if (open) selectedStep = step.Index;
+                    else if (selectedStep == step.Index) selectedStep = -1;
+                    DrawNavigate(pipeline, step.NodeId);
+                    EditorGUILayout.EndHorizontal();
+                    if (!open) continue;
+                    foreach (string message in step.Messages) EditorGUILayout.LabelField(message, EditorStyles.wordWrappedLabel);
+                    foreach (var item in step.Items) DrawAsset(item, true);
+                }
+                showCatalogs = EditorGUILayout.Foldout(showCatalogs, "執行結束快照（回復前，Cell 僅列實際求值結果）", true);
+                if (showCatalogs) DrawCatalogs(pipeline, run.Catalogs);
+                EditorGUILayout.EndScrollView();
+            }
+            EditorGUILayout.Space();
+            if (GUILayout.Button("刷新目前 Catalog／Cell 內容（使用已儲存圖）"))
+            {
+                pipeline.RefreshCatalogPreview();
+                showPreview = true;
+            }
+            showPreview = EditorGUILayout.Foldout(showPreview, "手動刷新快照（不隨 Repaint 重算）", true);
+            if (showPreview && pipeline.CatalogPreview != null) DrawCatalogs(pipeline, pipeline.CatalogPreview);
+        }
+
+        private static string StepLabel(PipelineStepStatus status) => status switch
+        {
+            PipelineStepStatus.Success => "成功",
+            PipelineStepStatus.Skipped => "跳過",
+            PipelineStepStatus.Partial => "部分完成",
+            PipelineStepStatus.Failed => "失敗",
+            _ => "未執行",
+        };
+
+        private static void DrawCatalogs(AssetPipeline pipeline, System.Collections.Generic.IReadOnlyList<PipelineCatalogSnapshot> catalogs)
+        {
+            if (catalogs.Count == 0) EditorGUILayout.LabelField("沒有目錄。");
+            foreach (var catalog in catalogs)
+            {
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField($"{catalog.Name} · {catalog.State}", EditorStyles.boldLabel);
+                DrawNavigate(pipeline, catalog.NodeId);
+                EditorGUILayout.EndHorizontal();
+                DrawValue(catalog.Contents);
+                for (int i = 0; i < catalog.Cells.Count; i++)
+                {
+                    var cell = catalog.Cells[i];
+                    EditorGUILayout.BeginHorizontal();
+                    EditorGUILayout.LabelField($"Cell {i + 1}");
+                    DrawNavigate(pipeline, cell.NodeId);
+                    EditorGUILayout.EndHorizontal();
+                    DrawValue(cell.Value);
+                }
+            }
+        }
+
+        private static void DrawValue(PipelineValueSnapshot value)
+        {
+            if (!string.IsNullOrEmpty(value.Value)) EditorGUILayout.LabelField(value.Value, EditorStyles.wordWrappedLabel);
+            if (value.Observed && value.Assets.Count == 0 && value.Value == null) EditorGUILayout.LabelField("空資料");
+            foreach (var item in value.Assets) DrawAsset(item, false);
+        }
+
+        private static void DrawAsset(PipelineAssetRecord item, bool showStatus)
+        {
+            string label = (showStatus ? $"[{item.Status}] " : "") + $"{item.Name} · {item.TypeName}";
+            if (GUILayout.Button(new GUIContent(label, item.Path), EditorStyles.linkLabel))
+            {
+                var asset = item.Resolve();
+                if (asset != null) EditorGUIUtility.PingObject(asset);
+            }
+            if (!string.IsNullOrEmpty(item.Path)) EditorGUILayout.SelectableLabel(item.Path, GUILayout.Height(EditorGUIUtility.singleLineHeight));
+            if (!string.IsNullOrEmpty(item.Message)) EditorGUILayout.LabelField(item.Message, EditorStyles.wordWrappedLabel);
+        }
+
+        private static void DrawNavigate(AssetPipeline pipeline, string nodeId)
+        {
+            using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(nodeId)))
+                if (GUILayout.Button("定位", GUILayout.Width(44f))) GraphDrawer.Navigate(pipeline, nodeId);
+        }
+
+        private void DrawRecovery(AssetPipeline pipeline)
+        {
+            if (pipeline.LastRun?.Transaction == PipelineTransactionStatus.RecoveryRequired
+                && string.IsNullOrEmpty(pipeline.LastRun.RecoveryDirectory)
+                && GUILayout.Button("重試回復目錄資料"))
+            {
+                var errors = pipeline.RecoverCatalogState();
+                if (errors.Count > 0) Debug.LogError(string.Join("\n", errors));
+            }
+            if (EditorApplication.timeSinceStartup >= nextRecoveryScan)
+            {
+                recoveryDirectories = PipelineAssetTransaction.PendingRecoveryDirectories();
+                nextRecoveryScan = EditorApplication.timeSinceStartup + 2d;
+            }
+            foreach (string directory in recoveryDirectories)
+            {
+                EditorGUILayout.HelpBox("尚未完成的 AP 資產交易：" + directory, MessageType.Error);
+                if (!GUILayout.Button("重試回復此交易")) continue;
+                var errors = pipeline.RecoverTransaction(directory);
+                nextRecoveryScan = 0d;
+                if (errors.Count > 0) Debug.LogError(string.Join("\n", errors));
+                else Debug.Log("[AssetPipeline] 資產交易已回復。");
+            }
         }
 
         private void DrawRunButton(AssetPipeline pipeline)

@@ -17,13 +17,28 @@ namespace HaruFamily.Tools.AssetPipeline
         private const string DefaultAssetPath = "Assets/Editor/HaruFamily/AssetPipeline/AssetPipeline.asset";
         internal static Action<string> formulaWarningHandler;
         /// <summary>目前正在執行的管線。動作與公式靠它讀資產群組、登記 dynamic 資產。</summary>
-        // 動作的具體實作住在使用端專案，所以這幾個給動作用的成員必須是 public，不是 internal。
-        public static AssetPipeline current;
+        // 使用端可讀取目前管線；執行與預覽的狀態切換由 AP 組件管理。
+        public static AssetPipeline current { get; internal set; }
 
-        /// <summary>每執行一次管線加一。動態目錄節點靠它分辨「這一次的產出」與上一次的殘留。</summary>
+        /// <summary>每執行一次管線加一，供執行紀錄識別輪次。</summary>
         public static int RunToken { get; private set; }
 
         internal static void BeginRun() => RunToken++;
+
+        public static PipelineActionContext CurrentAction { get; internal set; }
+
+        [NonSerialized] private PipelineRunResult lastRun;
+        public PipelineRunResult LastRun => lastRun;
+        [NonSerialized] private List<PipelineCatalogSnapshot> catalogPreview;
+        public IReadOnlyList<PipelineCatalogSnapshot> CatalogPreview => catalogPreview;
+
+        public void RefreshCatalogPreview()
+        {
+            AssetPipeline previous = current;
+            current = this;
+            try { catalogPreview = PipelineCatalogSnapshot.Capture(graph, new Dictionary<CatalogCell, PipelineValueSnapshot>(), true); }
+            finally { current = previous; }
+        }
 
         [MenuItem("HaruFamily/Asset Pipeline/Open")]
         private static void OpenTool()

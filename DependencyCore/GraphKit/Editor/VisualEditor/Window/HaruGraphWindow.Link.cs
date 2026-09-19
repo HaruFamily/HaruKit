@@ -274,9 +274,6 @@ public partial class HaruGraphWindow
             == HGPortConnectionResult.Allowed;
     }
 
-    private HGNodeView LinkTargetNode(Vector2 graphMouse)
-        => OwnerNodeOfPort(SnappedCompatiblePort(graphMouse));
-
     private Vector2 LinkPreviewEnd(Vector2 graphMouse)
     {
         var snapped = SnappedCompatiblePort(graphMouse);
@@ -578,18 +575,17 @@ public partial class HaruGraphWindow
         {
             if (!node.IsCatalogNode) continue;
             GraphNodeContent pack = node.Carrier?.CatalogObject;
-            node.HasOutputPort = pack == null || AnySlotTakesPack(pack, node.Carrier);
+            node.HasOutputPort = pack == null;
+            node.ReceivesCatalogWrites = false;
+            foreach (var slot in SlotsInCurrentGraph())
+            {
+                if (slot is not CatalogSlotBase catalogSlot) continue;
+                bool accepts = pack != null && catalogSlot.AcceptsCatalogObject(pack);
+                // 已存在但不合法的引用仍保留接點，讓使用者看得到並能解除問題連線。
+                if (accepts || ReferenceEquals(catalogSlot.Node, node.Carrier)) node.HasOutputPort = true;
+                if (accepts && catalogSlot.WritesToCatalog) node.ReceivesCatalogWrites = true;
+            }
         }
-    }
-
-    private bool AnySlotTakesPack(GraphNodeContent pack, GraphNode carrier)
-    {
-        foreach (var slot in SlotsInCurrentGraph())
-        {
-            if (slot is not CatalogSlotBase catalogSlot) continue;
-            if (catalogSlot.AcceptsCatalogObject(pack) || ReferenceEquals(catalogSlot.Node, carrier)) return true;
-        }
-        return false;
     }
 
     private static bool WouldCreateCycle(GraphSlotBase slot, object node)
