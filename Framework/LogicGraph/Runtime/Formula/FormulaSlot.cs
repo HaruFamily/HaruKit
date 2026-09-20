@@ -5,6 +5,8 @@ using System;
 using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 
+/// <summary>可接常數、公式、資產或 Token 的求值欄位。具體 Slot 型別是公式族的身分，同結果型別仍可分成不同族。</summary>
+/// <remarks>固定設定用一般序列化欄位；需要由圖提供數值時使用 Slot。新增族需搭配 Formula 與 FormulaAsset 型別。</remarks>
 [Serializable]
 public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlotBase, IFormulaSlot<TResult, TPack>
     where TAsset : FormulaAsset<TResult, TPack>
@@ -58,6 +60,8 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
     /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
     public TResult Default { get => _default; set => _default = value; }
 
+    /// <summary>透過此入口求子公式值，沿用收到的 pack 與 tokens，以保留停用、保底值、Token／資產作用域與執行觀察處理。</summary>
+    /// <remarks>每次呼叫重新求值；節點本體的例外與取消會向呼叫端傳遞，不會轉成保底值。</remarks>
     public async UniTask<TResult> Evaluate(TPack pack, TokenTable<TPack> tokens)
     {
         // 空槽回保底值。企劃可以關掉一段公式而不必拆線。

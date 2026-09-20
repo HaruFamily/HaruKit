@@ -75,6 +75,232 @@ Or add it to `Packages/manifest.json`:
 
 For reproducible builds, pin the package URL to a release tag or commit.
 
+## Choose An Extension Point
+
+| Goal | Start here | What you need to know |
+|---|---|---|
+| Add a side effect | `ActionBase<TPack>.OnExecute` | Pack, child Slots, cancellation |
+| Add a calculation to an existing family | That family's Formula base and `OnEvaluate` | Result type and child Slots |
+| Add a formula family | Formula / FormulaAsset / Slot; `PinTools/LogicGraph/Add Formula Type` | Family identity is the concrete Slot type, not just the result type |
+| Integrate a graph into your game | [Complete first example](#complete-first-example) | Owner, validation, runtime copy, trigger |
+| Restrict timings or add domain validation | `ILogicGraphUsage<TTiming, TPack>` | [Optional usage rules](#start-with-one-field) |
+| Draw a custom value type | GraphKit's `HGValueDrawer<T>` | Editor-only drawer and explicit Tool context |
+| Describe custom node fields | GraphKit's `IHGEditorMetadataProvider` | Complete node descriptor and explicit Tool context |
+
+Ordinary Action/Formula extensions do not need custom Ports, document sessions,
+or editor bindings. Those belong to advanced GraphKit tool integration; see the
+[GraphKit package](../../DependencyCore/GraphKit).
+
+## Complete First Example
+
+This example logs a base amount supplied by the caller plus a graph-authored
+bonus. It defines every type it uses: one timing, one Pack, one formula family,
+one Formula, one Action, an asset owner, and a scene runner.
+
+After installing the dependencies, place the following four files under a
+runtime folder in `Assets` (not `Editor`). If using an asmdef, reference
+`HaruFamily.Framework.LogicGraph`, `HaruFamily.DependencyCore.GraphKit`, and
+`UniTask`. These scripts do not need an Editor assembly reference. The snippets
+are source to copy into your project, not an automatically installed sample.
+
+### 1. Context and formula family — `DemoIntAsset.cs`
+
+```csharp
+using System;
+using HaruFamily.DependencyCore.GraphKit;
+using HaruFamily.Framework.LogicGraph;
+
+namespace LogicGraphQuickStart
+{
+    public enum DemoTiming { Activate }
+
+    public sealed class DemoPack
+    {
+        public int BaseAmount;
+    }
+
+    public abstract class DemoIntFormula : FormulaBase<int, DemoPack> { }
+
+    public sealed class DemoIntAsset : FormulaAsset<int, DemoPack> { }
+
+    [Serializable]
+    [HGKind("Demo Int")]
+    public sealed class DemoIntSlot
+        : FormulaSlot<int, DemoIntAsset, DemoIntFormula, DemoPack>
+    {
+        public DemoIntSlot() { }
+        public DemoIntSlot(int value) : base(value) { }
+    }
+}
+```
+
+The Pack supplies the current execution context. It is passed by the caller,
+not authored into the graph. TokenTable handles named formula lookup, asset
+parameter scopes, and execution cancellation/observation.
+
+The three family types have separate jobs: Formula is the calculation base,
+FormulaAsset supports reusable graph assets, and Slot is the authored input
+and family identity. You do not need to create a `DemoIntAsset` instance for
+this example. For later calculations in this family, inherit `DemoIntFormula`;
+do not generate another family. The editor discovers concrete Slot families
+without a separate registration call.
+
+### 2. Nodes — `DemoNodes.cs`
+
+```csharp
+using System;
+using Cysharp.Threading.Tasks;
+using HaruFamily.DependencyCore.GraphKit;
+using HaruFamily.Framework.LogicGraph;
+using UnityEngine;
+
+namespace LogicGraphQuickStart
+{
+    [Serializable]
+    [HGNode("Base plus bonus", "Adds an authored bonus to the caller's base amount.", "Quick Start")]
+    public sealed class BasePlusBonusFormula : DemoIntFormula
+    {
+        [HGLabel("Bonus")]
+        public DemoIntSlot Bonus = new DemoIntSlot(2);
+
+        protected override async UniTask<int> OnEvaluate(
+            DemoPack pack, TokenTable<DemoPack> tokens)
+        {
+            return pack.BaseAmount + await Bonus.Evaluate(pack, tokens);
+        }
+    }
+
+    [Serializable]
+    [HGNode("Log amount", "Evaluates Amount and writes it to the Unity Console.", "Quick Start")]
+    public sealed class LogAmountAction : ActionBase<DemoPack>
+    {
+        [HGLabel("Amount")]
+        public DemoIntSlot Amount = new DemoIntSlot(1);
+
+        protected override async UniTask OnExecute(
+            DemoPack pack, TokenTable<DemoPack> tokens)
+        {
+            int amount = await Amount.Evaluate(pack, tokens);
+            Debug.Log($"LogicGraph amount: {amount}");
+        }
+    }
+}
+```
+
+Use a normal serialized field for a fixed setting; use a Slot when the graph
+should be able to supply a constant, calculation, reusable asset, or Token.
+Always pass the received `pack` and `tokens` into child Slots. Slots apply
+disabled-state handling, fallback values, scopes, and execution observation.
+For nested actions, use `ActionSlot<DemoPack>.Execute(pack, tokens)`.
+Pass `tokens.CancellationToken` to any long-running asynchronous work you add.
+
+### 3. Shared template owner — `DemoGraphDefinition.cs`
+
+```csharp
+using HaruFamily.Framework.LogicGraph;
+using UnityEngine;
+
+namespace LogicGraphQuickStart
+{
+    [CreateAssetMenu(menuName = "LogicGraph Quick Start/Definition")]
+    public sealed class DemoGraphDefinition : ScriptableObject
+    {
+        [SerializeField] private LogicGraph<DemoTiming, DemoPack> graph = new();
+
+        public LogicGraph<DemoTiming, DemoPack> CreateRuntimeGraph()
+            => graph.DeepCopy();
+    }
+}
+```
+
+No owner interface is required. DeepCopy preserves validation state and internal
+managed sharing while isolating the runtime graph from the template. Unity
+Object references, including referenced graph assets, remain shared; the copy
+does not validate an invalid template or duplicate those assets.
+
+### 4. Trigger from your game — `DemoGraphRunner.cs`
+
+```csharp
+using System;
+using Cysharp.Threading.Tasks;
+using UnityEngine;
+
+namespace LogicGraphQuickStart
+{
+    public sealed class DemoGraphRunner : MonoBehaviour
+    {
+        [SerializeField] private DemoGraphDefinition definition;
+
+        private async void Start()
+        {
+            if (definition == null)
+            {
+                Debug.LogError("Assign a DemoGraphDefinition.", this);
+                return;
+            }
+
+            var runtimeGraph = definition.CreateRuntimeGraph();
+            var pack = new DemoPack { BaseAmount = 10 };
+            var cancellation = this.GetCancellationTokenOnDestroy();
+            try
+            {
+                await runtimeGraph.TriggerAction(
+                    DemoTiming.Activate, pack, cancellation, "Quick Start");
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                // This runner's lifetime ended; stop its execution chain.
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+        }
+    }
+}
+```
+
+`Start` is the Unity event boundary; ordinary game methods should return and
+await `UniTask`. Each trigger creates a fresh TokenTable and awaits actions in
+list order. Choose the cancellation lifetime appropriate to your system; this
+example uses destruction of the runner.
+
+### 5. Author, validate, and run
+
+1. Create an asset via **Create → LogicGraph Quick Start → Definition**.
+2. Open its graph from the Inspector and add the `Activate` timing.
+3. Add an action item and assign **Log amount** as its source.
+4. Assign **Base plus bonus** to that action's `Amount` Slot; leave `Bonus` at 2.
+5. Save the graph successfully; use the Inspector's **Validate** button to
+   confirm the stored graph is validated. Resolve any reported errors first.
+6. Add `DemoGraphRunner` to a scene GameObject and assign the definition.
+7. Enter Play Mode. The expected Console message is **LogicGraph amount: 12**.
+
+With `Amount` unconnected, the result is its constant 1. With the formula
+connected, it is the caller's 10 plus the Bonus constant 2. To add another
+calculation, only add another serializable `DemoIntFormula` subclass with
+`[HGNode]` and `OnEvaluate`.
+
+If no message appears, check the definition assignment, `Activate` action
+connection/enabled state, and validation errors. An unvalidated graph logs an
+error and skips execution; runtime does not repair validation. If editing the
+template after a runner has started, restart Play Mode to create a new copy.
+
+### Rules to keep nearby
+
+- After programmatic authoring changes, call `MarkDirty()` and then validate
+  through the Inspector or Editor-only `LogicGraphEditor.Verify(owner)`.
+  Do not use `MarkValidated()` to bypass authoring errors.
+- A Token is a named calculation, not a cached variable. Repeated requests
+  evaluate again, including random formulas. Query with the concrete Slot type:
+  `await tokens.Resolve<int>(typeof(DemoIntSlot), "Amount", pack)` requires a
+  separately authored Token named `Amount` in that family; it does not refer to
+  the action's field of the same name.
+- Missing/disabled formula sources use fallback values. Exceptions thrown by
+  node bodies still propagate; a fallback is not a general exception handler.
+- Keep per-execution context in Pack rather than treating serialized node
+  fields as a cross-call cache.
+
 ## Integration
 
 ### Start with one field
@@ -167,30 +393,10 @@ Define the types that give the framework its domain meaning:
 5. Store `LogicGraph<TTiming, TPack>` in a serialized owner field. Add
    `ILogicGraphUsage<TTiming, TPack>` only when custom rules are needed.
 
-```csharp
-using Cysharp.Threading.Tasks;
-using HaruFamily.DependencyCore.GraphKit;
-using HaruFamily.Framework.LogicGraph;
-
-[HGNode("Write message")]
-public sealed class WriteMessageAction : ActionBase<MyContext>
-{
-    protected override UniTask OnExecute(MyContext context, TokenTable<MyContext> tokens)
-    {
-        context.Write("executed");
-        return UniTask.CompletedTask;
-    }
-}
-
-[HGNode("Current value")]
-public sealed class CurrentValueFormula : FormulaBase<int, MyContext>
-{
-    protected override UniTask<int> OnEvaluate(MyContext context, TokenTable<MyContext> tokens)
-    {
-        return UniTask.FromResult(context.Value);
-    }
-}
-```
+See the [complete first example](#complete-first-example) for serializable
+Action/Formula implementations, family types, and a caller using child Slots.
+The `MyTiming`/`MyContext` names in the integration snippets stand for your own
+domain types; the complete example supplies `DemoTiming`/`DemoPack` instead.
 
 `[HGNode]` supplies the graph display name, description, group, and ordering.
 The package also provides graph-only presentation attributes such as

@@ -98,6 +98,8 @@ public class ActionSlot<TPack> : ActionSlotBase
     /// <summary>動作欄位不能接具名Token：Token是公式端點，求值不執行副作用。</summary>
     public override bool AcceptsToken(GraphToken endpoint) => false;
 
+    /// <summary>透過此入口執行子動作，沿用收到的 pack 與 tokens，以保留停用、資產作用域與執行觀察處理。</summary>
+    /// <remarks>節點本體的例外與取消會向呼叫端傳遞；非同步工作應沿用 tokens.CancellationToken。</remarks>
     public async UniTask Execute(TPack pack, TokenTable<TPack> tokens)
     {
         if (_disabled) return;

@@ -115,6 +115,8 @@ public class TokenTable<TPack>
     public bool IsResolving(Type kind, string key)
         => kind != null && !string.IsNullOrEmpty(key) && _inFlight.Contains((kind, key));
 
+    /// <summary>依（具體 Slot 型別, 名稱）重新求值，例如 Resolve&lt;int&gt;(typeof(IntSlot), "Damage", pack)；不快取結果。</summary>
+    /// <remarks>kind 傳 Slot 型別而非 typeof(T)。查無名稱、結果型別不符或遞迴解析時回 default(T)，節點例外仍向外傳遞。</remarks>
     public async UniTask<T> Resolve<T>(Type kind, string key, TPack pack)
     {
         // 字串查詢與欄位取值必須給同一個答案：資產參數被呼叫端覆蓋時，兩條路徑都要拿到覆蓋值，

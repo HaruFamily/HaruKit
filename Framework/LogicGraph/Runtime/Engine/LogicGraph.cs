@@ -115,6 +115,7 @@ where TTiming : Enum
 
     public bool IsValidated => _validated;
 
+    /// <summary>程式修改圖後呼叫，使驗證失效。編輯器中再由 Inspector 或 LogicGraphEditor.Verify(owner) 驗證含 Usage 的規則。</summary>
     public void MarkDirty()
     {
         _validated = false;
@@ -126,6 +127,7 @@ where TTiming : Enum
     public void MarkValidated() => _validated = true;
 
     /// <summary>深層複製整套動作集（含 ActionGroups / Orphans / _validated 的 SerializeReference 多型樹）。Owner 建構期抄給實體用，免共用 SO 被 runtime 改動污染。</summary>
+    /// <remarks>沿用來源的驗證狀態，不會替未驗證的圖補驗證。Unity Object 引用仍共用，非序列化執行狀態不作為範本資料複製。</remarks>
     public LogicGraph<TTiming, TPack> DeepCopy()
     {
         var copy = GraphDeepCopy.Copy(this);
@@ -146,6 +148,7 @@ where TTiming : Enum
             || (_endpoints?.Count ?? 0) > 0;
     }
 
+    /// <summary>建立本圖的具名求值表。未驗證時記錄錯誤並回空表；獨立查詢不建立時機執行觀察 session。</summary>
     public TokenTable<TPack> CreateTokenTable()
     {
         if (!_validated)
@@ -189,10 +192,12 @@ where TTiming : Enum
         return new List<ActionSlot<TPack>>();
     }
 
+    /// <summary>依清單順序執行指定時機的動作。圖須先在 Editor 通過驗證；此多載不帶呼叫端生命週期取消。</summary>
     public UniTask TriggerAction(TTiming timing, TPack pack)
         => TriggerAction(timing, pack, CancellationToken.None);
 
-    /// <summary>Runs one chain. The caller supplies lifetime cancellation; observation never freezes other chains.</summary>
+    /// <summary>依清單順序執行指定時機的動作，並將呼叫端的生命週期取消傳入 TokenTable；每次呼叫建立新的表。</summary>
+    /// <remarks>未驗證時記錄錯誤並跳過，不在 runtime 補驗證。節點沿用 tokens.CancellationToken，取消與例外向 await 呼叫端傳遞。</remarks>
     public async UniTask TriggerAction(TTiming timing, TPack pack, CancellationToken cancellationToken, string executionName = null)
     {
         if (!_validated)

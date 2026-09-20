@@ -21,13 +21,15 @@ public class FormulaKindScaffolder : EditorWindow
     private string outputNamespace = "";
 
     [MenuItem("PinTools/LogicGraph/Add Formula Type")]
-    private static void Open() => GetWindow<FormulaKindScaffolder>("新增 Formula 型別");
+    private static void Open() => GetWindow<FormulaKindScaffolder>("新增公式族");
 
     private void OnGUI()
     {
-        EditorGUILayout.LabelField("產生一種 result 型別的 token 族", EditorStyles.boldLabel);
+        EditorGUILayout.LabelField("產生 Formula、FormulaAsset 與 Slot", EditorStyles.boldLabel);
         EditorGUILayout.HelpBox(
-            "Kind=識別前綴（如 Int / Damage）\nResultType=求值回傳型別（如 int / Vector3）\nPackType=目標 TPack 型別名",
+            "新增公式族時使用；在既有族新增算式，只需繼承該族 Formula 並覆寫 OnEvaluate。\n" +
+            "族由具體 Slot 型別區分；同一結果型別也能有不同族，產生後不需額外登記。\n" +
+            "Kind=識別前綴（如 Int / Damage）\nResultType=求值回傳型別（如 int / Vector3）\nPackType=已定義的執行上下文型別名",
             MessageType.Info);
 
         kind = EditorGUILayout.TextField("Kind 前綴", kind);
@@ -96,6 +98,7 @@ using UnityEngine;
 // 具體算式：class XxxFormula : {kind}Formula {{ 覆寫 OnEvaluate }}。
 // 具體節點標 [Serializable] 與 [HGNode]，欄位標 [HGLabel]；子公式透過 Slot 求值。
 // 非同步工作沿用 tokens.CancellationToken。
+// 族的身分是 {kind}Slot，不只是 {resultType}；新增同族算式不必再次產生三件套。
 
 /// <summary>{kind} 算式分類 base：節點選單只列此類下的 {resultType} 公式。</summary>
 public abstract class {kind}Formula : FormulaBase<{resultType}, {packType}> {{ }}
@@ -103,7 +106,7 @@ public abstract class {kind}Formula : FormulaBase<{resultType}, {packType}> {{ }
 /// <summary>{kind} 公式經 Graph 抽出成共用 SO 時的資產型別。</summary>
 public class {kind}Asset : FormulaAsset<{resultType}, {packType}> {{ }}
 
-/// <summary>{kind} 求值槽：沒接節點＝常數，接了節點＝公式或資產。</summary>
+/// <summary>{kind} 求值槽：沒接節點＝常數，接了節點＝公式、資產或同族 Token；常數也是來源停用時的保底值。</summary>
 [Serializable]
 public class {kind}Slot : FormulaSlot<{resultType}, {kind}Asset, {kind}Formula, {packType}>
 {{
