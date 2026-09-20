@@ -8,9 +8,9 @@ using UnityEditor;
 using UnityEngine;
 
 /// <summary>
-/// 新增一種 result 型別的 token 族（Formula base / FormulaAsset / Slot / Entry）腳手架。
-/// 顯式吐 .cs，無 SourceGenerator / 反射魔法；產完手動把 ForEachKind 接線（視窗會印出片段）。
-/// 入口：Tools/LogicGraph/新增 Formula 型別。
+/// 新增 Formula / FormulaAsset / Slot 公式族的腳手架；具體節點覆寫 OnEvaluate。
+/// 產生 .cs 後由 GraphKit 自動探索 Slot 族，不需額外登記。
+/// 入口：PinTools/LogicGraph/Add Formula Type。
 /// </summary>
 public class FormulaKindScaffolder : EditorWindow
 {
@@ -76,7 +76,7 @@ public class FormulaKindScaffolder : EditorWindow
         AssetDatabase.ImportAsset(path);
         AssetDatabase.Refresh();
 
-        // 標註化之後不需要任何接線：Token 是節點上的一個名字，不是每個 kind 各一份宣告清單。
+        // GraphKit 透過具體 Slot 型別探索公式族。
         Debug.Log($"[FormulaKindScaffolder] 已產生 {path}（無須接線）");
 
         var obj = AssetDatabase.LoadAssetAtPath<MonoScript>(path);
@@ -87,12 +87,15 @@ public class FormulaKindScaffolder : EditorWindow
 $@"using System;
 using System.Collections.Generic;
 using HaruFamily.Framework.LogicGraph;
+using HaruFamily.DependencyCore.GraphKit;
 using UnityEngine;
 
 {NamespaceOpen()}
 
 // ===== {kind} 公式族（result 型別：{resultType}）— FormulaKindScaffolder 產生 =====
 // 具體算式：class XxxFormula : {kind}Formula {{ 覆寫 OnEvaluate }}。
+// 具體節點標 [Serializable] 與 [HGNode]，欄位標 [HGLabel]；子公式透過 Slot 求值。
+// 非同步工作沿用 tokens.CancellationToken。
 
 /// <summary>{kind} 算式分類 base：節點選單只列此類下的 {resultType} 公式。</summary>
 public abstract class {kind}Formula : FormulaBase<{resultType}, {packType}> {{ }}

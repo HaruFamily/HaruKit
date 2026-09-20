@@ -1,11 +1,7 @@
 namespace HaruFamily.Framework.LogicGraph.Editor
 {
-using System;
-using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
-using HaruFamily.DependencyCore.GraphKit;
-using HaruFamily.DependencyCore.GraphKit.Editor;
 
 /// <summary>
 /// Inspector 上的 LogicGraph 欄位：畫成一張「節點圖入口」卡片，不展開圖的任何內容。
@@ -27,9 +23,6 @@ public class LogicGraphDrawer : PropertyDrawer
     private static GUIStyle titleStyle;
     private static GUIStyle summaryStyle;
     private static GUIStyle statusStyle;
-    private static readonly HGEditorExtensionContext GraphContext =
-        new HGEditorExtensionContext(new LogicGraphDiagnosticProvider(), profile: new HGEditorProfile(
-            HGCapabilities.SharedAssets | HGCapabilities.Tokens, new LogicGraphRootAdapter()));
 
     private static readonly Color OkColor = new Color(0.36f, 0.90f, 0.52f);
     private static readonly Color FailColor = new Color(1f, 0.42f, 0.42f);
@@ -52,7 +45,7 @@ public class LogicGraphDrawer : PropertyDrawer
         if (!multi) timings = CountTimings(property, out actions, out tokens);
 
         // 空圖沒有「未驗證」可言，色條轉灰，免得一顆全新的資產一開就紅著臉。
-        Color accent = !known ? IdleColor : timings == 0 ? IdleColor : ok ? OkColor : FailColor;
+        Color accent = !known || timings == 0 && tokens == 0 ? IdleColor : ok ? OkColor : FailColor;
         DrawCard(position, accent);
 
         float x = position.x + AccentWidth + Pad;
@@ -63,7 +56,7 @@ public class LogicGraphDrawer : PropertyDrawer
         GUI.Label(titleRect, "◈  LogicGraph 節點圖", titleStyle);
 
         statusStyle.normal.textColor = accent;
-        GUI.Label(titleRect, StatusText(known, ok, timings, multi), statusStyle);
+        GUI.Label(titleRect, StatusText(known, ok, timings, tokens, multi), statusStyle);
 
         // ===== 摘要列 =====
         var summaryRect = new Rect(x, titleRect.yMax + 2f, width, SummaryHeight);
@@ -77,25 +70,25 @@ public class LogicGraphDrawer : PropertyDrawer
         {
             var open = new GUIContent("開啟節點圖編輯器",
                 "節點圖是唯一的編輯入口；Inspector 不展開圖的內容。");
-            if (GUI.Button(openRect, open)) OpenGraph(target);
+            if (GUI.Button(openRect, open))
+            {
+                property.serializedObject.ApplyModifiedProperties();
+                OpenGraph(target);
+            }
         }
 
-        var owner = target as IGraphOwner;
-        using (new EditorGUI.DisabledScope(multi || owner == null))
+        using (new EditorGUI.DisabledScope(multi || fieldInfo == null))
         {
-            var verify = owner != null
-                ? new GUIContent("驗證", "跑一次完整驗證，結果輸出到 Console。")
-                : new GUIContent("驗證",
-                    $"'{(target != null ? target.name : "?")}' 沒有實作 IGraphOwner，無法從 Inspector 驗證。");
-            if (GUI.Button(verifyRect, verify)) Verify(property, owner);
+            var verify = new GUIContent("驗證", "驗證這個欄位的圖與使用設定，結果輸出到 Console。");
+            if (GUI.Button(verifyRect, verify)) Verify(property);
         }
     }
 
-    private static string StatusText(bool known, bool ok, int timings, bool multi)
+    private static string StatusText(bool known, bool ok, int timings, int tokens, bool multi)
     {
         if (multi) return "多重選取";
         if (!known) return "狀態未知";
-        if (timings == 0) return "空的";
+        if (timings == 0 && tokens == 0) return "空的";
         return ok ? "✔ 已驗證" : "✘ 未驗證";
     }
 
@@ -146,13 +139,10 @@ public class LogicGraphDrawer : PropertyDrawer
     }
 
     // Verify() 改的是 C# 物件上的 _validated，不經 SerializedProperty，所以前後都要手動同步一次。
-    private static void Verify(SerializedProperty property, IGraphOwner owner)
+    private void Verify(SerializedProperty property)
     {
-        if (owner == null) return;
-
         property.serializedObject.ApplyModifiedProperties();
-        owner.VerifyGraph();
-        EditorUtility.SetDirty(property.serializedObject.targetObject);
+        LogicGraphEditor.Verify(property.serializedObject.targetObject, fieldInfo);
         property.serializedObject.Update();
     }
 
@@ -165,11 +155,7 @@ public class LogicGraphDrawer : PropertyDrawer
             return;
         }
 
-        string documentId = $"LogicGraph.{fieldInfo.DeclaringType?.FullName}.{fieldInfo.Name}";
-        HaruGraphWindow.OpenForDocument(owner, new HGDocumentBinding<IGraphDocument>(documentId,
-            target => fieldInfo.GetValue(target) as IGraphDocument,
-            (target, document) => fieldInfo.SetValue(target, document),
-            () => Activator.CreateInstance(fieldInfo.FieldType) as IGraphDocument), GraphContext);
+        LogicGraphEditor.Open(owner, fieldInfo);
     }
 
     private static void EnsureStyles()
@@ -186,51 +172,6 @@ public class LogicGraphDrawer : PropertyDrawer
         statusStyle.alignment = TextAnchor.MiddleRight;
     }
 
-    private sealed class LogicGraphDiagnosticProvider : IHGEditorExtensionProvider, IHGEditorDiagnosticProvider
-    {
-        public bool Supports(UnityEngine.Object owner, IGraphDocument document)
-            => owner is IGraphOwner && document is ILogicGraphEditorDiagnostics;
-
-        public void AddPorts(HGPortBuildContext context)
-        {
-        }
-
-        public void CollectDiagnostics(UnityEngine.Object owner, IGraphDocument document,
-            System.Collections.Generic.List<GraphDiagnostic> diagnostics)
-        {
-            if (document is not ILogicGraphEditorDiagnostics graph) return;
-            diagnostics.AddRange(graph.CollectDiagnostics(owner as IExternalTokenKeys));
-            if (owner is IGraphDomainDiagnostics domain)
-                domain.CollectDiagnostics(document, diagnostics);
-        }
-    }
-
-    private sealed class LogicGraphRootAdapter : IHGRootAdapter
-    {
-        private static readonly HGModel.HGDocumentRootAdapter Fallback = HGModel.HGDocumentRootAdapter.Instance;
-
-        public IReadOnlyList<object> RootKeys(IGraphDocument document, UnityEngine.Object owner)
-        {
-            var keys = Fallback.RootKeys(document, owner);
-            if (owner is not ILogicGraphTimingOwner timingOwner || timingOwner.AllowedTimings == null) return keys;
-
-            var filtered = new List<object>(timingOwner.AllowedTimings.Count);
-            foreach (var key in keys)
-                foreach (var allowed in timingOwner.AllowedTimings)
-                    if (Equals(key, allowed))
-                    {
-                        filtered.Add(key);
-                        break;
-                    }
-            return filtered;
-        }
-
-        public IReadOnlyList<HGRootGroupView> ReadRoots(IGraphDocument document) => Fallback.ReadRoots(document);
-        public HGRootGroupView AddRoot(IGraphDocument document, object rootKey) => Fallback.AddRoot(document, rootKey);
-        public bool RemoveRoot(IGraphDocument document, object root) => Fallback.RemoveRoot(document, root);
-        public Type ItemType(IGraphDocument document) => Fallback.ItemType(document);
-        public object CreateItem(IGraphDocument document) => Fallback.CreateItem(document);
-    }
 }
 
 }

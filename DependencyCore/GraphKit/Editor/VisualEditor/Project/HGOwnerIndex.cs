@@ -21,15 +21,18 @@ public class HGOwnerEntry
 public static class HGOwnerIndex
 {
     private static List<HGOwnerEntry> cache;
+    private static List<HGOwnerEntry> allCache;
 
-    public static List<HGOwnerEntry> Entries => cache ??= Scan();
+    // 選擇器只列能隱式開啟的單文件 Owner；引用索引也包含須指定 binding 的多文件 Owner。
+    internal static List<HGOwnerEntry> AllEntries => allCache ??= Scan();
+    public static List<HGOwnerEntry> Entries => cache ??= AllEntries.FindAll(entry => HGModel.CanEdit(entry.Owner));
 
     public static bool HasCache => cache != null;
 
-    public static void Refresh() => cache = Scan();
+    public static void Refresh() { allCache = Scan(); cache = null; }
 
     /// <summary>下次取用時才重掃。專案內容變動時由 <see cref="HGReferenceIndex"/> 呼叫。</summary>
-    public static void Invalidate() => cache = null;
+    public static void Invalidate() { cache = null; allCache = null; }
 
     private static List<HGOwnerEntry> Scan()
     {
@@ -47,7 +50,7 @@ public static class HGOwnerIndex
                 var path = AssetDatabase.GUIDToAssetPath(guids[i]);
                 // 先看型別再決定要不要載入：整個專案的 SO 全載一次太慢。
                 var type = AssetDatabase.GetMainAssetTypeAtPath(path);
-                if (type == null || HGModel.FindSystemField(type) == null) continue;
+                if (type == null || !HGOwnerValidation.HasDocuments(type)) continue;
 
                 var so = AssetDatabase.LoadAssetAtPath<ScriptableObject>(path);
                 if (so == null) continue;

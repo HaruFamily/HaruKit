@@ -42,7 +42,8 @@ public class GraphDeepCopyTests
         IReadOnlyList<GraphDiagnostic> diagnostics = graph.CollectDiagnostics();
 
         Assert.That(diagnostics, Has.Count.EqualTo(1));
-        Assert.That(diagnostics[0].Code, Is.EqualTo("logicgraph.reportduplicatetokennames"));
+        Assert.That(diagnostics[0].Code, Is.EqualTo("logicgraph.token.missing"));
+        Assert.That(diagnostics[0].Location.FieldPath, Is.EqualTo("Tokens[0]"));
         Assert.That(diagnostics[0].Severity, Is.EqualTo(GraphDiagnosticSeverity.Error));
         Assert.That(graph.IsValidated, Is.True, "Live diagnostics must not replace Owner validation state.");
     }
@@ -169,6 +170,31 @@ public class GraphDeepCopyTests
 
         Assert.That(first, Is.EqualTo(1));
         Assert.That(second, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task DisabledFormulaAssetRootUsesEachCallingSlotsFallbackWithoutEvaluating()
+    {
+        var asset = ScriptableObject.CreateInstance<TestFormulaAsset>();
+        var formula = new CountingFormula();
+        var root = new GraphNode(formula) { Disabled = true };
+        asset.SetRoot(root);
+        var carrier = new GraphNode();
+        carrier.SetAsset(asset);
+        var first = new TestSlot(7);
+        var second = new TestSlot(13);
+        first.SetNode(carrier);
+        second.SetNode(carrier);
+        try
+        {
+            Assert.That(await first.Evaluate(default, null), Is.EqualTo(7));
+            Assert.That(await second.Evaluate(default, null), Is.EqualTo(13));
+            Assert.That(await asset.Evaluate(default, null), Is.Zero, "資產直接求值沒有呼叫欄位，回 default(T)。");
+            Assert.That(formula.Calls, Is.Zero);
+            root.Disabled = false;
+            Assert.That(await first.Evaluate(default, null), Is.EqualTo(1));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(asset); }
     }
 
     [Test]

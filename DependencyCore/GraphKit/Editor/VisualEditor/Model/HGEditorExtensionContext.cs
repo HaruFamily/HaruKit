@@ -66,6 +66,15 @@ public interface IHGEditorExtensionProvider
     /// <summary>Collects optional Tool diagnostics without making GraphKit depend on any Tool assembly.</summary>
         public void CollectDiagnostics(Object owner, IGraphDocument document, List<GraphDiagnostic> diagnostics)
         {
+            if (document is IGraphDocumentValidation validation)
+            {
+                try { diagnostics.AddRange(validation.CollectDiagnostics(owner)); }
+                catch (Exception exception)
+                {
+                    diagnostics.Add(new GraphDiagnostic("graphkit.document.diagnostics-failed", GraphDiagnosticSeverity.Error,
+                        "文件驗證失敗：" + exception.Message));
+                }
+            }
             if (Provider is not IHGEditorDiagnosticProvider provider) return;
             var collected = new List<GraphDiagnostic>();
             try

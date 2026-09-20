@@ -172,7 +172,7 @@ public sealed class HGDocumentSession<TDocument>
                 return HGSessionCommandResult.ValidationFailed;
             }
         toStore.MarkDirty();
-        toStore.Verify();
+        HGOwnerValidation.VerifyDocument(toStore, Owner);
         if (!toStore.IsValidated) return HGSessionCommandResult.ValidationFailed;
         if (!commitGuard.TryWrite(toStore, out var failure))
         {

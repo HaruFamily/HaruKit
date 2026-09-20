@@ -38,14 +38,16 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAss
 
     public async UniTask Execute(TPack pack, TokenTable<TPack> caller, IReadOnlyList<NamedFormulaSlot> bindings = null)
     {
-        var action = Root?.GetBody<ActionBase<TPack>>();
+        var root = Root;
+        if (root?.Disabled == true) return;
+        var action = root?.GetBody<ActionBase<TPack>>();
         if (action == null)
         {
             Debug.LogWarning($"[LogicGraph] 動作資產 '{name}' 沒有內容，已跳過。");
             return;
         }
         var tokens = TokenTable<TPack>.CreateAssetScope(this, bindings, caller);
-        using var visit = tokens.EnterNode(Root);
+        using var visit = tokens.EnterNode(root);
         try
         {
             if (visit != null) await visit.WaitAsync();

@@ -19,4 +19,13 @@ public interface IGraphDomainDiagnostics
 #endif
 }
 
+/// <summary>文件可選的 Owner-aware 驗證能力；由文件實作，持有文件的內容類別不需轉發驗證。</summary>
+public interface IGraphDocumentValidation
+{
+#if UNITY_EDITOR
+    IReadOnlyList<GraphDiagnostic> CollectDiagnostics(UnityEngine.Object owner);
+    void Verify(UnityEngine.Object owner);
+#endif
+}
+
 }

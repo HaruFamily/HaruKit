@@ -73,7 +73,7 @@ public sealed class HGReferenceListPanel
                 continue;
             }
 
-            bool validated = so is IGraphOwner o && o.IsGraphValidated();
+            bool validated = HGOwnerValidation.IsValidated(so);
             GUI.Label(new Rect(row.x + 4f, row.y + 2f, row.width - 26f, 17f),
                 HGStyles.Elide(so.name, HGStyles.RowLabel, row.width - 26f), HGStyles.RowLabel);
             GUI.Label(new Rect(row.xMax - 20f, row.y + 2f, 16f, 17f),

@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
+using HaruFamily.DependencyCore.GraphKit.Editor;
 
 [InitializeOnLoad]
 public static class LogicGraphAutoVerifySweep
@@ -39,16 +40,16 @@ public static class LogicGraphAutoVerifySweep
         foreach (var guid in guids)
         {
             var path = AssetDatabase.GUIDToAssetPath(guid);
+            var type = AssetDatabase.GetMainAssetTypeAtPath(path);
+            if (type == null || !LogicGraphEditor.HasGraph(type) && !typeof(IGraphOwner).IsAssignableFrom(type)) continue;
             var so = AssetDatabase.LoadAssetAtPath<ScriptableObject>(path);
-            if (so is not IGraphOwner owner) continue;
+            if (!HGOwnerValidation.CanVerify(so)) continue;
 
-            bool was = owner.IsGraphValidated();
-            owner.VerifyGraph();
-            bool now = owner.IsGraphValidated();
+            bool now = HGOwnerValidation.Verify(so, out bool changed);
             verified++;
 
             if (!now) failures.Add($"  - {so.name} ({path})");
-            if (was == now) continue;
+            if (!changed) continue;
 
             EditorUtility.SetDirty(so);
             touched++;

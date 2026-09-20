@@ -24,8 +24,8 @@ or action behavior.
   names, incompatible bindings, and graph or asset cycles before execution.
 - `DeepCopy()` preserves polymorphic `SerializeReference` graphs, shared
   references, cycles, and Unity object references.
-- The node editor comes from GraphKit and has no Odin dependency; LogicGraph
-  contributes only the Inspector drawer that opens it.
+- The node editor comes from GraphKit and has no Odin dependency. LogicGraph
+  provides the Inspector entry, optional usage rules, and owner-aware validation.
 - All timing groups appear on one canvas. A timing group is one root node whose
   body is an ordered action list, so sources can be shared across timings.
 
@@ -77,6 +77,57 @@ For reproducible builds, pin the package URL to a release tag or commit.
 
 ## Integration
 
+### Start with one field
+
+With your domain's timing enum and Pack type, an owner only needs a serialized
+graph field. No owner interface or Dirty/Verify forwarding methods are required:
+
+```csharp
+using HaruFamily.Framework.LogicGraph;
+using UnityEngine;
+
+public sealed class SkillDefinition : ScriptableObject
+{
+    [SerializeField] private LogicGraph<MyTiming, MyContext> graph = new();
+}
+```
+
+Use the Inspector's Open and Validate buttons. All values of `MyTiming` are
+available by default. For additional rules, implement one optional interface:
+
+```csharp
+public sealed class RestrictedSkillDefinition : ScriptableObject,
+    ILogicGraphUsage<MyTiming, MyContext>
+{
+    [SerializeField] private LogicGraph<MyTiming, MyContext> graph = new();
+    [SerializeField] private string description;
+
+#if UNITY_EDITOR
+    public void ConfigureGraph(LogicGraphUsage<MyTiming, MyContext> usage)
+    {
+        usage.AllowTimings(new[] { MyTiming.BeforeExecute });
+        usage.RequireToken("Damage", nameof(description));
+    }
+#endif
+}
+```
+
+`AllowTimings` controls both the creation menu and validation. Null means all
+timings; an empty collection permits none. `RequireToken`/`RequireTokens` declare
+external references. A project can wrap its description parser in an extension
+method rather than repeat token extraction on every owner.
+
+For custom checks, use `usage.AddValidation((graph, report) => ...)` and
+`report.Error(code, message, fieldPath)` or `report.Warning(...)`. The callback
+receives the document being validated, including an isolated working copy.
+Configuration and validation must not mutate the owner, graph, or assets. They
+are evaluated on demand, not serialized into the graph.
+
+Rules apply to all documents with the same Timing/Pack types on that owner.
+Multiple graph fields must be opened through their Inspector button or an
+explicit binding. Automatic discovery covers direct serialized fields,
+including inherited private fields, and excludes nonserialized runtime caches.
+
 ### Optional execution observation
 
 LogicGraph implements GraphKit's `IGraphExecutionDocument`. `DeepCopy()` preserves
@@ -93,8 +144,8 @@ The existing two-argument `TriggerAction` remains available. Call the overload
 lifetime and a readable execution label. On retirement, `CancelObservedExecutions()`
 cancels observed sessions of **that graph instance**, not other runtime copies.
 Cancellation propagates to the awaiting caller; callers must unwind their own
-work. Node bodies with long-running operations should also implement their own
-cooperative cancellation. Observation never changes global time or freezes the
+work. Node bodies should pass `tokens.CancellationToken` to their long-running
+asynchronous operations. Observation never changes global time or freezes the
 world. Disabled nodes are not entered or held.
 
 Observation fields are nonserialized. `MarkDirty()` advances the document's
@@ -113,8 +164,8 @@ Define the types that give the framework its domain meaning:
    overriding `OnEvaluate`.
 4. For each formula family, provide a `FormulaAsset<TResult, TPack>` subtype
    and a `FormulaSlot<TResult, TAsset, TFormula, TPack>` subtype.
-5. Store `LogicGraph<TTiming, TPack>` on a serializable owner. Implement
-   `IGraphOwner` on that owner to enable Inspector validation.
+5. Store `LogicGraph<TTiming, TPack>` in a serialized owner field. Add
+   `ILogicGraphUsage<TTiming, TPack>` only when custom rules are needed.
 
 ```csharp
 using Cysharp.Threading.Tasks;
@@ -180,12 +231,14 @@ binding for each token.
 ## Authoring And Validation
 
 The custom Inspector drawer is the entry point to the graph editor for any
-serialized `LogicGraph<,>` field. It can open the graph and, when its owner
-implements `IGraphOwner`, run validation.
+serialized `LogicGraph<,>` field. It opens and validates the selected field.
+`PinTools/LogicGraph/開啟節點圖` and `Assets/LogicGraph/開啟節點圖` open a single-document
+owner. Usage rules also work with GraphKit's default context.
 
 Call `MarkDirty()` after changing a graph through code. In the Editor, call
-`Verify(owner)` after authoring changes; pass the owner when it implements
-`IExternalTokenKeys` so string-based external Token references are checked. A
+`LogicGraphEditor.Verify(owner)` from the LogicGraph Editor namespace after
+authoring changes, or use the Inspector. The parameterless `graph.Verify()`
+checks only the core graph rules; it has no owner from which to obtain Usage. A
 successful validation marks the graph as executable; `TriggerAction` and
 `CreateTokenTable` refuse to run an unvalidated graph. Empty formula slots are
 valid constant values. Empty enabled action slots, duplicate timing groups,
@@ -193,7 +246,8 @@ invalid Token endpoints, incompatible asset bindings, and graph or asset cycles
 are validation errors. Incomplete content reachable only through a disabled
 node is reported as a warning.
 
-The editor also revalidates opted-in owners when leaving Edit Mode. Failures are
+The editor also discovers serialized LogicGraph fields on ScriptableObject assets
+and revalidates them when leaving Edit Mode. No owner-interface opt-in is needed. Failures are
 reported in the Console; this sweep does not block entering Play Mode, but
 invalid graphs remain blocked from runtime execution.
 
@@ -234,13 +288,18 @@ as action execution.
   assets
 - `Runtime/Token`: token resolution
 - `Runtime/Engine`: dispatch, validation, and compilation
-- `Editor`: Inspector drawer, validation sweep, and formula family scaffolding
+- `Runtime/Engine/LogicGraphUsage.cs`: optional content rules and validation reports
+- `Editor`: explicit entry, Inspector drawer, validation sweep, and formula family scaffolding
 
 The graph carrier, the editor contracts, the `[HG*]` attributes, deep copy, and
 the node editor window all live in GraphKit.
 
 ## Tests
 
-`Editor/Tests/GraphDeepCopyTests.cs` covers polymorphic graphs, lists, shared
-references, cycles, Unity object references, carrier sharing, and Token
-reevaluation. Run it as an EditMode test in Unity Test Runner.
+- `GraphDeepCopyTests`: copying, Token reevaluation, bindings, and formula fallbacks.
+- `LogicGraphExecutionTests`: execution observation, Hold, cancellation, and author API boundaries.
+- `LogicGraphValidationTests`: structured diagnostics and legacy owner integration.
+- `LogicGraphUsageTests`: interface-free owners, usage rules, selected-field and batch
+  validation, default-context commits, and shared-asset revalidation.
+
+Run these as EditMode tests in Unity Test Runner.

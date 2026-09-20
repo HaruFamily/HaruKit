@@ -63,6 +63,16 @@ public class HGModel
     /// <summary>工作副本的圖契約。所有 root／時機操作都經過它，編輯器不認識具體圖型別。</summary>
     public IGraphDocument Doc => Data;
 
+    /// <summary>目前 binding 所指向的已儲存文件狀態，不查 Owner 上其他文件。</summary>
+    public bool IsStoredDocumentValidated
+    {
+        get
+        {
+            try { return documentBinding != null && documentBinding.TryRead(Owner, out var document) && document.IsValidated; }
+            catch (Exception) { return false; }
+        }
+    }
+
     /// <summary>可建立或跳轉的 root 識別值。過濾由 session root adapter 決定。</summary>
     // 快取在這一層而不是選單那一層：兩個選單入口共用同一份，不會有一邊漏過濾。
     public IReadOnlyList<object> AvailableRootKeys { get; private set; }
@@ -95,9 +105,8 @@ public class HGModel
         candidateCount = 0;
         if (ownerType == null) return null;
         FieldInfo candidate = null;
-        foreach (var f in HGReflect.Fields(ownerType))
+        foreach (var f in HGOwnerValidation.DocumentFields(ownerType))
         {
-            if (!typeof(IGraphDocument).IsAssignableFrom(f.FieldType)) continue;
             candidateCount++;
             if (candidateCount > 1) return null;
             candidate = f;
@@ -404,7 +413,7 @@ public class HGModel
         var toStore = DeepCopy(Data);
         if (toStore == null) return false;
         toStore.MarkDirty();
-        toStore.Verify();
+        HGOwnerValidation.VerifyDocument(toStore, Owner);
         if (!toStore.IsValidated)
         {
             Debug.LogError("[GraphKit] Core Verify 未通過，Owner 未寫入。請查看 Console 的 Core 驗證訊息。");

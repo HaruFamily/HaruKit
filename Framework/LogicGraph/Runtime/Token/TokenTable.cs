@@ -20,6 +20,9 @@ public class TokenTable<TPack>
     internal string ExecutionScope = "";
     internal CancellationToken ExecutionCancellation;
 
+    /// <summary>本次執行鏈的合作式取消；節點內的非同步工作應沿用此 token。</summary>
+    public CancellationToken CancellationToken => ExecutionCancellation;
+
     internal GraphNodeExecution EnterNode(GraphNode node)
     {
         ExecutionCancellation.ThrowIfCancellationRequested();

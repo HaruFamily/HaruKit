@@ -10,10 +10,9 @@ public interface IFormulaSlot<T, TPack>
 
 public abstract class FormulaBase<T, TPack> : FormulaNodeShape<T, TPack>
 {
-    public virtual async UniTask<T> Evaluate(TPack pack, TokenTable<TPack> tokens)
-    {
-        return await OnEvaluate(pack, tokens);
-    }
+    internal UniTask<T> Evaluate(TPack pack, TokenTable<TPack> tokens) => OnEvaluate(pack, tokens);
+
+    /// <summary>實作求值；子公式走 Slot，非同步工作沿用 tokens.CancellationToken。</summary>
     protected abstract UniTask<T> OnEvaluate(TPack pack, TokenTable<TPack> tokens);
 }
 

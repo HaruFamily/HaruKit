@@ -1071,7 +1071,7 @@ public partial class HaruGraphWindow : EditorWindow
         if (inAsset && !assetContentDirty) blocked = false;
         // 共用資產存檔會把引用它的 Owner 標成未驗證，但工作副本一個字都沒改（Dirty=false）。
         // 存檔是唯一會重跑 Core Verify 並寫回 Owner 的入口，這時候不開它就沒有任何路可以把圖救回已驗證。
-        bool needsRevalidate = !inAsset && model.Owner is IGraphOwner asOwner && !asOwner.IsGraphValidated();
+        bool needsRevalidate = !inAsset && !model.IsStoredDocumentValidated;
         // 只有目錄沒落盤時不被圖的錯誤擋住：目錄不在存檔交易裡，寫的是 Owner 上另一份資料，
         // 擋住它等於「圖有錯就再也存不了目錄」。
         bool catalogOnly = !inAsset && catalogDirty && !model.Dirty && !needsRevalidate;

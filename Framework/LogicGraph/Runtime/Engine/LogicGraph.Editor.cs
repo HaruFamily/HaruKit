@@ -3,24 +3,20 @@ namespace HaruFamily.Framework.LogicGraph
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
-using System.Runtime.CompilerServices;
 using System.Text;
-using UnityEditor;
 using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 
 /// <summary>Editor-only validation surface for a LogicGraph working copy.</summary>
 public interface ILogicGraphEditorDiagnostics
 {
-    IReadOnlyList<GraphDiagnostic> CollectDiagnostics(IExternalTokenKeys external = null);
+    IReadOnlyList<GraphDiagnostic> CollectDiagnostics(IExternalTokenKeys external = null, IGraphDomainDiagnostics domain = null);
 }
 
 public partial class LogicGraph<TTiming, TPack>
     : ILogicGraphEditorDiagnostics
 where TTiming : Enum
 {
-    [NonSerialized] private List<string> _errors = new();
-    [NonSerialized] private List<string> _warnings = new();
     [NonSerialized] private List<GraphDiagnostic> _diagnostics = new();
 
     // 節點內容檢查跑兩趟：第一趟只走啟用路徑，第二趟才穿透停用節點。見 ValidateSlotSources。
@@ -31,38 +27,59 @@ where TTiming : Enum
     public IReadOnlyList<GraphDiagnostic> Diagnostics
         => _diagnostics ?? (IReadOnlyList<GraphDiagnostic>)Array.Empty<GraphDiagnostic>();
 
-    private void Err(string msg, [CallerMemberName] string rule = null)
-    {
-        _errors.Add(msg);
-        AddDiagnostic(GraphDiagnosticSeverity.Error, msg, rule);
-    }
+    private void Err(string code, string message, GraphDiagnosticLocation location = default)
+        => _diagnostics.Add(new GraphDiagnostic("logicgraph." + code, GraphDiagnosticSeverity.Error, message, location));
 
-    private void Warn(string msg, [CallerMemberName] string rule = null)
-    {
-        _warnings.Add(msg);
-        AddDiagnostic(GraphDiagnosticSeverity.Warning, msg, rule);
-    }
+    private void Warn(string code, string message, GraphDiagnosticLocation location = default)
+        => _diagnostics.Add(new GraphDiagnostic("logicgraph." + code, GraphDiagnosticSeverity.Warning, message, location));
 
     /// <summary>第二趟才走到的節點代表所有指著它的路徑都被停用，runtime 不會求值，殘缺降成警告。</summary>
-    private void Issue(string msg, [CallerMemberName] string rule = null)
+    private void Issue(string code, string message, GraphDiagnosticLocation location)
     {
-        if (_walkDisabled) Warn(msg, rule);
-        else Err(msg, rule);
+        if (_walkDisabled) Warn(code, message, location);
+        else Err(code, message, location);
     }
 
     /// <summary>Runs generic LogicGraph validation without emitting a Console summary.</summary>
-    public IReadOnlyList<GraphDiagnostic> CollectDiagnostics(IExternalTokenKeys external = null)
-        => RunValidation(external, updateValidationState: false);
+    public IReadOnlyList<GraphDiagnostic> CollectDiagnostics(IExternalTokenKeys external = null, IGraphDomainDiagnostics domain = null)
+        => RunValidation(external, domain ?? external as IGraphDomainDiagnostics, updateValidationState: false);
 
-    private IReadOnlyList<GraphDiagnostic> RunValidation(IExternalTokenKeys external, bool updateValidationState)
+    IReadOnlyList<GraphDiagnostic> IGraphDocumentValidation.CollectDiagnostics(UnityEngine.Object owner)
+        => RunOwnerValidation(owner, false);
+
+    void IGraphDocumentValidation.Verify(UnityEngine.Object owner)
+    {
+        RunOwnerValidation(owner, true);
+        EmitSummary(owner != null ? owner.name : "LogicGraph");
+    }
+
+    private IReadOnlyList<GraphDiagnostic> RunOwnerValidation(UnityEngine.Object owner, bool updateValidationState)
+        => RunValidation(owner as IExternalTokenKeys, owner as IGraphDomainDiagnostics, updateValidationState, ReadUsage(owner));
+
+    private static LogicGraphUsage<TTiming, TPack> ReadUsage(UnityEngine.Object owner)
+    {
+        var usage = new LogicGraphUsage<TTiming, TPack>();
+        try
+        {
+            if (owner is ILogicGraphUsage<TTiming, TPack> configured) configured.ConfigureGraph(usage);
+            else if (owner is ILogicGraphTimingOwner legacy && legacy.AllowedTimings != null)
+            {
+                var allowed = new List<TTiming>();
+                foreach (var timing in legacy.AllowedTimings)
+                    if (timing is TTiming typed) allowed.Add(typed);
+                usage.AllowTimings(allowed);
+            }
+        }
+        catch (Exception exception) { usage.RejectConfiguration(exception.Message); }
+        return usage;
+    }
+
+    private IReadOnlyList<GraphDiagnostic> RunValidation(IExternalTokenKeys external, IGraphDomainDiagnostics domain,
+        bool updateValidationState, LogicGraphUsage<TTiming, TPack> usage = null)
     {
         // DeepCopy 與 Unity 反序列化不會保留 NonSerialized 驗證緩衝。
-        _errors ??= new List<string>();
-        _warnings ??= new List<string>();
         _diagnostics ??= new List<GraphDiagnostic>();
 
-        _errors.Clear();
-        _warnings.Clear();
         _diagnostics.Clear();
 
         ReportDuplicateTokenNames();
@@ -89,9 +106,24 @@ where TTiming : Enum
 
         ReportAssetCycles();
 
+        if (domain != null)
+        {
+            // Provider 只取得文件與本次的結果容器，不可覆寫 Core 已收集的問題。
+            var domainDiagnostics = new List<GraphDiagnostic>();
+            try { domain.CollectDiagnostics(this, domainDiagnostics); }
+            catch (Exception exception)
+            {
+                Err("domain.validation-failed", "領域驗證失敗：" + exception.Message);
+            }
+            foreach (var diagnostic in domainDiagnostics)
+                if (diagnostic != null) _diagnostics.Add(diagnostic);
+        }
+
+        usage?.Collect(this, _diagnostics);
+
         if (updateValidationState)
         {
-            _validated = _errors.Count == 0;
+            _validated = !HasErrors();
             _hasLoggedValidationFailure = false;
         }
 
@@ -99,10 +131,11 @@ where TTiming : Enum
     }
 
     /// <summary>external：Owner 自己，宣告它會從圖外用字串 key 求值哪些Token（見 IExternalTokenKeys）。null＝沒有圖外引用。</summary>
-    public void Verify(IExternalTokenKeys external = null)
+    public void Verify(IExternalTokenKeys external = null, IGraphDomainDiagnostics domain = null)
     {
-        RunValidation(external, updateValidationState: true);
-        EmitSummary(_errors.Count == 0);
+        RunValidation(external, domain ?? external as IGraphDomainDiagnostics, updateValidationState: true);
+        var owner = external as UnityEngine.Object ?? domain as UnityEngine.Object;
+        EmitSummary(owner != null ? owner.name : "LogicGraph");
     }
 
     private const string COLOR_OK      = "#5BE584";
@@ -112,36 +145,36 @@ where TTiming : Enum
     private const string COLOR_DIVIDER = "#888888";
     private const string COLOR_TAG     = "#B084EB";
 
-    private void AddDiagnostic(GraphDiagnosticSeverity severity, string message, string rule)
+    private bool HasErrors()
     {
-        string code = $"logicgraph.{(string.IsNullOrEmpty(rule) ? "validation" : rule.ToLowerInvariant())}";
-        _diagnostics.Add(new GraphDiagnostic(code, severity, message));
+        foreach (var diagnostic in _diagnostics)
+            if (diagnostic.Severity == GraphDiagnosticSeverity.Error) return true;
+        return false;
     }
 
-    private void EmitSummary(bool ok)
+    private void EmitSummary(string name)
     {
-        string name = Selection.activeObject != null ? Selection.activeObject.name : "?";
+        int errors = 0, warnings = 0;
+        foreach (var diagnostic in _diagnostics)
+        {
+            if (diagnostic.Severity == GraphDiagnosticSeverity.Error) errors++;
+            else if (diagnostic.Severity == GraphDiagnosticSeverity.Warning) warnings++;
+        }
+        bool ok = errors == 0;
         string verdict = ok
             ? $"<b><color={COLOR_OK}>驗證成功</color></b>"
             : $"<b><color={COLOR_FAIL}>驗證失敗</color></b>";
-        string errCount  = $"<color={COLOR_FAIL}>{_errors.Count}</color>";
-        string warnCount = $"<color={COLOR_WARN}>{_warnings.Count}</color>";
+        string errCount  = $"<color={COLOR_FAIL}>{errors}</color>";
+        string warnCount = $"<color={COLOR_WARN}>{warnings}</color>";
         string divider   = $"<color={COLOR_DIVIDER}>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</color>";
 
         var sb = new StringBuilder();
         sb.AppendLine(divider);
         sb.AppendLine($"<color={COLOR_TAG}>[Verify]</color><color={COLOR_NAME}>[{name}]</color> {verdict} — 錯誤 {errCount} / 警告 {warnCount}");
-        if (_errors.Count > 0)
+        foreach (var diagnostic in _diagnostics)
         {
-            sb.AppendLine($"<b><color={COLOR_FAIL}>【錯誤】</color></b>");
-            for (int i = 0; i < _errors.Count; i++)
-                sb.AppendLine($"  <color={COLOR_FAIL}>✗ [{i + 1}]</color> {_errors[i]}");
-        }
-        if (_warnings.Count > 0)
-        {
-            sb.AppendLine($"<b><color={COLOR_WARN}>【警告】</color></b>");
-            for (int i = 0; i < _warnings.Count; i++)
-                sb.AppendLine($"  <color={COLOR_WARN}>⚠ [{i + 1}]</color> {_warnings[i]}");
+            string color = diagnostic.Severity == GraphDiagnosticSeverity.Error ? COLOR_FAIL : COLOR_WARN;
+            sb.AppendLine($"  <color={color}>[{diagnostic.Code}]</color> {diagnostic.Location.FieldPath} {diagnostic.Message}");
         }
         sb.Append(divider);
         string body = sb.ToString();
@@ -149,19 +182,32 @@ where TTiming : Enum
         else    Debug.LogError(body);
     }
 
+    private static GraphDiagnosticLocation At(GraphDiagnosticLocation parent, string path, GraphNode node = null)
+        => new GraphDiagnosticLocation(focusId: parent.FocusId, nodeId: node?.Id ?? parent.NodeId,
+            tokenId: parent.TokenId, fieldPath: path);
+
+    private static GraphDiagnosticLocation AtToken(GraphToken token, int index)
+        => new GraphDiagnosticLocation(tokenId: token?.Id, fieldPath: $"Tokens[{index}]");
+
+    private static GraphDiagnosticLocation AtAction(int groupIndex, int actionIndex, ActionSlot<TPack> slot)
+        => new GraphDiagnosticLocation(nodeId: slot?.Node?.Id,
+            fieldPath: $"ActionGroups[{groupIndex}].Actions[{actionIndex}]");
+
     /// <summary>Token唯一性是「族＋名稱」：撞號時外部只查得到其中一個，另一個等於默默失效。</summary>
     private void ReportDuplicateTokenNames()
     {
         var seen = new HashSet<(Type, string)>();
         var reported = new HashSet<string>();
-        foreach (var endpoint in Tokens)
+        for (int i = 0; i < Tokens.Count; i++)
         {
-            if (endpoint == null) { Err("Token 清單裡有空項目"); continue; }
-            if (endpoint.Slot == null) { Err($"Token '{endpoint.Name ?? "(未命名)"}' 沒有指定結果型別"); continue; }
-            if (string.IsNullOrEmpty(endpoint.Name)) { Err($"有一個 {endpoint.ResultType?.Name} Token 沒有名稱"); continue; }
+            var endpoint = Tokens[i];
+            var location = AtToken(endpoint, i);
+            if (endpoint == null) { Err("token.missing", "Token 清單裡有空項目", location); continue; }
+            if (endpoint.Slot == null) { Err("token.slot-missing", $"Token '{endpoint.Name ?? "(未命名)"}' 沒有指定結果型別", location); continue; }
+            if (string.IsNullOrEmpty(endpoint.Name)) { Err("token.name-missing", $"有一個 {endpoint.ResultType?.Name} Token 沒有名稱", location); continue; }
 
             if (!seen.Add((endpoint.Slot.FamilyType, endpoint.Name)) && reported.Add(endpoint.Name))
-                Err($"Token 名稱重複：'{endpoint.Name}'（同族內必須唯一）");
+                Err("token.duplicate", $"Token 名稱重複：'{endpoint.Name}'（同族內必須唯一）", location);
         }
     }
 
@@ -184,7 +230,8 @@ where TTiming : Enum
         {
             if (string.IsNullOrWhiteSpace(key) || names.Contains(key)) continue;
             if (reported.Add(key))
-                Err($"圖外引用了不存在的 Token '{key}'（建一個同名 Token，或修正引用端的名稱；查不到的名字會被靜默跳過）");
+                Err("external-token.missing", $"圖外引用了不存在的 Token '{key}'（建一個同名 Token，或修正引用端的名稱；查不到的名字會被靜默跳過）",
+                    new GraphDiagnosticLocation(fieldPath: nameof(IExternalTokenKeys.ExternalTokenKeys)));
         }
     }
 
@@ -193,20 +240,22 @@ where TTiming : Enum
         if (ActionGroups == null) return;
         var seen = new HashSet<TTiming>();
         var dup = new HashSet<TTiming>();
-        foreach (var g in ActionGroups)
+        for (int i = 0; i < ActionGroups.Count; i++)
         {
+            var g = ActionGroups[i];
             if (g == null) continue;
-            if (!seen.Add(g.Timing)) dup.Add(g.Timing);
+            if (!seen.Add(g.Timing) && dup.Add(g.Timing))
+                Err("timing.duplicate", $"ActionGroups 重複 Timing：'{g.Timing}'",
+                    new GraphDiagnosticLocation(fieldPath: $"ActionGroups[{i}].Timing"));
         }
-        foreach (var t in dup)
-            Err($"ActionGroups 重複 Timing：'{t}'");
     }
 
     private void ReportEmptyRootActions()
     {
         if (ActionGroups == null) return;
-        foreach (var group in ActionGroups)
+        for (int groupIndex = 0; groupIndex < ActionGroups.Count; groupIndex++)
         {
+            var group = ActionGroups[groupIndex];
             if (group?.Actions == null) continue;
             for (int i = 0; i < group.Actions.Count; i++)
             {
@@ -216,9 +265,9 @@ where TTiming : Enum
 
                 // 停用的動作不執行，空著也跑得動，降成警告方便測試；與 ValidateSlotSources 的第二趟同一個理由。
                 if (slot.Disabled || (slot.Node != null && slot.Node.Disabled))
-                    Warn($"{group.Timing} 第 {i + 1} 個動作尚未指定 Action 類型（已停用）");
+                    Warn("action.missing", $"{group.Timing} 第 {i + 1} 個動作尚未指定 Action 類型（已停用）", AtAction(groupIndex, i, slot));
                 else
-                    Err($"{group.Timing} 第 {i + 1} 個動作尚未指定 Action 類型");
+                    Err("action.missing", $"{group.Timing} 第 {i + 1} 個動作尚未指定 Action 類型", AtAction(groupIndex, i, slot));
             }
         }
     }
@@ -228,18 +277,22 @@ where TTiming : Enum
         var completed = new HashSet<UnityEngine.Object>();
         if (ActionGroups != null)
         {
-            foreach (var group in ActionGroups)
+            for (int groupIndex = 0; groupIndex < ActionGroups.Count; groupIndex++)
             {
+                var group = ActionGroups[groupIndex];
                 if (group?.Actions == null) continue;
                 for (int i = 0; i < group.Actions.Count; i++)
-                    ValidateAssetCycles(group.Actions[i], $"{group.Timing} 第 {i + 1} 個動作", completed);
+                    ValidateAssetCycles(group.Actions[i], $"{group.Timing} 第 {i + 1} 個動作", completed, AtAction(groupIndex, i, group.Actions[i]));
             }
         }
-        foreach (var endpoint in Tokens)
-            if (endpoint?.Slot != null) ValidateAssetCycles(endpoint.Slot, $"Token '{endpoint.Name}'", completed);
+        for (int i = 0; i < Tokens.Count; i++)
+        {
+            var endpoint = Tokens[i];
+            if (endpoint?.Slot != null) ValidateAssetCycles(endpoint.Slot, $"Token '{endpoint.Name}'", completed, AtToken(endpoint, i));
+        }
     }
 
-    private void ValidateAssetCycles(object root, string where, HashSet<UnityEngine.Object> completed)
+    private void ValidateAssetCycles(object root, string where, HashSet<UnityEngine.Object> completed, GraphDiagnosticLocation location)
     {
         if (root == null) return;
         var stack = new HashSet<UnityEngine.Object>();
@@ -248,7 +301,7 @@ where TTiming : Enum
         {
             string cycle = FindAssetCycle(asset, stack, path, completed);
             if (cycle == null) continue;
-            Err($"{where} Asset 循環引用：{cycle}");
+            Err("asset.cycle", $"{where} Asset 循環引用：{cycle}", location);
             return;
         }
     }
@@ -359,10 +412,12 @@ where TTiming : Enum
     private void ValidateTokens()
     {
         var visited = new HashSet<object>(ReferenceComparer.Instance);
-        foreach (var endpoint in Tokens)
+        for (int i = 0; i < Tokens.Count; i++)
         {
+            var endpoint = Tokens[i];
             if (endpoint?.Slot == null) continue;   // 空項目與缺 Slot 由 ReportDuplicateTokenNames 報
-            ValidateSlotSources(endpoint.Slot, visited);
+            var location = AtToken(endpoint, i);
+            ValidateSlotSources(endpoint.Slot, visited, At(location, location.FieldPath + ".Slot"));
         }
     }
 
@@ -370,25 +425,28 @@ where TTiming : Enum
     {
         if (ActionGroups == null) return;
         var visited = new HashSet<object>(ReferenceComparer.Instance);
-        foreach (var g in ActionGroups)
+        for (int groupIndex = 0; groupIndex < ActionGroups.Count; groupIndex++)
         {
+            var g = ActionGroups[groupIndex];
             if (g?.Actions == null) continue;
-            foreach (var slot in g.Actions)
-                if (slot != null) ValidateSlotSources(slot, visited);
+            for (int i = 0; i < g.Actions.Count; i++)
+                if (g.Actions[i] != null) ValidateSlotSources(g.Actions[i], visited, AtAction(groupIndex, i, g.Actions[i]));
         }
     }
 
-    private void ValidateSlotSources(object node, HashSet<object> visited)
+    private void ValidateSlotSources(object node, HashSet<object> visited, GraphDiagnosticLocation location)
     {
         if (node == null || !visited.Add(node)) return;
 
         if (node is IGraphAsset assetGraph)
         {
-            ValidateSlotSources(assetGraph.ContentObject, visited);
+            if (assetGraph.Root?.Disabled == true && !_walkDisabled) return;
+            ValidateSlotSources(assetGraph.Root, visited, At(location, location.FieldPath + ".Asset.Root"));
             // 資產的端點就是它的參數介面，跟內容一樣是正式資料；候選池不驗。
             if (assetGraph.Tokens != null)
-                foreach (var endpoint in assetGraph.Tokens)
-                    if (endpoint?.Slot != null) ValidateSlotSources(endpoint.Slot, visited);
+                for (int i = 0; i < assetGraph.Tokens.Count; i++)
+                    if (assetGraph.Tokens[i]?.Slot != null)
+                        ValidateSlotSources(assetGraph.Tokens[i].Slot, visited, At(location, location.FieldPath + $".Asset.Tokens[{i}].Slot"));
             return;
         }
 
@@ -397,68 +455,54 @@ where TTiming : Enum
         {
             // 停用的動作欄位不執行，整棵子樹留到第二趟走，殘缺降成警告。
             if (a.Disabled && !_walkDisabled) return;
-            CheckNode(a.Node, "動作欄位", a.AcceptsBody, a.AcceptsAsset, a.AcceptsToken);
-            ValidateSlotSources(a.Node, visited);
+            CheckNode(a.Node, "動作欄位", a.AcceptsBody, a.AcceptsAsset, a.AcceptsToken, location);
+            ValidateSlotSources(a.Node, visited, location);
             return;
         }
         if (node is FormulaSlotBase fsb)
         {
-            CheckNode(fsb.Node, fsb.GetType().Name, fsb.AcceptsBody, fsb.AcceptsAsset, fsb.AcceptsToken);
-            ValidateSlotSources(fsb.Node, visited);
+            CheckNode(fsb.Node, fsb.GetType().Name, fsb.AcceptsBody, fsb.AcceptsAsset, fsb.AcceptsToken, location);
+            ValidateSlotSources(fsb.Node, visited, location);
             return;
         }
         if (node is GraphNode graphNode)
         {
             // 停用節點回保底值，子樹不求值，同樣留到第二趟。
-            if (graphNode.Disabled && !_walkDisabled) return;
-            foreach (var binding in graphNode.Bindings)
+            if (!_walkDisabled && (graphNode.Disabled
+                || graphNode.AssetObject is IGraphAsset referencedAsset && referencedAsset.Root?.Disabled == true)) return;
+            location = At(location, location.FieldPath, graphNode);
+            for (int i = 0; i < graphNode.Bindings.Count; i++)
             {
+                var binding = graphNode.Bindings[i];
                 if (binding?.Slot == null) continue;
                 if (!binding.OverrideEnabled && !_walkDisabled) continue;
-                ValidateSlotSources(binding.Slot, visited);
+                ValidateSlotSources(binding.Slot, visited, At(location, location.FieldPath + $".Bindings[{i}].Slot"));
             }
-            if (graphNode.Kind == NodeKind.Inline) ValidateSlotSources(graphNode.BodyObject, visited);
+            if (graphNode.Kind == NodeKind.Inline) ValidateSlotSources(graphNode.BodyObject, visited, location);
             else if (graphNode.Kind == NodeKind.Asset)
             {
-                if (!_walkDisabled) ValidateAssetBindings(graphNode);
-                ValidateSlotSources(graphNode.AssetObject, visited);
+                if (!_walkDisabled) ValidateAssetBindings(graphNode, location);
+                ValidateSlotSources(graphNode.AssetObject, visited, location);
             }
             return;
         }
 
-        // 下沉樹：穿透 ActionAsset / FormulaAssetBase；其他 UnityEngine.Object 視 leaf。
+        if (node is UnityEngine.Object) return;
+        var type = node.GetType();
+        if (type.IsPrimitive || type.IsEnum || node is string) return;
+        if (node is System.Collections.IList list)
+        {
+            for (int i = 0; i < list.Count; i++)
+                ValidateSlotSources(list[i], visited, At(location, location.FieldPath + $"[{i}]"));
+            return;
+        }
+
+        // 下沉序列化內容；資產分支共用上方的根載體與停用判定。
         foreach (var f in InstanceFields(node.GetType()))
         {
+            if (f.IsStatic || f.IsNotSerialized) continue;
             var val = f.GetValue(node);
-            if (val == null) continue;
-            var vt = val.GetType();
-            if (vt.IsPrimitive || val is string || vt.IsEnum) continue;
-
-            if (val is ActionAssetBase<TPack> aa)
-            {
-                if (!visited.Add(aa)) continue;
-                var inner = aa.EditorGetAction();
-                if (inner != null) ValidateSlotSources(inner, visited);
-                continue;
-            }
-
-            if (val is FormulaAssetBase fa)
-            {
-                if (!visited.Add(fa)) continue;
-                var inner = fa.EditorGetTargetObject();
-                if (inner != null) ValidateSlotSources(inner, visited);
-                continue;
-            }
-
-            if (val is UnityEngine.Object) continue;
-
-            if (val is System.Collections.IList list)
-            {
-                foreach (var item in list) ValidateSlotSources(item, visited);
-                continue;
-            }
-
-            ValidateSlotSources(val, visited);
+            ValidateSlotSources(val, visited, At(location, location.FieldPath + "." + f.Name));
         }
     }
 
@@ -467,24 +511,27 @@ where TTiming : Enum
         var completed = new HashSet<GraphNode>();
         if (ActionGroups != null)
         {
-            foreach (var group in ActionGroups)
+            for (int groupIndex = 0; groupIndex < ActionGroups.Count; groupIndex++)
             {
+                var group = ActionGroups[groupIndex];
                 if (group?.Actions == null) continue;
-                foreach (var action in group.Actions)
+                for (int i = 0; i < group.Actions.Count; i++)
                 {
+                    var action = group.Actions[i];
                     if (!HasCarrierCycle(action, new HashSet<GraphNode>(), completed,
                         new HashSet<object>(ReferenceComparer.Instance))) continue;
-                    Err($"{group.Timing} 的動作圖有節點連線循環");
+                    Err("node.cycle", $"{group.Timing} 的動作圖有節點連線循環", AtAction(groupIndex, i, action));
                     return;
                 }
             }
         }
-        foreach (var endpoint in Tokens)
+        for (int i = 0; i < Tokens.Count; i++)
         {
+            var endpoint = Tokens[i];
             if (endpoint?.Slot == null) continue;
             if (!HasCarrierCycle(endpoint.Slot, new HashSet<GraphNode>(), completed,
                 new HashSet<object>(ReferenceComparer.Instance))) continue;
-            Err($"Token '{endpoint.Name}' 的節點圖有連線循環");
+            Err("node.cycle", $"Token '{endpoint.Name}' 的節點圖有連線循環", AtToken(endpoint, i));
             return;
         }
     }
@@ -535,12 +582,12 @@ where TTiming : Enum
         return false;
     }
 
-    private void ValidateAssetBindings(GraphNode carrier)
+    private void ValidateAssetBindings(GraphNode carrier, GraphDiagnosticLocation location)
     {
         if (carrier?.AssetObject == null) return;
         var parameters = AssetGraphSchema.Read(carrier.AssetObject, out var duplicates);
         foreach (var duplicate in duplicates)
-            Err($"資產 '{carrier.AssetObject.name}' 的參數標註名稱重複：'{duplicate}'");
+            Err("asset.parameter-duplicate", $"資產 '{carrier.AssetObject.name}' 的參數標註名稱重複：'{duplicate}'", location);
 
         // 綁定與參數的配對鍵是（族, 名稱），和 TokenTable 的覆蓋表一致：同名不同族的參數是兩個參數。
         var byKey = new HashSet<(Type, string)>();
@@ -552,27 +599,29 @@ where TTiming : Enum
         }
 
         var bindingKeys = new HashSet<(Type, string)>();
-        foreach (var binding in carrier.Bindings)
+        for (int i = 0; i < carrier.Bindings.Count; i++)
         {
-            if (binding == null) { Err($"資產 '{carrier.AssetObject.name}' 有空的參數綁定"); continue; }
+            var binding = carrier.Bindings[i];
+            var bindingLocation = At(location, location.FieldPath + $".Bindings[{i}]");
+            if (binding == null) { Err("asset.binding-missing", $"資產 '{carrier.AssetObject.name}' 有空的參數綁定", bindingLocation); continue; }
             if (binding.Slot == null)
             {
-                Err($"資產 '{carrier.AssetObject.name}' 的參數 '{binding.Name}' 沒有 Slot");
+                Err("asset.binding-slot-missing", $"資產 '{carrier.AssetObject.name}' 的參數 '{binding.Name}' 沒有 Slot", bindingLocation);
                 continue;
             }
             var bindingKey = (binding.Slot.FamilyType, binding.Name);
-            if (!bindingKeys.Add(bindingKey)) Err($"資產 '{carrier.AssetObject.name}' 的參數綁定重複：'{binding.Name}'");
+            if (!bindingKeys.Add(bindingKey)) Err("asset.binding-duplicate", $"資產 '{carrier.AssetObject.name}' 的參數綁定重複：'{binding.Name}'", bindingLocation);
             if (byKey.Contains(bindingKey)) continue;
-            Err(parameterNames.Contains(binding.Name)
+            Err(parameterNames.Contains(binding.Name) ? "asset.binding-incompatible" : "asset.binding-unknown", parameterNames.Contains(binding.Name)
                 ? $"資產 '{carrier.AssetObject.name}' 的參數 '{binding.Name}' 型別不相容"
-                : $"資產 '{carrier.AssetObject.name}' 已沒有參數 '{binding.Name}'，請移除舊綁定");
+                : $"資產 '{carrier.AssetObject.name}' 已沒有參數 '{binding.Name}'，請移除舊綁定", bindingLocation);
         }
     }
 
     // 節點是唯一來源，所以只需檢查「這個節點的內容有沒有、對不對型別」一件事。
     private void CheckNode(GraphNode node, string where,
         Func<GraphNodeContent, bool> acceptsBody, Func<ScriptableObject, bool> acceptsAsset,
-        Func<GraphToken, bool> acceptsToken)
+        Func<GraphToken, bool> acceptsToken, GraphDiagnosticLocation location)
     {
         if (node == null) return;   // 動作＝空槽、公式＝常數，都是合法狀態
 
@@ -581,31 +630,32 @@ where TTiming : Enum
         // 節點自身的殘缺跟誰指著它無關，全圖報一次就夠；型別相容則是逐欄位判定，同一趟內每個欄位都要判。
         bool first = _checkedNodes.Add(node);
         if (_walkDisabled && !first) return;   // 第二趟只補報第一趟走不到的節點，避免同一則訊息重出
+        location = At(location, location.FieldPath, node);
 
         switch (node.Kind)
         {
             case NodeKind.Empty:
-                if (first) Issue($"{where} 有一個尚未指定內容的節點");
+                if (first) Issue("node.empty", $"{where} 有一個尚未指定內容的節點", location);
                 return;
 
             case NodeKind.Inline:
-                if (node.BodyObject == null) { if (first) Issue($"{where} 的節點設為內嵌內容，但內容是空的"); return; }
+                if (node.BodyObject == null) { if (first) Issue("node.body-missing", $"{where} 的節點設為內嵌內容，但內容是空的", location); return; }
                 if (!acceptsBody(node.BodyObject))
-                    Issue($"{where} 接的內容型別不相容：{node.BodyObject.GetType().Name}");
+                    Issue("node.body-incompatible", $"{where} 接的內容型別不相容：{node.BodyObject.GetType().Name}", location);
                 return;
 
             case NodeKind.Asset:
-                if (node.AssetObject == null) { if (first) Issue($"{where} 的節點設為資產，但沒有指定資產"); return; }
+                if (node.AssetObject == null) { if (first) Issue("node.asset-missing", $"{where} 的節點設為資產，但沒有指定資產", location); return; }
                 if (!acceptsAsset(node.AssetObject))
-                    Issue($"{where} 接的資產型別不相容：{node.AssetObject.GetType().Name}");
+                    Issue("node.asset-incompatible", $"{where} 接的資產型別不相容：{node.AssetObject.GetType().Name}", location);
                 return;
 
             case NodeKind.Token:
                 // 端點被刪掉時參照直接變 null，看得見；不會像字串 key 一樣留著一個查不到的名字。
-                if (node.Token == null) { if (first) Issue($"{where} 的節點設為 Token，但沒有指定 Token"); return; }
-                if (string.IsNullOrEmpty(node.Token.Name)) { if (first) Issue($"{where} 接的 Token 沒有名稱"); return; }
+                if (node.Token == null) { if (first) Issue("node.token-missing", $"{where} 的節點設為 Token，但沒有指定 Token", location); return; }
+                if (string.IsNullOrEmpty(node.Token.Name)) { if (first) Issue("node.token-name-missing", $"{where} 接的 Token 沒有名稱", location); return; }
                 if (!acceptsToken(node.Token))
-                    Issue($"{where} 接的 Token '{node.Token.Name}' 型別不相容：{node.Token.ResultType?.Name ?? "未指定"}");
+                    Issue("node.token-incompatible", $"{where} 接的 Token '{node.Token.Name}' 型別不相容：{node.Token.ResultType?.Name ?? "未指定"}", location);
                 return;
         }
     }

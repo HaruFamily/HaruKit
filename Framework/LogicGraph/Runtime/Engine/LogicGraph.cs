@@ -14,7 +14,7 @@ using UnityEditor;
 
 
 [Serializable]
-public partial class LogicGraph<TTiming, TPack> : IGraphDocument, ITokenOwner, IGraphExecutionDocument
+public partial class LogicGraph<TTiming, TPack> : IGraphDocument, ITokenOwner, IGraphExecutionDocument, IGraphDocumentValidation
 where TTiming : Enum
 {
     [SerializeReference]
@@ -31,13 +31,21 @@ where TTiming : Enum
 
     Type IGraphDocument.ItemSlotType => typeof(ActionSlot<TPack>);
 
-    // Root key 是所有 TTiming 成員；Owner 的時機限制由 LogicGraph Editor adapter 套用，
-    // 使 GraphKit Runtime 不需認識領域的 AllowedTimings 契約。
+    // 時機限制與驗證使用同一份 Usage，GraphKit 不需認識 Timing 或 Owner 的專案介面。
     IReadOnlyList<object> IGraphDocument.RootKeys(UnityEngine.Object owner)
     {
         var values = Enum.GetValues(typeof(TTiming));
         var all = new List<object>(values.Length);
-        foreach (var v in values) all.Add(v);
+#if UNITY_EDITOR
+        var usage = ReadUsage(owner);
+#endif
+        foreach (TTiming v in values)
+        {
+#if UNITY_EDITOR
+            if (!usage.Allows(v)) continue;
+#endif
+            all.Add(v);
+        }
         return all;
     }
 

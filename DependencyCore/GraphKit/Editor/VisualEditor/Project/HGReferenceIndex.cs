@@ -44,19 +44,21 @@ public static class HGReferenceIndex
     private static Dictionary<ScriptableObject, List<ScriptableObject>> Build()
     {
         var map = new Dictionary<ScriptableObject, List<ScriptableObject>>();
-        foreach (var entry in HGOwnerIndex.Entries)
+        foreach (var entry in HGOwnerIndex.AllEntries)
         {
             var owner = entry.Owner;
             if (owner == null) continue;
 
-            var system = HGModel.FindSystemField(owner)?.GetValue(owner);
-            if (system == null) continue;
-
-            foreach (var asset in HGModel.ReferencedAssetsOfSystem(system))
+            foreach (var field in HGOwnerValidation.DocumentFields(owner.GetType()))
             {
-                if (asset == null) continue;
-                if (!map.TryGetValue(asset, out var users)) map[asset] = users = new List<ScriptableObject>();
-                users.Add(owner);
+                var system = field.GetValue(owner);
+                if (system == null) continue;
+                foreach (var asset in HGModel.ReferencedAssetsOfSystem(system))
+                {
+                    if (asset == null) continue;
+                    if (!map.TryGetValue(asset, out var users)) map[asset] = users = new List<ScriptableObject>();
+                    if (!users.Contains(owner)) users.Add(owner);
+                }
             }
         }
         return map;

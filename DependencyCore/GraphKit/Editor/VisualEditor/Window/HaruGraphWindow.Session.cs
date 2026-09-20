@@ -951,15 +951,12 @@ public partial class HaruGraphWindow
         foreach (var so in HGReferenceIndex.Users(asset as ScriptableObject))
         {
             // 索引是這個 session 算的，中間可能有人刪掉資產；碰 name 前先擋掉已銷毀的引用。
-            if (so == null || so is not IGraphOwner owner) continue;
+            if (!HGOwnerValidation.CanVerify(so)) continue;
 
-            bool wasValidated = owner.IsGraphValidated();
-            owner.MarkGraphDirty();
-            owner.VerifyGraph();
-            bool nowValidated = owner.IsGraphValidated();
+            bool nowValidated = HGOwnerValidation.Verify(so, out bool changed, markDirty: true);
 
             if (!nowValidated) failed.Add(so.name);
-            if (wasValidated == nowValidated) continue;
+            if (!changed) continue;
 
             EditorUtility.SetDirty(so);
             touched++;

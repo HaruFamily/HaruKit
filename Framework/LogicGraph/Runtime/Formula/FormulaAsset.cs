@@ -68,10 +68,12 @@ public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
 
     public async UniTask<T> Evaluate(TPack pack, TokenTable<TPack> caller, IReadOnlyList<NamedFormulaSlot> bindings = null)
     {
-        var target = Root?.GetBody<FormulaBase<T, TPack>>();
+        var root = Root;
+        if (root?.Disabled == true) return default;
+        var target = root?.GetBody<FormulaBase<T, TPack>>();
         if (target == null) return default;
         var tokens = TokenTable<TPack>.CreateAssetScope(this, bindings, caller);
-        using var visit = tokens.EnterNode(Root);
+        using var visit = tokens.EnterNode(root);
         try
         {
             if (visit != null) await visit.WaitAsync();

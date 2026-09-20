@@ -92,6 +92,8 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
             {
                 var asset = _node.GetAsset<TAsset>();
                 if (asset == null) return Mismatch("資產");
+                // 資產根停用與 inline 停用相同：採用呼叫欄位自己的保底值，不求值參數。
+                if (asset.Root?.Disabled == true) return _default;
                 return await asset.Evaluate(pack, tokens, _node.Bindings);
             }
             case NodeKind.Token:
