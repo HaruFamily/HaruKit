@@ -1,0 +1,13 @@
+{
+  "name": "HaruFamily.UX.Bookmarks.Editor.Tests",
+  "rootNamespace": "HaruFamily.UX.Bookmarks.Tests",
+  "references": [
+    "HaruFamily.UX.Bookmarks.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

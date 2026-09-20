@@ -4,6 +4,8 @@ using UnityEngine;
 using System.Collections.Generic;
 using System.IO;
 
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("HaruFamily.UX.Bookmarks.Editor.Tests")]
+
 namespace HaruFamily.UX.Bookmarks
 {
     // ====================== InspectorItem ======================================
@@ -63,53 +65,31 @@ namespace HaruFamily.UX.Bookmarks
         private static readonly string LegacySavePath =
             Path.Combine(Application.dataPath, LegacyPathData);
 
-        private static InspectorJData _data;
+        private static readonly BookmarkFileStorage storage = new(SavePath, LegacySavePath);
+        private static bool isLoaded;
 
-        // 每次 Save() 遞增；BookmarksGUI 用來判斷 RefToObject / Count 等 cache 是否失效。
+        // 儲存版本僅用於畫面刷新，不作為物件解析或書籤成員快取的版本。
         public static int Version { get; private set; }
+        public static bool IsAvailable => isLoaded && !storage.IsWriteBlocked;
+        public static string LastError => storage.LastError;
 
-        private static bool _isDirty;
         private static bool _flushScheduled;
 
         public static InspectorJData Data
         {
             get
             {
-                if (_data == null)
+                if (!isLoaded)
                     Load();
-                return _data;
+                return storage.Data;
             }
         }
 
         public static void Load()
         {
-            // 一次性 migration：新路徑無檔 + 舊路徑有檔 → 搬到新路徑。
-            // 舊檔保留不刪（user 需自行 `git rm --cached ProjectSettings/PinInspectorData.json` 並 commit）
-            if (!File.Exists(SavePath) && File.Exists(LegacySavePath))
-            {
-                try
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(SavePath));
-                    File.Copy(LegacySavePath, SavePath, overwrite: false);
-                    Debug.Log($"[PinTools.Bookmarks] 已將舊書籤資料從 ProjectSettings/ 搬到 UserSettings/。" +
-                              $"請執行 `git rm --cached ProjectSettings/PinInspectorData.json` 並 commit 一次以解 track。");
-                }
-                catch (System.Exception e)
-                {
-                    Debug.LogWarning($"[PinTools.Bookmarks] Migration 失敗：{e.Message}。將以空資料起始。");
-                }
-            }
-
-            if (!File.Exists(SavePath))
-            {
-                _data = new InspectorJData();
-                SaveImmediate();
-            }
-            else
-            {
-                string json = File.ReadAllText(SavePath);
-                _data = JsonUtility.FromJson<InspectorJData>(json) ?? new InspectorJData();
-            }
+            if (isLoaded) return;
+            isLoaded = true;
+            if (!storage.Load()) Debug.LogError(storage.LastError);
         }
 
         // Save 為 debounced：呼叫即 bump Version + 排程一次 delayCall 落盤。
@@ -117,8 +97,9 @@ namespace HaruFamily.UX.Bookmarks
         // domain reload / Editor quitting 透過 Flush() 強制即時落盤（Inspector.Init 內註冊）。
         public static void Save()
         {
+            if (!IsAvailable) return;
             Version++;
-            _isDirty = true;
+            storage.MarkDirty();
             if (_flushScheduled) return;
             _flushScheduled = true;
             EditorApplication.delayCall += Flush;
@@ -126,18 +107,102 @@ namespace HaruFamily.UX.Bookmarks
 
         public static void Flush()
         {
+            EditorApplication.delayCall -= Flush;
             _flushScheduled = false;
-            if (!_isDirty) return;
-            _isDirty = false;
-            SaveImmediate();
+            string previousError = storage.LastError;
+            if (!storage.Flush() && storage.LastError != previousError)
+                Debug.LogError(storage.LastError);
+        }
+    }
+
+    // 路徑由呼叫端提供，測試可使用獨立目錄，不碰使用者的書籤資料。
+    internal sealed class BookmarkFileStorage
+    {
+        private readonly string path;
+        private readonly string legacyPath;
+
+        public InspectorJData Data { get; private set; } = new();
+        public bool IsDirty { get; private set; }
+        public bool IsWriteBlocked { get; private set; }
+        public string LastError { get; private set; }
+
+        public BookmarkFileStorage(string path, string legacyPath = null)
+        {
+            this.path = path;
+            this.legacyPath = legacyPath;
         }
 
-        private static void SaveImmediate()
+        public bool Load()
         {
-            if (_data == null) return;
-            Directory.CreateDirectory(Path.GetDirectoryName(SavePath));
-            string json = JsonUtility.ToJson(_data, true);
-            File.WriteAllText(SavePath, json);
+            string source = path;
+            try
+            {
+                if (!File.Exists(path) && legacyPath != null && File.Exists(legacyPath))
+                    source = legacyPath;
+
+                var loaded = File.Exists(source)
+                    ? JsonUtility.FromJson<InspectorJData>(File.ReadAllText(source))
+                    : new InspectorJData();
+                if (loaded == null || loaded.bookmarks == null || loaded.history == null)
+                    throw new InvalidDataException("書籤或歷史資料結構不完整。");
+                if (loaded.bookmarks.Exists(x => x == null) || loaded.history.Exists(x => x == null))
+                    throw new InvalidDataException("書籤或歷史含有空白項目。");
+
+                loaded.folders ??= new List<FolderInfo>();
+                foreach (var item in loaded.bookmarks) item.folder ??= string.Empty;
+                loaded.maxCount = Mathf.Clamp(loaded.maxCount, 1, 999);
+                loaded.index = loaded.history.Count == 0 ? -1 : Mathf.Clamp(loaded.index, 0, loaded.history.Count - 1);
+
+                // 先驗證舊檔才複製；失敗時不以預設資料蓋過任何來源。
+                if (source != path)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(path));
+                    File.Copy(source, path + ".tmp", overwrite: true);
+                    File.Move(path + ".tmp", path);
+                }
+
+                Data = loaded;
+                IsWriteBlocked = false;
+                IsDirty = false;
+                LastError = null;
+                return true;
+            }
+            catch (System.Exception e)
+            {
+                IsWriteBlocked = true;
+                LastError = $"[PinTools.Bookmarks] 載入失敗：{source} → {path}\n{e.Message}\n已停止書籤操作與寫入，請修復檔案後重新載入腳本或重開 Editor。";
+                return false;
+            }
+        }
+
+        public void MarkDirty()
+        {
+            if (!IsWriteBlocked) IsDirty = true;
+        }
+
+        public bool Flush()
+        {
+            if (IsWriteBlocked) return false;
+            if (!IsDirty) return true;
+            string temporaryPath = path + ".tmp";
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                File.WriteAllText(temporaryPath, JsonUtility.ToJson(Data, true));
+                if (File.Exists(path))
+                    File.Replace(temporaryPath, path, null);
+                else
+                    File.Move(temporaryPath, path);
+
+                IsDirty = false;
+                LastError = null;
+                return true;
+            }
+            catch (System.Exception e)
+            {
+                LastError = $"[PinTools.Bookmarks] 儲存失敗：{path}\n{e.Message}\n保留原檔與待存狀態；下次操作或結束 Editor 時會重試，暫存位置：{temporaryPath}";
+                return false;
+            }
         }
     }
 }

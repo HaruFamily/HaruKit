@@ -8,6 +8,10 @@ namespace HaruFamily.UX.Bookmarks
     internal class BookmarksWindow : EditorWindow
     {
         private BookmarksGUI gui;
+        private int storageVersion = -1;
+        private int referenceVersion = -1;
+        private bool wasEnabled;
+        private string storageError;
 
         [MenuItem("PinTools/Bookmarks Window")]
         public static void Open()
@@ -23,6 +27,8 @@ namespace HaruFamily.UX.Bookmarks
         private void OnEnable()
         {
             titleContent = new GUIContent(InspectorConstants.LabelBookmarks);
+            minSize = new Vector2(430, 400);
+            wantsMouseMove = true;
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
             RefreshSelectionRepaint();
@@ -48,10 +54,23 @@ namespace HaruFamily.UX.Bookmarks
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
         }
 
+        private void OnInspectorUpdate()
+        {
+            bool enabled = Inspector.IsEnabled;
+            if (storageVersion == JSONStorage.Version && referenceVersion == Inspector.ReferenceVersion
+                && wasEnabled == enabled && storageError == JSONStorage.LastError) return;
+            storageVersion = JSONStorage.Version;
+            referenceVersion = Inspector.ReferenceVersion;
+            storageError = JSONStorage.LastError;
+            if (wasEnabled != enabled) RefreshSelectionRepaint();
+            wasEnabled = enabled;
+            Repaint();
+        }
+
         private void OnGUI()
         {
             gui ??= new BookmarksGUI();
-            gui.DrawBody(new Rect(0, 0, position.width, position.height), onItemPicked: null);
+            gui.DrawBody(onItemPicked: null, repaint: Repaint);
         }
     }
 }

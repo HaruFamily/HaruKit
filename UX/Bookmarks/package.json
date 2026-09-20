@@ -36,6 +36,7 @@
     "InspectorShortcuts.cs.meta",
     "JSONStorage.cs",
     "JSONStorage.cs.meta",
+    "Tests",
     "UI.meta",
     "UI/DragSortHandler.cs",
     "UI/DragSortHandler.cs.meta",

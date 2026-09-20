@@ -10,7 +10,9 @@ namespace HaruFamily.UX.Bookmarks
     internal static partial class Inspector
     {
         private static InspectorJData Data => JSONStorage.Data;
-        internal static bool IsEnabled => Data.enableSystem && (!Data.disableInPlayMode || !EditorApplication.isPlaying);
+        internal static bool IsEnabled => Data.enableSystem && JSONStorage.IsAvailable && (!Data.disableInPlayMode || !EditorApplication.isPlaying);
+        internal static int BookmarkVersion { get; private set; }
+        internal static int ReferenceVersion { get; private set; }
 
         private const int BookmarkObjectCacheLimit = 128;
         private static int bookmarkCacheVersion = -1;
@@ -30,12 +32,25 @@ namespace HaruFamily.UX.Bookmarks
 
         public static void Save() => JSONStorage.Save();
 
+        private static void SaveBookmarkMembership()
+        {
+            BookmarkVersion++;
+            Save();
+        }
+
         [InitializeOnLoadMethod]
         private static void Init()
         {
             JSONStorage.Load();
 
-            // 第一輪：空 guid（純 scene instance 跨重啟必失效）
+            AssemblyReloadEvents.beforeAssemblyReload -= JSONStorage.Flush;
+            AssemblyReloadEvents.beforeAssemblyReload += JSONStorage.Flush;
+            EditorApplication.quitting -= JSONStorage.Flush;
+            EditorApplication.quitting += JSONStorage.Flush;
+            EditorApplication.delayCall += DelayedInit;
+            if (!JSONStorage.IsAvailable) return;
+
+            // 場景 instance 只保留於目前 domain，重新載入腳本時清除。
             Data.history.RemoveAll(x => string.IsNullOrEmpty(x.guid));
             Data.bookmarks.RemoveAll(x => string.IsNullOrEmpty(x.guid));
 
@@ -45,15 +60,7 @@ namespace HaruFamily.UX.Bookmarks
 
             Data.index = Data.history.Count == 0 ? -1 : Mathf.Clamp(Data.index, 0, Data.history.Count - 1);
 
-            Save();
-
-            // 確保 debounced Save 的髒資料在 domain reload / Editor 結束前真的落盤
-            AssemblyReloadEvents.beforeAssemblyReload -= JSONStorage.Flush;
-            AssemblyReloadEvents.beforeAssemblyReload += JSONStorage.Flush;
-            EditorApplication.quitting -= JSONStorage.Flush;
-            EditorApplication.quitting += JSONStorage.Flush;
-
-            EditorApplication.delayCall += DelayedInit;
+            SaveBookmarkMembership();
         }
 
         private static void PruneInvalidRefs()
@@ -83,7 +90,7 @@ namespace HaruFamily.UX.Bookmarks
             if (removedBM > 0 || removedHS > 0 || reassigned > 0)
             {
                 Debug.Log($"[PinTools.Bookmarks] Prune 失效引用：書籤 -{removedBM} / 歷史 -{removedHS} / 失效資料夾重置 {reassigned}");
-                Save();
+                SaveBookmarkMembership();
             }
         }
 
@@ -101,6 +108,25 @@ namespace HaruFamily.UX.Bookmarks
 
             Editor.finishedDefaultHeaderGUI -= DrawInspectorHeader;
             Editor.finishedDefaultHeaderGUI += DrawInspectorHeader;
+
+            EditorApplication.projectChanged -= InvalidateReferences;
+            EditorApplication.projectChanged += InvalidateReferences;
+            EditorApplication.hierarchyChanged -= InvalidateReferences;
+            EditorApplication.hierarchyChanged += InvalidateReferences;
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+        }
+
+        private static void InvalidateReferences()
+        {
+            ReferenceVersion++;
+            bookmarkObjectCache.Clear();
+        }
+
+        private static void OnPlayModeStateChanged(PlayModeStateChange state)
+        {
+            _expectedNavTarget = null;
+            InvalidateReferences();
         }
 
         private static void OnSelectionChanged()
@@ -183,9 +209,9 @@ namespace HaruFamily.UX.Bookmarks
 
         private static void RefreshBookmarkCache()
         {
-            if (bookmarkCacheVersion == JSONStorage.Version) return;
+            if (bookmarkCacheVersion == BookmarkVersion) return;
 
-            bookmarkCacheVersion = JSONStorage.Version;
+            bookmarkCacheVersion = BookmarkVersion;
             bookmarkGuids.Clear();
             bookmarkInstanceIds.Clear();
             bookmarkObjectCache.Clear();
@@ -199,6 +225,7 @@ namespace HaruFamily.UX.Bookmarks
 
         public static Object RefToObject(ObjectRef item)
         {
+            if (item == null) return null;
             if (!string.IsNullOrEmpty(item.guid))
             {
                 string path = AssetDatabase.GUIDToAssetPath(item.guid);
@@ -219,6 +246,7 @@ namespace HaruFamily.UX.Bookmarks
         // ====================== Commands ======================
         public static void NavigateTo(int newIndex)
         {
+            if (!IsEnabled) return;
             if (newIndex < 0 || newIndex >= Data.history.Count) return;
 
             Object obj = RefToObject(Data.history[newIndex]);
@@ -244,6 +272,7 @@ namespace HaruFamily.UX.Bookmarks
 
         public static void ToggleBookmark(Object obj)
         {
+            if (!IsEnabled || obj == null) return;
             ObjectRef item = ObjectToRef(obj);
             int exist = Data.bookmarks.FindIndex(x => EqualsItem(x, item));
 
@@ -258,29 +287,75 @@ namespace HaruFamily.UX.Bookmarks
                 Data.bookmarks.Add(item);
             }
 
-            Save();
+            SaveBookmarkMembership();
         }
 
         public static void ClearAllBookmarks()
         {
+            if (!IsEnabled || Data.bookmarks.Count == 0) return;
             Data.bookmarks.Clear();
-            Save();
+            SaveBookmarkMembership();
+        }
+
+        internal static ObjectRef FindBookmark(Object obj)
+        {
+            if (obj == null) return null;
+            var reference = ObjectToRef(obj);
+            return Data.bookmarks.Find(item => EqualsItem(item, reference));
+        }
+
+        internal static void AddBookmarkToFolder(Object obj, string folder)
+        {
+            if (!IsEnabled || obj == null) return;
+            var existing = FindBookmark(obj);
+            if (existing != null)
+            {
+                MoveBookmarkToFolder(existing, folder);
+                return;
+            }
+
+            var item = ObjectToRef(obj);
+            item.folder = FolderExists(folder) ? folder ?? string.Empty : string.Empty;
+            Data.bookmarks.Add(item);
+            SaveBookmarkMembership();
+        }
+
+        internal static void ReorderBookmark(ObjectRef source, ObjectRef target)
+        {
+            if (!IsEnabled) return;
+            if (ReorderBookmarks(Data.bookmarks, source, target)) Save();
+        }
+
+        // 同夾保留其他資料夾的 slot；跨夾插在目標之前。以引用識別避免搜尋後的可見 index 與原清單混用。
+        internal static bool ReorderBookmarks(List<ObjectRef> bookmarks, ObjectRef source, ObjectRef target)
+        {
+            if (source == null || target == null || source == target) return false;
+            int from = bookmarks.IndexOf(source);
+            int to = bookmarks.IndexOf(target);
+            if (from < 0 || to < 0) return false;
+
+            string folder = target.folder ?? string.Empty;
+            if ((source.folder ?? string.Empty) != folder)
+            {
+                bookmarks.RemoveAt(from);
+                bookmarks.Insert(bookmarks.IndexOf(target), source);
+                source.folder = folder;
+                return true;
+            }
+
+            int direction = from < to ? 1 : -1;
+            int slot = from;
+            for (int i = from + direction; direction > 0 ? i <= to : i >= to; i += direction)
+            {
+                if ((bookmarks[i].folder ?? string.Empty) != folder) continue;
+                bookmarks[slot] = bookmarks[i];
+                slot = i;
+            }
+            bookmarks[slot] = source;
+            return true;
         }
 
         // ====================== Folder API ======================
-        // 回傳所有「分組顯示順序」：使用者自訂 folders 依序 + 未分類放最後（用 "" 表示）。
-        public static System.Collections.Generic.List<string> GetFolderDisplayOrder()
-        {
-            var list = new System.Collections.Generic.List<string>(Data.folders.Count + 1);
-            foreach (var f in Data.folders)
-            {
-                if (f == null || string.IsNullOrEmpty(f.name)) continue;
-                list.Add(f.name);
-            }
-            list.Add(""); // 未分類永遠存在，固定排最後
-            return list;
-        }
-
         public static bool FolderExists(string name)
         {
             if (string.IsNullOrEmpty(name)) return true; // 未分類視為一定存在
@@ -290,6 +365,7 @@ namespace HaruFamily.UX.Bookmarks
         // 回傳 true 表示新增成功；名稱空白、重複、或為保留值（"未分類" 字面）則拒絕。
         public static bool AddFolder(string name)
         {
+            if (!IsEnabled) return false;
             name = name?.Trim();
             if (string.IsNullOrEmpty(name)) return false;
             if (name == InspectorConstants.LabelUncategorized) return false;
@@ -302,6 +378,7 @@ namespace HaruFamily.UX.Bookmarks
 
         public static bool RenameFolder(string oldName, string newName)
         {
+            if (!IsEnabled) return false;
             if (string.IsNullOrEmpty(oldName)) return false;
             newName = newName?.Trim();
             if (string.IsNullOrEmpty(newName)) return false;
@@ -323,6 +400,7 @@ namespace HaruFamily.UX.Bookmarks
         // 刪除資料夾，原本歸屬此夾的書籤搬回「未分類」（folder = ""）。
         public static void DeleteFolder(string name)
         {
+            if (!IsEnabled) return;
             if (string.IsNullOrEmpty(name)) return;
             int idx = Data.folders.FindIndex(f => f != null && f.name == name);
             if (idx < 0) return;
@@ -336,16 +414,18 @@ namespace HaruFamily.UX.Bookmarks
 
         public static void MoveBookmarkToFolder(ObjectRef item, string folder)
         {
-            if (item == null) return;
+            if (!IsEnabled || item == null || !Data.bookmarks.Contains(item)) return;
             folder ??= "";
             // 非未分類但 folder list 沒這個夾 → 視為無效，落到未分類
             if (!string.IsNullOrEmpty(folder) && !FolderExists(folder)) folder = "";
+            if ((item.folder ?? string.Empty) == folder) return;
             item.folder = folder;
             Save();
         }
 
         public static void ToggleFolderFold(string name)
         {
+            if (!IsEnabled) return;
             if (string.IsNullOrEmpty(name))
             {
                 Data.foldUncategorized = !Data.foldUncategorized;
@@ -359,15 +439,9 @@ namespace HaruFamily.UX.Bookmarks
             Save();
         }
 
-        public static bool IsFolderFolded(string name)
-        {
-            if (string.IsNullOrEmpty(name)) return Data.foldUncategorized;
-            var f = Data.folders.Find(x => x != null && x.name == name);
-            return f == null || f.fold;
-        }
-
         public static void ClearAllHistory()
         {
+            if (!IsEnabled) return;
             Data.history.Clear();
 
             if (Selection.activeObject != null)
@@ -386,6 +460,7 @@ namespace HaruFamily.UX.Bookmarks
         // ====================== Variables ======================
         internal static bool EqualsItem(ObjectRef a, ObjectRef b)
         {
+            if (a == null || b == null) return false;
             if (!string.IsNullOrEmpty(a.guid) && !string.IsNullOrEmpty(b.guid))
                 return a.guid == b.guid;
 

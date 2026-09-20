@@ -25,6 +25,9 @@ namespace HaruFamily.UX.Bookmarks
                 guiHandler = searchContext =>
                 {
                     var data = JSONStorage.Data;
+                    if (!string.IsNullOrEmpty(JSONStorage.LastError))
+                        EditorGUILayout.HelpBox(JSONStorage.LastError, MessageType.Error);
+                    if (!JSONStorage.IsAvailable) return;
 
                     EditorGUILayout.Space(10);
 

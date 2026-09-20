@@ -11,6 +11,37 @@ namespace HaruFamily.UX.Bookmarks
         internal class InspectorPopup : PopupWindowContent
         {
             private readonly BookmarksGUI gui = new();
+            private int storageVersion = -1;
+            private int referenceVersion = -1;
+            private string storageError;
+            private bool wasEnabled;
+
+            public override void OnOpen()
+            {
+                editorWindow.wantsMouseMove = true;
+                EditorApplication.update += Refresh;
+            }
+
+            public override void OnClose() => EditorApplication.update -= Refresh;
+
+            private void Refresh()
+            {
+                if (editorWindow == null) return;
+                bool enabled = Inspector.IsEnabled;
+                if (storageVersion == JSONStorage.Version && referenceVersion == ReferenceVersion
+                    && storageError == JSONStorage.LastError && wasEnabled == enabled) return;
+                storageVersion = JSONStorage.Version;
+                referenceVersion = ReferenceVersion;
+                storageError = JSONStorage.LastError;
+                wasEnabled = enabled;
+                editorWindow.Repaint();
+            }
+
+            private void Close() => editorWindow.Close();
+            private void Repaint()
+            {
+                if (editorWindow != null) editorWindow.Repaint();
+            }
 
             public override Vector2 GetWindowSize() => new(500, 700);
 
@@ -26,7 +57,7 @@ namespace HaruFamily.UX.Bookmarks
                 }
                 EditorGUILayout.EndHorizontal();
 
-                gui.DrawBody(rect, () => editorWindow.Close());
+                gui.DrawBody(Close, Repaint);
             }
         }
     }
