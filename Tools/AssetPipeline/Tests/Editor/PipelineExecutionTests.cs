@@ -67,11 +67,28 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
     {
         [TestCase("graph")]
         [TestCase("empty")]
-        [TestCase("missing-body")]
+        [TestCase("cell-filter")]
+        [TestCase("cleared-record")]
+        [TestCase("carrier")]
+        [TestCase("orphan-carrier")]
+        [TestCase("orphan-mixed")]
+        [TestCase("token-slot")]
+        [TestCase("token-mixed")]
+        [TestCase("session")]
+        [TestCase("unrelated-empty")]
+        [TestCase("unrelated-null")]
         [TestCase("incompatible")]
         [TestCase("conflict")]
-        [TestCase("strict")]
-        public void DraftSaveDiscardsMissingTypesAndPreservesEditsWithoutEnablingInvalidGraph(string mode)
+        public void MissingTypeCleanupRemovesOnlyAffectedDataAndStillRequiresValidGraph(string mode)
+            => RunMissingTypeCleanupCase(mode, false);
+
+        [TestCase("carrier")]
+        [TestCase("orphan-carrier")]
+        [TestCase("token-slot")]
+        public void MissingReferenceLocationDiagnostics(string mode)
+            => RunMissingTypeCleanupCase(mode, true);
+
+        private static void RunMissingTypeCleanupCase(string mode, bool diagnose)
         {
             string folder = "Assets/APMissingTypeTest_" + Guid.NewGuid().ToString("N");
             string path = folder + "/Pipeline.asset";
@@ -86,8 +103,54 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 var root = (ActionGroup)((IGraphDocument)pipeline.graph).AddRoot(Graph.PipelineKey);
                 root.Actions.Add(new ActionSlot(new RepairMissingBody()));
                 root.Actions.Add(new ActionSlot(new RepairValidBody { value = 42 }));
+                if (mode == "carrier") root.Actions[0].SetNode(new RepairMissingCarrier(new RepairMissingBody()));
+                if (mode == "orphan-carrier" || mode == "orphan-mixed")
+                    pipeline.graph.Orphans.Add(new RepairMissingCarrier(new RepairValidBody()));
+                if (mode == "orphan-mixed")
+                {
+                    pipeline.graph.Orphans.Add(null);
+                    pipeline.graph.Orphans.Add(new GraphNode(new RepairValidBody()));
+                }
+                if (mode == "token-slot" || mode == "token-mixed")
+                {
+                    var token = new GraphToken("MissingSlot", new RepairMissingTokenSlot());
+                    token.EnsureId();
+                    pipeline.graph.Tokens.Add(token);
+                    var proxy = new GraphNode();
+                    proxy.SetToken(token);
+                    proxy.EnsureId();
+                    pipeline.graph.Orphans.Add(proxy);
+                    if (mode == "token-mixed") pipeline.graph.Tokens.Add(new GraphToken("Unconfigured", null));
+                }
+                root.Actions[0].Node.EnsureId();
                 root.Actions[1].Node.EnsureId();
                 string validId = root.Actions[1].Node.Id;
+                if (mode == "cell-filter" || mode == "cleared-record" || mode == "incompatible")
+                {
+                    var catalog = new DynamicAssetCatalog { initialization = DynamicAssetCatalog.InitializationMode.Retain };
+                    var carrier = new GraphNode();
+                    carrier.SetCatalog(catalog);
+                    pipeline.graph.Orphans.Add(carrier);
+                    GraphNode cell = ((IGraphNodeOwner)catalog).CreateChild();
+                    cell.EnsureId();
+                    if (mode == "cell-filter" || mode == "cleared-record")
+                    {
+                        var filter = new GraphNode(new RepairMissingFilter());
+                        filter.EnsureId();
+                        ((CatalogCell)cell.BodyObject).InputSlot.SetNode(filter);
+                        pipeline.graph.Orphans.Add(filter);
+                    }
+                    var action = (RepairValidBody)root.Actions[1].Node.BodyObject;
+                    action.sourcePrefab.SetNode(cell);
+                    action.otherPrefab.SetNode(cell);
+                }
+                if (mode == "unrelated-empty")
+                {
+                    var empty = new ActionSlot();
+                    empty.SetNode(new GraphNode());
+                    root.Actions.Add(empty);
+                }
+                if (mode == "unrelated-null") root.Actions.Add(new ActionSlot());
                 AssetDatabase.CreateAsset(pipeline, path);
                 AssetDatabase.SaveAssetIfDirty(pipeline);
                 AssetDatabase.ForceReserializeAssets(new[] { path });
@@ -95,45 +158,104 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 // 僅改測試自行建立的資產，模擬消費端刪除／改名一種 SerializeReference 型別。
                 string yaml = File.ReadAllText(path);
                 Assert.That(yaml, Does.Contain(nameof(RepairMissingBody)));
-                File.WriteAllText(path, yaml.Replace(nameof(RepairMissingBody), "DeletedRepairMissingBody"));
+                File.WriteAllText(path, yaml.Replace(nameof(RepairMissingBody), "DeletedRepairMissingBody")
+                    .Replace(nameof(RepairMissingFilter), "DeletedRepairMissingFilter")
+                    .Replace(nameof(RepairMissingCarrier), "DeletedRepairMissingCarrier")
+                    .Replace(nameof(RepairMissingTokenSlot), "DeletedRepairMissingTokenSlot"));
                 AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
                 pipeline = AssetDatabase.LoadAssetAtPath<AssetPipeline>(path);
                 Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.True);
+                if (mode == "cleared-record")
+                {
+                    // 模擬先前僅丟棄 Unity 記錄、卻把破損 Inline 載體存下來的版本。
+                    Assert.That(UnityEditor.SerializationUtility.ClearAllManagedReferencesWithMissingTypes(pipeline), Is.True);
+                    EditorUtility.SetDirty(pipeline);
+                    AssetDatabase.SaveAssetIfDirty(pipeline);
+                    Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
+                    Assert.That(pipeline.graph.Actions[0].Node.Kind, Is.EqualTo(NodeKind.Inline));
+                    Assert.That(pipeline.graph.Actions[0].Node.BodyObject, Is.Null);
+                }
                 byte[] before = File.ReadAllBytes(path);
                 string guid = AssetDatabase.AssetPathToGUID(path);
+                string diagnostic = null;
+                if (diagnose)
+                {
+                    diagnostic = $"\n=== BEFORE {mode}, Unity {Application.unityVersion} ===\n"
+                        + DescribeMissingReferenceLocations(pipeline);
+                }
+                if (mode == "session")
+                {
+                    var binding = new HGDocumentBinding<Graph>("AP.Graph", target => ((AssetPipeline)target).graph,
+                        (target, document) => ((AssetPipeline)target).graph = document, () => new Graph());
+                    Assert.That(HGDocumentSession<Graph>.TryOpen(pipeline, binding, out var session), Is.True);
+                    Assert.That(session.Document.Actions.Count, Is.EqualTo(1));
+                    Assert.That(session.IsDirty, Is.True);
+                    Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+                    Assert.That(pipeline.graph.IsValidated, Is.True);
+                    Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
+                    return;
+                }
                 var model = new HGModel();
-                Assert.That(model.Bind(pipeline), Is.True);
+                Assert.That(model.Bind(pipeline), Is.True, diagnostic);
+                if (diagnose)
+                {
+                    diagnostic += $"\n=== AFTER {mode}: Owner actions={pipeline.graph.Actions.Count}, "
+                        + $"orphans={pipeline.graph.Orphans.Count}, tokens={pipeline.graph.Tokens.Count}; "
+                        + $"Working actions={((Graph)model.Data).Actions.Count}, orphans={((Graph)model.Data).Orphans.Count}, "
+                        + $"tokens={((Graph)model.Data).Tokens.Count} ===\n"
+                        + DescribeMissingReferenceLocations(pipeline);
+                }
+                Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False, diagnostic);
+                Assert.That(File.ReadAllBytes(path), Is.EqualTo(before), "清理不自動存檔。");
                 var working = (Graph)model.Data;
                 var items = ((ActionGroup)((IGraphDocument)working).Roots[0]).Actions;
-                bool invalid = mode == "missing-body" || mode == "incompatible";
-                if (mode != "missing-body") items.RemoveAt(0);
-                if (mode == "empty") items.Clear();
-                else ((RepairValidBody)items[items.Count - 1].Node.BodyObject).value = 99;
-                if (mode == "incompatible")
+                bool unrelatedEmpty = mode == "unrelated-empty" || mode == "unrelated-null";
+                Assert.That(items.Count, Is.EqualTo(unrelatedEmpty ? 2 : 1), "遺失 Action 的 Slot 應移除，無關空 Slot 應保留。" + diagnostic);
+                if (mode == "orphan-carrier") Assert.That(working.Orphans, Is.Empty, diagnostic);
+                if (mode == "orphan-mixed")
                 {
-                    var catalog = new DynamicAssetCatalog();
-                    var carrier = new GraphNode();
-                    carrier.SetCatalog(catalog);
-                    working.Orphans.Add(carrier);
-                    GraphNode cell = ((IGraphNodeOwner)catalog).CreateChild();
-                    ((RepairValidBody)items[0].Node.BodyObject).sourcePrefab.SetNode(cell);
-                    Assert.That(HGValidator.Run(model).Issues.Exists(issue => issue.Code == "graphkit.slot.body-incompatible"), Is.True);
+                    Assert.That(working.Orphans.Count, Is.EqualTo(2));
+                    Assert.That(working.Orphans[0], Is.Null, "原本的 null 項目不能因旁邊有遺失 class 而被刪除。");
+                    Assert.That(working.Orphans[1].BodyObject, Is.TypeOf<RepairValidBody>());
+                }
+                if (mode == "token-slot")
+                {
+                    Assert.That(working.Tokens, Is.Empty, diagnostic);
+                    Assert.That(working.Orphans, Is.Empty, diagnostic);
+                }
+                if (mode == "token-mixed")
+                {
+                    Assert.That(working.Tokens.Count, Is.EqualTo(1));
+                    Assert.That(working.Tokens[0].Name, Is.EqualTo("Unconfigured"));
+                    Assert.That(working.Tokens[0].Slot, Is.Null);
+                }
+                bool invalid = unrelatedEmpty || mode == "incompatible" || mode == "token-mixed";
+                ((RepairValidBody)items[0].Node.BodyObject).value = 99;
+                if (mode == "empty") items.Clear();
+                if (mode == "cell-filter" || mode == "cleared-record")
+                {
+                    var action = (RepairValidBody)items[0].Node.BodyObject;
+                    Assert.That(action.sourcePrefab.Node, Is.Null);
+                    Assert.That(action.otherPrefab.Node, Is.Null);
+                    Assert.That(working.Orphans.Count, Is.EqualTo(1), "遺失公式不可殘留候選池。");
+                    var catalog = (DynamicAssetCatalog)working.Orphans[0].CatalogObject;
+                    Assert.That(((CatalogCell)((IGraphNodeOwner)catalog).ChildNodes[0].BodyObject).InputSlot.Node, Is.Null);
                 }
                 model.MarkDirty();
-                Assert.That(model.Save(), Is.False, "普通程式化提交不可默默放棄遺失內容。");
-                Assert.That(model.LastCommitDiagnostic.Code, Is.EqualTo("graphkit.serialize-reference.missing-type"));
                 if (mode == "conflict") pipeline.graph = GraphDeepCopy.Copy(pipeline.graph);
                 var oldGraph = pipeline.graph;
 
-                bool shouldFail = mode == "conflict" || mode == "strict";
-                bool saved = model.SaveDraft(discardMissingTypes: mode != "strict");
+                bool shouldFail = mode == "conflict" || invalid;
+                if (invalid) LogAssert.Expect(LogType.Error, new System.Text.RegularExpressions.Regex("\\[AssetPipeline\\] 驗證未通過"));
+                bool saved = model.Save();
                 Assert.That(saved, Is.EqualTo(!shouldFail), model.LastCommitDiagnostic?.Message);
                 if (shouldFail)
                 {
                     if (mode == "conflict") Assert.That(model.LastCommitDiagnostic.Code, Is.EqualTo("graphkit.commit.owner-changed"));
+                    else Assert.That(model.LastCommitDiagnostic.Code, Is.EqualTo("graphkit.commit.validation-failed"));
                     Assert.That(File.ReadAllBytes(path), Is.EqualTo(before));
                     Assert.That(pipeline.graph, Is.SameAs(oldGraph));
-                    Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.True);
+                    Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
                     Assert.That(model.Data, Is.SameAs(working));
                     Assert.That(model.Dirty, Is.True);
                     Assert.That(model.CanUndo, Is.True);
@@ -143,10 +265,9 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 Assert.That(model.LastCommitDiagnostic, Is.Null);
                 Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
                 Assert.That(pipeline.graph, Is.Not.SameAs(oldGraph), "舊 session 必須失去提交基準。");
-                Assert.That(pipeline.graph.IsValidated, Is.False);
-                int count = mode == "empty" ? 0 : mode == "missing-body" ? 2 : 1;
+                Assert.That(pipeline.graph.IsValidated, Is.True);
+                int count = mode == "empty" ? 0 : 1;
                 Assert.That(pipeline.graph.Actions.Count, Is.EqualTo(count));
-                if (mode == "missing-body") Assert.That(pipeline.graph.Actions[0].Node.BodyObject, Is.Null);
                 if (count > 0)
                 {
                     Assert.That(((RepairValidBody)pipeline.graph.Actions[count - 1].Node.BodyObject).value, Is.EqualTo(99));
@@ -154,7 +275,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 }
                 Assert.That(model.Data, Is.SameAs(working));
                 Assert.That(model.Dirty, Is.False);
-                Assert.That(model.SaveDraft(), Is.True, "草稿 session 可繼續編輯並存檔。");
+                Assert.That(model.Save(), Is.True, "清理後可繼續正常驗證與存檔。");
                 Assert.That(pipeline.collectKey, Is.EqualTo("KeepThisKey"));
                 Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
 
@@ -164,18 +285,9 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 Assert.That(pipeline.collectKey, Is.EqualTo("KeepThisKey"));
                 Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
                 Assert.That(pipeline.graph.Actions.Count, Is.EqualTo(count));
-                Assert.That(pipeline.graph.IsValidated, Is.False);
+                Assert.That(pipeline.graph.IsValidated, Is.True);
                 if (count > 0)
                     Assert.That(((RepairValidBody)pipeline.graph.Actions[count - 1].Node.BodyObject).value, Is.EqualTo(99));
-                if (invalid)
-                {
-                    RepairValidBody.Calls = 0;
-                    var run = pipeline.RunPipeline();
-                    Assert.That(run.Errors, Is.Not.Empty);
-                    Assert.That(run.Errors.Exists(error => error.Contains(mode == "incompatible" ? "CatalogCell" : "節點是空的")), Is.True);
-                    Assert.That(run.Steps, Is.Empty);
-                    Assert.That(RepairValidBody.Calls, Is.Zero, "保存草稿不可放行無效管線的執行。");
-                }
             }
             finally
             {
@@ -185,14 +297,56 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             }
         }
 
+        private static string DescribeMissingReferenceLocations(AssetPipeline pipeline)
+        {
+            var report = new System.Text.StringBuilder();
+            var missing = new HashSet<long>();
+            foreach (var item in UnityEditor.SerializationUtility.GetManagedReferencesWithMissingTypes(pipeline))
+            {
+                missing.Add(item.referenceId);
+                report.AppendLine($"MISSING id={item.referenceId} type={item.namespaceName}.{item.className} assembly={item.assemblyName}");
+            }
+            using (var serialized = new SerializedObject(pipeline))
+            {
+                var property = serialized.GetIterator();
+                var seen = new HashSet<long>();
+                bool enter = true;
+                while (property.Next(enter))
+                {
+                    enter = true;
+                    if (property.propertyType != SerializedPropertyType.ManagedReference) continue;
+                    string path = property.propertyPath;
+                    try
+                    {
+                        long id = property.managedReferenceId;
+                        object value = property.managedReferenceValue;
+                        enter = value != null && seen.Add(id);
+                        report.AppendLine($"PROPERTY path={path} id={id} missingMatch={missing.Contains(id)} "
+                            + $"valueType={value?.GetType().FullName ?? "null"} serializedType={property.managedReferenceFullTypename} enter={enter}");
+                    }
+                    catch (Exception exception)
+                    {
+                        enter = false;
+                        report.AppendLine($"PROPERTY path={path} error={exception.GetType().Name}: {exception.Message}");
+                    }
+                }
+            }
+            return report.ToString();
+        }
+
         [Serializable] private sealed class RepairMissingBody : ActionBase
         { protected override void OnExecute(PipelineActionContext context) { } }
+        [Serializable] private sealed class RepairMissingCarrier : GraphNode
+        { public RepairMissingCarrier(GraphNodeContent body) : base(body) { } }
+        [Serializable] private sealed class RepairMissingFilter : Formula_GameObject<List<Object>>
+        { protected override GameObject OnEvaluate(List<Object> pack) => null; }
+        [Serializable] private sealed class RepairMissingTokenSlot : IntSlot { }
         [Serializable] private sealed class RepairValidBody : ActionBase
         {
-            public static int Calls;
             public int value;
             public GameObjectSlot sourcePrefab = new();
-            protected override void OnExecute(PipelineActionContext context) { Calls++; }
+            public GameObjectSlot otherPrefab = new();
+            protected override void OnExecute(PipelineActionContext context) { }
         }
     }
 

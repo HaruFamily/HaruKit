@@ -158,7 +158,7 @@ public partial class HaruGraphWindow
     internal HGSessionCommandResult CommitDocument(HGModel expected)
     {
         if (QueryDocument(expected) == null) return HGSessionCommandResult.StaleGeneration;
-        bool saved = focus.Kind == HGFocusKind.Asset ? SaveAsset(false) : DoSave(false, false);
+        bool saved = focus.Kind == HGFocusKind.Asset ? SaveAsset(false) : DoSave(false);
         if (!saved) return model.LastCommitDiagnostic != null && focus.Kind != HGFocusKind.Asset
             ? HGDocumentCommitGuard.ResultOf(model.LastCommitDiagnostic)
             : HGSessionCommandResult.ValidationFailed;
@@ -645,6 +645,22 @@ public partial class HaruGraphWindow
             return;
         }
 
+        bool hadMissingTypes = model.Owner != null && (SerializationUtility.HasManagedReferencesWithMissingTypes(model.Owner)
+            || HGMissingTypeCleanup.HasLostContent(model.Doc));
+        if (!model.CleanMissingTypes())
+        {
+            report = new HGReport();
+            if (model.LastCommitDiagnostic != null)
+                report.Issues.Add(new HGIssue(model.LastCommitDiagnostic, "遺失資料清理", null, null, null));
+            console.RevealErrors();
+            return;
+        }
+        if (hadMissingTypes)
+        {
+            ClearPortInteractionState();
+            graphDirty = true;
+            UpdateUnsavedState();
+        }
         report = HGValidator.Run(model, includeMissingTypes: true);
         AddExtensionDiagnostics(report);
         report.ReplaceGraphViewDiagnostics(graph?.Diagnostics);
@@ -655,31 +671,19 @@ public partial class HaruGraphWindow
             ShowNotification(new GUIContent("驗證通過"));
     }
 
-    private bool DoSave(bool showDialog = true, bool allowDraft = true)
+    private bool DoSave(bool showDialog = true)
     {
         model.LastCommitDiagnostic = null;
         DoVerify(true);
-        bool draft = !report.CanSave && allowDraft;
-        if (!report.CanSave && !draft)
+        if (!report.CanSave)
         {
-            // 圖一個字都沒改、只有目錄沒落盤時照存：目錄不在存檔交易裡，被圖的錯誤擋住等於再也存不了它。
-            if (!model.Dirty && catalogDirty
-                && !report.Issues.Exists(issue => issue.Code == "graphkit.serialize-reference.missing-type"))
-                return SaveCatalogsOnly();
-
             console.RevealErrors();
             // Console 已經被展開切到錯誤頁，細節都在那裡；再彈一個要按「好」的框只是多一次跨螢幕來回。
             if (showDialog)
                 ShowNotification(new GUIContent($"無法存檔：還有 {report.ErrorCount} 個錯誤，請先在 Console 修正"));
             return false;
         }
-        bool saved = draft ? model.SaveDraft(discardMissingTypes: true) : model.Save();
-        // Tool 的 Core 規則可能比畫布診斷完整；驗證失敗仍可保存草稿，衝突與 IO 失敗不可降級。
-        if (!saved && allowDraft && model.LastCommitDiagnostic?.Code == "graphkit.commit.validation-failed")
-        {
-            draft = true;
-            saved = model.SaveDraft(discardMissingTypes: true);
-        }
+        bool saved = model.Save();
         if (!saved)
         {
             if (model.LastCommitDiagnostic != null)
@@ -698,17 +702,7 @@ public partial class HaruGraphWindow
         catalogDirty = false;
         DoVerify(true);
         UpdateUnsavedState();
-        ShowNotification(new GUIContent(draft ? "已存檔（未驗證草稿）" : "已存檔"));
-        return true;
-    }
-
-    /// <summary>只把目錄落盤。目錄不在存檔交易裡，所以不跑驗證、不寫回工作副本。</summary>
-    private bool SaveCatalogsOnly()
-    {
-        AssetDatabase.SaveAssets();
-        catalogDirty = false;
-        UpdateUnsavedState();
-        ShowNotification(new GUIContent("已存檔（目錄庫）"));
+        ShowNotification(new GUIContent("已存檔"));
         return true;
     }
 

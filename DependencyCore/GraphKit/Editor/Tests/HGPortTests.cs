@@ -493,6 +493,87 @@ public class HGPortTests
         UnityEngine.Object.DestroyImmediate(owner);
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void StoredValidationReadsTheWrittenDocumentForExplicitAndLegacyBindings(bool legacy)
+    {
+        var owner = ScriptableObject.CreateInstance<TestDocumentOwner>();
+        try
+        {
+            owner.Document = new TestDocument();
+            var model = new HGModel();
+            var binding = new HGDocumentBinding<TestDocument>("Document", target => ((TestDocumentOwner)target).Document,
+                (target, document) => ((TestDocumentOwner)target).Document = document);
+            Assert.That(legacy ? model.Bind(owner) : model.Bind(owner, binding), Is.True);
+            Assert.That(model.IsStoredDocumentValidated, Is.False);
+
+            Assert.That(model.Save(), Is.True);
+
+            Assert.That(owner.Document.IsValidated, Is.True);
+            Assert.That(model.Doc.IsValidated, Is.False, "未驗證的工作副本不能取代已寫回文件的旗標。");
+            Assert.That(model.IsStoredDocumentValidated, Is.True);
+            var reopened = new HGModel();
+            Assert.That(legacy ? reopened.Bind(owner) : reopened.Bind(owner, binding), Is.True);
+            Assert.That(reopened.IsStoredDocumentValidated, Is.True, "重開後仍須讀到已寫回的驗證結果。");
+            model.MarkDirty();
+            Assert.That(model.IsStoredDocumentValidated, Is.True, "工作副本未存修改不會改變已儲存文件。");
+            owner.Document.MarkDirty();
+            Assert.That(model.IsStoredDocumentValidated, Is.False);
+            owner.Document.Verify();
+            Assert.That(model.IsStoredDocumentValidated, Is.True);
+            owner.Document = null;
+            Assert.That(model.IsStoredDocumentValidated, Is.False);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void RawReferenceLocationsKeepHostScopeAndIgnoreNullsDeclarationsAndScalarText()
+    {
+        const string yaml = @"%YAML 1.1
+--- !u!114 &11400000
+MonoBehaviour:
+  graph:
+    _orphans:
+    - rid: 294645405547233762
+    - rid: -2
+    - {rid: 294645405547233762}
+  note: |
+    rid: 294645405547233762
+  references:
+    version: 2
+    RefIds:
+    - rid: 760
+      type: {class: ActionSlot, ns: Test, asm: Test}
+      data:
+        _node:
+          rid: 294645405547233762
+        ordinaryNull:
+          rid: -2
+    - rid: 761
+      type: {class: GraphToken, ns: Test, asm: Test}
+      data:
+        _slot: {rid: 294645405547233762}
+    - rid: 294645405547233762
+      type: {class: Missing, ns: Test, asm: Test}
+      data:
+        value: 42
+--- !u!114 &11400001
+MonoBehaviour:
+  other:
+    rid: 294645405547233762
+";
+        var paths = HGSerializedReferenceLocations.Parse(yaml.Split('\n'), 11400000,
+            new HashSet<long> { 294645405547233762 });
+        Assert.That(paths, Is.EqualTo(new[]
+        {
+            "graph._orphans.Array.data[0]", "graph._orphans.Array.data[2]",
+            "managedReferences[760]._node", "managedReferences[761]._slot"
+        }));
+        Assert.Throws<System.IO.InvalidDataException>(() => HGSerializedReferenceLocations.Parse(
+            new[] { "not a Unity text asset" }, 11400000, new HashSet<long> { 1 }));
+    }
+
     [Test]
     public void NodeDescriptorUsesTypedFieldAccessAndRejectsDuplicateIds()
     {

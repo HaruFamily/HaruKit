@@ -740,10 +740,9 @@ public partial class HaruGraphWindow
     {
         bool isAsset = focus.Kind == HGFocusKind.Asset;
 
-        // Owner 的 Core 驗證狀態。未驗證的圖 runtime 直接擋下不執行，而這件事原本只有資產焦點的
-        // 引用清單（別人的清單）看得到，自己這張畫布反而看不出來。
+        // 查已儲存文件的驗證旗標；不把驗證、未存修改與執行混為同一個狀態。
         string warning = !isAsset && model != null && !model.IsStoredDocumentValidated
-            ? "✗ 這份圖未驗證，存檔後才會執行"
+            ? "已儲存圖尚未通過驗證"
             : null;
 
         return new HGConsoleView

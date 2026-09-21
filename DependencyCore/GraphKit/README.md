@@ -78,9 +78,9 @@ data contracts and are not renamed as routine cleanup.
 
 ## Editor Integration
 
-The editor always works on a deep-copied document. Window Save writes a new copy
-back to the owner, marking invalid graphs as unvalidated drafts; Cancel discards
-the working copy. Undo/Redo and Port
+The editor works on a deep-copied document after cleaning missing-type data.
+Save validates and writes a new copy back to the owner only on success; Cancel
+discards the working copy. Undo/Redo and Port
 handles are scoped to that document session and its current generation.
 
 - `HaruGraphWindow.OpenFor(owner)` keeps the legacy convenience path and finds
@@ -220,20 +220,28 @@ working copy and its history remain available. Preserve any edits you need
 before cancelling to adopt the latest Owner document. Validation is followed by
 another Owner check immediately before writing.
 
-Owner graph window saves preserve editing progress even with validation errors.
-Invalid graphs are saved as drafts with `IsValidated=false`; missing-type records
-on the Owner are discarded directly, without backups, confirmation dialogs, or
-an Inspector detour. The current working copy is retained. Console diagnostics
-remain visible, and execution still requires the consuming tool's validation.
-Conflict, clone, and write failures still stop the save. Shared-asset focus uses
-its separate validated save transaction.
+Missing-type cleanup happens before cloning/opening and before validation/commit,
+without backups or confirmation dialogs. Unity's missing managed-reference IDs
+identify affected carriers and list entries; broken Action entries and references
+are removed. Cleanup also handles previously persisted Inline/Catalog/Token
+carriers with missing content after Unity's missing-type records were already
+cleared. Normal Empty carriers and unassigned Action slots are retained.
+When a missing CatalogCell filter changes its output type, only
+incompatible users of that affected Cell are disconnected. Unrelated empty nodes
+and incompatible connections are not treated as missing data.
 
-Programmatic `Save()` and session `Commit()` retain strict validation. Tools can
-explicitly use `HGModel.SaveDraft(discardMissingTypes: true)` to persist an
-unvalidated draft and discard all missing-type records on that Owner, not just
-one graph field. The compatibility API `SaveDiscardingMissingTypes(out
-backupDirectory)` still validates before clearing, but no longer creates a backup;
-the output argument is always null.
+When Unity exposes a missing reference as the ordinary null ID (`-2`), cleanup
+reads the Owner's original Unity text-serialized v2 `rid` links to locate it.
+This is read-only, scoped to the Owner's local file ID, and does not classify
+ordinary null references as missing. Unavailable or unsupported source data is
+reported before clearing; the asset file is not edited by the location reader.
+
+Cleanup changes memory and marks the document dirty; it does not save the asset.
+Window saves, `HGModel.Save()` and session `Commit()` all require validation to
+pass. Invalid graphs are never saved as drafts. Conflict, clone and write failures
+also stop the save. Cleanup during an active session clears history containing the
+removed references, while retaining current edits. The save label stays **存檔**;
+only actual unsaved changes highlight it.
 
 Reference checks do not detect in-place changes to the same document instance.
 Tools with other editing entry points can supply a document-scoped revision:

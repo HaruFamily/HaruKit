@@ -397,7 +397,7 @@ public sealed class HGPublicConsumerTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public void WindowSavePersistsInvalidEditsAsDraftWhileProgrammaticCommitRemainsStrict(bool coreOnlyFailure)
+    public void WindowAndProgrammaticSaveBothRejectInvalidEdits(bool coreOnlyFailure)
     {
         var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
         var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
@@ -416,13 +416,12 @@ public sealed class HGPublicConsumerTests
             Assert.That(owner.B, Is.SameAs(original));
             Assert.That(commands.Query().IsDirty, Is.True);
 
-            Assert.DoesNotThrow(() => window.SaveChanges());
+            Assert.Throws<InvalidOperationException>(() => window.SaveChanges());
 
-            Assert.That(owner.B, Is.Not.SameAs(original));
-            Assert.That(owner.B.Root.Items[0].Node.Id, Is.EqualTo(sourceId));
+            Assert.That(owner.B, Is.SameAs(original));
+            Assert.That(owner.B.Root.Items[0].Node, Is.Null);
             Assert.That(owner.B.IsValidated, Is.False);
-            Assert.That(commands.Query().IsDirty, Is.False);
-            Assert.That(window.hasUnsavedChanges, Is.False);
+            Assert.That(commands.Query().IsDirty, Is.True);
         }
         finally
         {
@@ -430,6 +429,29 @@ public sealed class HGPublicConsumerTests
             UnityEngine.Object.DestroyImmediate(window);
             UnityEngine.Object.DestroyImmediate(owner);
         }
+    }
+
+    [Test]
+    public void StoredValidationUsesOnlyTheBoundDocumentOnAMultiDocumentOwner()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.A = ConsumerDocument.Create();
+            owner.A.Verify();
+            owner.B = ConsumerDocument.Create();
+            owner.B.Root.Items[0].SetNode(owner.B.Orphans[0]);
+            var model = new HGModel();
+            Assert.That(model.Bind(owner, Binding()), Is.True);
+            Assert.That(model.IsStoredDocumentValidated, Is.False);
+            Assert.That(model.Save(), Is.True);
+            Assert.That(model.IsStoredDocumentValidated, Is.True);
+            owner.A.MarkDirty();
+            Assert.That(model.IsStoredDocumentValidated, Is.True);
+            owner.B.MarkDirty();
+            Assert.That(model.IsStoredDocumentValidated, Is.False);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
     }
 
     private static HGDocumentBinding<ConsumerDocument> Binding()

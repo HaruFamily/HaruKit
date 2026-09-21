@@ -69,11 +69,13 @@ ListCell 的輸出。AssetPipeline 不提供共用公式／動作資產節點；
 
 ### 遺失節點型別的修復
 
-若 Console 顯示 `Missing types referenced`，直接在圖內按「存檔」即可丟棄遺失型別記錄並保留目前編輯內容。不備份、不彈修復確認，也不需要切換 Inspector。
+開啟圖時先清理 Unity 回報的遺失型別資料，再建立工作副本；驗證／存檔前也會清理新出現的遺失記錄。不備份、不詢問，不需要額外 Inspector 操作。
 
-圖有空節點、CatalogCell 型別不相容等錯誤時，存檔鈕仍可使用，會顯示「已存檔（未驗證草稿）」。錯誤留在 Console 供後續修正；文件版本衝突與真正的寫入失敗仍阻擋保存。
+清理依 managed-reference ID 定位遺失 class，移除對應的 Node／Action 清單項目與引用。CatalogCell 的轉換公式遺失時，會清空遺失公式，並斷開因該 Cell 輸出變回 `List<Object>` 而失效的型別連線；其他原本就接錯的線不會被一併刪掉。
 
-CatalogCell 的轉換公式被移除時，輸出可能回到 `List<Object>`，因此原本連到單個 GameObject／Folder 等欄位的線會不相容。可以先存草稿，再重新接正確型別來源或斷線設定常數。**能存草稿不代表能執行**：`RunPipeline()` 每次重新驗證已儲存圖，錯誤未修正就不執行。
+先前已清除 missing-type 記錄、但留下「Inline 等來源標記仍在、內容為 null」的破損 Node，也會清理。正常的 Empty 節點與未指定來源的 ActionSlot 仍交由正常驗證，不會一概刪除。
+
+**清理後仍須通過正常驗證才能存檔，沒有草稿存檔。** 無關的空 Action、型別錯誤、版本衝突等仍會阻擋。清理只修改記憶體並標記未儲存，驗證通過才寫回 SO；`RunPipeline()` 的執行前驗證亦維持。
 
 ## Extending
 

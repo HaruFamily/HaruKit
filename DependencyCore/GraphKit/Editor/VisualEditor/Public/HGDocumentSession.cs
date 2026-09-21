@@ -23,7 +23,7 @@ public enum HGSessionCommandResult
 
 /// <summary>
 /// Public working-copy transaction for Tools that need commands without accessing HaruGraphWindow, HGModel, or HGGraphView.
-/// A session owns only its cloned document; only <see cref="Commit"/> attempts to write Owner data.
+/// A session edits a cloned document. Missing-type cleanup may sanitize Owner memory; only <see cref="Commit"/> persists edits.
 /// Failed setters are compensated by restoring the selected document reference; uncertain recovery blocks further commits.
 /// </summary>
 public sealed class HGDocumentSession<TDocument>
@@ -74,7 +74,16 @@ public sealed class HGDocumentSession<TDocument>
                 throw new InvalidOperationException("Clone must return an isolated document of the bound type.");
             context ??= HGEditorExtensionContext.Default;
             if (!context.Supports(owner, document)) throw new InvalidOperationException("The provider does not support this document.");
+            if (!commitGuard.TryCleanMissingTypes(null, out bool cleaned, out diagnostic)) return false;
+            if (cleaned)
+            {
+                if (binding.TryRead(owner, out var cleanedLive) && cleanedLive != null) live = cleanedLive;
+                if (!binding.TryClone(live, out copy) || copy is not TDocument cleanedDocument)
+                    throw new InvalidOperationException("The cleaned document could not be cloned.");
+                document = cleanedDocument;
+            }
             session = new HGDocumentSession<TDocument>(owner, binding, document, context, commitGuard);
+            session.IsDirty = cleaned;
             return true;
         }
         catch (Exception exception)
@@ -162,6 +171,18 @@ public sealed class HGDocumentSession<TDocument>
 
     private HGSessionCommandResult CommitCore()
     {
+        if (!commitGuard.TryCleanMissingTypes(Document, out bool cleaned, out var cleanupFailure))
+        {
+            LastDiagnostic = cleanupFailure;
+            return HGDocumentCommitGuard.ResultOf(cleanupFailure);
+        }
+        if (cleaned)
+        {
+            undo.Clear();
+            redo.Clear();
+            IsDirty = true;
+            Generation++;
+        }
         LastDiagnostic = commitGuard.Check();
         if (LastDiagnostic != null) return HGDocumentCommitGuard.ResultOf(LastDiagnostic);
         if (!TryClone(Document, out TDocument toStore)) return HGSessionCommandResult.WriteFailed;
@@ -199,6 +220,12 @@ public sealed class HGDocumentSession<TDocument>
         if (Owner == null) return HGSessionCommandResult.Rejected;
         binding.TryRead(Owner, out IGraphDocument live);
         var nextGuard = new HGDocumentCommitGuard(Owner, binding, live);
+        if (!nextGuard.TryCleanMissingTypes(null, out bool cleaned, out var cleanupFailure))
+        {
+            LastDiagnostic = cleanupFailure;
+            return HGDocumentCommitGuard.ResultOf(cleanupFailure);
+        }
+        if (cleaned) binding.TryRead(Owner, out live);
         if (live == null && !binding.TryCreate(out live)) return HGSessionCommandResult.Rejected;
         if (!binding.TryClone(live, out IGraphDocument copy)
             || copy is not TDocument document) return HGSessionCommandResult.Rejected;
@@ -206,7 +233,7 @@ public sealed class HGDocumentSession<TDocument>
         commitGuard = nextGuard;
         undo.Clear();
         redo.Clear();
-        IsDirty = false;
+        IsDirty = cleaned;
         Generation++;
         return HGSessionCommandResult.Changed;
     }

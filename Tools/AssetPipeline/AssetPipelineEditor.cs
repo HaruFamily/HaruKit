@@ -57,8 +57,8 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
                 details.AppendLine($"{missing.namespaceName}.{missing.className} ({missing.assemblyName}), id={missing.referenceId}");
 
             EditorGUILayout.HelpBox("SO 含有遺失型別：\n" + details
-                + "\n直接在圖內存檔會丟棄遺失內容，不備份、不要求切換 Inspector。"
-                + "圖有其他錯誤也能保存未驗證草稿；執行前仍須修正並通過驗證。",
+                + "\n開啟圖時會自動清除遺失內容與相關失效連線，不備份、不詢問。"
+                + "清理後維持正常驗證，其他錯誤必須修正才能存檔。",
                 MessageType.Error);
             if (GUILayout.Button("開啟節點圖修正並存檔")) GraphDrawer.Open(pipeline);
             return true;
