@@ -316,23 +316,27 @@ public class HGModel
     /// <summary>
     /// 把一次目錄修改記成一步。<paramref name="before"/> 是修改**之前**抄的快照。
     /// </summary>
+    public void PushCatalogStep(object before) => PushCatalogStep(before, true);
+
+    /// <summary>記錄目錄修改；mergeWithPrevious 為 false 時，與前後修改各自成為獨立一步。</summary>
     // 目錄是先抄再改，圖是改完才抄 baseline：目錄直接寫在 Owner 上、沒有工作副本，記著的 baseline 會被
     // 視窗外的入口改掉，只有當場抄的那份一定對得上。
-    public void PushCatalogStep(object before)
+    public void PushCatalogStep(object before, bool mergeWithPrevious)
     {
         if (!TrackChanges || before == null) return;
         double now = EditorApplication.timeSinceStartup;
 
         // 只跟「緊接著的上一個目錄步」合併：把資產拖到「＋ 新增目錄」上是一次手勢，卻會跑 Create 與
         // Add 兩條命令，分成兩步就得按兩次 Ctrl+Z 才回得到原狀。併進前一步記的是更早的狀態，退回去仍正確。
-        bool merge = undoStack.Count > 0
+        bool merge = mergeWithPrevious && undoStack.Count > 0
                      && undoStack[undoStack.Count - 1].Catalogs != null
                      && now - lastCatalogPush < MergeWindow;
 
         if (merge) redoStack.Clear();
         else Push(new HGStep { Catalogs = before });
 
-        lastCatalogPush = now;
+        // 獨立手勢（重排）也隔開下一次修改，避免下一個快速操作併回這一步。
+        lastCatalogPush = mergeWithPrevious ? now : double.NegativeInfinity;
         lastPushTime = 0d;                            // 下一次圖的修改不跟這一步合併
     }
 
@@ -667,14 +671,13 @@ public class HGModel
     public List<GraphToken> OwnerTokens
         => HGReflect.Tokens(Data) ?? new List<GraphToken>();
 
-    /// <summary>把一份端點清單讀成顯示用的視圖，依名稱排序。</summary>
+    /// <summary>把一份端點清單讀成顯示用的視圖，保留清單順序。</summary>
     public static List<HGToken> ReadTokens(IEnumerable<GraphToken> endpoints)
     {
         var result = new List<HGToken>();
         if (endpoints == null) return result;
         foreach (var endpoint in endpoints)
             if (endpoint != null) result.Add(new HGToken { Token = endpoint });
-        result.Sort((a, b) => string.CompareOrdinal(a.Key, b.Key));
         return result;
     }
 

@@ -117,7 +117,7 @@ public partial class HaruGraphWindow
             HGAssetIndex.Refresh();
         GUI.color = prevColor;
 
-        assetLibrary.Draw(assetRect, assetRect.y + 24f, AssetLibraryView(), inlineName, drag, RenameAssetFile, ActivateAsset);
+        assetLibrary.Draw(assetRect, assetRect.y + 24f, AssetLibraryView(), inlineName, drag, AssetLibraryCommands());
 
         if (showToken) DrawResizeGrip(handle, false, resizingLibrarySplit);
 
@@ -153,7 +153,27 @@ public partial class HaruGraphWindow
         Remove = DeleteCatalog,
         Add = AddToCatalog,
         RemoveItem = RemoveFromCatalog,
+        Move = model?.Owner is IReorderableCatalogOwner ? MoveCatalog : null,
+        MoveItem = model?.Owner is IReorderableCatalogOwner ? MoveCatalogItem : null,
     };
+
+    private void MoveCatalog(string id, string targetId)
+    {
+        if (model?.Owner is not IReorderableCatalogOwner owner) return;
+        object before = model.CaptureCatalogs();
+        if (!owner.MoveCatalog(id, targetId)) return;
+        model.PushCatalogStep(before, false);
+        MarkOwnerDirty();
+    }
+
+    private void MoveCatalogItem(string id, int from, int to)
+    {
+        if (model?.Owner is not IReorderableCatalogOwner owner) return;
+        object before = model.CaptureCatalogs();
+        if (!owner.MoveCatalogItem(id, from, to)) return;
+        model.PushCatalogStep(before, false);
+        MarkOwnerDirty();
+    }
 
     private string CreateCatalog()
     {
@@ -250,7 +270,22 @@ public partial class HaruGraphWindow
         Remove = RemoveToken,
         Create = ShowCreateTokenMenu,
         IssueOf = TokenIssue,
+        Move = MoveToken,
     };
+
+    private void MoveToken(GraphToken token, GraphToken target)
+    {
+        var scope = CurrentTokens();
+        if (scope == null) return;
+        int from = scope.IndexOf(token);
+        int to = scope.IndexOf(target);
+        if (from < 0 || to < 0 || from == to) return;
+        BreakUndoMerge();
+        scope.RemoveAt(from);
+        scope.Insert(to, token);
+        MarkGraphChanged();
+        BreakUndoMerge();
+    }
 
     private bool RenameTokenFromLibrary(GraphToken endpoint, string name)
     {
@@ -403,6 +438,13 @@ public partial class HaruGraphWindow
         Entries = HGAssetIndex.Entries,
         SlotTypes = AssetSlotTypes(),
         FocusedAsset = focus.Kind == HGFocusKind.Asset ? focus.AssetObject : null,
+    };
+
+    private HGAssetLibraryCommands AssetLibraryCommands() => new()
+    {
+        Rename = RenameAssetFile,
+        Activate = ActivateAsset,
+        Move = (asset, target) => { if (HGAssetIndex.Move(asset, target)) Repaint(); },
     };
 
     /// <summary>資產庫選了一筆：再點一次目前這格＝退出（在它的Token子畫布時先回到資產本體，由 EnterAsset 處理）。</summary>

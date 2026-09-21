@@ -130,7 +130,7 @@ public interface IGraphCatalogLibrary
     // 由庫自己宣告而不是從 Items 推：空的庫也要答得出來，否則第一筆加進去之前無法判定相容性。
     Type ItemType { get; }
 
-    /// <summary>目錄內容。順序即加入順序。</summary>
+    /// <summary>目錄內容，依目前清單順序提供。</summary>
     // 非泛型：泛型參數會逼 ICatalogOwner 跟著泛型化，編輯器就只能反射掃泛型介面實例去找「全部的庫」，
     // 那正是框架明令禁止的作法。型別由 ItemType 自述，內容怎麼畫由 Editor 側的繪製契約決定。
     IReadOnlyList<object> Items { get; }
@@ -186,6 +186,16 @@ public interface ICatalogOwner
 
     /// <summary>用 <see cref="CaptureCatalogs"/> 的快照覆寫全部目錄。認不得的快照直接忽略。</summary>
     void RestoreCatalogs(object snapshot);
+}
+
+/// <summary>目錄 Owner 可選的重排能力。成功移動才回 true；保留目錄 Id 與項目引用。</summary>
+public interface IReorderableCatalogOwner
+{
+    /// <summary>將目錄移至目標原先的索引；向上移到目標之前，向下移到目標之後。</summary>
+    bool MoveCatalog(string id, string targetId);
+
+    /// <summary>在同一目錄內移動項目，toIndex 是移動完成後的索引。</summary>
+    bool MoveCatalogItem(string id, int fromIndex, int toIndex);
 }
 
 /// <summary>Optional observation capability. Copies share a source, but retain their own document revision.</summary>

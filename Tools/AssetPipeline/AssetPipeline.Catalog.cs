@@ -20,7 +20,7 @@ namespace HaruFamily.Tools.AssetPipeline
     // 資產分頁與目錄庫編的是同一份 prototypeAssets，兩個入口沒有各自的快取，所以不會不同步。
     // 同時實作兩半：ICatalogOwner 是資料操作（Runtime 契約），IHGCatalogRenderer 是這個領域
     // 的項目畫法與拖放判定（Editor 契約）。框架只保留版面、展開、搜尋、改名與復原堆疊。
-    public partial class AssetPipeline : ICatalogOwner, IHGCatalogRenderer
+    public partial class AssetPipeline : ICatalogOwner, IReorderableCatalogOwner, IHGCatalogRenderer
     {
         private const string DefaultCatalogPrefix = "Catalog";
 
@@ -108,6 +108,32 @@ namespace HaruFamily.Tools.AssetPipeline
             if (item is not Object asset) return;
             if (!group.assets.Remove(asset)) return;
             RefreshGroupInfo(group);
+        }
+
+        bool IReorderableCatalogOwner.MoveCatalog(string id, string targetId)
+        {
+            var group = FindCatalog(id);
+            var target = FindCatalog(targetId);
+            if (group == null || target == null || ReferenceEquals(group, target)) return false;
+
+            int from = prototypeAssets.IndexOf(group);
+            int to = prototypeAssets.IndexOf(target);
+            prototypeAssets.RemoveAt(from);
+            prototypeAssets.Insert(to, group);
+            return true;
+        }
+
+        bool IReorderableCatalogOwner.MoveCatalogItem(string id, int fromIndex, int toIndex)
+        {
+            var group = FindCatalog(id);
+            if (group == null || fromIndex == toIndex || fromIndex < 0 || toIndex < 0
+                || fromIndex >= group.assets.Count || toIndex >= group.assets.Count) return false;
+
+            var item = group.assets[fromIndex];
+            group.assets.RemoveAt(fromIndex);
+            group.assets.Insert(toIndex, item);
+            RefreshGroupInfo(group);
+            return true;
         }
 
         object ICatalogOwner.CaptureCatalogs()

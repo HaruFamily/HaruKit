@@ -38,13 +38,9 @@ public sealed class HGAssetLibraryPanel
         scroll = Vector2.zero;
     }
 
-    /// <summary>
-    /// <paramref name="activate"/> 是點一筆（不是拖）時發的命令：進去編它，或是再點目前這筆＝退出。
-    /// 進出的判斷留在視窗，面板只回報「使用者選了這一筆」。
-    /// </summary>
+    /// <summary>繪製資產列；選取、改名與重排由命令接回視窗。</summary>
     public void Draw(Rect r, float top, in HGAssetLibraryView view,
-        HGInlineRename inlineName, HGLibraryDrag drag,
-        Func<UnityEngine.Object, string, bool> rename, Action<ScriptableObject, Type> activate)
+        HGInlineRename inlineName, HGLibraryDrag drag, HGAssetLibraryCommands cmd)
     {
         // 重掃縮成搜尋列旁的圖示鈕：上下分區後高度是兩區共用的，整條寬按鈕不值那一列。
         var searchRect = new Rect(r.x + 4f, top, r.width - 30f, 20f);
@@ -67,6 +63,7 @@ public sealed class HGAssetLibraryPanel
         var listRect = new Rect(r.x + 2f, top + 24f, r.width - 4f, Mathf.Max(0f, r.yMax - top - 26f));
         var content = new Rect(0f, 0f, listRect.width - 16f, shown.Count * CellHeight + 4f);
         scroll = GUI.BeginScrollView(listRect, scroll, content);
+        Action pendingMove = null;
         for (int i = 0; i < shown.Count; i++)
         {
             var entry = shown[i].entry;
@@ -77,10 +74,19 @@ public sealed class HGAssetLibraryPanel
             Color payload = entry.IsAction ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
             HGStyles.CellBackground(row, HGStyles.HeaderAsset, payload, i % 2 == 1, isFocus);
 
-            var nameRect = new Rect(row.x + 8f, row.y + 2f, row.width - 64f, 18f);
+            int direction = HGLibraryOrder.Draw(new Rect(row.x + 3f, row.y + 5f, HGLibraryOrder.Width, 18f),
+                cmd.Move != null && i > 0, cmd.Move != null && i + 1 < shown.Count);
+            if (direction != 0)
+            {
+                var target = shown[i + direction].entry.Asset;
+                pendingMove = () => cmd.Move(asset, target);
+            }
+
+            var nameRect = new Rect(row.x + 8f + HGLibraryOrder.Width, row.y + 2f,
+                Mathf.Max(0f, row.width - 64f - HGLibraryOrder.Width), 18f);
             bool renaming = inlineName.Draw(nameRect, asset, HGInlineRename.SiteAssetLib,
                 asset.name, asset.name, HGStyles.RowLabel, "雙擊可改名（改的是 .asset 檔名）",
-                name => rename(asset, name));
+                name => cmd.Rename(asset, name));
             string kind = entry.IsAction ? "ACT" : HGReflect.ResultTypeName(entry.ResultType);
             var typeRect = new Rect(row.xMax - 54f, row.y + 6f, 46f, 15f);
             HGStyles.RoundedFill(typeRect, payload, CellCorner);
@@ -100,12 +106,19 @@ public sealed class HGAssetLibraryPanel
                 && row.Contains(e.mousePosition) && !nameRect.Contains(e.mousePosition))
             {
                 drag.ClearAsset();
-                activate(asset, shown[i].slotType);
+                cmd.Activate(asset, shown[i].slotType);
                 e.Use();
             }
         }
         GUI.EndScrollView();
+        pendingMove?.Invoke();
     }
+
+    /// <summary>相容僅提供改名與選取命令的使用端。</summary>
+    public void Draw(Rect r, float top, in HGAssetLibraryView view,
+        HGInlineRename inlineName, HGLibraryDrag drag,
+        Func<UnityEngine.Object, string, bool> rename, Action<ScriptableObject, Type> activate)
+        => Draw(r, top, view, inlineName, drag, new HGAssetLibraryCommands { Rename = rename, Activate = activate });
 
     private bool Matches(HGAssetEntry entry)
     {
@@ -115,6 +128,14 @@ public sealed class HGAssetLibraryPanel
         return entry.ResultType != null
             && HGReflect.ResultTypeName(entry.ResultType).IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0;
     }
+}
+
+/// <summary>共用資產庫的編輯與導覽命令。</summary>
+public struct HGAssetLibraryCommands
+{
+    public Func<UnityEngine.Object, string, bool> Rename;
+    public Action<ScriptableObject, Type> Activate;
+    public Action<ScriptableObject, ScriptableObject> Move;
 }
 
 }

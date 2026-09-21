@@ -33,6 +33,12 @@ public struct HGCatalogLibraryCommands
 
     /// <summary>從目錄移除單一項目。</summary>
     public Action<string, object> RemoveItem;
+
+    /// <summary>移動目錄至目標的原位置；null 表示 Owner 不支援重排。</summary>
+    public Action<string, string> Move;
+
+    /// <summary>在同一目錄內移動項目；索引來自完整 Items。</summary>
+    public Action<string, int, int> MoveItem;
 }
 
 /// <summary>
@@ -41,7 +47,7 @@ public struct HGCatalogLibraryCommands
 // 拖放區面板。展開狀態、搜尋字與捲動是自己的視圖狀態；就地改名向框架借 HGInlineRename，
 // 理由與資產庫相同：同一個目錄可能同時出現在別的區，各自記就會兩格一起進編輯。
 //
-// **內容住在 Owner，不進圖的工作副本**：這裡的每一個命令都是立即寫檔，沒有「取消就還原」。
+// **內容住在 Owner，不進圖的工作副本**：命令修改 Owner 並標記未存檔，沒有「取消就還原」。
 // 這與共用資產庫一致（轉存資產也是立刻寫進 Project），與 Token 庫相反。
 public sealed class HGCatalogLibraryPanel
 {
@@ -117,6 +123,7 @@ public sealed class HGCatalogLibraryPanel
 
         var content = new Rect(0f, 0f, listRect.width - 16f, contentHeight);
         scroll = GUI.BeginScrollView(listRect, scroll, content);
+        Action pendingMove = null;
 
         float y = 2f;
         for (int i = 0; i < shown.Count; i++)
@@ -136,6 +143,18 @@ public sealed class HGCatalogLibraryPanel
 
             float inset = open ? 2f : 0f;
             var row = new Rect(2f + inset, y + inset, content.width - 4f - inset * 2f, RowHeight - 3f);
+            if (cmd.Move != null)
+            {
+                int direction = HGLibraryOrder.Draw(new Rect(row.x, row.y + 2f, HGLibraryOrder.Width, 17f),
+                    i > 0, i + 1 < shown.Count);
+                if (direction != 0)
+                {
+                    string id = catalog.Id;
+                    string targetId = shown[i + direction].Id;
+                    pendingMove = () => cmd.Move(id, targetId);
+                }
+                row.xMin += HGLibraryOrder.Width;
+            }
             DrawCatalogRow(row, catalog, open, i % 2 == 1, inlineName, drag, view.Renderer, cmd);
 
             if (!open)
@@ -156,6 +175,19 @@ public sealed class HGCatalogLibraryPanel
             {
                 var item = new Rect(ItemIndent, itemTop + k * ItemHeight,
                     content.width - ItemIndent - 6f, ItemHeight - 2f);
+                if (cmd.MoveItem != null)
+                {
+                    int direction = HGLibraryOrder.Draw(new Rect(item.x, item.y, HGLibraryOrder.Width, item.height),
+                        k > 0, k + 1 < count);
+                    if (direction != 0)
+                    {
+                        string id = catalog.Id;
+                        int from = k;
+                        int to = k + direction;
+                        pendingMove = () => cmd.MoveItem(id, from, to);
+                    }
+                    item.xMin += HGLibraryOrder.Width;
+                }
                 DrawItemRow(item, catalog, catalog.Items[k], view.Renderer, cmd);
             }
 
@@ -169,6 +201,8 @@ public sealed class HGCatalogLibraryPanel
         }
 
         GUI.EndScrollView();
+        // 結束繪製後才改清單，這一輪的索引與展開高度保持一致。
+        pendingMove?.Invoke();
     }
 
     /// <summary>更新「現在有沒有一輪 Project 拖曳在進行」。每次 Draw 最前面跑一次。</summary>

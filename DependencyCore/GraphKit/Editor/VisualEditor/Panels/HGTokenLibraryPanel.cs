@@ -37,6 +37,9 @@ public struct HGTokenLibraryCommands
 
     /// <summary>這個Token有沒有驗證問題；reason 為 null＝沒有。</summary>
     public Func<HGToken, (string reason, bool isError)> IssueOf;
+
+    /// <summary>移動至另一個可見 Token 的原位置。</summary>
+    public Action<GraphToken, GraphToken> Move;
 }
 
 /// <summary>
@@ -83,6 +86,7 @@ public sealed class HGTokenLibraryPanel
 
         var content = new Rect(0f, 0f, listRect.width - 16f, shown.Count * CellHeight + 4f);
         scroll = GUI.BeginScrollView(listRect, scroll, content);
+        Action pendingMove = null;
         for (int i = 0; i < shown.Count; i++)
         {
             var token = shown[i];
@@ -92,7 +96,16 @@ public sealed class HGTokenLibraryPanel
             // 深綠→琥珀，和畫布上的Token節點同一條漸層。
             HGStyles.CellBackground(row, HGStyles.HeaderToken, HGStyles.HeaderFormula, i % 2 == 1, isFocus);
 
-            var nameRect = new Rect(row.x + 8f, row.y + 2f, row.width - 70f, 18f);
+            int direction = HGLibraryOrder.Draw(new Rect(row.x + 3f, row.y + 5f, HGLibraryOrder.Width, 18f),
+                cmd.Move != null && i > 0, cmd.Move != null && i + 1 < shown.Count);
+            if (direction != 0)
+            {
+                var target = shown[i + direction].Token;
+                pendingMove = () => cmd.Move(endpoint, target);
+            }
+
+            var nameRect = new Rect(row.x + 8f + HGLibraryOrder.Width, row.y + 2f,
+                Mathf.Max(0f, row.width - 70f - HGLibraryOrder.Width), 18f);
             bool renaming = inlineName.Draw(nameRect, endpoint, HGInlineRename.SiteTokenLib,
                 string.IsNullOrEmpty(token.Key) ? "（未命名）" : token.Key, token.Key ?? "",
                 HGStyles.RowLabel, "雙擊可改名；外部（Inspector）用這個名字查它的值",
@@ -131,6 +144,7 @@ public sealed class HGTokenLibraryPanel
             }
         }
         GUI.EndScrollView();
+        pendingMove?.Invoke();
     }
 
     /// <summary>
