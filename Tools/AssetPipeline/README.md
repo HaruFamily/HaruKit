@@ -90,7 +90,8 @@ public class MyAction : ActionBase
 }
 ```
 
-- 動作繼承 `ActionBase` 並覆寫同步的 `protected OnExecute(PipelineActionContext context)`。`Execute` 與 `ActionSlot.Execute` 是框架內部入口；由 `RunPipeline()` 管理完整執行流程。
+- 動作繼承 `ActionBase` 並覆寫同步的 `protected OnExecute(PipelineActionContext context)`。本體的 `ActionBase.Execute` 是框架內部入口；由 `RunPipeline()` 管理完整執行流程。
+- 組合動作宣告 `public ActionSlot child = new();`，在 `OnExecute` 內呼叫公開的 `child.Execute(context)`，沿用收到的 context。子動作的資產寫入與結果歸入父步驟及同一次交易，不另建管線或步驟。回傳 bool 只表示是否呼叫並正常返回，不表示工作成功；執行後可用 `if (context.Result.HasFailure) return;` 停止後續子動作。
 - 資產修改透過 `context.Assets` 納入交易；失敗使用 `context.Fail(...)`，正常無事可做使用 `context.Skip(...)`。需要停止目前方法時明確 `return`。
 - 交易型別與提交／回復生命週期由 AP 內部管理，使用端不自行建立交易。
 - 公式繼承對應輸出家族並明確指定 Pack，如 `Formula_Int<NullPack>`、`Formula_Object<NullPack>`。

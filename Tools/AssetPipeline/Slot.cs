@@ -242,10 +242,11 @@ namespace HaruFamily.Tools.AssetPipeline
         public override bool AcceptsToken(GraphToken endpoint) => false;
 
         /// <summary>
-        /// 執行這個動作。停用、空槽、型別不符一律跳過。
+        /// 執行子動作，沿用 OnExecute 收到的 context，讓資產寫入與結果歸入同一步交易。
+        /// 停用、空槽、型別不符一律跳過；例外向呼叫端傳遞。
         /// </summary>
-        /// <returns>真的執行了才回 true；跳過回 false，呼叫端才不會把跳過算成成功。</returns>
-        internal bool Execute(PipelineActionContext context)
+        /// <returns>已呼叫動作並正常返回為 true；跳過為 false。工作是否失敗須看 context.Result.HasFailure。</returns>
+        public bool Execute(PipelineActionContext context)
         {
             if (_disabled) return false;
             if (_node == null || _node.Disabled) return false;

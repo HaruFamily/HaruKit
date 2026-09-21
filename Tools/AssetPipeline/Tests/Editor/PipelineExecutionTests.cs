@@ -13,7 +13,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
     public sealed class PipelineApiBoundaryTests
     {
         [Test]
-        public void AuthorsCanOverrideActionsWithoutPublicExecutionOrTransactionAccess()
+        public void AuthorsCanExecuteChildSlotsWithoutDirectActionOrTransactionAccess()
         {
             const System.Reflection.BindingFlags methods = System.Reflection.BindingFlags.Instance
                 | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
@@ -28,7 +28,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(onExecute.IsFamily, Is.True);
             Assert.That(onExecute.IsAbstract, Is.True);
             Assert.That(slotExecute, Is.Not.Null);
-            Assert.That(slotExecute.IsAssembly, Is.True);
+            Assert.That(slotExecute.IsPublic, Is.True);
             Assert.That(typeof(PipelineAssetTransaction).IsVisible, Is.False);
         }
 
@@ -115,6 +115,33 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(File.Exists(target + ".meta"), Is.False);
             Assert.That(File.Exists(folder + "/Never.prefab"), Is.False);
             Assert.That(File.Exists(source), Is.True);
+            Assert.That(PipelineAssetTransaction.PendingRecoveryDirectories(), Is.Empty);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void ChildSlotSharesParentResultAndTransaction(bool failAfterCopy)
+        {
+            string source = Prefab("Source");
+            string target = folder + "/Child.prefab";
+            Add(new ChildAction
+            {
+                child = new ActionSlot(new CopyAction
+                {
+                    source = source, target = target, failAfterCopy = failAfterCopy
+                })
+            });
+
+            var result = pipeline.RunPipeline();
+
+            Assert.That(result.Steps.Count, Is.EqualTo(1));
+            Assert.That(result.Steps[0].Count(PipelineItemStatus.Created), Is.EqualTo(1));
+            Assert.That(result.Steps[0].Status, Is.EqualTo(
+                failAfterCopy ? PipelineStepStatus.Partial : PipelineStepStatus.Success));
+            Assert.That(result.Transaction, Is.EqualTo(
+                failAfterCopy ? PipelineTransactionStatus.RolledBack : PipelineTransactionStatus.Committed));
+            Assert.That(File.Exists(target), Is.EqualTo(!failAfterCopy));
+            Assert.That(File.Exists(target + ".meta"), Is.EqualTo(!failAfterCopy));
             Assert.That(PipelineAssetTransaction.PendingRecoveryDirectories(), Is.Empty);
         }
 
@@ -311,6 +338,11 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(CountingFilter.Calls, Is.EqualTo(2));
         }
 
+        [Serializable] private sealed class ChildAction : ActionBase
+        {
+            public ActionSlot child = new();
+            protected override void OnExecute(PipelineActionContext context) => child.Execute(context);
+        }
         [Serializable] private sealed class NoOpAction : ActionBase
         { protected override void OnExecute(PipelineActionContext context) { } }
         [Serializable] private sealed class SkipAction : ActionBase
