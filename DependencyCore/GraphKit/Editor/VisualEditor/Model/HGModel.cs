@@ -395,16 +395,22 @@ public class HGModel
     }
 
     /// <summary>先以 Core 規則驗證副本；通過後才寫回 Owner。</summary>
-    public bool Save() => Save(false, out _);
+    public bool Save() => Save(false, false);
 
-    /// <summary>明確放棄 Owner 遺失型別：先驗證工作副本、備份原檔，再清除並儲存目前編輯；不重載或捨棄工作副本。</summary>
-    public bool SaveDiscardingMissingTypes(out string backupDirectory) => Save(true, out backupDirectory);
+    /// <summary>保存未驗證草稿，不以圖內容錯誤阻擋編輯進度；文件衝突與寫入失敗仍阻擋。</summary>
+    public bool SaveDraft(bool discardMissingTypes = false) => Save(discardMissingTypes, true);
 
-    private bool Save(bool discardMissingTypes, out string backupDirectory)
+    /// <summary>相容既有呼叫端：驗證後放棄遺失型別並保存。不建立備份，backupDirectory 固定為 null。</summary>
+    public bool SaveDiscardingMissingTypes(out string backupDirectory)
     {
         backupDirectory = null;
+        return Save(true, false);
+    }
+
+    private bool Save(bool discardMissingTypes, bool draft)
+    {
         LastCommitDiagnostic = null;
-        try { return SaveCore(discardMissingTypes, out backupDirectory); }
+        try { return SaveCore(discardMissingTypes, draft); }
         catch (Exception exception)
         {
             LastCommitDiagnostic = new GraphDiagnostic("graphkit.commit.save-failed", GraphDiagnosticSeverity.Error,
@@ -415,23 +421,27 @@ public class HGModel
         }
     }
 
-    private bool SaveCore(bool discardMissingTypes, out string backupDirectory)
+    private bool SaveCore(bool discardMissingTypes, bool draft)
     {
-        backupDirectory = null;
         if (commitGuard == null) return false;
         LastCommitDiagnostic = commitGuard.Check(discardMissingTypes);
         if (LastCommitDiagnostic != null) return false;
         var toStore = DeepCopy(Data);
         if (toStore == null) return false;
         toStore.MarkDirty();
-        HGOwnerValidation.VerifyDocument(toStore, Owner);
-        if (!toStore.IsValidated)
+        if (!draft)
         {
-            Debug.LogError("[GraphKit] Core Verify 未通過，Owner 未寫入。請查看 Console 的 Core 驗證訊息。");
-            return false;
+            HGOwnerValidation.VerifyDocument(toStore, Owner);
+            if (!toStore.IsValidated)
+            {
+                LastCommitDiagnostic = new GraphDiagnostic("graphkit.commit.validation-failed", GraphDiagnosticSeverity.Error,
+                    "Core 驗證未通過；可在圖視窗保存未驗證草稿，修正後再執行。",
+                    new GraphDiagnosticLocation(documentId: DocumentId));
+                return false;
+            }
         }
 
-        if (discardMissingTypes && !commitGuard.TryRecoverMissingTypes(out backupDirectory, out var recoveryFailure))
+        if (discardMissingTypes && !commitGuard.TryDiscardMissingTypes(out var recoveryFailure))
         {
             LastCommitDiagnostic = recoveryFailure;
             return false;

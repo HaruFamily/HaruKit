@@ -65,18 +65,16 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
 
     public sealed class PipelineMissingTypeRepairTests
     {
-        [TestCase(false, "inspector")]
-        [TestCase(true, "inspector")]
-        [TestCase(false, "graph")]
-        [TestCase(true, "graph")]
-        [TestCase(false, "empty")]
-        [TestCase(false, "conflict")]
-        [TestCase(false, "invalid")]
-        public void MissingTypeRepairBacksUpOriginalAndPreservesValidDataOrStopsBeforeMutation(bool missingMeta, string mode)
+        [TestCase("graph")]
+        [TestCase("empty")]
+        [TestCase("missing-body")]
+        [TestCase("incompatible")]
+        [TestCase("conflict")]
+        [TestCase("strict")]
+        public void DraftSaveDiscardsMissingTypesAndPreservesEditsWithoutEnablingInvalidGraph(string mode)
         {
             string folder = "Assets/APMissingTypeTest_" + Guid.NewGuid().ToString("N");
             string path = folder + "/Pipeline.asset";
-            string backupDirectory = null;
             var previousMode = EditorSettings.serializationMode;
             AssetPipeline pipeline = null;
             try
@@ -102,111 +100,88 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 pipeline = AssetDatabase.LoadAssetAtPath<AssetPipeline>(path);
                 Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.True);
                 byte[] before = File.ReadAllBytes(path);
-                byte[] meta = File.ReadAllBytes(path + ".meta");
                 string guid = AssetDatabase.AssetPathToGUID(path);
+                var model = new HGModel();
+                Assert.That(model.Bind(pipeline), Is.True);
+                var working = (Graph)model.Data;
+                var items = ((ActionGroup)((IGraphDocument)working).Roots[0]).Actions;
+                bool invalid = mode == "missing-body" || mode == "incompatible";
+                if (mode != "missing-body") items.RemoveAt(0);
+                if (mode == "empty") items.Clear();
+                else ((RepairValidBody)items[items.Count - 1].Node.BodyObject).value = 99;
+                if (mode == "incompatible")
+                {
+                    var catalog = new DynamicAssetCatalog();
+                    var carrier = new GraphNode();
+                    carrier.SetCatalog(catalog);
+                    working.Orphans.Add(carrier);
+                    GraphNode cell = ((IGraphNodeOwner)catalog).CreateChild();
+                    ((RepairValidBody)items[0].Node.BodyObject).sourcePrefab.SetNode(cell);
+                    Assert.That(HGValidator.Run(model).Issues.Exists(issue => issue.Code == "graphkit.slot.body-incompatible"), Is.True);
+                }
+                model.MarkDirty();
+                Assert.That(model.Save(), Is.False, "普通程式化提交不可默默放棄遺失內容。");
+                Assert.That(model.LastCommitDiagnostic.Code, Is.EqualTo("graphkit.serialize-reference.missing-type"));
+                if (mode == "conflict") pipeline.graph = GraphDeepCopy.Copy(pipeline.graph);
                 var oldGraph = pipeline.graph;
-                bool fromGraph = mode != "inspector";
-                bool shouldFail = missingMeta || mode == "conflict" || mode == "invalid";
-                HGModel model = null;
-                Graph working = null;
-                if (fromGraph)
-                {
-                    model = new HGModel();
-                    Assert.That(model.Bind(pipeline), Is.True);
-                    working = (Graph)model.Data;
-                    var items = ((ActionGroup)((IGraphDocument)working).Roots[0]).Actions;
-                    if (mode != "invalid") items.RemoveAt(0);
-                    if (mode == "empty") items.Clear();
-                    else ((RepairValidBody)items[items.Count - 1].Node.BodyObject).value = 99;
-                    model.MarkDirty();
-                    Assert.That(model.Save(), Is.False, "普通程式化提交不可默默放棄遺失內容。");
-                    Assert.That(model.LastCommitDiagnostic.Code, Is.EqualTo("graphkit.serialize-reference.missing-type"));
-                    if (mode == "conflict") pipeline.graph = GraphDeepCopy.Copy(pipeline.graph);
-                    oldGraph = pipeline.graph;
-                    if (mode == "invalid")
-                    {
-                        LogAssert.Expect(LogType.Error, new System.Text.RegularExpressions.Regex("\\[AssetPipeline\\] 驗證未通過"));
-                        LogAssert.Expect(LogType.Error, "[GraphKit] Core Verify 未通過，Owner 未寫入。請查看 Console 的 Core 驗證訊息。");
-                    }
-                }
 
-                if (missingMeta) File.Move(path + ".meta", path + ".meta.backup");
-                string error = null;
-                bool repaired;
-                if (fromGraph)
-                {
-                    repaired = model.SaveDiscardingMissingTypes(out backupDirectory);
-                    error = model.LastCommitDiagnostic?.Message;
-                }
-                else repaired = HaruFamily.Tools.AssetPipeline.Editor.AssetPipelineEditor.TryRepairMissingTypes(
-                    pipeline, out backupDirectory, out error);
-
-                Assert.That(repaired, Is.EqualTo(!shouldFail), error);
-                if (!fromGraph || shouldFail)
-                    Assert.That(File.ReadAllBytes(path), Is.EqualTo(before), "Inspector 修復／失敗的圖提交不應存檔。");
+                bool shouldFail = mode == "conflict" || mode == "strict";
+                bool saved = model.SaveDraft(discardMissingTypes: mode != "strict");
+                Assert.That(saved, Is.EqualTo(!shouldFail), model.LastCommitDiagnostic?.Message);
                 if (shouldFail)
                 {
-                    if (missingMeta) Assert.That(error, Does.Contain("備份"));
                     if (mode == "conflict") Assert.That(model.LastCommitDiagnostic.Code, Is.EqualTo("graphkit.commit.owner-changed"));
-                    Assert.That(backupDirectory, Is.Null);
+                    Assert.That(File.ReadAllBytes(path), Is.EqualTo(before));
                     Assert.That(pipeline.graph, Is.SameAs(oldGraph));
                     Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.True);
-                    if (fromGraph)
-                    {
-                        Assert.That(model.Data, Is.SameAs(working));
-                        Assert.That(model.Dirty, Is.True);
-                        Assert.That(model.CanUndo, Is.True);
-                    }
+                    Assert.That(model.Data, Is.SameAs(working));
+                    Assert.That(model.Dirty, Is.True);
+                    Assert.That(model.CanUndo, Is.True);
                     return;
                 }
 
-                Assert.That(error, Is.Null);
-                Assert.That(File.ReadAllBytes(Path.Combine(backupDirectory, "Pipeline.asset")), Is.EqualTo(before));
-                Assert.That(File.ReadAllBytes(Path.Combine(backupDirectory, "Pipeline.asset.meta")), Is.EqualTo(meta));
+                Assert.That(model.LastCommitDiagnostic, Is.Null);
                 Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
                 Assert.That(pipeline.graph, Is.Not.SameAs(oldGraph), "舊 session 必須失去提交基準。");
-                Assert.That(pipeline.graph.IsValidated, Is.EqualTo(fromGraph));
-                int count = mode == "empty" ? 0 : fromGraph ? 1 : 2;
+                Assert.That(pipeline.graph.IsValidated, Is.False);
+                int count = mode == "empty" ? 0 : mode == "missing-body" ? 2 : 1;
                 Assert.That(pipeline.graph.Actions.Count, Is.EqualTo(count));
-                if (!fromGraph) Assert.That(pipeline.graph.Actions[0].Node.BodyObject, Is.Null);
+                if (mode == "missing-body") Assert.That(pipeline.graph.Actions[0].Node.BodyObject, Is.Null);
                 if (count > 0)
                 {
-                    Assert.That(((RepairValidBody)pipeline.graph.Actions[count - 1].Node.BodyObject).value, Is.EqualTo(fromGraph ? 99 : 42));
+                    Assert.That(((RepairValidBody)pipeline.graph.Actions[count - 1].Node.BodyObject).value, Is.EqualTo(99));
                     Assert.That(pipeline.graph.Actions[count - 1].Node.Id, Is.EqualTo(validId));
                 }
-                if (fromGraph)
-                {
-                    Assert.That(model.Data, Is.SameAs(working), "圖存檔不可重載或捨棄使用者的工作副本。");
-                    Assert.That(model.Dirty, Is.False);
-                    Assert.That(model.Save(), Is.True, "修復後的 session 應可繼續正常存檔。");
-                }
+                Assert.That(model.Data, Is.SameAs(working));
+                Assert.That(model.Dirty, Is.False);
+                Assert.That(model.SaveDraft(), Is.True, "草稿 session 可繼續編輯並存檔。");
                 Assert.That(pipeline.collectKey, Is.EqualTo("KeepThisKey"));
                 Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
 
-                // 修補空節點後，驗證與保存可恢復，毋須重建 SO。
-                if (!fromGraph)
-                {
-                    pipeline.graph.Actions[0].Node.SetBody(new RepairValidBody());
-                    pipeline.graph.Verify();
-                    Assert.That(pipeline.graph.IsValidated, Is.True);
-                    AssetDatabase.SaveAssetIfDirty(pipeline);
-                }
                 AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
                 pipeline = AssetDatabase.LoadAssetAtPath<AssetPipeline>(path);
                 Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
                 Assert.That(pipeline.collectKey, Is.EqualTo("KeepThisKey"));
                 Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
                 Assert.That(pipeline.graph.Actions.Count, Is.EqualTo(count));
-                if (fromGraph && count > 0)
-                    Assert.That(((RepairValidBody)pipeline.graph.Actions[0].Node.BodyObject).value, Is.EqualTo(99));
+                Assert.That(pipeline.graph.IsValidated, Is.False);
+                if (count > 0)
+                    Assert.That(((RepairValidBody)pipeline.graph.Actions[count - 1].Node.BodyObject).value, Is.EqualTo(99));
+                if (invalid)
+                {
+                    RepairValidBody.Calls = 0;
+                    var run = pipeline.RunPipeline();
+                    Assert.That(run.Errors, Is.Not.Empty);
+                    Assert.That(run.Errors.Exists(error => error.Contains(mode == "incompatible" ? "CatalogCell" : "節點是空的")), Is.True);
+                    Assert.That(run.Steps, Is.Empty);
+                    Assert.That(RepairValidBody.Calls, Is.Zero, "保存草稿不可放行無效管線的執行。");
+                }
             }
             finally
             {
-                if (File.Exists(path + ".meta.backup")) File.Move(path + ".meta.backup", path + ".meta");
                 EditorSettings.serializationMode = previousMode;
                 AssetDatabase.DeleteAsset(folder);
                 if (pipeline != null && !EditorUtility.IsPersistent(pipeline)) Object.DestroyImmediate(pipeline);
-                if (backupDirectory != null && Directory.Exists(backupDirectory)) Directory.Delete(backupDirectory, true);
             }
         }
 
@@ -214,8 +189,10 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         { protected override void OnExecute(PipelineActionContext context) { } }
         [Serializable] private sealed class RepairValidBody : ActionBase
         {
+            public static int Calls;
             public int value;
-            protected override void OnExecute(PipelineActionContext context) { }
+            public GameObjectSlot sourcePrefab = new();
+            protected override void OnExecute(PipelineActionContext context) { Calls++; }
         }
     }
 

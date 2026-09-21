@@ -184,7 +184,7 @@ public static class HGValidator
             {
                 Err(report, "graphkit.serialize-reference.missing-type", null, "資產本體",
                     $"有節點的程式類別已不存在：{missing.namespaceName}.{missing.className}（{missing.assemblyName}）",
-                    "可恢復原型別；若要放棄，先刪除或補接空節點，再按存檔並確認備份清除，會保留目前圖的修改。", null, null);
+                    "直接按存檔會丟棄遺失型別記錄並保留目前圖；其他錯誤不阻擋草稿保存，修正後才能執行。", null, null);
             }
         }
 
@@ -327,7 +327,12 @@ public static class HGValidator
             if (formula == null)
                 Issue(report, "graphkit.slot.formula-missing", disabled, focus, where, "欄位設為公式，但內容是空的", "選一個公式，或把模式改回常數。", slot, null);
             else
+            {
+                if (!slot.AcceptsBody(formula as GraphNodeContent))
+                    Issue(report, "graphkit.slot.body-incompatible", disabled, focus, where,
+                        $"接的 {formula.GetType().Name} 型別不相容", "重新接上符合此欄位型別的來源，或斷開連線後重新設定。", slot, carrier);
                 WalkNode(report, model, focus, formula, where, visited, disabled);
+            }
         }
         else if (contentKind == NodeKind.Asset)
         {

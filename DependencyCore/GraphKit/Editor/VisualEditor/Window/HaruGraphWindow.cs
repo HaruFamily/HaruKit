@@ -1065,13 +1065,13 @@ public partial class HaruGraphWindow : EditorWindow
         string ownerPath = AssetDatabase.GetAssetPath(model.Owner);
         if (string.IsNullOrEmpty(ownerPath)) ownerPath = "Scene";
 
-        // 即時檢查一有錯就把存檔鈕關掉；沒有錯時仍可按，存檔當下再跑一次嚴格驗證。
-        bool blocked = !Rep.CanSave;
+        // Owner 圖可保存未驗證草稿；共用資產焦點維持獨立的驗證交易。
+        bool blocked = inAsset && !Rep.CanSave;
         // 資產只搬過座標時不擋：內容沒變，存回去的東西跟磁碟上一樣，不該被它本來就有的錯誤鎖住位置。
         if (inAsset && !assetContentDirty) blocked = false;
         // 共用資產存檔會把引用它的 Owner 標成未驗證，但工作副本一個字都沒改（Dirty=false）。
         // 存檔是唯一會重跑 Core Verify 並寫回 Owner 的入口，這時候不開它就沒有任何路可以把圖救回已驗證。
-        bool needsRevalidate = !inAsset && !model.IsStoredDocumentValidated;
+        bool needsRevalidate = !inAsset && (!model.IsStoredDocumentValidated || !Rep.CanSave);
         // 只有目錄沒落盤時不被圖的錯誤擋住：目錄不在存檔交易裡，寫的是 Owner 上另一份資料，
         // 擋住它等於「圖有錯就再也存不了目錄」。
         bool catalogOnly = !inAsset && catalogDirty && !model.Dirty && !needsRevalidate;
@@ -1087,10 +1087,13 @@ public partial class HaruGraphWindow : EditorWindow
             Locked = locked,
             SaveEnabled = canSave,
             SaveHighlight = canSave,
-            SaveLabel = blocked ? "存檔（有錯誤）" : revalidateOnly ? "存檔（未驗證）" : "存檔",
+            SaveLabel = blocked ? "存檔（有錯誤）" : !inAsset && !Rep.CanSave ? "存檔（草稿）"
+                : revalidateOnly ? "存檔（未驗證）" : "存檔",
             SaveTooltip = blocked ? "驗證有錯誤，先在 Console 修正才能存檔"
+                : !inAsset && !Rep.CanSave ? "保存目前草稿並直接丟棄遺失型別內容；錯誤留在 Console，修正後才能執行"
                 : revalidateOnly ? "這份圖目前未驗證（多半是引用的資產改過），按下後重跑 Core 驗證並寫回"
                 : !hasChanges ? "目前沒有未儲存的修改"
+                : !inAsset ? "保存目前圖；驗證未通過時保存未驗證草稿，遺失型別內容直接丟棄"
                 : !IsCurrentReportFresh ? "按下後先做完整驗證（含循環與型別遺失），通過才會存檔"
                 : "驗證通過後寫回資產",
             // 資產焦點的「返回」與存檔分開：存檔留在畫布上，返回才退出（有未存修改會先問要不要捨棄）。

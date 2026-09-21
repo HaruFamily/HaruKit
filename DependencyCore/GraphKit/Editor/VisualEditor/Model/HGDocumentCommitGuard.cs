@@ -1,7 +1,6 @@
 namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
-using System.IO;
 using UnityEditor;
 using Object = UnityEngine.Object;
 
@@ -37,7 +36,7 @@ internal sealed class HGDocumentCommitGuard
                 return new GraphDiagnostic("graphkit.serialize-reference.missing-type", GraphDiagnosticSeverity.Error,
                     "Owner 含有遺失型別的 SerializeReference，提交已停止以保留原資料。",
                     new GraphDiagnosticLocation(documentId: binding.DocumentId),
-                    "可恢復原型別；或修正空節點後在圖視窗按存檔，確認備份並放棄遺失內容。");
+                    "圖視窗存檔會丟棄遺失型別記錄，保留目前編輯內容；未修正的圖可存為草稿。");
             return null;
         }
         catch (Exception exception)
@@ -46,33 +45,15 @@ internal sealed class HGDocumentCommitGuard
         }
     }
 
-    /// <summary>使用者明確同意後，先備份再清除 Owner 遺失型別；不重載編輯中的工作副本。</summary>
-    internal bool TryRecoverMissingTypes(out string backupDirectory, out GraphDiagnostic diagnostic)
+    /// <summary>清除 Owner 的遺失型別記錄，不重載目前工作副本；只用於允許放棄遺失內容的提交。</summary>
+    internal bool TryDiscardMissingTypes(out GraphDiagnostic diagnostic)
     {
-        backupDirectory = null;
         diagnostic = Check(true);
         if (diagnostic != null) return false;
         bool clearing = false;
         try
         {
             if (!SerializationUtility.HasManagedReferencesWithMissingTypes(owner)) return true;
-            string path = AssetDatabase.GetAssetPath(owner);
-            if (owner is not UnityEngine.ScriptableObject || !AssetDatabase.IsMainAsset(owner)
-                || !path.StartsWith("Assets/", StringComparison.Ordinal)
-                || !string.Equals(Path.GetExtension(path), ".asset", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("圖內備份修復只支援 Assets 內已儲存的主 .asset。");
-            string source = Path.GetFullPath(path);
-            if (!File.Exists(source) || !File.Exists(source + ".meta"))
-                throw new IOException("原 .asset 或 .meta 不存在，無法完整備份；原資料未清除。");
-            backupDirectory = Path.GetFullPath(Path.Combine("Library", "GraphKitMissingTypes",
-                DateTime.UtcNow.ToString("yyyyMMdd_HHmmss") + "_" + Guid.NewGuid().ToString("N")));
-            Directory.CreateDirectory(backupDirectory);
-            string backup = Path.Combine(backupDirectory, Path.GetFileName(source));
-            File.Copy(source, backup);
-            File.Copy(source + ".meta", backup + ".meta");
-
-            diagnostic = Check(true);
-            if (diagnostic != null) return false;
             clearing = true;
             if (!SerializationUtility.ClearAllManagedReferencesWithMissingTypes(owner)
                 || SerializationUtility.HasManagedReferencesWithMissingTypes(owner))
@@ -88,7 +69,7 @@ internal sealed class HGDocumentCommitGuard
         {
             if (clearing) recoveryRequired = true;
             diagnostic = Failure("missing-type-recovery-failed", "遺失型別修復已停止，工作副本保留："
-                + exception.Message + " 備份：" + (backupDirectory ?? "尚未建立"));
+                + exception.Message);
             return false;
         }
     }
@@ -150,6 +131,7 @@ internal sealed class HGDocumentCommitGuard
         {
             "graphkit.commit.owner-changed" => HGSessionCommandResult.Conflict,
             "graphkit.serialize-reference.missing-type" => HGSessionCommandResult.ValidationFailed,
+            "graphkit.commit.validation-failed" => HGSessionCommandResult.ValidationFailed,
             _ => HGSessionCommandResult.WriteFailed,
         };
 }

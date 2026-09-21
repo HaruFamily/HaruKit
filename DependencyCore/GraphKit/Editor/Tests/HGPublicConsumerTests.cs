@@ -395,6 +395,43 @@ public sealed class HGPublicConsumerTests
         }
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void WindowSavePersistsInvalidEditsAsDraftWhileProgrammaticCommitRemainsStrict(bool coreOnlyFailure)
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            owner.B = ConsumerDocument.Create(coreOnlyFailure);
+            var original = owner.B;
+            string sourceId = owner.B.Orphans[0].Id;
+            var provider = new WindowConsumerProvider(sourceId) { Reject = !coreOnlyFailure };
+            var context = new HGEditorExtensionContext(provider, provider, new HGEditorProfile(HGCapabilities.None));
+            Assert.That(window.BindDocument(owner, Binding(), context), Is.True);
+            var commands = window.GetDocumentCommands();
+            var snapshot = commands.Query();
+            Assert.That(commands.Connect(snapshot.Generation, provider.Output, provider.Input), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
+            Assert.That(owner.B, Is.SameAs(original));
+            Assert.That(commands.Query().IsDirty, Is.True);
+
+            Assert.DoesNotThrow(() => window.SaveChanges());
+
+            Assert.That(owner.B, Is.Not.SameAs(original));
+            Assert.That(owner.B.Root.Items[0].Node.Id, Is.EqualTo(sourceId));
+            Assert.That(owner.B.IsValidated, Is.False);
+            Assert.That(commands.Query().IsDirty, Is.False);
+            Assert.That(window.hasUnsavedChanges, Is.False);
+        }
+        finally
+        {
+            window.GetDocumentCommands()?.Cancel();
+            UnityEngine.Object.DestroyImmediate(window);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+    }
+
     private static HGDocumentBinding<ConsumerDocument> Binding()
         => new("Consumer.B", target => ((ConsumerOwner)target).B,
             (target, document) => ((ConsumerOwner)target).B = document, ConsumerDocument.Create);

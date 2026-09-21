@@ -78,8 +78,9 @@ data contracts and are not renamed as routine cleanup.
 
 ## Editor Integration
 
-The editor always works on a deep-copied document. Save validates and writes a
-new copy back to the owner; Cancel discards the working copy. Undo/Redo and Port
+The editor always works on a deep-copied document. Window Save writes a new copy
+back to the owner, marking invalid graphs as unvalidated drafts; Cancel discards
+the working copy. Undo/Redo and Port
 handles are scoped to that document session and its current generation.
 
 - `HaruGraphWindow.OpenFor(owner)` keeps the legacy convenience path and finds
@@ -219,20 +220,20 @@ working copy and its history remain available. Preserve any edits you need
 before cancelling to adopt the latest Owner document. Validation is followed by
 another Owner check immediately before writing.
 
-For missing node types on a saved main `.asset` under `Assets/`, repair or delete
-the empty nodes in the graph and click Save. If only missing-type diagnostics
-remain, the window offers **備份並存檔**: back up the original disk `.asset` and
-`.meta` under `Library/GraphKitMissingTypes/`, discard the Owner's missing-type
-records, then save the current working copy. Your graph edits are retained; no
-Inspector detour or reload is required. Cancelling, validation failures, conflicts,
-or backup failures stop the operation. Keep needed backups before clearing Library;
-they do not include unsaved edits.
+Owner graph window saves preserve editing progress even with validation errors.
+Invalid graphs are saved as drafts with `IsValidated=false`; missing-type records
+on the Owner are discarded directly, without backups, confirmation dialogs, or
+an Inspector detour. The current working copy is retained. Console diagnostics
+remain visible, and execution still requires the consuming tool's validation.
+Conflict, clone, and write failures still stop the save. Shared-asset focus uses
+its separate validated save transaction.
 
-Programmatic `Save()` and session `Commit()` remain non-destructive and do not
-prompt. Tools that explicitly authorize discarding missing data can use
-`HGModel.SaveDiscardingMissingTypes(out backupDirectory)`, which still performs
-Core validation, conflict checks, and backup before clearing. The recovery applies
-to all missing-type records on that Owner, not just one graph field.
+Programmatic `Save()` and session `Commit()` retain strict validation. Tools can
+explicitly use `HGModel.SaveDraft(discardMissingTypes: true)` to persist an
+unvalidated draft and discard all missing-type records on that Owner, not just
+one graph field. The compatibility API `SaveDiscardingMissingTypes(out
+backupDirectory)` still validates before clearing, but no longer creates a backup;
+the output argument is always null.
 
 Reference checks do not detect in-place changes to the same document instance.
 Tools with other editing entry points can supply a document-scoped revision:
