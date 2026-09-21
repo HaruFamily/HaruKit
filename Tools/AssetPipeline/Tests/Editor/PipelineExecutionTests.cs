@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using HaruFamily.DependencyCore.GraphKit;
+using HaruFamily.DependencyCore.GraphKit.Editor;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -64,9 +65,14 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
 
     public sealed class PipelineMissingTypeRepairTests
     {
-        [TestCase(false)]
-        [TestCase(true)]
-        public void MissingTypeRepairBacksUpOriginalAndPreservesValidDataOrStopsBeforeMutation(bool missingMeta)
+        [TestCase(false, "inspector")]
+        [TestCase(true, "inspector")]
+        [TestCase(false, "graph")]
+        [TestCase(true, "graph")]
+        [TestCase(false, "empty")]
+        [TestCase(false, "conflict")]
+        [TestCase(false, "invalid")]
+        public void MissingTypeRepairBacksUpOriginalAndPreservesValidDataOrStopsBeforeMutation(bool missingMeta, string mode)
         {
             string folder = "Assets/APMissingTypeTest_" + Guid.NewGuid().ToString("N");
             string path = folder + "/Pipeline.asset";
@@ -99,19 +105,58 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 byte[] meta = File.ReadAllBytes(path + ".meta");
                 string guid = AssetDatabase.AssetPathToGUID(path);
                 var oldGraph = pipeline.graph;
+                bool fromGraph = mode != "inspector";
+                bool shouldFail = missingMeta || mode == "conflict" || mode == "invalid";
+                HGModel model = null;
+                Graph working = null;
+                if (fromGraph)
+                {
+                    model = new HGModel();
+                    Assert.That(model.Bind(pipeline), Is.True);
+                    working = (Graph)model.Data;
+                    var items = ((ActionGroup)((IGraphDocument)working).Roots[0]).Actions;
+                    if (mode != "invalid") items.RemoveAt(0);
+                    if (mode == "empty") items.Clear();
+                    else ((RepairValidBody)items[items.Count - 1].Node.BodyObject).value = 99;
+                    model.MarkDirty();
+                    Assert.That(model.Save(), Is.False, "普通程式化提交不可默默放棄遺失內容。");
+                    Assert.That(model.LastCommitDiagnostic.Code, Is.EqualTo("graphkit.serialize-reference.missing-type"));
+                    if (mode == "conflict") pipeline.graph = GraphDeepCopy.Copy(pipeline.graph);
+                    oldGraph = pipeline.graph;
+                    if (mode == "invalid")
+                    {
+                        LogAssert.Expect(LogType.Error, new System.Text.RegularExpressions.Regex("\\[AssetPipeline\\] 驗證未通過"));
+                        LogAssert.Expect(LogType.Error, "[GraphKit] Core Verify 未通過，Owner 未寫入。請查看 Console 的 Core 驗證訊息。");
+                    }
+                }
 
                 if (missingMeta) File.Move(path + ".meta", path + ".meta.backup");
-                bool repaired = HaruFamily.Tools.AssetPipeline.Editor.AssetPipelineEditor.TryRepairMissingTypes(
-                    pipeline, out backupDirectory, out string error);
-
-                Assert.That(repaired, Is.EqualTo(!missingMeta), error);
-                Assert.That(File.ReadAllBytes(path), Is.EqualTo(before), "修復不應自動存檔。");
-                if (missingMeta)
+                string error = null;
+                bool repaired;
+                if (fromGraph)
                 {
-                    Assert.That(error, Does.Contain("備份"));
+                    repaired = model.SaveDiscardingMissingTypes(out backupDirectory);
+                    error = model.LastCommitDiagnostic?.Message;
+                }
+                else repaired = HaruFamily.Tools.AssetPipeline.Editor.AssetPipelineEditor.TryRepairMissingTypes(
+                    pipeline, out backupDirectory, out error);
+
+                Assert.That(repaired, Is.EqualTo(!shouldFail), error);
+                if (!fromGraph || shouldFail)
+                    Assert.That(File.ReadAllBytes(path), Is.EqualTo(before), "Inspector 修復／失敗的圖提交不應存檔。");
+                if (shouldFail)
+                {
+                    if (missingMeta) Assert.That(error, Does.Contain("備份"));
+                    if (mode == "conflict") Assert.That(model.LastCommitDiagnostic.Code, Is.EqualTo("graphkit.commit.owner-changed"));
                     Assert.That(backupDirectory, Is.Null);
                     Assert.That(pipeline.graph, Is.SameAs(oldGraph));
                     Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.True);
+                    if (fromGraph)
+                    {
+                        Assert.That(model.Data, Is.SameAs(working));
+                        Assert.That(model.Dirty, Is.True);
+                        Assert.That(model.CanUndo, Is.True);
+                    }
                     return;
                 }
 
@@ -120,24 +165,40 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 Assert.That(File.ReadAllBytes(Path.Combine(backupDirectory, "Pipeline.asset.meta")), Is.EqualTo(meta));
                 Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
                 Assert.That(pipeline.graph, Is.Not.SameAs(oldGraph), "舊 session 必須失去提交基準。");
-                Assert.That(pipeline.graph.IsValidated, Is.False);
-                Assert.That(pipeline.graph.Actions.Count, Is.EqualTo(2));
-                Assert.That(pipeline.graph.Actions[0].Node.BodyObject, Is.Null);
-                Assert.That(((RepairValidBody)pipeline.graph.Actions[1].Node.BodyObject).value, Is.EqualTo(42));
-                Assert.That(pipeline.graph.Actions[1].Node.Id, Is.EqualTo(validId));
+                Assert.That(pipeline.graph.IsValidated, Is.EqualTo(fromGraph));
+                int count = mode == "empty" ? 0 : fromGraph ? 1 : 2;
+                Assert.That(pipeline.graph.Actions.Count, Is.EqualTo(count));
+                if (!fromGraph) Assert.That(pipeline.graph.Actions[0].Node.BodyObject, Is.Null);
+                if (count > 0)
+                {
+                    Assert.That(((RepairValidBody)pipeline.graph.Actions[count - 1].Node.BodyObject).value, Is.EqualTo(fromGraph ? 99 : 42));
+                    Assert.That(pipeline.graph.Actions[count - 1].Node.Id, Is.EqualTo(validId));
+                }
+                if (fromGraph)
+                {
+                    Assert.That(model.Data, Is.SameAs(working), "圖存檔不可重載或捨棄使用者的工作副本。");
+                    Assert.That(model.Dirty, Is.False);
+                    Assert.That(model.Save(), Is.True, "修復後的 session 應可繼續正常存檔。");
+                }
                 Assert.That(pipeline.collectKey, Is.EqualTo("KeepThisKey"));
                 Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
 
                 // 修補空節點後，驗證與保存可恢復，毋須重建 SO。
-                pipeline.graph.Actions[0].Node.SetBody(new RepairValidBody());
-                pipeline.graph.Verify();
-                Assert.That(pipeline.graph.IsValidated, Is.True);
-                AssetDatabase.SaveAssetIfDirty(pipeline);
+                if (!fromGraph)
+                {
+                    pipeline.graph.Actions[0].Node.SetBody(new RepairValidBody());
+                    pipeline.graph.Verify();
+                    Assert.That(pipeline.graph.IsValidated, Is.True);
+                    AssetDatabase.SaveAssetIfDirty(pipeline);
+                }
                 AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
                 pipeline = AssetDatabase.LoadAssetAtPath<AssetPipeline>(path);
                 Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
                 Assert.That(pipeline.collectKey, Is.EqualTo("KeepThisKey"));
                 Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
+                Assert.That(pipeline.graph.Actions.Count, Is.EqualTo(count));
+                if (fromGraph && count > 0)
+                    Assert.That(((RepairValidBody)pipeline.graph.Actions[0].Node.BodyObject).value, Is.EqualTo(99));
             }
             finally
             {

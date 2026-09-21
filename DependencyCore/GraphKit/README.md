@@ -219,6 +219,21 @@ working copy and its history remain available. Preserve any edits you need
 before cancelling to adopt the latest Owner document. Validation is followed by
 another Owner check immediately before writing.
 
+For missing node types on a saved main `.asset` under `Assets/`, repair or delete
+the empty nodes in the graph and click Save. If only missing-type diagnostics
+remain, the window offers **備份並存檔**: back up the original disk `.asset` and
+`.meta` under `Library/GraphKitMissingTypes/`, discard the Owner's missing-type
+records, then save the current working copy. Your graph edits are retained; no
+Inspector detour or reload is required. Cancelling, validation failures, conflicts,
+or backup failures stop the operation. Keep needed backups before clearing Library;
+they do not include unsaved edits.
+
+Programmatic `Save()` and session `Commit()` remain non-destructive and do not
+prompt. Tools that explicitly authorize discarding missing data can use
+`HGModel.SaveDiscardingMissingTypes(out backupDirectory)`, which still performs
+Core validation, conflict checks, and backup before clearing. The recovery applies
+to all missing-type records on that Owner, not just one graph field.
+
 Reference checks do not detect in-place changes to the same document instance.
 Tools with other editing entry points can supply a document-scoped revision:
 

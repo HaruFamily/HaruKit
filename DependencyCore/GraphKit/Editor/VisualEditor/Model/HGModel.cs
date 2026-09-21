@@ -395,10 +395,16 @@ public class HGModel
     }
 
     /// <summary>先以 Core 規則驗證副本；通過後才寫回 Owner。</summary>
-    public bool Save()
+    public bool Save() => Save(false, out _);
+
+    /// <summary>明確放棄 Owner 遺失型別：先驗證工作副本、備份原檔，再清除並儲存目前編輯；不重載或捨棄工作副本。</summary>
+    public bool SaveDiscardingMissingTypes(out string backupDirectory) => Save(true, out backupDirectory);
+
+    private bool Save(bool discardMissingTypes, out string backupDirectory)
     {
+        backupDirectory = null;
         LastCommitDiagnostic = null;
-        try { return SaveCore(); }
+        try { return SaveCore(discardMissingTypes, out backupDirectory); }
         catch (Exception exception)
         {
             LastCommitDiagnostic = new GraphDiagnostic("graphkit.commit.save-failed", GraphDiagnosticSeverity.Error,
@@ -409,10 +415,11 @@ public class HGModel
         }
     }
 
-    private bool SaveCore()
+    private bool SaveCore(bool discardMissingTypes, out string backupDirectory)
     {
+        backupDirectory = null;
         if (commitGuard == null) return false;
-        LastCommitDiagnostic = commitGuard.Check();
+        LastCommitDiagnostic = commitGuard.Check(discardMissingTypes);
         if (LastCommitDiagnostic != null) return false;
         var toStore = DeepCopy(Data);
         if (toStore == null) return false;
@@ -421,6 +428,12 @@ public class HGModel
         if (!toStore.IsValidated)
         {
             Debug.LogError("[GraphKit] Core Verify 未通過，Owner 未寫入。請查看 Console 的 Core 驗證訊息。");
+            return false;
+        }
+
+        if (discardMissingTypes && !commitGuard.TryRecoverMissingTypes(out backupDirectory, out var recoveryFailure))
+        {
+            LastCommitDiagnostic = recoveryFailure;
             return false;
         }
 

@@ -1,6 +1,7 @@
 namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
+using System.IO;
 using UnityEditor;
 using Object = UnityEngine.Object;
 
@@ -21,25 +22,74 @@ internal sealed class HGDocumentCommitGuard
         revision = binding.ReadRevision(owner);
     }
 
-    public GraphDiagnostic Check()
+    public GraphDiagnostic Check() => Check(false);
+
+    internal GraphDiagnostic Check(bool allowMissingTypes)
     {
         try
         {
             if (owner == null) return Failure("owner-missing", "Owner 已不存在，提交已停止。");
             if (recoveryRequired) return Failure("recovery-required", "上次寫入無法確認已回復，提交已停止；請先檢查 Owner，再重新載入文件。");
-            if (SerializationUtility.HasManagedReferencesWithMissingTypes(owner))
-                return new GraphDiagnostic("graphkit.serialize-reference.missing-type", GraphDiagnosticSeverity.Error,
-                    "Owner 含有遺失型別的 SerializeReference，提交已停止以保留原資料。",
-                    new GraphDiagnosticLocation(documentId: binding.DocumentId),
-                    "恢復遺失的程式型別後重新開啟；不要直接覆寫資產。");
             binding.TryRead(owner, out var current);
             if (!ReferenceEquals(current, baseline) || !string.Equals(binding.ReadRevision(owner), revision, StringComparison.Ordinal))
                 return Failure("owner-changed", "Owner 的文件已被其他入口修改，提交已停止；工作副本保留。請保留所需修改後取消並重新載入。");
+            if (!allowMissingTypes && SerializationUtility.HasManagedReferencesWithMissingTypes(owner))
+                return new GraphDiagnostic("graphkit.serialize-reference.missing-type", GraphDiagnosticSeverity.Error,
+                    "Owner 含有遺失型別的 SerializeReference，提交已停止以保留原資料。",
+                    new GraphDiagnosticLocation(documentId: binding.DocumentId),
+                    "可恢復原型別；或修正空節點後在圖視窗按存檔，確認備份並放棄遺失內容。");
             return null;
         }
         catch (Exception exception)
         {
             return Failure("check-failed", "無法確認 Owner 狀態，提交已停止：" + exception.Message);
+        }
+    }
+
+    /// <summary>使用者明確同意後，先備份再清除 Owner 遺失型別；不重載編輯中的工作副本。</summary>
+    internal bool TryRecoverMissingTypes(out string backupDirectory, out GraphDiagnostic diagnostic)
+    {
+        backupDirectory = null;
+        diagnostic = Check(true);
+        if (diagnostic != null) return false;
+        bool clearing = false;
+        try
+        {
+            if (!SerializationUtility.HasManagedReferencesWithMissingTypes(owner)) return true;
+            string path = AssetDatabase.GetAssetPath(owner);
+            if (owner is not UnityEngine.ScriptableObject || !AssetDatabase.IsMainAsset(owner)
+                || !path.StartsWith("Assets/", StringComparison.Ordinal)
+                || !string.Equals(Path.GetExtension(path), ".asset", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("圖內備份修復只支援 Assets 內已儲存的主 .asset。");
+            string source = Path.GetFullPath(path);
+            if (!File.Exists(source) || !File.Exists(source + ".meta"))
+                throw new IOException("原 .asset 或 .meta 不存在，無法完整備份；原資料未清除。");
+            backupDirectory = Path.GetFullPath(Path.Combine("Library", "GraphKitMissingTypes",
+                DateTime.UtcNow.ToString("yyyyMMdd_HHmmss") + "_" + Guid.NewGuid().ToString("N")));
+            Directory.CreateDirectory(backupDirectory);
+            string backup = Path.Combine(backupDirectory, Path.GetFileName(source));
+            File.Copy(source, backup);
+            File.Copy(source + ".meta", backup + ".meta");
+
+            diagnostic = Check(true);
+            if (diagnostic != null) return false;
+            clearing = true;
+            if (!SerializationUtility.ClearAllManagedReferencesWithMissingTypes(owner)
+                || SerializationUtility.HasManagedReferencesWithMissingTypes(owner))
+                throw new InvalidOperationException("Unity 未完成清除。");
+            // Unity 清除 managed reference 時可能重建 Owner 的資料；只採納這次明確修復造成的基準。
+            if (!binding.TryRead(owner, out var current))
+                throw new InvalidOperationException("清除後無法重新取得 Owner 文件。");
+            baseline = current;
+            revision = binding.ReadRevision(owner);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            if (clearing) recoveryRequired = true;
+            diagnostic = Failure("missing-type-recovery-failed", "遺失型別修復已停止，工作副本保留："
+                + exception.Message + " 備份：" + (backupDirectory ?? "尚未建立"));
+            return false;
         }
     }
 

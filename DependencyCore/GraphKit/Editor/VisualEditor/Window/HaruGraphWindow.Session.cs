@@ -158,7 +158,7 @@ public partial class HaruGraphWindow
     internal HGSessionCommandResult CommitDocument(HGModel expected)
     {
         if (QueryDocument(expected) == null) return HGSessionCommandResult.StaleGeneration;
-        bool saved = focus.Kind == HGFocusKind.Asset ? SaveAsset(false) : DoSave(false);
+        bool saved = focus.Kind == HGFocusKind.Asset ? SaveAsset(false) : DoSave(false, false);
         if (!saved) return model.LastCommitDiagnostic != null && focus.Kind != HGFocusKind.Asset
             ? HGDocumentCommitGuard.ResultOf(model.LastCommitDiagnostic)
             : HGSessionCommandResult.ValidationFailed;
@@ -655,14 +655,38 @@ public partial class HaruGraphWindow
             ShowNotification(new GUIContent("驗證通過"));
     }
 
-    private bool DoSave(bool showDialog = true)
+    private bool DoSave(bool showDialog = true, bool allowMissingTypePrompt = true)
     {
         model.LastCommitDiagnostic = null;
         DoVerify(true);
-        if (!report.CanSave)
+        bool recoverMissingTypes = false;
+        if (!report.CanSave && allowMissingTypePrompt)
+        {
+            bool onlyMissingTypes = true;
+            var missing = new System.Text.StringBuilder();
+            foreach (var issue in report.Issues)
+            {
+                if (!issue.IsError) continue;
+                if (issue.Code != "graphkit.serialize-reference.missing-type") onlyMissingTypes = false;
+                else missing.AppendLine(issue.Message);
+            }
+            if (onlyMissingTypes)
+            {
+                if (!EditorUtility.DisplayDialog("儲存目前圖並放棄遺失型別",
+                    $"對象：{model.Owner.name}\n\n{missing}\n"
+                    + "目前圖的其他驗證已通過。將備份磁碟上的原 .asset 與 .meta 至 Library/GraphKitMissingTypes，"
+                    + "清除這顆 SO 上全部遺失型別記錄，再儲存你目前編輯的圖。"
+                    + "\n你已刪除或補接的節點會保留，不需重新開圖。遺失型別的內容將被放棄；備份不含未儲存修改。",
+                    "備份並存檔", "取消")) return false;
+                recoverMissingTypes = true;
+            }
+        }
+        if (!report.CanSave && !recoverMissingTypes)
         {
             // 圖一個字都沒改、只有目錄沒落盤時照存：目錄不在存檔交易裡，被圖的錯誤擋住等於再也存不了它。
-            if (!model.Dirty && catalogDirty) return SaveCatalogsOnly();
+            if (!model.Dirty && catalogDirty
+                && !report.Issues.Exists(issue => issue.Code == "graphkit.serialize-reference.missing-type"))
+                return SaveCatalogsOnly();
 
             console.RevealErrors();
             // Console 已經被展開切到錯誤頁，細節都在那裡；再彈一個要按「好」的框只是多一次跨螢幕來回。
@@ -670,7 +694,11 @@ public partial class HaruGraphWindow
                 ShowNotification(new GUIContent($"無法存檔：還有 {report.ErrorCount} 個錯誤，請先在 Console 修正"));
             return false;
         }
-        if (!model.Save())
+        string backupDirectory = null;
+        bool saved = recoverMissingTypes ? model.SaveDiscardingMissingTypes(out backupDirectory) : model.Save();
+        if (!string.IsNullOrEmpty(backupDirectory))
+            Debug.Log($"[GraphKit] '{model.Owner.name}' 遺失型別原檔備份：{backupDirectory}", model.Owner);
+        if (!saved)
         {
             if (model.LastCommitDiagnostic != null)
             {
@@ -686,6 +714,7 @@ public partial class HaruGraphWindow
         HGReferenceIndex.Invalidate();
         AssetDatabase.SaveAssets();
         catalogDirty = false;
+        if (recoverMissingTypes) DoVerify(true);
         UpdateUnsavedState();
         ShowNotification(new GUIContent("已存檔"));
         return true;

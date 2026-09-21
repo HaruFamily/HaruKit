@@ -70,9 +70,10 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
                 details.AppendLine($"{missing.namespaceName}.{missing.className} ({missing.assemblyName}), id={missing.referenceId}");
 
             EditorGUILayout.HelpBox("SO 本體含有遺失型別記錄；只刪除畫布節點不會清除這些記錄。\n"
-                + details + "\n若只是改名或搬移型別，請先修正型別遷移。確認不需要遺失內容時，可備份後清除；其餘節點與 SO GUID 保留。",
+                + details + "\n可直接開圖刪除或補接空節點，按存檔後確認備份並放棄遺失內容，保留目前圖的修改。"
+                + "若只是改名或搬移型別，也可先修正型別遷移。下方獨立清除按鈕供無法開圖時使用。",
                 MessageType.Error);
-            if (GUILayout.Button("開啟節點圖查看")) GraphDrawer.Open(pipeline);
+            if (GUILayout.Button("開啟節點圖修正並存檔")) GraphDrawer.Open(pipeline);
             if (!GUILayout.Button("備份並清除遺失型別記錄…")) return true;
             if (!EditorUtility.DisplayDialog("清除遺失型別記錄",
                 $"對象：{AssetDatabase.GetAssetPath(pipeline)}\n\n{details}\n"

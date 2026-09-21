@@ -72,9 +72,9 @@ ListCell 的輸出。AssetPipeline 不提供共用公式／動作資產節點；
 若 Console 顯示 `Missing types referenced`，SO 本體仍保存舊的 SerializeReference 型別記錄；刪除畫布上的節點只改工作副本，不能解除這個提交阻擋。
 
 1. 若 class 只是改名或搬 namespace／assembly，優先恢復原身分或提供型別遷移，保留原資料。
-2. 確認要放棄遺失型別的內容時，在 AP Inspector 按「備份並清除遺失型別記錄…」並確認。此操作清除所選 SO 的全部遺失型別記錄，不刪除有效節點。
-3. 工具先將磁碟上的 `.asset` 與 `.meta` 原樣複製到 `Library/AssetPipelineMissingTypes/<唯一目錄>/`；備份失敗不清除。備份不含未儲存修改，清除 Library 前請另外保存需要保留的備份。
-4. 清除只修改記憶體，不自動存檔；既有圖 session 的提交基準會失效。捨棄舊工作副本並重新開圖，補接或刪除空節點，驗證後存檔。SO GUID 與其他有效內容保留。
+2. 確認要放棄遺失型別的內容時，直接在圖內刪除或補接空節點，再按「存檔」。當剩餘錯誤只有 Owner 的遺失型別記錄時，會詢問「備份並存檔」。確認後備份原 `.asset`／`.meta` 到 `Library/GraphKitMissingTypes/<唯一目錄>/`，清除記錄並儲存目前工作副本；不需切換 Inspector 或重新開圖，已完成的刪除與修改會保留。
+3. 其他驗證錯誤、Owner 版本衝突或備份失敗仍會阻擋存檔；取消確認不清除資料。備份是磁碟原檔、不含未儲存修改，清除 Library 前請另外保存需要保留的備份。
+4. 無法開圖時，AP Inspector 的「備份並清除遺失型別記錄…」仍可獨立修復；備份位置為 `Library/AssetPipelineMissingTypes/`。此備援操作不自動存檔，需捨棄舊圖工作副本並重新開圖。
 
 若要回復，先關閉相關編輯視窗，將備份的原 `.asset` 與 `.meta` 還原到原路徑後重新匯入；原型別仍缺少時，遺失型別提示也會恢復。修復目前限於 `Assets/` 下已儲存的 AP 主 `.asset`，不處理場景或子資產。
 
