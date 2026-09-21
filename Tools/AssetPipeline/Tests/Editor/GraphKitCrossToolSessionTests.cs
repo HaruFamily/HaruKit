@@ -11,6 +11,68 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
 {
     public sealed class GraphKitCrossToolSessionTests
     {
+        [TestCase(false, false, false)]
+        [TestCase(false, true, true)]
+        [TestCase(true, false, false)]
+        [TestCase(true, true, true)]
+        public void SharedValidatorHonorsDisabledChildrenAndEnabledSharedPaths(
+            bool logicGraph, bool alsoEnabled, bool disableNode)
+        {
+            ScriptableObject owner = null;
+            try
+            {
+                var model = new HGModel();
+                if (logicGraph)
+                {
+                    var logicOwner = ScriptableObject.CreateInstance<LogicOwner>();
+                    owner = logicOwner;
+                    var broken = new ActionSlot<CrossPack>();
+                    broken.SetNode(new GraphNode());
+                    var inner = new LogicSequence { actions = new() { broken } };
+                    var disabled = new ActionSlot<CrossPack>(inner);
+                    if (disableNode) disabled.Node.Disabled = true;
+                    else disabled.Disabled = true;
+                    var outer = new LogicSequence { actions = new() { disabled } };
+                    if (alsoEnabled) outer.actions.Add(new ActionSlot<CrossPack>(inner));
+                    logicOwner.Graph = new LogicGraph<CrossTiming, CrossPack>();
+                    logicOwner.Graph.ActionGroups.Add(new ActionTimingGroup<CrossTiming, CrossPack>
+                    {
+                        Timing = CrossTiming.Start,
+                        Actions = new() { new ActionSlot<CrossPack>(outer) },
+                    });
+                    Assert.That(model.Bind(owner, new HGDocumentBinding<LogicGraph<CrossTiming, CrossPack>>("LogicGraph.Cross",
+                        value => ((LogicOwner)value).Graph, (value, graph) => ((LogicOwner)value).Graph = graph)), Is.True);
+                    var diagnostics = logicOwner.Graph.CollectDiagnostics();
+                    Assert.That(System.Linq.Enumerable.Any(diagnostics, item => item.Severity == GraphDiagnosticSeverity.Error),
+                        Is.EqualTo(alsoEnabled), "LogicGraph Core 與共用編輯器應保留一致的啟用路徑判準。");
+                }
+                else
+                {
+                    var pipelineOwner = ScriptableObject.CreateInstance<AssetPipeline>();
+                    owner = pipelineOwner;
+                    var broken = new ActionSlot();
+                    broken.SetNode(new GraphNode());
+                    var inner = new PipelineSequence { actions = new() { broken } };
+                    var disabled = new ActionSlot(inner);
+                    if (disableNode) disabled.Node.Disabled = true;
+                    else disabled.Disabled = true;
+                    var outer = new PipelineSequence { actions = new() { disabled } };
+                    if (alsoEnabled) outer.actions.Add(new ActionSlot(inner));
+                    pipelineOwner.graph = new Graph();
+                    var root = (ActionGroup)((IGraphDocument)pipelineOwner.graph).AddRoot(Graph.PipelineKey);
+                    root.Actions.Add(new ActionSlot(outer));
+                    Assert.That(model.Bind(owner, new HGDocumentBinding<Graph>("AssetPipeline.Graph",
+                        value => ((AssetPipeline)value).graph, (value, graph) => ((AssetPipeline)value).graph = graph)), Is.True);
+                    Assert.That(GraphVerifier.CollectDiagnostics(pipelineOwner.graph).Count > 0, Is.EqualTo(alsoEnabled));
+                }
+
+                HGReport report = HGValidator.Run(model);
+                Assert.That(report.ErrorCount > 0, Is.EqualTo(alsoEnabled));
+                if (!alsoEnabled) Assert.That(report.WarningCount, Is.GreaterThan(0));
+            }
+            finally { if (owner != null) UnityEngine.Object.DestroyImmediate(owner); }
+        }
+
         [Test]
         public void ResultNavigationKeepsTheCurrentDocumentAndDirtyState()
         {
@@ -146,6 +208,32 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         }
 
         private struct CrossPack { }
+
+        [Serializable]
+        private sealed class PipelineSequence : ActionBase, ISequentialActionContainer
+        {
+            public List<ActionSlot> actions = new();
+            public IReadOnlyList<ActionSlotBase> SequentialActions => actions;
+            protected override void OnExecute(PipelineActionContext context)
+            {
+                foreach (ActionSlot action in actions)
+                {
+                    action.Execute(context);
+                    if (context.Result.HasFailure) return;
+                }
+            }
+        }
+
+        [Serializable]
+        private sealed class LogicSequence : ActionBase<CrossPack>, ISequentialActionContainer
+        {
+            public List<ActionSlot<CrossPack>> actions = new();
+            public IReadOnlyList<ActionSlotBase> SequentialActions => actions;
+            protected override async Cysharp.Threading.Tasks.UniTask OnExecute(CrossPack pack, TokenTable<CrossPack> tokens)
+            {
+                foreach (ActionSlot<CrossPack> action in actions) await action.Execute(pack, tokens);
+            }
+        }
 
         private sealed class LogicOwner : ScriptableObject
         {

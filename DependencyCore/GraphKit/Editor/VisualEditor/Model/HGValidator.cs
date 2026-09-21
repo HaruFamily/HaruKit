@@ -313,13 +313,16 @@ public static class HGValidator
     private static void WalkSlot(HGReport report, HGModel model, HGFocus focus, GraphSlotBase slot,
         string where, HashSet<object> visited, bool disabled)
     {
-        if (slot == null || !visited.Add(slot)) return;
+        if (slot == null) return;
+
+        // 停用支線使用獨立的 visited，不能遮蔽稍後從啟用支線抵達的共用內容。
+        bool slotDisabled = HGReflect.GetDisabled(slot) || (slot.Node?.Disabled ?? false);
+        if (!disabled && slotDisabled) visited = new HashSet<object>(visited, HGRefComparer.Instance);
+        disabled = disabled || slotDisabled;
+        if (!visited.Add(slot)) return;
 
         var carrier = slot.Node;
         var contentKind = carrier?.Kind;
-
-        // 停用往下傳染：載體停用後整棵子樹都不求值，殘缺一律降成警告。
-        disabled = disabled || (HGReflect.GetNode(slot)?.Disabled ?? false);
 
         if (contentKind is NodeKind.Inline or NodeKind.Empty)
         {

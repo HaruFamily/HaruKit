@@ -108,27 +108,19 @@ namespace HaruFamily.Tools.AssetPipeline
 
             List<ActionSlot> actions = graph.Actions;
             for (int i = 0; i < actions.Count; i++)
+                CheckActionSlot(actions[i], $"動作[{i}]", errors, new ActionReads(), producedCatalogs);
+        }
+
+        private static void CheckCatalogOrder(ActionReads reads, string path, DiagnosticCollector errors,
+            HashSet<AssetCatalogBase> producedCatalogs)
+        {
+            foreach (AssetCatalogBase catalog in reads.CatalogReads)
             {
-                ActionSlot slot = actions[i];
-                string path = $"動作[{i}]";
-
-                var reads = new ActionReads();
-                CheckActionSlot(slot, path, errors, reads);
-
-                // 動態來源的目錄是前面的動作跑完才有內容的，所以只比對「到目前為止已產出」的集合。
-                // 原型來源隨時都有值，不受動作順序影響。
-                foreach (AssetCatalogBase catalog in reads.CatalogReads)
-                {
-                    if (catalog is not DynamicAssetCatalog dynamic) continue;
-                    if (dynamic.initialization == DynamicAssetCatalog.InitializationMode.Retain) continue;
-                    if (!producedCatalogs.Contains(catalog))
-                        errors.Add("assetpipeline.action.dynamic-catalog-read-before-write", path,
-                            "讀取動態目錄，但寫入它的動作不在前面。");
-                }
-
-                // 產出登記放在檢查之後：同一步讀自己的產出，仍然是「還沒跑完就讀」。
-                foreach (AssetCatalogBase catalog in reads.CatalogOutputs)
-                    producedCatalogs.Add(catalog);
+                if (catalog is not DynamicAssetCatalog dynamic) continue;
+                if (dynamic.initialization == DynamicAssetCatalog.InitializationMode.Retain) continue;
+                if (!producedCatalogs.Contains(catalog))
+                    errors.Add("assetpipeline.action.dynamic-catalog-read-before-write", path,
+                        "讀取動態目錄，但寫入它的動作不在前面。");
             }
         }
 
@@ -153,10 +145,12 @@ namespace HaruFamily.Tools.AssetPipeline
             }
         }
 
-        private static void CheckActionSlot(ActionSlot slot, string path, DiagnosticCollector errors, ActionReads reads)
+        private static void CheckActionSlot(ActionSlotBase slot, string path, DiagnosticCollector errors, ActionReads reads,
+            HashSet<AssetCatalogBase> producedCatalogs = null, HashSet<object> visiting = null)
         {
             if (slot == null) { errors.Add("assetpipeline.action.missing", path, "是空的。"); return; }
             if (slot.Disabled) return;   // 停用的動作不執行，殘缺不擋。
+            if (slot is not ActionSlot) { errors.Add("assetpipeline.action.slot-incompatible", path, "不是管線動作欄位。"); return; }
 
             GraphNode node = slot.Node;
             if (node == null) { errors.Add("assetpipeline.action.node-missing", path, "沒有接任何動作內容。"); return; }
@@ -172,13 +166,48 @@ namespace HaruFamily.Tools.AssetPipeline
             if (body == null) { errors.Add("assetpipeline.action.node-empty", path, "的節點是空的。"); return; }
             if (!slot.AcceptsBody(body)) { errors.Add("assetpipeline.action.body-incompatible", path, $"接的 {body.GetType().Name} 不是管線動作。"); return; }
 
-            CollectKeys(body, reads);
-            WalkSlots(body, path, errors, reads, new HashSet<object>(ReferenceComparer.Instance));
+            visiting ??= new HashSet<object>(ReferenceComparer.Instance);
+            if (!visiting.Add(node)) { errors.Add("assetpipeline.node.cycle", path, "形成節點循環。"); return; }
+            try
+            {
+                var ownReads = new ActionReads();
+                var children = (body as ISequentialActionContainer)?.SequentialActions;
+                if (children != null)
+                    foreach (ActionSlotBase child in children)
+                        if (child != null) ownReads.SequentialChildren.Add(child);
+
+                // 只收容器自身的輸入／輸出，宣告過的子 Slot 由下面的循序走訪處理。
+                CollectKeys(body, ownReads);
+                WalkSlots(body, path, errors, ownReads, visiting);
+                if (producedCatalogs != null) CheckCatalogOrder(ownReads, path, errors, producedCatalogs);
+                AddKeys(ownReads.Prototype, reads.Prototype);
+
+                if (children != null)
+                    for (int i = 0; i < children.Count; i++)
+                        CheckActionSlot(children[i], $"{path}.SequentialActions[{i}]", errors, reads,
+                            producedCatalogs, visiting);
+
+                // 自身輸出在子動作結束後才可用；不可提前登記來掩蓋讀取在前的錯誤。
+                if (producedCatalogs != null)
+                    foreach (AssetCatalogBase catalog in ownReads.CatalogOutputs)
+                        producedCatalogs.Add(catalog);
+
+                foreach (AssetCatalogBase catalog in ownReads.CatalogReads)
+                    if (!reads.CatalogReads.Contains(catalog)) reads.CatalogReads.Add(catalog);
+                foreach (AssetCatalogBase catalog in ownReads.CatalogOutputs)
+                    if (!reads.CatalogOutputs.Contains(catalog)) reads.CatalogOutputs.Add(catalog);
+            }
+            finally { visiting.Remove(node); }
         }
 
         // 公式欄位與目錄欄位共用這一條：兩者都是「指著一顆節點」，差別只在收得下哪些種類的節點。
         private static void CheckSlot(GraphSlotBase slot, string path, DiagnosticCollector errors, ActionReads reads, HashSet<object> visiting)
         {
+            if (slot is ActionSlotBase action)
+            {
+                CheckActionSlot(action, path, errors, reads, visiting: visiting);
+                return;
+            }
             GraphNode node = slot?.Node;
             if (node == null) return;   // 常數模式，合法。
             if (node.Disabled) return;  // 停用的子樹不求值。
@@ -310,6 +339,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
             if (owner is GraphSlotBase slot)
             {
+                if (reads.SequentialChildren.Contains(slot)) return;
                 CheckSlot(slot, path, errors, reads, visiting);
                 return;
             }
@@ -340,6 +370,7 @@ namespace HaruFamily.Tools.AssetPipeline
         /// <summary>一個動作碰到的東西：讀到的 prototype key、讀到的目錄，以及它自己寫入的目錄。</summary>
         private sealed class ActionReads
         {
+            public readonly HashSet<object> SequentialChildren = new HashSet<object>(ReferenceComparer.Instance);
             public readonly List<string> Prototype = new List<string>();
             public readonly List<AssetCatalogBase> CatalogReads = new List<AssetCatalogBase>();
             public readonly List<AssetCatalogBase> CatalogOutputs = new List<AssetCatalogBase>();

@@ -6,6 +6,7 @@
     "HaruFamily.DependencyCore.GraphKit",
     "HaruFamily.DependencyCore.GraphKit.Editor",
     "HaruFamily.Framework.LogicGraph",
+    "UniTask",
     "UnityEditor.TestRunner",
     "UnityEngine.TestRunner"
   ],

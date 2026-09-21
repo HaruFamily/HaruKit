@@ -117,6 +117,68 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(errors, Has.Some.Contains(OrderError));
         }
 
+        [Test]
+        public void Verify_SequentialChildrenWriteThenReadWithoutAnOrphanCatalog()
+        {
+            GraphNode catalog = DynamicCatalog(out GraphNode cell);
+            graph.Orphans.Remove(catalog);
+            AddAction(new SequentialAction(new WriteAction(catalog), new ReadAction(cell)));
+
+            Assert.That(GraphVerifier.Collect(graph), Is.Empty);
+        }
+
+        [Test]
+        public void Verify_SequentialChildrenReadThenWriteReportsTheChildPath()
+        {
+            GraphNode catalog = DynamicCatalog(out GraphNode cell);
+            graph.Orphans.Remove(catalog);
+            AddAction(new SequentialAction(new ReadAction(cell), new WriteAction(catalog)));
+
+            List<GraphDiagnostic> diagnostics = GraphVerifier.CollectDiagnostics(graph);
+
+            Assert.That(diagnostics.Count, Is.EqualTo(1));
+            Assert.That(diagnostics[0].Code, Is.EqualTo("assetpipeline.action.dynamic-catalog-read-before-write"));
+            Assert.That(diagnostics[0].Location.FieldPath, Is.EqualTo("動作[0].SequentialActions[0]"));
+        }
+
+        [Test]
+        public void Verify_NestedSequencesShareOutputsWithSiblingsAndFollowingRoots()
+        {
+            GraphNode catalog = DynamicCatalog(out GraphNode cell);
+            AddAction(new SequentialAction(
+                new SequentialAction(new WriteAction(catalog)),
+                new SequentialAction(new ReadAction(cell))));
+            AddAction(new ReadAction(cell));
+
+            Assert.That(GraphVerifier.Collect(graph), Is.Empty);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void Verify_DisabledChildWriterDoesNotProduceCatalogs(bool disableNode)
+        {
+            GraphNode catalog = DynamicCatalog(out GraphNode cell);
+            var sequence = new SequentialAction(new WriteAction(catalog), new ReadAction(cell));
+            if (disableNode) sequence.actions[0].Node.Disabled = true;
+            else sequence.actions[0].Disabled = true;
+            AddAction(sequence);
+
+            Assert.That(GraphVerifier.Collect(graph), Has.Some.Contains(OrderError));
+        }
+
+        [Test]
+        public void Verify_SequentialCyclesAreReportedWithoutRejectingRepeatedSharedChildren()
+        {
+            GraphNode catalog = DynamicCatalog(out GraphNode cell);
+            var sequence = new SequentialAction(new WriteAction(catalog), new ReadAction(cell));
+            sequence.actions.Add(sequence.actions[1]);
+            AddAction(sequence);
+            Assert.That(GraphVerifier.Collect(graph), Is.Empty);
+
+            sequence.actions.Add(root.Actions[0]);
+            Assert.That(GraphVerifier.CollectDiagnostics(graph).Exists(item => item.Code == "assetpipeline.node.cycle"), Is.True);
+        }
+
         /// <summary>原型來源隨時都有內容，不受動作順序影響。</summary>
         // 這顆目錄沒有任何動作寫得進去，節點只在候選池裡：驗證器得自己走到那裡把格子接回母目錄，
         // 否則整條原型路徑會停在「沒有母目錄」，執行期也取不到內容。所以這裡斷言的是整份無錯。
@@ -455,6 +517,27 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         private sealed class CountFilter : Formula_Int<List<Object>>
         {
             protected override int OnEvaluate(List<Object> catalog) => catalog.Count;
+        }
+
+        [Serializable]
+        private sealed class SequentialAction : ActionBase, ISequentialActionContainer
+        {
+            public List<ActionSlot> actions = new();
+            public IReadOnlyList<ActionSlotBase> SequentialActions => actions;
+
+            public SequentialAction(params ActionBase[] children)
+            {
+                foreach (ActionBase child in children) actions.Add(new ActionSlot(child));
+            }
+
+            protected override void OnExecute(PipelineActionContext context)
+            {
+                foreach (ActionSlot child in actions)
+                {
+                    child.Execute(context);
+                    if (context.Result.HasFailure) return;
+                }
+            }
         }
 
         /// <summary>只宣告「我把產出寫進這顆目錄」的假動作，不做任何事。</summary>

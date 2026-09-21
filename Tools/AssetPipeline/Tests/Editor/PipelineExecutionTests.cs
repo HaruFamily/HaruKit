@@ -434,6 +434,29 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         }
 
         [Test]
+        public void SequentialCatalogWriteIsVisibleToTheNextChildInTheSameStep()
+        {
+            var catalog = new DynamicAssetCatalog();
+            var carrier = new GraphNode();
+            carrier.SetCatalog(catalog);
+            GraphNode cell = ((IGraphNodeOwner)catalog).CreateChild();
+            var writer = new WriteCatalogAction { value = pipeline };
+            writer.output.SetNode(carrier);
+            var reader = new ObserveCatalogAction();
+            reader.input.SetNode(cell);
+            Add(new SequenceAction
+            {
+                actions = new() { new ActionSlot(writer), new ActionSlot(reader) },
+            });
+
+            var result = pipeline.RunPipeline();
+
+            Assert.That(result.Transaction, Is.EqualTo(PipelineTransactionStatus.Committed));
+            Assert.That(result.Steps.Count, Is.EqualTo(1));
+            Assert.That(reader.observed, Is.EqualTo(new Object[] { pipeline }));
+        }
+
+        [Test]
         public void RepeatedEditsRollbackToOriginalBytesAndGuid()
         {
             string path = Prefab("Original");
@@ -626,9 +649,35 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(CountingFilter.Calls, Is.EqualTo(2));
         }
 
-        [Serializable] private sealed class ChildAction : ActionBase
+        [Serializable] private sealed class SequenceAction : ActionBase, ISequentialActionContainer
+        {
+            public List<ActionSlot> actions = new();
+            public IReadOnlyList<ActionSlotBase> SequentialActions => actions;
+            protected override void OnExecute(PipelineActionContext context)
+            {
+                foreach (ActionSlot action in actions)
+                {
+                    action.Execute(context);
+                    if (context.Result.HasFailure) return;
+                }
+            }
+        }
+        [Serializable] private sealed class WriteCatalogAction : ActionBase
+        {
+            public CatalogOutputSlot output = new();
+            public Object value;
+            protected override void OnExecute(PipelineActionContext context) => output.Write(new[] { value });
+        }
+        [Serializable] private sealed class ObserveCatalogAction : ActionBase
+        {
+            public ObjectListSlot input = new();
+            [NonSerialized] public List<Object> observed;
+            protected override void OnExecute(PipelineActionContext context) => observed = input.Evaluate();
+        }
+        [Serializable] private sealed class ChildAction : ActionBase, ISequentialActionContainer
         {
             public ActionSlot child = new();
+            public IReadOnlyList<ActionSlotBase> SequentialActions => new ActionSlotBase[] { child };
             protected override void OnExecute(PipelineActionContext context) => child.Execute(context);
         }
         [Serializable] private sealed class NoOpAction : ActionBase

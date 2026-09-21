@@ -33,6 +33,21 @@ public interface IGraphSink
 }
 
 /// <summary>
+/// 動作內容的循序執行契約。清單必須提供實際使用的子 Slot，順序與執行順序一致。
+/// </summary>
+/// <remarks>
+/// 子 Slot 仍存於序列化欄位；此介面只描述時序，不執行、不求值，也不取代結構走訪。
+/// 容器自身的輸入在子動作之前讀取，輸出在全部子動作完成後才可用。
+/// 正常完成時依序執行全部子動作（遵守 Slot／節點停用）；失敗或取消可中止整條執行鏈。
+/// 條件分支、平行、零次迴圈及任意交錯讀寫不符合此契約，不可實作。
+/// </remarks>
+public interface ISequentialActionContainer
+{
+    /// <summary>依執行順序提供子動作；getter 無副作用，null 視為空清單。</summary>
+    IReadOnlyList<ActionSlotBase> SequentialActions { get; }
+}
+
+/// <summary>
 /// 內容底下自己帶一串子節點的節點。子節點是完整的 <see cref="GraphNode"/>——
 /// 有自己的 Id 與座標，所以任何欄位都指得到它，畫布上也各自是一顆節點。
 /// </summary>
