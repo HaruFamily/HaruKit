@@ -62,6 +62,102 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         }
     }
 
+    public sealed class PipelineMissingTypeRepairTests
+    {
+        [TestCase(false)]
+        [TestCase(true)]
+        public void MissingTypeRepairBacksUpOriginalAndPreservesValidDataOrStopsBeforeMutation(bool missingMeta)
+        {
+            string folder = "Assets/APMissingTypeTest_" + Guid.NewGuid().ToString("N");
+            string path = folder + "/Pipeline.asset";
+            string backupDirectory = null;
+            var previousMode = EditorSettings.serializationMode;
+            AssetPipeline pipeline = null;
+            try
+            {
+                EditorSettings.serializationMode = SerializationMode.ForceText;
+                AssetDatabase.CreateFolder("Assets", Path.GetFileName(folder));
+                pipeline = ScriptableObject.CreateInstance<AssetPipeline>();
+                pipeline.collectKey = "KeepThisKey";
+                var root = (ActionGroup)((IGraphDocument)pipeline.graph).AddRoot(Graph.PipelineKey);
+                root.Actions.Add(new ActionSlot(new RepairMissingBody()));
+                root.Actions.Add(new ActionSlot(new RepairValidBody { value = 42 }));
+                root.Actions[1].Node.EnsureId();
+                string validId = root.Actions[1].Node.Id;
+                AssetDatabase.CreateAsset(pipeline, path);
+                AssetDatabase.SaveAssetIfDirty(pipeline);
+                AssetDatabase.ForceReserializeAssets(new[] { path });
+
+                // 僅改測試自行建立的資產，模擬消費端刪除／改名一種 SerializeReference 型別。
+                string yaml = File.ReadAllText(path);
+                Assert.That(yaml, Does.Contain(nameof(RepairMissingBody)));
+                File.WriteAllText(path, yaml.Replace(nameof(RepairMissingBody), "DeletedRepairMissingBody"));
+                AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+                pipeline = AssetDatabase.LoadAssetAtPath<AssetPipeline>(path);
+                Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.True);
+                byte[] before = File.ReadAllBytes(path);
+                byte[] meta = File.ReadAllBytes(path + ".meta");
+                string guid = AssetDatabase.AssetPathToGUID(path);
+                var oldGraph = pipeline.graph;
+
+                if (missingMeta) File.Move(path + ".meta", path + ".meta.backup");
+                bool repaired = HaruFamily.Tools.AssetPipeline.Editor.AssetPipelineEditor.TryRepairMissingTypes(
+                    pipeline, out backupDirectory, out string error);
+
+                Assert.That(repaired, Is.EqualTo(!missingMeta), error);
+                Assert.That(File.ReadAllBytes(path), Is.EqualTo(before), "修復不應自動存檔。");
+                if (missingMeta)
+                {
+                    Assert.That(error, Does.Contain("備份"));
+                    Assert.That(backupDirectory, Is.Null);
+                    Assert.That(pipeline.graph, Is.SameAs(oldGraph));
+                    Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.True);
+                    return;
+                }
+
+                Assert.That(error, Is.Null);
+                Assert.That(File.ReadAllBytes(Path.Combine(backupDirectory, "Pipeline.asset")), Is.EqualTo(before));
+                Assert.That(File.ReadAllBytes(Path.Combine(backupDirectory, "Pipeline.asset.meta")), Is.EqualTo(meta));
+                Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
+                Assert.That(pipeline.graph, Is.Not.SameAs(oldGraph), "舊 session 必須失去提交基準。");
+                Assert.That(pipeline.graph.IsValidated, Is.False);
+                Assert.That(pipeline.graph.Actions.Count, Is.EqualTo(2));
+                Assert.That(pipeline.graph.Actions[0].Node.BodyObject, Is.Null);
+                Assert.That(((RepairValidBody)pipeline.graph.Actions[1].Node.BodyObject).value, Is.EqualTo(42));
+                Assert.That(pipeline.graph.Actions[1].Node.Id, Is.EqualTo(validId));
+                Assert.That(pipeline.collectKey, Is.EqualTo("KeepThisKey"));
+                Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
+
+                // 修補空節點後，驗證與保存可恢復，毋須重建 SO。
+                pipeline.graph.Actions[0].Node.SetBody(new RepairValidBody());
+                pipeline.graph.Verify();
+                Assert.That(pipeline.graph.IsValidated, Is.True);
+                AssetDatabase.SaveAssetIfDirty(pipeline);
+                AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+                pipeline = AssetDatabase.LoadAssetAtPath<AssetPipeline>(path);
+                Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
+                Assert.That(pipeline.collectKey, Is.EqualTo("KeepThisKey"));
+                Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
+            }
+            finally
+            {
+                if (File.Exists(path + ".meta.backup")) File.Move(path + ".meta.backup", path + ".meta");
+                EditorSettings.serializationMode = previousMode;
+                AssetDatabase.DeleteAsset(folder);
+                if (pipeline != null && !EditorUtility.IsPersistent(pipeline)) Object.DestroyImmediate(pipeline);
+                if (backupDirectory != null && Directory.Exists(backupDirectory)) Directory.Delete(backupDirectory, true);
+            }
+        }
+
+        [Serializable] private sealed class RepairMissingBody : ActionBase
+        { protected override void OnExecute(PipelineActionContext context) { } }
+        [Serializable] private sealed class RepairValidBody : ActionBase
+        {
+            public int value;
+            protected override void OnExecute(PipelineActionContext context) { }
+        }
+    }
+
     public sealed class PipelineExecutionTests
     {
         private string folder;

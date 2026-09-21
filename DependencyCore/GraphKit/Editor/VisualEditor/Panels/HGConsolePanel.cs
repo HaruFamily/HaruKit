@@ -36,6 +36,7 @@ public sealed class HGConsolePanel
     public const float HeaderHeight = 22f;
 
     private const float RowHeight = 20f;
+    private const float CopyWidth = 44f;
     private const float TabCornerRadius = 3f;
     private const float MinDragHeight = 60f;
     private const string PrefHeight = "HaruGraph.ConsoleHeight";
@@ -148,9 +149,14 @@ public sealed class HGConsolePanel
 
             var icon = new Rect(row.x + 4f, row.y + 5f, 9f, 9f);
             HGStyles.Fill(icon, issue.IsError ? HGStyles.Error : HGStyles.Warning);
-            GUI.Label(new Rect(row.x + 18f, row.y + 1f, row.width - 22f, 17f), issue.Line, HGStyles.ConsoleRow);
+            var copyRect = new Rect(row.xMax - CopyWidth - 4f, row.y + 1f, CopyWidth, 17f);
+            GUI.Label(new Rect(row.x + 18f, row.y + 1f, Mathf.Max(0f, row.width - CopyWidth - 30f), 17f),
+                issue.Line, HGStyles.ConsoleRow);
+            if (GUI.Button(copyRect, new GUIContent("Copy", "複製完整訊息、診斷代碼與修正建議"), EditorStyles.miniButton))
+                EditorGUIUtility.systemCopyBuffer = $"[{(issue.IsError ? "Error" : "Warning")}] [{issue.Code}] {issue.Line}";
 
-            if (Event.current.type == EventType.MouseDown && row.Contains(Event.current.mousePosition))
+            if (Event.current.type == EventType.MouseDown && row.Contains(Event.current.mousePosition)
+                && !copyRect.Contains(Event.current.mousePosition))
             {
                 jump?.Invoke(issue);
                 Event.current.Use();
