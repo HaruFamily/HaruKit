@@ -29,14 +29,16 @@ public partial class HaruGraphWindow : EditorWindow
     /// <summary>左欄Token區的最小高度：三顆固定控制項 + 一列，再小就有東西被切掉（標題由面板標題兼任）。</summary>
     private const float MinTokenSection = 106f;
     private const float MinAssetSection = 80f;
-    /// <summary>Property 庫與其他區並存時的固定高度：兩顆鈕 + 搜尋列 + 兩列 + 初始值列。</summary>
+    /// <summary>變數庫內容的最小高度：兩顆鈕 + 搜尋列 + 兩列 + 初始值列。</summary>
     private const float MinPropertySection = 146f;
     /// <summary>引用區的最小高度：標題列 + 一筆引用。它只在資產焦點出現，另外兩區跟著讓出高度。</summary>
     private const float MinRefSection = 76f;
     private const float DefaultTokenSection = 240f;
+    private const float DefaultPropertySection = 168f;
     private const float DefaultRefSection = 140f;
     private const string PrefLeftWidth = "HaruGraph.LeftWidth";
     private const string PrefTokenSection = "HaruGraph.TokenSectionHeight";
+    private const string PrefPropertySection = "HaruGraph.PropertySectionHeight";
     private const string PrefRefSection = "HaruGraph.RefSectionHeight";
 
     /// <summary>下方框。高度、收合、分頁與它的 EditorPrefs 都住在面板裡，視窗只給它一塊 Rect。</summary>
@@ -83,6 +85,8 @@ public partial class HaruGraphWindow : EditorWindow
     // 左欄Token／資產上下分區：存Token區的高度，資產區吃剩下的。編資產時兩份清單要同時看得到，不能再用分頁互斥。
     private float tokenSectionHeight = DefaultTokenSection;
     private bool resizingLibrarySplit;
+    private float propertySectionHeight = DefaultPropertySection;
+    private bool resizingPropertySplit;
     // 左欄第三區（引用此資產）：只在資產焦點出現，存自己的高度，資產區吃剩下的。
     private float refSectionHeight = DefaultRefSection;
     private bool resizingRefSplit;
@@ -111,7 +115,7 @@ public partial class HaruGraphWindow : EditorWindow
     /// <summary>左欄資產庫。搜尋字與捲動在面板裡，拖曳與改名向框架借。</summary>
     private readonly HGAssetLibraryPanel assetLibrary = new();
 
-    /// <summary>左欄 ProtoProperty 庫。定義住圖的工作副本，所以跟著存檔交易與同一個 Undo 堆疊走。</summary>
+    /// <summary>左欄變數庫。ProtoProperty 定義跟隨目前圖的工作副本、存檔交易與 Undo 堆疊。</summary>
     private readonly HGPropertyLibraryPanel propertyLibrary = new();
 
     // 互動
@@ -209,8 +213,8 @@ public partial class HaruGraphWindow : EditorWindow
     private bool HasTokenSection => model?.Doc is ITokenOwner
         && HGGraph.Has(activeContext, model.Doc, HGCapabilities.Tokens);
 
-    /// <summary>Property 庫要不要存在。能力由圖宣告，清單由圖自己持有，兩者都要成立。</summary>
-    private bool HasPropertySection => model?.Doc is IPropertyOwner
+    /// <summary>變數庫要不要存在。能力由圖宣告，清單由目前焦點的圖持有。</summary>
+    private bool HasPropertySection => (focus.Kind == HGFocusKind.Asset ? focus.AssetObject is IPropertyOwner : model?.Doc is IPropertyOwner)
         && HGGraph.Has(activeContext, model.Doc, HGCapabilities.Properties);
 
     /// <summary>左欄還有沒有東西可放。沒綁定時維持原版型，閒置畫面不因此改變。</summary>
@@ -742,8 +746,8 @@ public partial class HaruGraphWindow : EditorWindow
     }
 
     /// <summary>
-    /// 目前資產工作副本的快照。內容、候選與Token**同一次深複製**：分次抄會把同一顆端點抄成
-    /// 幾份不相干的物件，Token節點指到的就不是清單裡那一顆（進出資產的交易也是同一條規則）。
+    /// 目前資產工作副本的快照。內容、候選、Token 與 ProtoProperty 庫同一次深複製，
+    /// 保留節點與庫定義的共享引用（進出資產的交易也是同一條規則）。
     /// </summary>
     private HGAssetSnapshot CaptureAssetState()
     {
@@ -754,6 +758,7 @@ public partial class HaruGraphWindow : EditorWindow
             HGReflect.GetNode(focus.AssetHostSlot),
             focus.AssetOrphans ?? new List<GraphNode>(),
             focus.AssetTokens ?? new List<GraphToken>(),
+            focus.AssetProperties ?? new List<GraphProperty>(),
         };
         var copy = GraphDeepCopy.Copy(pack);
         if (copy == null)
@@ -766,6 +771,7 @@ public partial class HaruGraphWindow : EditorWindow
             Root = copy[0] as GraphNode,
             Orphans = copy[1] as List<GraphNode> ?? new List<GraphNode>(),
             Tokens = copy[2] as List<GraphToken> ?? new List<GraphToken>(),
+            Properties = copy[3] as List<GraphProperty> ?? new List<GraphProperty>(),
         };
     }
 
@@ -780,6 +786,7 @@ public partial class HaruGraphWindow : EditorWindow
         HGReflect.SetNode(focus.AssetHostSlot, snapshot.Root);
         focus.AssetOrphans = snapshot.Orphans;
         focus.AssetTokens = snapshot.Tokens;
+        focus.AssetProperties = snapshot.Properties;
 
         string endpointId = focus.Token?.Id;
         focus.Token = string.IsNullOrEmpty(endpointId)

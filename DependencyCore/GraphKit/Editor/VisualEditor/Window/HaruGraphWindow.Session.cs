@@ -561,6 +561,7 @@ public partial class HaruGraphWindow
         console.LoadPrefs();
         leftWidth = EditorPrefs.GetFloat(PrefLeftWidth, DefaultLeftWidth);
         tokenSectionHeight = EditorPrefs.GetFloat(PrefTokenSection, DefaultTokenSection);
+        propertySectionHeight = EditorPrefs.GetFloat(PrefPropertySection, DefaultPropertySection);
         refSectionHeight = EditorPrefs.GetFloat(PrefRefSection, DefaultRefSection);
         UpdateUnsavedState();
     }
@@ -577,6 +578,7 @@ public partial class HaruGraphWindow
         console.SavePrefs();
         EditorPrefs.SetFloat(PrefLeftWidth, leftWidth);
         EditorPrefs.SetFloat(PrefTokenSection, tokenSectionHeight);
+        EditorPrefs.SetFloat(PrefPropertySection, propertySectionHeight);
         EditorPrefs.SetFloat(PrefRefSection, refSectionHeight);
     }
 
@@ -748,6 +750,7 @@ public partial class HaruGraphWindow
                 AssetHostSlot = focus.AssetHostSlot,
                 AssetOrphans = focus.AssetOrphans,
                 AssetTokens = focus.AssetTokens,
+                AssetProperties = focus.AssetProperties,
                 Token = endpoint,
             });
         }
@@ -773,6 +776,7 @@ public partial class HaruGraphWindow
                 AssetHostSlot = focus.AssetHostSlot,
                 AssetOrphans = focus.AssetOrphans,
                 AssetTokens = focus.AssetTokens,
+                AssetProperties = focus.AssetProperties,
             });
         }
         else SetFocus(AllRootsFocus());
@@ -802,14 +806,20 @@ public partial class HaruGraphWindow
             return;
         }
 
-        // 內容、候選與Token必須同一次複製：Token節點指著端點物件，分幾次抄就會抄成幾份不相干的端點。
+        // 內容、候選、Token 與 ProtoProperty 庫同一次複製，才能保留節點對庫定義的共享引用。
         var pack = new List<object>
         {
             HGReflect.AssetRoot(asset),
             HGReflect.Orphans(asset) ?? new List<GraphNode>(),
             HGReflect.Tokens(asset) ?? new List<GraphToken>(),
+            HGReflect.Properties(asset) ?? new List<GraphProperty>(),
         };
         var packCopy = GraphDeepCopy.Copy(pack);
+        if (packCopy == null)
+        {
+            ShowNotification(new GUIContent("無法建立資產工作副本，保留目前畫布。"));
+            return;
+        }
         // 根節點連載體一起抄進容器槽：座標、備註、Id 都在載體上，容器槽本身是拋棄式的。
         HGReflect.SetNode(host, packCopy?[0] as GraphNode);
 
@@ -820,6 +830,7 @@ public partial class HaruGraphWindow
             AssetHostSlot = host,
             AssetOrphans = packCopy?[1] as List<GraphNode> ?? new List<GraphNode>(),
             AssetTokens = packCopy?[2] as List<GraphToken> ?? new List<GraphToken>(),
+            AssetProperties = packCopy?[3] as List<GraphProperty> ?? new List<GraphProperty>(),
         });
         returnFocus = back ?? new HGFocus();
         ClearAssetDirty();
@@ -858,10 +869,10 @@ public partial class HaruGraphWindow
         }
 
         var rootCarrier = host.Node;
-        if (rootCarrier?.Kind is NodeKind.Asset or NodeKind.Token)
+        if (rootCarrier?.Kind is NodeKind.Asset or NodeKind.Token or NodeKind.Property)
         {
             if (showDialog)
-                ShowNotification(new GUIContent("無法存檔：資產的內容只能是公式或動作，不能再指向另一個資產或 Token"));
+                ShowNotification(new GUIContent("無法存檔：資產根內容必須是公式或動作；Property 請接到內容的輸入欄位"));
             return false;
         }
 
@@ -872,14 +883,20 @@ public partial class HaruGraphWindow
             return false;
         }
 
-        // 寫回也是一次抄三份：內容裡的Token節點與Token清單必須指到同一批端點物件。
+        // 寫回仍同一次複製四部分，節點必須引用實際寫入 Token／ProtoProperty 庫的物件。
         var pack = new List<object>
         {
             rootCarrier?.Kind is NodeKind.Inline or NodeKind.Empty ? rootCarrier : null,
             focus.AssetOrphans ?? new List<GraphNode>(),
             focus.AssetTokens ?? new List<GraphToken>(),
+            focus.AssetProperties ?? new List<GraphProperty>(),
         };
         var packCopy = GraphDeepCopy.Copy(pack);
+        if (packCopy == null)
+        {
+            ShowNotification(new GUIContent("資產複製失敗，未寫回，請保留目前工作副本。"));
+            return false;
+        }
         setRoot.Invoke(asset, new object[] { packCopy?[0] as GraphNode });
 
         var storedOrphans = HGReflect.Orphans(asset);
@@ -892,6 +909,11 @@ public partial class HaruGraphWindow
         {
             storedTokens.Clear();
             if (packCopy?[2] is List<GraphToken> endpointCopy) storedTokens.AddRange(endpointCopy);
+        }
+        if (HGReflect.Properties(asset) is List<GraphProperty> storedProperties)
+        {
+            storedProperties.Clear();
+            if (packCopy?[3] is List<GraphProperty> propertyCopy) storedProperties.AddRange(propertyCopy);
         }
         EditorUtility.SetDirty(asset);
         AssetDatabase.SaveAssets();

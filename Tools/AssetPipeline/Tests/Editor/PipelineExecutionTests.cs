@@ -466,8 +466,9 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(skipped.Transaction, Is.EqualTo(PipelineTransactionStatus.Committed));
         }
 
-        [Test]
-        public void FailureRestoresPropertyValueAndSharedListContents()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void FailureRestoresPropertyValueAndSharedListContents(bool previouslyWritten)
         {
             var initial = new List<Object> { pipeline };
             var property = new GraphProperty("Objects", new ObjectListSlot(), true);
@@ -476,14 +477,18 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             var node = new GraphNode();
             node.SetProperty(property);
             var replacement = new List<Object>();
-            Add(new MutateAndWritePropertyAction(property, node, replacement));
+            var previous = new List<Object> { null, pipeline };
+            if (previouslyWritten) property.SetValue(previous);
+            Add(new MutateAndWritePropertyAction(property, node, replacement) { initializeBeforeMutation = previouslyWritten });
             Add(new FailAction());
 
             var result = pipeline.RunPipeline();
 
             Assert.That(result.Transaction, Is.EqualTo(PipelineTransactionStatus.RolledBack));
-            Assert.That(property.CurrentValue, Is.SameAs(initial));
+            Assert.That(property.CurrentValue, Is.SameAs(previouslyWritten ? previous : initial));
+            Assert.That(property.HasValue, Is.EqualTo(previouslyWritten));
             Assert.That(initial, Is.EqualTo(new Object[] { pipeline }));
+            Assert.That(previous, Is.EqualTo(new Object[] { null, pipeline }));
         }
 
         [Test]
@@ -672,6 +677,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             private readonly GraphProperty property;
             private readonly List<Object> replacement;
             public ObjectListPropertySlot output = new();
+            public bool initializeBeforeMutation;
 
             public MutateAndWritePropertyAction(GraphProperty property, GraphNode node, List<Object> replacement)
             {
@@ -682,6 +688,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
 
             protected override void OnExecute(PipelineActionContext context)
             {
+                if (initializeBeforeMutation) property.Initialize();
                 ((List<Object>)property.CurrentValue).Add(null);
                 output.Write(replacement);
             }

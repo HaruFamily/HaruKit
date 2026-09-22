@@ -324,6 +324,9 @@ public sealed class HGDocumentSession<TDocument>
         {
             if (!IsDocumentOwned(carrier) || source == null || !source.IsValid) return HGSessionCommandResult.Rejected;
             if (source.Token != null && !Owns(source.Token)) return HGSessionCommandResult.Rejected;
+            if (source.Property?.Proto == true
+                && (Document is not IPropertyOwner propertyOwner || !propertyOwner.Properties.Contains(source.Property)))
+                return HGSessionCommandResult.Rejected;
             if (source.Matches(carrier)) return HGSessionCommandResult.NoChange;
             var slots = new List<GraphSlotBase>();
             var visited = new HashSet<object>(HGRefComparer.Instance);
@@ -337,6 +340,9 @@ public sealed class HGDocumentSession<TDocument>
             foreach (var slot in slots)
                 if (slot.Node != null) shared.Add(slot.Node);
             foreach (var token in DocumentTokens()) shared.Add(token);
+            if (Document is IPropertyOwner properties)
+                foreach (var property in properties.Properties)
+                    if (property?.Proto == true) shared.Add(property);
             foreach (var pool in OrphanPools())
                 foreach (var node in pool) shared.Add(node);
             var pending = new Queue<GraphNode>();
@@ -737,8 +743,19 @@ public sealed class HGCarrierSource
     internal void Apply(GraphNode carrier, IEnumerable<object> shared)
     {
         if (kind == NodeKind.Token) { carrier.SetToken(Token); return; }
-        // 與Token同樣是引用：定義住圖層清單，不跟著複製，否則會抄出一份沒有人管的儲存位置。
-        if (kind == NodeKind.Property) { carrier.SetProperty(Property); return; }
+        if (kind == NodeKind.Property)
+        {
+            if (Property.Proto) carrier.SetProtoProperty(Property);
+            else
+            {
+                var local = GraphDeepCopy.Copy(Property);
+                if (local == null || ReferenceEquals(local, Property)) throw new InvalidOperationException("Property clone failed.");
+                local.ResetId();
+                local.EnsureId();
+                carrier.SetLocalProperty(local);
+            }
+            return;
+        }
         if (kind == NodeKind.Asset)
         {
             var parameters = AssetGraphSchema.Read(asset, out var duplicates);

@@ -4,14 +4,15 @@ using System.Collections.Generic;
 using UnityEditor;
 
 /// <summary>
-/// 資產工作副本的一份快照。內容、候選與Token必須是**同一次深複製**的產物，
-/// 分次抄會把同一顆端點抄成幾份不相干的物件，Token節點指到的就不是清單裡那一顆。
+/// 資產工作副本的一份快照。內容、候選、Token 與 ProtoProperty 庫須同一次深複製，
+/// 保留節點與庫定義之間的共享引用。
 /// </summary>
 public class HGAssetSnapshot
 {
     public GraphNode Root;
     public List<GraphNode> Orphans;
     public List<GraphToken> Tokens;
+    public List<GraphProperty> Properties;
 }
 
 /// <summary>

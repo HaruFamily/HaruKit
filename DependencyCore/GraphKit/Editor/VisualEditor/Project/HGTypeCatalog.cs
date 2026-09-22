@@ -10,6 +10,7 @@ using UnityEngine;
 public static class HGTypeCatalog
 {
     private static readonly Dictionary<Type, List<Type>> cache = new();
+    private static readonly Dictionary<System.Reflection.Assembly, bool> testAssemblies = new();
 
     /// <summary>某個 base 底下所有可實例化的具體型別。</summary>
     public static List<Type> Concrete(Type baseType)
@@ -66,8 +67,25 @@ public static class HGTypeCatalog
     private static bool Usable(Type t, Type baseType)
     {
         if (t == null || t.IsAbstract || t.IsGenericTypeDefinition) return false;
+        if (IsTestAssembly(t.Assembly)) return false;
         if (!baseType.IsAssignableFrom(t)) return false;
         return t.GetConstructor(Type.EmptyTypes) != null;
+    }
+
+    private static bool IsTestAssembly(System.Reflection.Assembly assembly)
+    {
+        if (assembly == null) return false;
+        if (testAssemblies.TryGetValue(assembly, out bool isTestAssembly)) return isTestAssembly;
+
+        isTestAssembly = false;
+        foreach (var reference in assembly.GetReferencedAssemblies())
+            if (reference.Name == "nunit.framework")
+            {
+                isTestAssembly = true;
+                break;
+            }
+        testAssemblies[assembly] = isTestAssembly;
+        return isTestAssembly;
     }
 
     /// <summary>開啟型別選擇下拉（內建關鍵字搜尋 + 分類分組）。</summary>
@@ -182,14 +200,21 @@ public class HGTypeDropdown : AdvancedDropdown
 
         foreach (var t in types)
         {
-            string category = HGReflect.TypeCategory(t);
-            if (!folders.TryGetValue(category, out var folder))
+            var parent = root;
+            string path = "";
+            foreach (string part in (HGReflect.TypeCategory(t) ?? "").Split('/'))
             {
-                folder = new AdvancedDropdownItem(category);
-                folders[category] = folder;
-                root.AddChild(folder);
+                if (string.IsNullOrEmpty(part)) continue;
+                path = string.IsNullOrEmpty(path) ? part : path + "/" + part;
+                if (!folders.TryGetValue(path, out var folder))
+                {
+                    folder = new AdvancedDropdownItem(part);
+                    folders[path] = folder;
+                    parent.AddChild(folder);
+                }
+                parent = folder;
             }
-            folder.AddChild(new TypeItem(HGReflect.TypeName(t), t));
+            parent.AddChild(new TypeItem(HGReflect.TypeName(t), t));
         }
         return root;
     }

@@ -38,9 +38,16 @@ namespace HaruFamily.Tools.AssetPipeline
             AssetPipeline previous = current;
             Action<string> previousWarnings = formulaWarningHandler;
             var transaction = new PipelineAssetTransaction();
-            // Property 的執行前狀態。Live 是當時的清單實體，Items 是它當時的內容——
-            // 只記目前值的引用回復不了「原地增刪」，而仍持有同一份引用的讀取者看的就是那個實體。
-            var propertiesBefore = new List<(GraphProperty Property, object Value, bool Written, IList Live, List<object> Items)>();
+            // 值狀態與清單內容分開備份；清單依引用去重，回復原地增刪時保留所有別名。
+            var propertiesBefore = new List<(GraphProperty Property, object Value, bool Written)>();
+            var listsBefore = new Dictionary<object, List<object>>(ReferenceComparer.Instance);
+            void CaptureList(object value)
+            {
+                if (value is not IList live || listsBefore.ContainsKey(live)) return;
+                var items = new List<object>(live.Count);
+                foreach (object item in live) items.Add(item);
+                listsBefore.Add(live, items);
+            }
             bool began = false;
             bool committed = false;
             executing = true;
@@ -69,35 +76,43 @@ namespace HaruFamily.Tools.AssetPipeline
                 foreach (GraphProperty property in GraphPropertyWalk.Collect(graph))
                 {
                     (object value, bool written) = property.CaptureValue();
-                    // 讀 CurrentValue 而不是 value：未寫入時目前值是初始內容，而 Proto 的初始清單
-                    // 與目前值共用引用，本次執行的原地修改一樣會改到它。
-                    var live = property.CurrentValue as IList;
-                    List<object> items = null;
-                    if (live != null)
-                    {
-                        items = new List<object>(live.Count);
-                        foreach (object item in live) items.Add(item);
-                    }
-                    propertiesBefore.Add((property, value, written, live, items));
+                    // Set 後目前值與 Proto 初始內容可指向不同清單，兩者都可能被本次執行修改。
+                    CaptureList(property.CurrentValue);
+                    CaptureList(property.InitialValue);
+                    propertiesBefore.Add((property, value, written));
                 }
                 began = true;
                 run.RestoreProperties = () =>
                 {
                     var errors = new List<string>();
-                    foreach (var before in propertiesBefore)
+                    foreach (var before in listsBefore)
                     {
                         try
                         {
                             // 先還原清單內容再換回指標：只換指標會把已被原地修改的清單留給仍持有它的讀取者。
-                            if (before.Live != null && before.Items != null)
+                            var live = (IList)before.Key;
+                            if (live.IsReadOnly)
                             {
-                                before.Live.Clear();
-                                foreach (object item in before.Items) before.Live.Add(item);
+                                bool unchanged = live.Count == before.Value.Count;
+                                for (int i = 0; unchanged && i < live.Count; i++)
+                                    unchanged = Equals(live[i], before.Value[i]);
+                                if (!unchanged) throw new NotSupportedException("唯讀清單的內容已變更，無法原地回復。");
+                                continue;
                             }
-                            before.Property.RestoreValue((before.Value, before.Written));
+                            if (live.IsFixedSize)
+                            {
+                                for (int i = 0; i < before.Value.Count; i++) live[i] = before.Value[i];
+                            }
+                            else
+                            {
+                                live.Clear();
+                                foreach (object item in before.Value) live.Add(item);
+                            }
                         }
                         catch (Exception exception) { errors.Add("Property 回復失敗：" + exception.Message); }
                     }
+                    foreach (var before in propertiesBefore)
+                        before.Property.RestoreValue((before.Value, before.Written));
                     return errors;
                 };
                 BeginRun();

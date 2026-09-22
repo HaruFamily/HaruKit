@@ -355,8 +355,7 @@ public static class HGReflect
     /// <summary>節點分類（建立選單的資料夾）。</summary>
     public static string TypeCategory(Type t)
     {
-        string cat = NodeAttr(t)?.Group;
-        return string.IsNullOrEmpty(cat) ? "其他" : cat;
+        return NodeAttr(t)?.Group;
     }
 
     /// <summary>

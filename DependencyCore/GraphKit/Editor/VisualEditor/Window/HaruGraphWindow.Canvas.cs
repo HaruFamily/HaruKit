@@ -866,7 +866,7 @@ public partial class HaruGraphWindow
             new GUIContent("寫入", "由左側 Input 指定寫入這顆 Property 的目標"), HGStyles.RowLabel);
     }
 
-    /// <summary>只列這個欄位讀寫得下的 Property（族相同）。</summary>
+    /// <summary>列出目前變數庫的全部 ProtoProperty；換族時由交易中斷不相容的讀寫線。</summary>
     private void ShowPropertyPicker(HGNodeView node, Rect anchor)
     {
         var options = new List<HGSourceOption>();
@@ -874,8 +874,6 @@ public partial class HaruGraphWindow
         {
             if (property == null) continue;
             if (!property.Proto) continue;
-            // 父欄位存在時以它的相容判定為準；候選池裡的節點沒有父欄位，一律可選。
-            if (node.ParentSlot != null && !node.ParentSlot.AcceptsProperty(property)) continue;
             var captured = property;
             options.Add(new HGSourceOption
             {
@@ -887,7 +885,7 @@ public partial class HaruGraphWindow
 
         if (options.Count == 0)
         {
-            ShowNotification(new GUIContent("沒有相容的 Property；先到左欄 Property 庫新增一顆"));
+            ShowNotification(new GUIContent("變數庫尚無 ProtoProperty；先到左欄變數庫新增一顆"));
             return;
         }
         HGTypeCatalog.ShowSourcePicker(anchor, options, "選擇 Property");
@@ -897,10 +895,13 @@ public partial class HaruGraphWindow
     private void ChangeNodeToProperty(HGNodeView node, GraphProperty property)
     {
         if (node?.Carrier == null || property == null) return;
+        BreakUndoMerge();
+        PreserveVisibleNodePositions();
         node.Carrier.SetProtoProperty(property);
         BreakIncompatiblePropertyLinks(node.Carrier, property);
         Invalidate();
         MarkGraphChanged();
+        BreakUndoMerge();
     }
 
     /// <summary>只列這個欄位收得下的資產。</summary>

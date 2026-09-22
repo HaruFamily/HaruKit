@@ -81,8 +81,10 @@ where TTiming : Enum
         _diagnostics ??= new List<GraphDiagnostic>();
 
         _diagnostics.Clear();
+        _walkDisabled = false;
 
         ReportDuplicateTokenNames();
+        ValidatePropertyDefinitions(Properties, new GraphDiagnosticLocation(fieldPath: "Properties"));
         ReportExternalTokenKeys(external);
         ReportDuplicateTimings();
         ReportEmptyRootActions();
@@ -208,6 +210,24 @@ where TTiming : Enum
 
             if (!seen.Add((endpoint.Slot.FamilyType, endpoint.Name)) && reported.Add(endpoint.Name))
                 Err("token.duplicate", $"Token 名稱重複：'{endpoint.Name}'（同族內必須唯一）", location);
+        }
+    }
+
+    private void ValidatePropertyDefinitions(IEnumerable<GraphProperty> properties, GraphDiagnosticLocation location)
+    {
+        var names = new HashSet<string>();
+        int index = 0;
+        foreach (var property in properties ?? Array.Empty<GraphProperty>())
+        {
+            var at = At(location, location.FieldPath + $"[{index++}]");
+            if (property == null) { Issue("property.missing", "變數庫有空項目", at); continue; }
+            if (!property.Proto) continue;
+            if (string.IsNullOrWhiteSpace(property.Name))
+                Issue("property.name-missing", "ProtoProperty 沒有名稱", at);
+            else if (!names.Add(property.Name))
+                Issue("property.duplicate", $"ProtoProperty 名稱重複：'{property.Name}'", at);
+            if (property.Slot == null)
+                Issue("property.slot-missing", $"ProtoProperty '{property.Name}' 沒有指定型別", at);
         }
     }
 
@@ -441,6 +461,10 @@ where TTiming : Enum
         if (node is IGraphAsset assetGraph)
         {
             if (assetGraph.Root?.Disabled == true && !_walkDisabled) return;
+            if (assetGraph.Root?.Kind == NodeKind.Property && _checkedNodes.Add(assetGraph.Root))
+                Issue("asset.property-root", "資產根內容必須是公式或動作，不能直接引用 Property", location);
+            if (!_walkDisabled && assetGraph is IPropertyOwner properties)
+                ValidatePropertyDefinitions(properties.Properties, At(location, location.FieldPath + ".Asset.Properties"));
             ValidateSlotSources(assetGraph.Root, visited, At(location, location.FieldPath + ".Asset.Root"));
             // 資產的端點就是它的參數介面，跟內容一樣是正式資料；候選池不驗。
             if (assetGraph.Tokens != null)
@@ -455,13 +479,13 @@ where TTiming : Enum
         {
             // 停用的動作欄位不執行，整棵子樹留到第二趟走，殘缺降成警告。
             if (a.Disabled && !_walkDisabled) return;
-            CheckNode(a.Node, "動作欄位", a.AcceptsBody, a.AcceptsAsset, a.AcceptsToken, location);
+            CheckNode(a.Node, "動作欄位", a.AcceptsBody, a.AcceptsAsset, a.AcceptsToken, a.AcceptsProperty, location);
             ValidateSlotSources(a.Node, visited, location);
             return;
         }
-        if (node is FormulaSlotBase fsb)
+        if (node is GraphSlotBase fsb)
         {
-            CheckNode(fsb.Node, fsb.GetType().Name, fsb.AcceptsBody, fsb.AcceptsAsset, fsb.AcceptsToken, location);
+            CheckNode(fsb.Node, fsb.GetType().Name, fsb.AcceptsBody, fsb.AcceptsAsset, fsb.AcceptsToken, fsb.AcceptsProperty, location);
             ValidateSlotSources(fsb.Node, visited, location);
             return;
         }
@@ -540,6 +564,7 @@ where TTiming : Enum
         HashSet<GraphNode> completed, HashSet<object> visitedObjects)
     {
         if (value == null) return false;
+        if (value is PropertySlotBase || value is GraphPropertyInputSlot) return false;
         if (value is ActionSlot<TPack> actionSlot) return HasCarrierCycle(actionSlot.Node, stack, completed, visitedObjects);
         if (value is FormulaSlotBase formulaSlot) return HasCarrierCycle(formulaSlot.Node, stack, completed, visitedObjects);
         if (value is GraphNode carrier)
@@ -621,7 +646,7 @@ where TTiming : Enum
     // 節點是唯一來源，所以只需檢查「這個節點的內容有沒有、對不對型別」一件事。
     private void CheckNode(GraphNode node, string where,
         Func<GraphNodeContent, bool> acceptsBody, Func<ScriptableObject, bool> acceptsAsset,
-        Func<GraphToken, bool> acceptsToken, GraphDiagnosticLocation location)
+        Func<GraphToken, bool> acceptsToken, Func<GraphProperty, bool> acceptsProperty, GraphDiagnosticLocation location)
     {
         if (node == null) return;   // 動作＝空槽、公式＝常數，都是合法狀態
 
@@ -656,6 +681,13 @@ where TTiming : Enum
                 if (string.IsNullOrEmpty(node.Token.Name)) { if (first) Issue("node.token-name-missing", $"{where} 接的 Token 沒有名稱", location); return; }
                 if (!acceptsToken(node.Token))
                     Issue("node.token-incompatible", $"{where} 接的 Token '{node.Token.Name}' 型別不相容：{node.Token.ResultType?.Name ?? "未指定"}", location);
+                return;
+
+            case NodeKind.Property:
+                if (node.Property == null) { if (first) Issue("node.property-missing", $"{where} 沒有指定 Property", location); return; }
+                if (node.Property.Slot == null) { if (first) Issue("node.property-slot-missing", $"{where} 的 Property 尚未定型", location); return; }
+                if (!acceptsProperty(node.Property))
+                    Issue("node.property-incompatible", $"{where} 接的 Property 型別不相容", location);
                 return;
         }
     }

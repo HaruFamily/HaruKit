@@ -7,6 +7,7 @@ public sealed class HGNodeAttribute : Attribute
 {
     public string Name { get; }
     public string Description { get; }
+    /// <summary>選單分類；未填直接列在根層，以 <c>/</c> 分隔階層，例如 <c>數值/運算</c>。</summary>
     public string Group { get; }
     public int Priority { get; }
 

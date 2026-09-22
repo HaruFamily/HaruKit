@@ -29,17 +29,29 @@ public partial class HaruGraphWindow
         if (HasPropertySection)
         {
             bool alone = !HasTokenSection && !HasAssetSection;
-            float propertyBottom = alone ? rest.yMax : rest.y + 22f + MinPropertySection;
+            float handleHeight = alone ? 0f : Mathf.Min(ResizeHandleWidth, rest.height);
+            float available = Mathf.Max(0f, rest.height - handleHeight);
+            float lowerMinimum = (HasTokenSection ? 22f + MinTokenSection : 0f)
+                + (HasAssetSection ? MinAssetSection : 0f)
+                + (HasTokenSection && HasAssetSection ? ResizeHandleWidth : 0f)
+                + (HasReferenceSection ? MinRefSection + ResizeHandleWidth : 0f);
+            float minimum = Mathf.Min(22f + MinPropertySection, available * .5f);
+            float maximum = Mathf.Max(minimum, available - Mathf.Min(lowerMinimum, available * .5f));
+            if (!alone) propertySectionHeight = Mathf.Clamp(propertySectionHeight, minimum, maximum);
+            float propertyBottom = alone ? rest.yMax : rest.y + propertySectionHeight;
             var propertyRect = new Rect(rest.x, rest.y, rest.width, propertyBottom - rest.y);
+            var handle = new Rect(rest.x, propertyBottom, rest.width, handleHeight);
+            if (!alone) HandlePropertySplitResize(handle, minimum, maximum);
 
             GUI.Label(new Rect(propertyRect.x + 4f, propertyRect.y + 2f, 160f, 18f),
-                new GUIContent("ProtoProperty 庫", "有初始內容的具名變數；不必先寫入就讀得到。LocalProperty 在畫布上建立"),
+                new GUIContent("變數庫", "有初始內容的具名變數；不必先寫入就讀得到。LocalProperty 在畫布上建立"),
                 HGStyles.PanelHeader);
             propertyLibrary.Draw(propertyRect, propertyRect.y + 22f, PropertyLibraryView(),
                 PropertyLibraryCommands(), inlineName, drag);
 
             if (alone) return;
-            rest = new Rect(rest.x, propertyBottom, rest.width, rest.yMax - propertyBottom);
+            DrawResizeGrip(handle, false, resizingPropertySplit);
+            rest = new Rect(rest.x, handle.yMax, rest.width, Mathf.Max(0f, rest.yMax - handle.yMax));
         }
 
         DrawTokenAndAssetSections(rest);
@@ -70,7 +82,7 @@ public partial class HaruGraphWindow
         bool showRef = HasReferenceSection;
         // 把手只長在兩區之間：Token↔資產一條、資產↔引用一條，區沒出現那條把手也不存在。
         float handleCount = (showToken ? 1f : 0f) + (showRef ? 1f : 0f);
-        float avail = r.yMax - top - ResizeHandleWidth * handleCount;
+        float avail = Mathf.Max(0f, r.yMax - top - ResizeHandleWidth * handleCount);
         // 視窗太矮時連各區的最小高度都放不下，這時平均分；寧可擠也不要出現負高度的 Rect。
         float share = avail / (1f + handleCount);
         float minToken = showToken ? Mathf.Min(MinTokenSection, share) : 0f;
@@ -195,7 +207,8 @@ public partial class HaruGraphWindow
     };
 
     /// <summary>目前這張圖的 Property 定義。沒有這個能力的文件回 null，面板不會被畫出來。</summary>
-    private List<GraphProperty> CurrentProperties() => HGReflect.Properties(model?.Data);
+    private List<GraphProperty> CurrentProperties()
+        => focus.Kind == HGFocusKind.Asset ? focus.AssetProperties : HGReflect.Properties(model?.Data);
 
     private bool RenamePropertyFromLibrary(GraphProperty property, string name)
     {
@@ -229,7 +242,7 @@ public partial class HaruGraphWindow
         if (property == null || scope == null) return;
 
         BreakUndoMerge();                   // 刪除自成一個復原步驟
-        int references = HGModel.CountReferences(property, model.AllSlots());
+        int references = HGModel.CountReferences(property, SlotsInCurrentGraph());
         model.DeleteProperty(property, scope, CurrentCarrierScope());
         MarkGraphChanged();
         BreakUndoMerge();
@@ -413,6 +426,30 @@ public partial class HaruGraphWindow
         if (e.type == EventType.MouseUp && resizingLibrarySplit)
         {
             resizingLibrarySplit = false;
+            e.Use();
+        }
+    }
+
+    private void HandlePropertySplitResize(Rect handle, float min, float max)
+    {
+        EditorGUIUtility.AddCursorRect(handle, MouseCursor.ResizeVertical);
+        var e = Event.current;
+        if (e.type == EventType.MouseDown && e.button == 0 && handle.Contains(e.mousePosition))
+        {
+            resizingPropertySplit = true;
+            e.Use();
+            return;
+        }
+        if (e.type == EventType.MouseDrag && resizingPropertySplit)
+        {
+            propertySectionHeight = Mathf.Clamp(propertySectionHeight + e.delta.y, min, max);
+            e.Use();
+            Repaint();
+            return;
+        }
+        if (e.type == EventType.MouseUp && resizingPropertySplit)
+        {
+            resizingPropertySplit = false;
             e.Use();
         }
     }

@@ -328,10 +328,11 @@ public sealed class LogicGraphExecutionTests
         Assert.That(pack.Count, Is.EqualTo(1));
     }
 
-    [Test]
-    public async Task SharedAssetPropertiesAreScopedByCallingNode()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task SharedAssetPropertiesAreScopedByCallingNode(bool addedAfterFirstRun)
     {
-        var property = new GraphProperty("Count", new IntSlot(0));
+        var property = new GraphProperty("Count", new IntSlot(0), true);
         var asset = UnityEngine.ScriptableObject.CreateInstance<TestActionAsset>();
         asset.Properties.Add(property);
         asset.SetRoot(new GraphNode(new IncrementAndReadProperty
@@ -352,6 +353,15 @@ public sealed class LogicGraphExecutionTests
             var first = new Pack();
             await graph.TriggerAction(Timing.Run, first);
             Assert.That(first.Count, Is.EqualTo(2));
+            if (addedAfterFirstRun)
+            {
+                var added = new GraphProperty("Added", new IntSlot(1), true);
+                asset.Properties.Add(added);
+                asset.SetRoot(new GraphNode(new IncrementAndReadProperty
+                {
+                    Input = PropertyInput(added), Target = PropertyTarget(added),
+                }));
+            }
             var second = new Pack();
             await graph.TriggerAction(Timing.Run, second);
             Assert.That(second.Count, Is.EqualTo(4));

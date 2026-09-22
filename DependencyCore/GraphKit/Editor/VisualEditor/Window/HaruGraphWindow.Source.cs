@@ -279,48 +279,6 @@ public partial class HaruGraphWindow
             }
         }
 
-        // Property 的兩種模式由 Proto 決定：一般 Property 是目前節點私有的未命名暫存位置，
-        // 不可從名稱清單重指向；ProtoProperty 才是可選、可改名的圖內定義。
-        // 寫入目標欄位（PropertySlotBase）宣告的是「要寫哪一族」而不是自己的族，所以判準另外算一次；
-        // 直接拿 slotKind 比會永遠對不上，那一格的下拉就會是空的。
-        Type propertyKind = slot is PropertySlotBase writeSlot ? writeSlot.FamilyType : slotKind;
-        propertyKind ??= node.Property?.FamilyType;
-        if (HasPropertySection && (propertyKind != null || resultType != null))
-        {
-            // 這是模式切換，不是另一個「建立」入口：選中後把目前載體換成節點專屬的一般 Property。
-            if (propertyKind != null)
-            {
-                Type captured = propertyKind;
-                options.Add(new HGSourceOption
-                {
-                    Group = "Property 類型",
-                    Name = "LocalProperty",
-                    IsCurrent = node.Property?.Proto == false,
-                    Apply = () =>
-                    {
-                        if (node.Property?.Proto == false) return;
-                        CreatePropertyForNode(node, captured);
-                    },
-                });
-            }
-
-            // Header 的「換來源」可從一般 Property 切成任一相容 ProtoProperty。
-            foreach (var property in HGModel.ReadProperties(CurrentProperties()))
-            {
-                if (propertyKind != null ? property.FamilyType != propertyKind : property.ResultType != resultType) continue;
-                if (property.Property?.Proto != true) continue;
-                var definition = property.Property;
-                options.Add(new HGSourceOption
-                {
-                    Group = "ProtoProperty",
-                    Name = property.Key,
-                    IsCurrent = ReferenceEquals(node.Property, definition),
-                    Apply = () => ChangeNodeToProperty(node, definition),
-                });
-            }
-
-        }
-
         HGTypeCatalog.ShowSourcePicker(selector, options);
     }
 
@@ -343,7 +301,7 @@ public partial class HaruGraphWindow
             },
         };
 
-        HGTypeCatalog.ShowSourcePicker(selector, options, "Property 類型");
+        HGTypeCatalog.ShowSourcePicker(selector, options);
     }
 
     internal void ChangePropertyMode(HGNodeView node, bool proto)
@@ -386,6 +344,9 @@ public partial class HaruGraphWindow
 
         foreach (bool input in new[] { true, false })
         {
+            if (!input && node.Property?.FamilyType is Type outputFamily)
+                foreach (var property in properties)
+                    if (property?.Proto == true && property.FamilyType == outputFamily) return property;
             foreach (var link in graph?.Links ?? new List<HGLink>())
             {
                 if (!ReferenceEquals(link.OutputOwner, node)) continue;

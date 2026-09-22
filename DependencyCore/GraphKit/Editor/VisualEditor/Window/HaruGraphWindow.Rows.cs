@@ -671,6 +671,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     focus.AssetHostSlot.SetNode(assetSnapshot.Root);
                     focus.AssetOrphans = assetSnapshot.Orphans;
                     focus.AssetTokens = assetSnapshot.Tokens;
+                    focus.AssetProperties = assetSnapshot.Properties;
                     focus.Token = assetSnapshot.Tokens.Find(token => token.Id == tokenId);
                     restoreAssetHistory?.Invoke();
                     assetDirty = wasAssetDirty;

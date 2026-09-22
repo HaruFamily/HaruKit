@@ -130,22 +130,7 @@ public static class HGValidator
             ValidateToken(report, model, focus, t);
         }
 
-        // ProtoProperty 的 Key 跨族也是全域身分；同名會讓 Key 選擇與外部顯示無法判定指向哪一顆。
-        var propertyKeys = new HashSet<string>();
-        foreach (var property in model.OwnerProperties)
-        {
-            if (property?.Proto != true) continue;
-            if (string.IsNullOrWhiteSpace(property.Name))
-            {
-                Err(report, "graphkit.property.key-missing", null, "ProtoProperty", "ProtoProperty 沒有 Key",
-                    "在左欄 ProtoProperty 庫設定全域唯一的 Key。", null, property);
-            }
-            else if (!propertyKeys.Add(property.Name))
-            {
-                Err(report, "graphkit.property.key-duplicate", null, "ProtoProperty", $"ProtoProperty Key '{property.Name}' 重複",
-                    "改成圖內全域唯一的 Key。", null, property);
-            }
-        }
+        ValidateProperties(report, null, model.OwnerProperties);
 
         // 2. 每個動作、每個 Token 的節點樹
         foreach (var g in model.ReadRootGroups())
@@ -215,6 +200,7 @@ public static class HGValidator
         var report = new HGReport();
         if (model?.Data == null || rootSlot == null) return report;
 
+        ValidateProperties(report, focus, focus?.AssetProperties);
         WalkTree(report, model, focus, rootSlot, where, false);
         ValidateAssetCycles(report, focus, rootSlot, focus?.AssetObject, where, new HashSet<UnityEngine.Object>());
 
@@ -222,6 +208,9 @@ public static class HGValidator
         if (rootCarrier?.Kind == NodeKind.Token)
             Err(report, "graphkit.asset.token-root", focus, where, "資產內容不能只是一個 Token 引用",
                 "資產的內容要是公式或動作；要對外開參數請用左欄的 Token 清單。", rootSlot, rootCarrier);
+        if (rootCarrier?.Kind == NodeKind.Property)
+            Err(report, "graphkit.asset.property-root", focus, where, "資產根內容不能只是一個 Property 引用",
+                "資產根內容要是公式或動作；Property 請接到內容的輸入欄位。", rootSlot, rootCarrier);
 
         var tokens = HGModel.ReadTokens(focus?.AssetTokens);
         var seen = new HashSet<(Type, string)>();
@@ -235,6 +224,30 @@ public static class HGValidator
             WalkTokenCarrier(report, model, tokenFocus, token, new HashSet<UnityEngine.Object>(), focus?.AssetObject);
         }
         return report;
+    }
+
+    private static void ValidateProperties(HGReport report, HGFocus focus, IEnumerable<GraphProperty> properties)
+    {
+        var keys = new HashSet<string>();
+        foreach (var property in properties ?? Array.Empty<GraphProperty>())
+        {
+            if (property == null)
+            {
+                Err(report, "graphkit.property.missing", focus, "變數庫", "變數庫有空項目",
+                    "移除空項目。", null, null);
+                continue;
+            }
+            if (!property.Proto) continue;
+            if (string.IsNullOrWhiteSpace(property.Name))
+                Err(report, "graphkit.property.key-missing", focus, "ProtoProperty", "ProtoProperty 沒有 Key",
+                    "在左欄變數庫設定全域唯一的 Key。", null, property);
+            else if (!keys.Add(property.Name))
+                Err(report, "graphkit.property.key-duplicate", focus, "ProtoProperty", $"ProtoProperty Key '{property.Name}' 重複",
+                    "改成圖內全域唯一的 Key。", null, property);
+            if (property.Slot == null)
+                Err(report, "graphkit.property.slot-missing", focus, "ProtoProperty", $"ProtoProperty '{property.Name}' 沒有型別",
+                    "在變數庫移除遺失型別的定義並重建。", null, property);
+        }
     }
 
     // 一次驗證裡同一個資產只探一次：巢狀資產與多處引用都會問到同一顆。
@@ -268,6 +281,7 @@ public static class HGValidator
             AssetHostSlot = host,
             AssetOrphans = HGReflect.Orphans(asset),
             AssetTokens = HGReflect.Tokens(asset),
+            AssetProperties = HGReflect.Properties(asset),
         };
 
         probeDepth++;
@@ -292,6 +306,7 @@ public static class HGValidator
             AssetHostSlot = assetFocus?.AssetHostSlot,
             AssetOrphans = assetFocus?.AssetOrphans,
             AssetTokens = assetFocus?.AssetTokens,
+            AssetProperties = assetFocus?.AssetProperties,
             Token = token?.Token,
         };
 
@@ -404,11 +419,11 @@ public static class HGValidator
                         "選一顆 Property，或把模式改回常數。", slot, carrier);
             }
             else if (!slot.AcceptsProperty(property))
-                Err(report, "graphkit.property.type-incompatible", focus, where, $"接的 Property '{property.Name}' 型別不相容",
+                Issue(report, "graphkit.property.type-incompatible", disabled, focus, where, $"接的 Property '{property.Name}' 型別不相容",
                     "改接同族的 Property。", slot, carrier);
             else if (!InScope(model, focus, property))
-                Err(report, "graphkit.property.out-of-scope", focus, where, $"接的 Property '{property.Name}' 不屬於這張圖",
-                    "改接本圖 Property 庫裡的定義；跨圖引用不會共用儲存位置。", slot, carrier);
+                Issue(report, "graphkit.property.out-of-scope", disabled, focus, where, $"接的 Property '{property.Name}' 不屬於這張圖",
+                    "改接本圖變數庫裡的定義；跨圖引用不會共用儲存位置。", slot, carrier);
         }
     }
 
@@ -431,7 +446,7 @@ public static class HGValidator
     private static bool InScope(HGModel model, HGFocus focus, GraphProperty property)
     {
         if (!property.Proto) return true; // LocalProperty 住在引用它的 GraphNode，不在圖層清單。
-        var scope = HGReflect.Properties(model?.Data);
+        var scope = focus?.Kind == HGFocusKind.Asset ? focus.AssetProperties : HGReflect.Properties(model?.Data);
         if (scope == null) return true;   // 讀不到清單就不判，寧可不報也不要誤報
         foreach (var other in scope)
             if (ReferenceEquals(other, property)) return true;

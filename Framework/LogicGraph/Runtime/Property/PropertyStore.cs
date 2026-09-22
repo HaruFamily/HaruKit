@@ -10,7 +10,12 @@ internal sealed class PropertyStore
 {
     private PropertyScope root;
 
-    internal PropertyScope Root(IEnumerable<GraphProperty> properties) => root ??= new PropertyScope(properties, null);
+    internal PropertyScope Root(IEnumerable<GraphProperty> properties)
+    {
+        root ??= new PropertyScope(properties, null);
+        root.RegisterDefinitions(properties);
+        return root;
+    }
 
     /// <summary>把所有 scope 的目前值退回未寫入狀態。</summary>
     // 不丟掉 scope 物件：已經拿到 scope 的 TokenTable 會繼續用手上那一份，換新的只會讓明確初始化對它們無效。
@@ -39,8 +44,13 @@ internal sealed class PropertyScope
     internal PropertyScope(IEnumerable<GraphProperty> properties, PropertyScope parent)
     {
         this.parent = parent;
+        RegisterDefinitions(properties);
+    }
+
+    internal void RegisterDefinitions(IEnumerable<GraphProperty> properties)
+    {
         foreach (GraphProperty property in properties ?? Array.Empty<GraphProperty>())
-            if (property != null) values[property] = new Value();
+            if (property != null && !values.ContainsKey(property)) Register(property);
     }
 
     internal PropertyScope Asset(ScriptableObject asset, GraphNode caller, IEnumerable<GraphProperty> properties)
@@ -51,6 +61,8 @@ internal sealed class PropertyScope
             scope = new PropertyScope(properties, this);
             assets.Add(key, scope);
         }
+        // 共用資產可在 scope 建立後新增定義；必須先在該呼叫位置登記，不能落到父層而合併不同呼叫者。
+        scope.RegisterDefinitions(properties);
         return scope;
     }
 

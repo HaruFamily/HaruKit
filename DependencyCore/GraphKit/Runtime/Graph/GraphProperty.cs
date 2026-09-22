@@ -49,7 +49,7 @@ public class GraphProperty
         _proto = proto;
     }
 
-    /// <summary>顯示名稱。唯一性是「族＋名稱」，所以同名不同族可以並存。</summary>
+    /// <summary>顯示名稱。ProtoProperty 在同一變數庫內跨族唯一；LocalProperty 不要求名稱。</summary>
     public string Name
     {
         get => string.IsNullOrEmpty(_name) ? null : _name;
@@ -68,7 +68,7 @@ public class GraphProperty
     /// <summary>值型別。Slot 未指定時為 null。</summary>
     public Type ResultType => _slot?.ResultType;
 
-    /// <summary>族身分（＝Slot 型別）。撞名唯一性與讀寫相容一律看它，不看結果型別。</summary>
+    /// <summary>族身分（＝Slot 型別）。讀寫相容看族，不看結果型別。</summary>
     public Type FamilyType => _slot?.FamilyType;
 
     /// <summary>穩定識別碼，改名不影響。</summary>

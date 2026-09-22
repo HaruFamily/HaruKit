@@ -303,8 +303,9 @@ public class HGPortTests
         }
     }
 
-    [Test]
-    public void SwitchingToProtoFallsBackToTheReaderFamilyWhenNothingWritesTheProperty()
+    [TestCase(true)]
+    [TestCase(false)]
+    public void SwitchingToProtoFallsBackToItsOutputFamilyWhenNothingWritesTheProperty(bool connectedReader)
     {
         var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
         var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
@@ -329,7 +330,7 @@ public class HGPortTests
             reader.Source.SetNode(propertyNode);
             var readerNode = new GraphNode(reader);
             readerNode.EnsureId();
-            document.Orphans.Add(readerNode);
+            document.Orphans.Add(connectedReader ? readerNode : propertyNode);
             owner.Document = document;
 
             Assert.That(window.BindDocument(owner, PropertyBinding(), PropertyContext()), Is.True);
@@ -389,6 +390,36 @@ public class HGPortTests
     private static HGDocumentBinding<PropertyDocument> PropertyBinding()
         => new("Property.Document", target => ((PropertyDocumentOwner)target).Document,
             (target, document) => ((PropertyDocumentOwner)target).Document = document);
+
+    [Test]
+    public void PublicReplacementRejectsForeignProtoAndCopiesPrivateLocalDefinitions()
+    {
+        var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
+        try
+        {
+            owner.Document = new PropertyDocument();
+            owner.Document.Properties.Add(new GraphProperty("Shared", new TestFormulaSlot(), true));
+            owner.Document.Orphans.Add(new GraphNode());
+            Assert.That(HGDocumentSession<PropertyDocument>.TryOpen(owner, PropertyBinding(), out var session), Is.True);
+            var carrier = session.Document.Orphans[0];
+            Assert.That(session.ReplaceSource(carrier, HGCarrierSource.NamedProperty(owner.Document.Properties[0])),
+                Is.EqualTo(HGSessionCommandResult.Rejected), "Owner 的定義不是工作副本的定義。");
+            Assert.That(session.IsDirty, Is.False);
+            var proto = session.Document.Properties[0];
+            Assert.That(session.ReplaceSource(carrier, HGCarrierSource.NamedProperty(proto)), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(carrier.Property, Is.SameAs(proto));
+
+            var local = new GraphProperty(null, new TestFormulaSlot());
+            string id = local.EnsureId();
+            Assert.That(session.ReplaceSource(carrier, HGCarrierSource.NamedProperty(local)), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(carrier.Property, Is.Not.SameAs(local));
+            Assert.That(carrier.Property.Id, Is.Not.EqualTo(id));
+            Assert.That(session.Document.Properties[0], Is.SameAs(proto));
+            Assert.That(session.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(session.Document.Orphans[0].Property, Is.SameAs(session.Document.Properties[0]));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
 
     private static HGEditorExtensionContext PropertyContext()
         => new(new PropertyDocumentProvider(), profile: new HGEditorProfile(HGCapabilities.Properties));
