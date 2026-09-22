@@ -196,18 +196,15 @@ public partial class HaruGraphWindow
     private void ShowNodeSourceSelector(HGNodeView node, Rect selector)
     {
         if (node == null) return;
+        HGTypeCatalog.ShowSourcePicker(selector, NodeSourceOptions(node));
+    }
 
+    internal List<HGSourceOption> NodeSourceOptions(HGNodeView node)
+    {
         var options = new List<HGSourceOption>();
-        object slot = SourceSlot(node);
-        if (node.IsPropertyNode)
-        {
-            ShowPropertyNodeTypeSelector(node, slot as GraphSlotBase, selector);
-            return;
-        }
-
-        // 同一族的 Formula／Asset／Token 一律可以互換，包含候選池裡沒有父欄位的節點：
-        // 族靠「代表性的 Slot 型別」推導，推不出來才退回用目前內容的基底型別。
-        Type slotType = slot?.GetType() ?? RepresentativeSlotType(node);
+        if (node == null) return options;
+        // 來源由自身的族決定；接線只在替換後決定保留或斷開，不控制候選可用性。
+        Type slotType = ReplacementSlotType(node);
         bool isAction = slotType != null
             ? HGReflect.IsActionSlotType(slotType)
             : node.IsActionNode || (node.IsAssetNode && node.ResultType == null);
@@ -217,10 +214,17 @@ public partial class HaruGraphWindow
         // 有些欄位的族是「pack 固定、結果型別任意」，
         // 那個條件 BodyBaseType 表達不出來，由 Slot 另外宣告 CandidatePackType 收窄。
         Type packFilter = !isAction && slotType != null ? HGReflect.CandidatePackType(slotType) : null;
+        var bodyTypes = new HashSet<Type>();
         if (baseType != null)
+            foreach (var type in HGTypeCatalog.Concrete(baseType, packFilter)) bodyTypes.Add(type);
+        else if (node.IsPropertyNode)
+            foreach (var family in model.FormulaKinds())
+                foreach (var type in HGTypeCatalog.Concrete(HGReflect.FormulaBaseType(family.slotType),
+                    HGReflect.CandidatePackType(family.slotType))) bodyTypes.Add(type);
+        if (bodyTypes.Count > 0)
         {
             string kind = isAction ? "Action" : "Formula";
-            foreach (var type in HGTypeCatalog.Concrete(baseType, packFilter))
+            foreach (var type in bodyTypes)
             {
                 Type captured = type;
                 options.Add(new HGSourceOption
@@ -242,8 +246,7 @@ public partial class HaruGraphWindow
         Type resultType = isAction || slotKind != null ? null : node.ResultType;
 
 
-        // 不支援共用資產的圖直接跳過：CanReplaceAssetNode 本來就會全部擋掉，
-        // 但 Entries 會觸發一次全專案 ScriptableObject 掃描，那個代價不該白付。
+        // 不支援共用資產的圖直接跳過，避免無用的資產掃描。
         if (HasAssetSection)
         {
             foreach (var entry in HGAssetIndex.Entries)
@@ -260,14 +263,14 @@ public partial class HaruGraphWindow
             }
         }
 
-        // Token與 Formula／Asset 同一層：三者都能填同一族的欄位，所以換來源選單一律列在一起。
+        // Token 與其他讀值來源同層；動作不列 Token。
         // 判準用上面推出來的 slotKind，和 Formula／Asset 兩組同源；動作欄位沒有族，天然排除。
         // 沒宣告 Token 能力的圖直接跳過：那張圖的Token清單永遠是空的，列出來也只有標題。
-        if (HasTokenSection && (slotKind != null || resultType != null))
+        if (HasTokenSection && !isAction && (slotKind != null || resultType != null || node.IsPropertyNode))
         {
             foreach (var token in HGModel.ReadTokens(CurrentTokens()))
             {
-                if (slotKind != null ? token.FamilyType != slotKind : token.ResultType != resultType) continue;
+                if (slotKind != null ? token.FamilyType != slotKind : resultType != null && token.ResultType != resultType) continue;
                 var endpoint = token.Token;
                 options.Add(new HGSourceOption
                 {
@@ -279,62 +282,40 @@ public partial class HaruGraphWindow
             }
         }
 
-        HGTypeCatalog.ShowSourcePicker(selector, options);
-    }
-
-    /// <summary>Property Header 只切換 LocalProperty／ProtoProperty 模式；Key 只在 Proto 節點本體選擇。</summary>
-    private void ShowPropertyNodeTypeSelector(HGNodeView node, GraphSlotBase slot, Rect selector)
-    {
-        var options = new List<HGSourceOption>
+        if (!isAction && HasPropertySection)
         {
-            new()
+            options.Add(new HGSourceOption
             {
+                Group = "Property",
                 Name = "LocalProperty",
-                IsCurrent = node.Carrier?.IsProtoProperty == false,
+                IsCurrent = node.IsPropertyNode && node.Carrier?.IsProtoProperty == false,
                 Apply = () => ChangePropertyMode(node, false),
-            },
-            new()
+            });
+            options.Add(new HGSourceOption
             {
+                Group = "Property",
                 Name = "ProtoProperty",
-                IsCurrent = node.Carrier?.IsProtoProperty == true,
+                IsCurrent = node.IsPropertyNode && node.Carrier?.IsProtoProperty == true,
                 Apply = () => ChangePropertyMode(node, true),
-            },
-        };
-
-        HGTypeCatalog.ShowSourcePicker(selector, options);
+            });
+        }
+        return options;
     }
 
     internal void ChangePropertyMode(HGNodeView node, bool proto)
     {
-        if (node?.Carrier == null || node.Carrier.IsProtoProperty == proto) return;
+        if (node?.Carrier == null || (node.IsPropertyNode && node.Carrier.IsProtoProperty == proto)) return;
 
-        BreakUndoMerge();
-        PreserveVisibleNodePositions();
-        if (proto)
+        Type family = ReplacementSlotType(node);
+        GraphProperty next = proto ? FirstCompatibleProtoProperty(node) : model.CreateLocalProperty(family, out _);
+        if (!proto && next == null) return;
+
+        ReplaceNodeSource(node, family, () =>
         {
-            GraphProperty match = FirstCompatibleProtoProperty(node);
-            node.Carrier.SetProtoProperty(match);
-            // 未選 Key 的 ProtoProperty 尚無型別；保留實際連線與接點，選定 Key 後才能修正它。
-            if (match != null) BreakIncompatiblePropertyLinks(node.Carrier, match);
-        }
-        else
-        {
-            // 沒有 Key 的 ProtoProperty 推不出族：切成未定型的 LocalProperty，由第一條寫入線定型。
-            Type family = node.Property?.FamilyType ?? PropertyFamilyFromConnections(node);
-            GraphProperty local = model.CreateLocalProperty(family, out string error);
-            if (local == null)
-            {
-                ShowNotification(new GUIContent(error ?? "無法建立 LocalProperty。"));
-                return;
-            }
-
-            node.Carrier.SetLocalProperty(local);
-            BreakIncompatiblePropertyLinks(node.Carrier, local);
-        }
-
-        Invalidate();
-        MarkGraphChanged();
-        BreakUndoMerge();
+            DetachChildSourcesForReplacement(node);
+            if (proto) node.Carrier.SetProtoProperty(next);
+            else node.Carrier.SetLocalProperty(next);
+        });
     }
 
     private GraphProperty FirstCompatibleProtoProperty(HGNodeView node)
@@ -342,36 +323,12 @@ public partial class HaruGraphWindow
         var properties = CurrentProperties();
         if (properties == null) return null;
 
-        foreach (bool input in new[] { true, false })
-        {
-            if (!input && node.Property?.FamilyType is Type outputFamily)
-                foreach (var property in properties)
-                    if (property?.Proto == true && property.FamilyType == outputFamily) return property;
-            foreach (var link in graph?.Links ?? new List<HGLink>())
-            {
-                if (!ReferenceEquals(link.OutputOwner, node)) continue;
-                GraphSlotBase linkedSlot = link.ParentRow?.InputSlot;
-                if (linkedSlot == null || (linkedSlot is PropertySlotBase) != input) continue;
-                foreach (var property in properties)
-                    if (property?.Proto == true && linkedSlot.AcceptsProperty(property)) return property;
-            }
-        }
+        Type family = ReplacementSlotType(node);
+        foreach (var property in properties)
+            if (property?.Proto == true && property.FamilyType == family) return property;
 
         foreach (var property in properties)
             if (property?.Proto == true) return property;
-        return null;
-    }
-
-    private Type PropertyFamilyFromConnections(HGNodeView node)
-    {
-        foreach (bool input in new[] { true, false })
-            foreach (var link in graph?.Links ?? new List<HGLink>())
-            {
-                if (!ReferenceEquals(link.OutputOwner, node)) continue;
-                GraphSlotBase linkedSlot = link.ParentRow?.InputSlot;
-                if (linkedSlot == null || (linkedSlot is PropertySlotBase) != input) continue;
-                return linkedSlot is PropertySlotBase writeSlot ? writeSlot.FamilyType : linkedSlot.GetType();
-            }
         return null;
     }
 
@@ -386,54 +343,83 @@ public partial class HaruGraphWindow
             if (ReferenceEquals(linkedSlot?.Node, carrier) && !linkedSlot.AcceptsProperty(property)) AttachSource(linkedSlot, null);
     }
 
-    private GraphSlotBase SourceSlot(HGNodeView node)
+    /// <summary>換來源後只斷不相容的線；不刪兩端節點，整次操作保持單一步復原。</summary>
+    private void ReplaceNodeSource(HGNodeView node, Type family, Action replace)
     {
-        if (node?.ParentSlot != null) return node.ParentSlot;
-        if (graph?.Links == null) return null;
-        foreach (var link in graph.Links)
-            if (ReferenceEquals(link.OutputOwner, node) && link.ParentRow?.InputSlot != null)
-                return link.ParentRow.InputSlot;
-        return null;
+        var carrier = node.Carrier;
+        BreakUndoMerge();
+        PreserveVisibleNodePositions();
+        int disconnected = 0;
+        bool trackChanges = model.TrackChanges;
+        model.TrackChanges = false;
+        try
+        {
+            replace();
+            foreach (var slot in new List<GraphSlotBase>(SlotsInCurrentGraph()))
+            {
+                if (slot is GraphPropertyInputSlot || !ReferenceEquals(slot?.Node, carrier)) continue;
+                bool compatible = carrier.Kind switch
+                {
+                    NodeKind.Inline => slot.AcceptsBody(carrier.BodyObject),
+                    NodeKind.Asset => slot.AcceptsAsset(carrier.AssetObject),
+                    NodeKind.Token => slot.AcceptsToken(carrier.Token),
+                    NodeKind.Property => slot.AcceptsProperty(carrier.Property),
+                    _ => false,
+                };
+                if (!compatible && AttachSource(slot, null)) disconnected++;
+            }
+        }
+        finally { model.TrackChanges = trackChanges; }
+        // AttachSource 可能記到寫入端的 PropertySlot 型別；來源的族提示必須維持讀值族。
+        if (family != null) orphanKindHints[carrier.EnsureId()] = family;
+        MarkGraphChanged();
+        BreakUndoMerge();
+        if (disconnected > 0) ShowNotification(new GUIContent($"已變更來源，斷開 {disconnected} 條不相容連線"));
     }
 
-    /// <summary>換節點型別＝換載體裡的內容。載體 Id、座標、備註與所有連入邊都不動，這才是真的「替換」。</summary>
-    private void ReplaceNodeType(HGNodeView node, Type type)
+    private Type ReplacementSlotType(HGNodeView node)
+    {
+        if (node == null) return null;
+        if (node.IsPropertyNode) return node.Property?.FamilyType;
+        if (node.Token != null) return node.Token.FamilyType;
+        if (node.Asset is ScriptableObject asset)
+        {
+            Type family = HGReflect.SlotTypeForAsset(asset, AssetSlotTypes());
+            if (family != null) return family;
+        }
+        if (!string.IsNullOrEmpty(node.Id) && orphanKindHints.TryGetValue(node.Id, out var hint)
+            && !typeof(PropertySlotBase).IsAssignableFrom(hint)) return hint;
+        if (node.IsActionNode) return ActionSlotTypeOfCurrentSystem();
+        if (node.Obj is GraphNodeContent body)
+            foreach (var family in model.FormulaKinds())
+                if (HGReflect.CreateInstance(family.slotType) is FormulaSlotBase probe
+                    && probe.ResultType == node.ResultType && probe.AcceptsBody(body))
+                    return family.slotType;
+        return RepresentativeSlotType(node);
+    }
+
+    /// <summary>換節點內容，保留身分與相容的連線。</summary>
+    internal void ReplaceNodeType(HGNodeView node, Type type)
     {
         if (node?.Carrier == null || type == null || node.Obj?.GetType() == type) return;
         if (HGReflect.CreateInstance(type) is not GraphNodeContent instance) return;
+        Type family = ReplacementSlotType(node);
 
-        BreakUndoMerge();
-        PreserveVisibleNodePositions();
-        DetachChildSourcesForReplacement(node);
-        node.Carrier.SetBody(instance);
-        Invalidate();
-        Repaint();
+        ReplaceNodeSource(node, family, () =>
+        {
+            DetachChildSourcesForReplacement(node);
+            node.Carrier.SetBody(instance);
+        });
     }
 
     private bool CanReplaceAssetNode(HGNodeView node, ScriptableObject asset)
     {
-        if (node?.ParentSlot != null)
-        {
-            Type slotType = node.ParentSlot.GetType();
-            Type accepted = HGReflect.IsActionSlotType(slotType)
-                ? HGReflect.ActionAssetType(slotType)
-                : HGReflect.AssetType(slotType);
-            return accepted != null && accepted.IsInstanceOfType(asset);
-        }
-
-        bool hasLink = false;
-        if (graph?.Links != null)
-        {
-            foreach (var link in graph.Links)
-            {
-                if (!ReferenceEquals(link.OutputOwner, node)) continue;
-                hasLink = true;
-                if (!CanAssignAsset(link.ParentRow, asset)) return false;
-            }
-        }
-        if (hasLink) return true;
-
-        Type acceptedType = AcceptedAssetType(node);
+        Type slotType = ReplacementSlotType(node);
+        Type acceptedType = slotType == null ? null : HGReflect.IsActionSlotType(slotType)
+            ? HGReflect.ActionAssetType(slotType) : HGReflect.AssetType(slotType);
+        if (slotType == null && node?.IsPropertyNode == true)
+            foreach (var family in model.FormulaKinds())
+                if (HGReflect.CreateInstance(family.slotType) is FormulaSlotBase probe && probe.AcceptsAsset(asset)) return true;
         return acceptedType != null && acceptedType.IsInstanceOfType(asset);
     }
 
@@ -465,28 +451,19 @@ public partial class HaruGraphWindow
         return null;
     }
 
-    private Type AcceptedAssetType(HGNodeView node)
-    {
-        Type slotType = RepresentativeSlotType(node);
-        if (slotType == null) return null;
-        return HGReflect.IsActionSlotType(slotType)
-            ? HGReflect.ActionAssetType(slotType)
-            : HGReflect.AssetType(slotType);
-    }
-
     private void ChangeNodeToAsset(HGNodeView node, ScriptableObject asset)
     {
         if (node?.Carrier == null || asset == null || node.Asset == asset) return;
+        Type family = ReplacementSlotType(node);
 
-        BreakUndoMerge();
-        PreserveVisibleNodePositions();
-        if (node.Carrier.Kind == NodeKind.Asset) ReconcileAssetBindings(node.Carrier, asset);
-        else DetachChildSourcesForReplacement(node);
-        node.Carrier.SetAsset(asset);
-        model.ClearAssetParameterCache();
-        model.EnsureAssetBindings(node.Carrier);
-        Invalidate();
-        Repaint();
+        ReplaceNodeSource(node, family, () =>
+        {
+            if (node.Carrier.Kind == NodeKind.Asset) ReconcileAssetBindings(node.Carrier, asset);
+            else DetachChildSourcesForReplacement(node);
+            node.Carrier.SetAsset(asset);
+            model.ClearAssetParameterCache();
+            model.EnsureAssetBindings(node.Carrier);
+        });
     }
 
     /// <summary>切換資產只沿用同名、同族的綁定；其餘來源保留成候選。</summary>
@@ -518,7 +495,7 @@ public partial class HaruGraphWindow
     /// <summary>換掉節點內容前，先把它的直接來源拆散：子載體原位變成候選，完整子樹與座標都留著。</summary>
     private void DetachChildSourcesForReplacement(HGNodeView node)
     {
-        if (node?.Carrier == null) return;
+        if (node?.Carrier == null || node.IsPropertyNode) return;
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
             if (!row.HasSlot) continue;
@@ -748,22 +725,7 @@ public partial class HaruGraphWindow
     private bool CanReplaceTokenNode(HGNodeView node, GraphToken endpoint)
     {
         if (endpoint?.Slot == null) return false;
-        if (node?.ParentSlot != null) return HGReflect.AcceptsToken(node.ParentSlot, endpoint);
-
-        bool hasLink = false;
-        if (graph?.Links != null)
-        {
-            foreach (var link in graph.Links)
-            {
-                if (!ReferenceEquals(link.OutputOwner, node)) continue;
-                hasLink = true;
-                if (link.ParentRow?.InputSlot == null || !link.ParentRow.InputSlot.AcceptsToken(endpoint)) return false;
-            }
-        }
-        if (hasLink) return true;
-
-        // 候選池裡沒有連入線的節點：拿代表性 Slot 的族比對；推不出族才退回結果型別（近似，接上去時仍會被擋）。
-        Type slotType = RepresentativeSlotType(node);
+        Type slotType = ReplacementSlotType(node);
         if (slotType != null) return slotType == endpoint.FamilyType;
         return node?.ResultType == null || node.ResultType == endpoint.ResultType;
     }
@@ -772,12 +734,11 @@ public partial class HaruGraphWindow
     {
         if (node?.Carrier == null || endpoint == null || ReferenceEquals(node.Token, endpoint)) return;
 
-        BreakUndoMerge();
-        PreserveVisibleNodePositions();
-        if (node.Carrier.Kind != NodeKind.Token) DetachChildSourcesForReplacement(node);
-        node.Carrier.SetToken(endpoint);
-        Invalidate();
-        Repaint();
+        ReplaceNodeSource(node, endpoint.FamilyType, () =>
+        {
+            if (node.Carrier.Kind != NodeKind.Token) DetachChildSourcesForReplacement(node);
+            node.Carrier.SetToken(endpoint);
+        });
     }
 
     /// <summary>

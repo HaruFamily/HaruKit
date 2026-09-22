@@ -891,17 +891,15 @@ public partial class HaruGraphWindow
         HGTypeCatalog.ShowSourcePicker(anchor, options, "選擇 Property");
     }
 
-    /// <summary>換這顆節點指到的 Property。載體不變，所以 Id、座標與所有連入邊都保留。</summary>
+    /// <summary>換這顆節點指到的 Property，保留載體與相容連線。</summary>
     private void ChangeNodeToProperty(HGNodeView node, GraphProperty property)
     {
         if (node?.Carrier == null || property == null) return;
-        BreakUndoMerge();
-        PreserveVisibleNodePositions();
-        node.Carrier.SetProtoProperty(property);
-        BreakIncompatiblePropertyLinks(node.Carrier, property);
-        Invalidate();
-        MarkGraphChanged();
-        BreakUndoMerge();
+        ReplaceNodeSource(node, property.FamilyType, () =>
+        {
+            DetachChildSourcesForReplacement(node);
+            node.Carrier.SetProtoProperty(property);
+        });
     }
 
     /// <summary>只列這個欄位收得下的資產。</summary>

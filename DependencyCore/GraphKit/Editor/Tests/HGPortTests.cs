@@ -391,6 +391,70 @@ public class HGPortTests
         => new("Property.Document", target => ((PropertyDocumentOwner)target).Document,
             (target, document) => ((PropertyDocumentOwner)target).Document = document);
 
+    [TestCase(true)]
+    [TestCase(false)]
+    public void ReplacingPropertyWithBodyPreservesReadersAndUndoRestoresWriters(bool connectedWriter)
+    {
+        var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            var document = new PropertyDocument();
+            var property = new GraphNode();
+            string id = property.EnsureId();
+            property.SetLocalProperty(new GraphProperty(null, new TestFormulaSlot()));
+            property.Pos = new Vector2(120, 160);
+            property.Note = "keep";
+            var reader = new PropertyReaderBody();
+            reader.Source.SetNode(property);
+            var readerNode = new GraphNode(reader);
+            string readerId = readerNode.EnsureId();
+            var writer = new PropertyWriterBody();
+            if (connectedWriter) writer.Target.SetNode(property);
+            var writerNode = new GraphNode(writer);
+            string writerId = writerNode.EnsureId();
+            document.Orphans.Add(readerNode);
+            document.Orphans.Add(writerNode);
+            owner.Document = document;
+            Assert.That(window.BindDocument(owner, PropertyBinding(), PropertyContext()), Is.True);
+            var commands = window.GetDocumentCommands();
+            commands.Query();
+
+            window.ReplaceNodeType(window.NodeOfId(id), typeof(PropertyReaderBody));
+            commands.Query();
+            var changed = window.NodeOfId(id).Carrier;
+            Assert.That(changed.Kind, Is.EqualTo(NodeKind.Inline));
+            Assert.That(changed.Pos, Is.EqualTo(new Vector2(120, 160)));
+            Assert.That(changed.Note, Is.EqualTo("keep"));
+            Assert.That(((PropertyReaderBody)window.NodeOfId(readerId).Obj).Source.Node, Is.SameAs(changed));
+            Assert.That(((PropertyWriterBody)window.NodeOfId(writerId).Obj).Target.Node, Is.Null);
+            Assert.That(window.NodeSourceOptions(window.NodeOfId(id)).Exists(option => option.Name == "LocalProperty"), Is.True);
+
+            Assert.That(commands.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            commands.Query();
+            var restored = window.NodeOfId(id).Carrier;
+            Assert.That(restored.Kind, Is.EqualTo(NodeKind.Property));
+            Assert.That(((PropertyReaderBody)window.NodeOfId(readerId).Obj).Source.Node, Is.SameAs(restored));
+            var restoredTarget = ((PropertyWriterBody)window.NodeOfId(writerId).Obj).Target.Node;
+            if (connectedWriter) Assert.That(restoredTarget, Is.SameAs(restored));
+            else Assert.That(restoredTarget, Is.Null);
+
+            Assert.That(commands.Redo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            commands.Query();
+            window.NodeSourceOptions(window.NodeOfId(id)).Find(option => option.Name == "LocalProperty").Apply();
+            commands.Query();
+            Assert.That(window.NodeOfId(id).Carrier.Kind, Is.EqualTo(NodeKind.Property));
+            Assert.That(((PropertyReaderBody)window.NodeOfId(readerId).Obj).Source.Node,
+                Is.SameAs(window.NodeOfId(id).Carrier));
+        }
+        finally
+        {
+            window.GetDocumentCommands()?.Cancel();
+            UnityEngine.Object.DestroyImmediate(window);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+    }
+
     [Test]
     public void PublicReplacementRejectsForeignProtoAndCopiesPrivateLocalDefinitions()
     {
@@ -1479,6 +1543,7 @@ MonoBehaviour:
 
         // 與正式的求值欄位同語意：收同族的 Property，族的身分是 Slot 型別本身。
         public override bool AcceptsProperty(GraphProperty property) => property?.FamilyType == FamilyType;
+        public override bool AcceptsBody(GraphNodeContent body) => body is PropertyReaderBody;
 
         public override GraphNode Node => node;
         public override Type ResultType => typeof(int);
