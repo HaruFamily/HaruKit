@@ -8,10 +8,7 @@ using Object = UnityEngine.Object;
 
 namespace HaruFamily.Tools.AssetPipeline
 {
-    /// <summary>
-    /// 節點圖的走訪與驗證。把舊 PipelineGraphAnalyzer 的兩條檢查
-    /// （prototype key 缺漏、動態目錄在寫入者之前被讀取）接到節點圖上。
-    /// </summary>
+    /// <summary>節點圖的走訪與驗證。</summary>
     // 時序是 AssetPipeline 獨有的概念，所以住在這裡而不是 GraphKit 的 HGValidator：
         // 具名Token沒有先後，動作清單才有。
     public static class GraphVerifier
@@ -25,8 +22,8 @@ namespace HaruFamily.Tools.AssetPipeline
             if (graph == null) return diagnostics;
             var errors = new DiagnosticCollector(diagnostics);
 
-            SyncCatalogs(graph);
             CheckTokens(graph, errors);
+            CheckProperties(graph, errors);
             CheckActions(graph, errors);
             return diagnostics;
         }
@@ -40,88 +37,16 @@ namespace HaruFamily.Tools.AssetPipeline
             return errors;
         }
 
-        /// <summary>正式驗證前先把每一格接回它的母目錄。</summary>
-        // 格子的 Owner 不序列化，接回去是驗證與執行的前提，不是驗證結果的一部分，所以先走一整趟：
-        // 一、驗證是依動作順序走的，讀取排在產出之前時，格子在被檢查的當下還沒有母目錄，
-        //     報出來的會是「沒有母目錄」而不是真正的時序錯誤。
-        // 二、只有產出格指得到目錄，原型目錄沒有任何動作寫得進去，它的節點只存在候選池裡，
-        //     光走動作永遠碰不到它——那一整條路的格子會全部取不到內容。
-        // 候選節點本身不參與驗證，所以這一趟的錯誤一律丟掉，真正的錯誤由後面兩段負責。
-        private static void SyncCatalogs(Graph graph)
-        {
-            var ignored = new DiagnosticCollector();
-
-            List<ActionSlot> actions = graph.Actions;
-            for (int i = 0; i < actions.Count; i++)
-                CheckActionSlot(actions[i], $"動作[{i}]", ignored, new ActionReads());
-
-            foreach (GraphNode node in graph.Orphans)
-            {
-                if (node == null) continue;
-                if (node.CatalogObject is AssetCatalogBase catalog) catalog.SyncCells();
-                WalkSlots(node.BodyObject, "候選節點", ignored, new ActionReads(),
-                    new HashSet<object>(ReferenceComparer.Instance));
-            }
-        }
-
-        /// <summary>
-        /// 整張圖讀到的 prototype key → 讀它的動作。給資產頁檢查「這個 key 有沒有群組、群組是不是空的」。
-        /// </summary>
-        public static Dictionary<string, List<string>> CollectPrototypeKeyUsages(Graph graph)
-        {
-            var usages = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-            if (graph == null) return usages;
-
-            // 這裡只要 key，錯誤由 Collect 負責回報，所以丟一個不看的清單進去。
-            var ignored = new DiagnosticCollector();
-            List<ActionSlot> actions = graph.Actions;
-
-            for (int i = 0; i < actions.Count; i++)
-            {
-                string path = $"動作[{i}] {actions[i]?.DisplayName}";
-                var reads = new ActionReads();
-                CheckActionSlot(actions[i], path, ignored, reads);
-
-                foreach (string key in reads.Prototype)
-                {
-                    if (!usages.TryGetValue(key, out List<string> list))
-                    {
-                        list = new List<string>();
-                        usages.Add(key, list);
-                    }
-                    if (!list.Contains(path)) list.Add(path);
-                }
-            }
-
-            return usages;
-        }
-
         /// <summary>
         /// 依動作順序檢查每一項：內容完不完整，以及讀到的目錄有沒有產出者排在前面。
         /// </summary>
-        // prototype key 存不存在是「資產群組」層面的事，需要 AssetPipeline 上的群組清單，
-        // 所以留在 ValidatePipelinePrototypeSources；這裡只看圖自己答得出來的東西。
+        // 先寫後讀不檢查：Property 取代目錄之後，「還沒寫入」是合法狀態（讀到 default(T)），
+        // 不是錯誤，所以沒有可以靜態阻擋的時序。
         private static void CheckActions(Graph graph, DiagnosticCollector errors)
         {
-            // 目錄比參照，不比名稱：名稱只是顯示用，同名的兩顆仍然是兩顆。
-            var producedCatalogs = new HashSet<AssetCatalogBase>();
-
             List<ActionSlot> actions = graph.Actions;
             for (int i = 0; i < actions.Count; i++)
-                CheckActionSlot(actions[i], $"動作[{i}]", errors, new ActionReads(), producedCatalogs);
-        }
-
-        private static void CheckCatalogOrder(ActionReads reads, string path, DiagnosticCollector errors,
-            HashSet<AssetCatalogBase> producedCatalogs)
-        {
-            foreach (AssetCatalogBase catalog in reads.CatalogReads)
-            {
-                if (catalog is not DynamicAssetCatalog dynamic) continue;
-                if (dynamic.initialization == DynamicAssetCatalog.InitializationMode.Retain) continue;
-                if (!producedCatalogs.Contains(catalog))
-                    errors.Add("assetpipeline.action.dynamic-catalog-read-before-write", path,
-                        "讀取動態目錄，但寫入它的動作不在前面。");
-            }
+                CheckActionSlot(actions[i], $"動作[{i}]", errors, new ActionReads());
         }
 
         private static void CheckTokens(Graph graph, DiagnosticCollector errors)
@@ -145,8 +70,35 @@ namespace HaruFamily.Tools.AssetPipeline
             }
         }
 
+        /// <summary>Property 定義自己對不對。讀寫接線的相容性在 <see cref="CheckSlot"/>。</summary>
+        // 未接時 Slot 提供常數初始值；接上時它是 Property 節點的型別化輸入來源。
+        private static void CheckProperties(Graph graph, DiagnosticCollector errors)
+        {
+            // ProtoProperty 的 Key 是圖內全域名稱；不同族也不可同名。
+            var seen = new HashSet<string>();
+
+            for (int i = 0; i < graph.Properties.Count; i++)
+            {
+                GraphProperty property = graph.Properties[i];
+                if (property == null) { errors.Add("assetpipeline.property.missing", $"Property[{i}]", "是空的。"); continue; }
+
+                string path = $"Property[{property.Name ?? i.ToString()}]";
+                if (!property.Proto) continue; // LocalProperty 不屬於圖層清單；保留舊資料但不把它當 Proto 定義驗證。
+                if (string.IsNullOrWhiteSpace(property.Name))
+                    errors.Add("assetpipeline.property.name-missing", $"Property[{i}]", "ProtoProperty 沒有名字。");
+                if (property.Slot == null) { errors.Add("assetpipeline.property.slot-missing", path, "沒有指定型別。"); continue; }
+
+                if (!string.IsNullOrWhiteSpace(property.Name) && !seen.Add(property.Name))
+                    errors.Add("assetpipeline.property.duplicate", path, "與另一個 ProtoProperty 重名。");
+
+                // 接了來源代表這顆該是Token而不是 Property：Property 的值由動作寫入，不由公式算出來。
+                if (property.Slot.Node != null)
+                    CheckSlot(property.Slot, path + ".input", errors, new ActionReads(), new HashSet<object>(ReferenceComparer.Instance));
+            }
+        }
+
         private static void CheckActionSlot(ActionSlotBase slot, string path, DiagnosticCollector errors, ActionReads reads,
-            HashSet<AssetCatalogBase> producedCatalogs = null, HashSet<object> visiting = null)
+            HashSet<object> visiting = null)
         {
             if (slot == null) { errors.Add("assetpipeline.action.missing", path, "是空的。"); return; }
             if (slot.Disabled) return;   // 停用的動作不執行，殘缺不擋。
@@ -176,26 +128,12 @@ namespace HaruFamily.Tools.AssetPipeline
                     foreach (ActionSlotBase child in children)
                         if (child != null) ownReads.SequentialChildren.Add(child);
 
-                // 只收容器自身的輸入／輸出，宣告過的子 Slot 由下面的循序走訪處理。
-                CollectKeys(body, ownReads);
+                // 只收容器自身的輸入，宣告過的子 Slot 由下面的循序走訪處理。
                 WalkSlots(body, path, errors, ownReads, visiting);
-                if (producedCatalogs != null) CheckCatalogOrder(ownReads, path, errors, producedCatalogs);
-                AddKeys(ownReads.Prototype, reads.Prototype);
 
                 if (children != null)
                     for (int i = 0; i < children.Count; i++)
-                        CheckActionSlot(children[i], $"{path}.SequentialActions[{i}]", errors, reads,
-                            producedCatalogs, visiting);
-
-                // 自身輸出在子動作結束後才可用；不可提前登記來掩蓋讀取在前的錯誤。
-                if (producedCatalogs != null)
-                    foreach (AssetCatalogBase catalog in ownReads.CatalogOutputs)
-                        producedCatalogs.Add(catalog);
-
-                foreach (AssetCatalogBase catalog in ownReads.CatalogReads)
-                    if (!reads.CatalogReads.Contains(catalog)) reads.CatalogReads.Add(catalog);
-                foreach (AssetCatalogBase catalog in ownReads.CatalogOutputs)
-                    if (!reads.CatalogOutputs.Contains(catalog)) reads.CatalogOutputs.Add(catalog);
+                        CheckActionSlot(children[i], $"{path}.SequentialActions[{i}]", errors, reads, visiting);
             }
             finally { visiting.Remove(node); }
         }
@@ -222,24 +160,19 @@ namespace HaruFamily.Tools.AssetPipeline
                     errors.Add("assetpipeline.slot.asset-unsupported", path, "接了共用資產，但 AssetPipeline 不支援資產節點。");
                     return;
 
-                // 包不求值，只有目錄欄位（CatalogSlotBase，目前只有產出格）指得到它。
-                case NodeKind.Catalog:
+                // 讀取端（一般公式欄位）與寫入端（PropertySlotBase）共用這一條：兩者的差別是欄位型別，不是節點種類。
+                case NodeKind.Property:
                 {
-                    if (slot is not CatalogSlotBase catalogSlot) { errors.Add("assetpipeline.slot.catalog-incompatible", path, "收不下包：這一格不是產出格。"); return; }
-                    if (node.CatalogObject is not AssetCatalogBase catalog)
+                    GraphProperty property = node.Property;
+                    if (property == null) { errors.Add("assetpipeline.property.target-missing", path, "指向的 Property 已不存在。"); return; }
+                    if (!slot.AcceptsProperty(property))
                     {
-                        errors.Add("assetpipeline.slot.catalog-invalid", path, "接的包不是目錄。");
+                        errors.Add("assetpipeline.property.target-incompatible", path, $"指向的 Property [{property.Name}] 型別不相容。");
                         return;
                     }
 
-                    catalog.SyncCells();
-                    if (catalogSlot.WritesToCatalog && catalog is not DynamicAssetCatalog)
-                        errors.Add("assetpipeline.catalog.output-not-dynamic", path, "是產出格，只接得上動態目錄。");
-
-                    CheckCatalog(catalog, path, errors);
-
-                    List<AssetCatalogBase> bucket = catalogSlot.WritesToCatalog ? reads.CatalogOutputs : reads.CatalogReads;
-                    if (!bucket.Contains(catalog)) bucket.Add(catalog);
+                    // 到此為止，不往下走也不登記讀寫集合：Property 沒有取值子樹，
+                    // 而寫入目標不是求值依賴——「讀 Property → 算 → 寫回同一顆」不該被判成循環。
                     return;
                 }
 
@@ -267,19 +200,6 @@ namespace HaruFamily.Tools.AssetPipeline
                     if (body == null) { errors.Add("assetpipeline.slot.node-empty", path, "的節點是空的。"); return; }
                     if (!slot.AcceptsBody(body)) { errors.Add("assetpipeline.slot.body-incompatible", path, $"接的 {body.GetType().Name} 型別不相容。"); return; }
 
-                    // 接到某一格＝讀它母目錄的內容。目錄本身接不到一般欄位上，所以讀取一律從這裡登記。
-                    if (body is CatalogCell cell)
-                    {
-                        // Owner 的宣告型別是泛型基底，這裡要的是 AssetPipeline 這一種目錄。
-                        var cellOwner = cell.Owner as AssetCatalogBase;
-                        if (cellOwner == null) errors.Add("assetpipeline.catalog.owner-missing", path, "的目錄格沒有母目錄。");
-                        else if (!reads.CatalogReads.Contains(cellOwner))
-                        {
-                            reads.CatalogReads.Add(cellOwner);
-                            CheckCatalog(cellOwner, path, errors);
-                        }
-                    }
-
                     if (!visiting.Add(node))
                     {
                         errors.Add("assetpipeline.node.cycle", path, "形成節點循環。");
@@ -288,7 +208,6 @@ namespace HaruFamily.Tools.AssetPipeline
 
                     try
                     {
-                        CollectKeys(body, reads);
                         WalkSlots(body, path, errors, reads, visiting);
                     }
                     finally { visiting.Remove(node); }
@@ -297,35 +216,6 @@ namespace HaruFamily.Tools.AssetPipeline
             }
         }
 
-        /// <summary>目錄自己的設定對不對。同一顆在同一步只報一次，由呼叫端以 reads 去重。</summary>
-        private static void CheckCatalog(AssetCatalogBase catalog, string path, DiagnosticCollector errors)
-        {
-            // 動態目錄的內容來自動作，設定上沒有東西可錯；時序由 CheckActions 負責。
-            if (catalog is not PrototypeAssetCatalog prototype) return;
-
-            if (string.IsNullOrWhiteSpace(prototype.catalogId))
-                errors.Add("assetpipeline.catalog.id-missing", path, "的原型目錄沒有指定目錄。");
-            else if (AssetPipeline.current != null
-                     && AssetPipeline.current.FindCatalogById(prototype.catalogId.Trim()) == null)
-                errors.Add("assetpipeline.catalog.target-missing", path, "指到的目錄已不存在。");
-        }
-
-        private static void CollectKeys(object body, ActionReads reads)
-        {
-            if (body is IPrototypeKeyReader prototypeReader)
-                AddKeys(prototypeReader.PrototypeInputKeys, reads.Prototype);
-        }
-
-        private static void AddKeys(IEnumerable<string> source, List<string> target)
-        {
-            if (source == null) return;
-            foreach (string key in source)
-            {
-                if (string.IsNullOrWhiteSpace(key)) continue;
-                string trimmed = key.Trim();
-                if (!target.Contains(trimmed)) target.Add(trimmed);
-            }
-        }
 
         /// <summary>反射走訪一個節點內容的所有欄位，找出巢狀的公式欄位並繼續往下檢查。</summary>
         // visited 一律用 ReferenceComparer：裸 HashSet<object> 對 struct 走值相等，
@@ -367,13 +257,10 @@ namespace HaruFamily.Tools.AssetPipeline
                 }
         }
 
-        /// <summary>一個動作碰到的東西：讀到的 prototype key、讀到的目錄，以及它自己寫入的目錄。</summary>
+        /// <summary>一個動作宣告的循序子動作。</summary>
         private sealed class ActionReads
         {
             public readonly HashSet<object> SequentialChildren = new HashSet<object>(ReferenceComparer.Instance);
-            public readonly List<string> Prototype = new List<string>();
-            public readonly List<AssetCatalogBase> CatalogReads = new List<AssetCatalogBase>();
-            public readonly List<AssetCatalogBase> CatalogOutputs = new List<AssetCatalogBase>();
         }
 
         private sealed class DiagnosticCollector

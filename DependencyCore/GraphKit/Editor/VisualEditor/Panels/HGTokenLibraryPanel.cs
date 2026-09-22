@@ -54,18 +54,21 @@ public sealed class HGTokenLibraryPanel
 
     private string search = "";
     private Vector2 scroll;
+    private readonly HGLibraryReorder order = new();
 
     /// <summary>換編輯對象時把面板自己的視圖狀態歸零。</summary>
     public void Reset()
     {
         search = "";
         scroll = Vector2.zero;
+        order.Clear();
     }
 
     // cmd 不用 in：底下的改名要在 lambda 裡叫它，而 in／ref 參數不能被 lambda 捕捉（CS1628）。
     public void Draw(Rect r, float top, in HGTokenLibraryView view, HGTokenLibraryCommands cmd,
         HGInlineRename inlineName, HGLibraryDrag drag)
     {
+        order.BeginFrame();
         DrawCreateButton(new Rect(r.x + 4f, top, r.width - 8f, 20f), cmd, drag);
         DrawRemoveButton(new Rect(r.x + 4f, top + 22f, r.width - 8f, 20f), view, cmd, drag);
 
@@ -96,16 +99,14 @@ public sealed class HGTokenLibraryPanel
             // 深綠→琥珀，和畫布上的Token節點同一條漸層。
             HGStyles.CellBackground(row, HGStyles.HeaderToken, HGStyles.HeaderFormula, i % 2 == 1, isFocus);
 
-            int direction = HGLibraryOrder.Draw(new Rect(row.x + 3f, row.y + 5f, HGLibraryOrder.Width, 18f),
-                cmd.Move != null && i > 0, cmd.Move != null && i + 1 < shown.Count);
-            if (direction != 0)
-            {
-                var target = shown[i + direction].Token;
-                pendingMove = () => cmd.Move(endpoint, target);
-            }
+            if (order.IsTarget(i, out bool below)) HGLibraryReorder.InsertLine(row, below);
+            if (cmd.Move != null)
+                order.Row(new Rect(row.x + 3f, row.y + 2f, HGLibraryReorder.HandleWidth, row.height - 4f),
+                    endpoint.Id, i, row.y + row.height * 0.5f);
 
-            var nameRect = new Rect(row.x + 8f + HGLibraryOrder.Width, row.y + 2f,
-                Mathf.Max(0f, row.width - 70f - HGLibraryOrder.Width), 18f);
+            float orderWidth = cmd.Move != null ? HGLibraryReorder.HandleWidth + 3f : 0f;
+            var nameRect = new Rect(row.x + 8f + orderWidth, row.y + 2f,
+                Mathf.Max(0f, row.width - 70f - orderWidth), 18f);
             bool renaming = inlineName.Draw(nameRect, endpoint, HGInlineRename.SiteTokenLib,
                 string.IsNullOrEmpty(token.Key) ? "（未命名）" : token.Key, token.Key ?? "",
                 HGStyles.RowLabel, "雙擊可改名；外部（Inspector）用這個名字查它的值",
@@ -143,7 +144,16 @@ public sealed class HGTokenLibraryPanel
                 e.Use();
             }
         }
+        // 在 ScrollView 內結算：滑鼠位置與記下來的中線要在同一個座標系。
+        bool move = order.EndFrame(out int from, out int to);
         GUI.EndScrollView();
+
+        if (move && from < shown.Count && to < shown.Count)
+        {
+            var source = shown[from].Token;
+            var target = shown[to].Token;
+            pendingMove = () => cmd.Move(source, target);
+        }
         pendingMove?.Invoke();
     }
 

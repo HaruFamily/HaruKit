@@ -24,30 +24,28 @@ public partial class HaruGraphWindow
         HGStyles.Fill(r, HGStyles.Panel);
         HGStyles.Frame(r, HGStyles.NodeBorder);
 
-        // 目錄庫是最上面一區。目前唯一的使用端（AssetPipeline）只宣告這一個能力，
-        // 所以「只有目錄庫」是主要路徑；與其他區並存時它取固定高度，不另外長一條把手——
-        // 沒有真實需求之前不為未知形狀做四區可拖版面。
-        if (HasCatalogSection)
+        Rect rest = r;
+
+        if (HasPropertySection)
         {
             bool alone = !HasTokenSection && !HasAssetSection;
-            float catalogBottom = alone ? r.yMax : r.y + 22f + MinCatalogSection;
-            var catalogRect = new Rect(r.x, r.y, r.width, catalogBottom - r.y);
+            float propertyBottom = alone ? rest.yMax : rest.y + 22f + MinPropertySection;
+            var propertyRect = new Rect(rest.x, rest.y, rest.width, propertyBottom - rest.y);
 
-            GUI.Label(new Rect(catalogRect.x + 4f, catalogRect.y + 2f, 160f, 18f),
-                new GUIContent("目錄庫", "手動蒐集的資產分組；先建目錄，再把 Project 的資產拖進某一列"),
+            GUI.Label(new Rect(propertyRect.x + 4f, propertyRect.y + 2f, 160f, 18f),
+                new GUIContent("ProtoProperty 庫", "有初始內容的具名變數；不必先寫入就讀得到。LocalProperty 在畫布上建立"),
                 HGStyles.PanelHeader);
-            catalogLibrary.Draw(catalogRect, catalogRect.y + 22f, CatalogLibraryView(), inlineName, drag,
-                CatalogLibraryCommands());
+            propertyLibrary.Draw(propertyRect, propertyRect.y + 22f, PropertyLibraryView(),
+                PropertyLibraryCommands(), inlineName, drag);
 
             if (alone) return;
-            DrawTokenAndAssetSections(new Rect(r.x, catalogBottom, r.width, r.yMax - catalogBottom));
-            return;
+            rest = new Rect(rest.x, propertyBottom, rest.width, rest.yMax - propertyBottom);
         }
 
-        DrawTokenAndAssetSections(r);
+        DrawTokenAndAssetSections(rest);
     }
 
-    /// <summary>Token 區與資產區（含引用區）的上下分區。目錄庫存在時它拿到的是扣掉目錄庫之後的那一段。</summary>
+    /// <summary>Token 區與資產區（含引用區）的上下分區。</summary>
     private void DrawTokenAndAssetSections(Rect r)
     {
         bool showToken = HasTokenSection;
@@ -130,132 +128,6 @@ public partial class HaruGraphWindow
         DrawResizeGrip(refHandle, false, resizingRefSplit);
     }
 
-    /// <summary>左欄上下分隔：拖動只改Token區高度，資產區吃剩下的。夾限與 Console 那條同一套。</summary>
-    // ===== 目錄庫 =====
-    // 目錄住在 Owner，不在 model.Data 的工作副本裡，所以這些命令都不走 MarkGraphChanged／Undo，
-    // 每一條都是直接改 Owner 再 SetDirty。取消編輯不會還原目錄——這與共用資產庫一致。
-    // 復原是另一件事：改之前先抄一份，真的有改到才 PushCatalogStep，記進與圖同一個 Undo 堆疊。
-    // 命令失敗或沒動到東西時不記，否則堆疊裡會留下退回去什麼都看不出來的空步。
-
-    private ICatalogOwner CatalogOwner => model?.Owner as ICatalogOwner;
-
-    private HGCatalogLibraryView CatalogLibraryView() => new()
-    {
-        Catalogs = CatalogOwner?.Catalogs,
-        // 畫法與拖放由編輯對象自己提供；沒實作就走面板的通用畫法，並且不接受拖放。
-        Renderer = model?.Owner as IHGCatalogRenderer,
-    };
-
-    private HGCatalogLibraryCommands CatalogLibraryCommands() => new()
-    {
-        Create = CreateCatalog,
-        Rename = RenameCatalog,
-        Remove = DeleteCatalog,
-        Add = AddToCatalog,
-        RemoveItem = RemoveFromCatalog,
-        Move = model?.Owner is IReorderableCatalogOwner ? MoveCatalog : null,
-        MoveItem = model?.Owner is IReorderableCatalogOwner ? MoveCatalogItem : null,
-    };
-
-    private void MoveCatalog(string id, string targetId)
-    {
-        if (model?.Owner is not IReorderableCatalogOwner owner) return;
-        object before = model.CaptureCatalogs();
-        if (!owner.MoveCatalog(id, targetId)) return;
-        model.PushCatalogStep(before, false);
-        MarkOwnerDirty();
-    }
-
-    private void MoveCatalogItem(string id, int from, int to)
-    {
-        if (model?.Owner is not IReorderableCatalogOwner owner) return;
-        object before = model.CaptureCatalogs();
-        if (!owner.MoveCatalogItem(id, from, to)) return;
-        model.PushCatalogStep(before, false);
-        MarkOwnerDirty();
-    }
-
-    private string CreateCatalog()
-    {
-        var owner = CatalogOwner;
-        if (owner == null) return null;
-
-        object before = model.CaptureCatalogs();
-        var catalog = owner.CreateCatalog();
-        if (catalog == null) return null;
-
-        model.PushCatalogStep(before);
-        MarkOwnerDirty();
-        return catalog.Id;
-    }
-
-    private bool RenameCatalog(string id, string name)
-    {
-        var owner = CatalogOwner;
-        if (owner == null) return false;
-
-        string oldName = HGReflect.FindCatalog(owner.Catalogs, id)?.Name;
-        object before = model.CaptureCatalogs();
-        if (!owner.RenameCatalog(id, name, out string error))
-        {
-            ShowNotification(new GUIContent(error));
-            return false;
-        }
-
-        // 改成同一個名字也會回 true，那一步不必記。
-        if (HGReflect.FindCatalog(owner.Catalogs, id)?.Name != oldName) model.PushCatalogStep(before);
-        MarkOwnerDirty();
-        return true;
-    }
-
-    private void DeleteCatalog(string id)
-    {
-        var owner = CatalogOwner;
-        if (owner == null) return;
-        if (HGReflect.FindCatalog(owner.Catalogs, id) == null) return;
-
-        object before = model.CaptureCatalogs();
-        owner.DeleteCatalog(id);
-        model.PushCatalogStep(before);
-        MarkOwnerDirty();
-    }
-
-    private void AddToCatalog(string id, IReadOnlyList<object> items)
-    {
-        var owner = CatalogOwner;
-        if (owner == null) return;
-
-        object before = model.CaptureCatalogs();
-        int added = owner.AddToCatalog(id, items);
-        // 一個都沒加進去通常是因為全都已經在裡面（型別不符由庫自己擋）。不說一聲會看起來像拖放壞掉。
-        if (added == 0) ShowNotification(new GUIContent("這些項目已經在目錄裡了"));
-        else model.PushCatalogStep(before);
-        MarkOwnerDirty();
-    }
-
-    private void RemoveFromCatalog(string id, object item)
-    {
-        var owner = CatalogOwner;
-        if (owner == null) return;
-
-        int oldCount = HGReflect.FindCatalog(owner.Catalogs, id)?.Items?.Count ?? 0;
-        object before = model.CaptureCatalogs();
-        owner.RemoveFromCatalog(id, item);
-
-        if ((HGReflect.FindCatalog(owner.Catalogs, id)?.Items?.Count ?? 0) != oldCount) model.PushCatalogStep(before);
-        MarkOwnerDirty();
-    }
-
-    /// <summary>目錄改完直接寫 Owner。不進工作副本，所以也不碰 model.Dirty 與存檔交易。</summary>
-    // 同時記 catalogDirty：寫進記憶體中的 SO 不等於寫進檔案，視窗要看得出有東西沒落盤。
-    private void MarkOwnerDirty()
-    {
-        if (model?.Owner != null) EditorUtility.SetDirty(model.Owner);
-        catalogDirty = true;
-        UpdateUnsavedState();
-        Repaint();
-    }
-
     private HGTokenLibraryView TokenLibraryView() => new()
     {
         Tokens = HGModel.ReadTokens(CurrentTokens()),
@@ -296,6 +168,219 @@ public partial class HaruGraphWindow
         }
         ShowNotification(new GUIContent(error));
         return false;
+    }
+
+    // ===== Property 庫 =====
+    // 定義住圖的工作副本，所以每個命令都走 MarkGraphChanged，跟著存檔交易與圖的 Undo 堆疊；
+    // 這和目錄庫（內容住 Owner、立即寫檔）不同，不要照抄那一邊的收尾。
+
+    // 庫只列 ProtoProperty：庫的用途是編「作者填的初始內容」，一般 Property 沒有那種內容，
+    // 列在這裡只會是一排點不出東西的格子。一般 Property 在畫布上就地建立與選取。
+    private HGPropertyLibraryView PropertyLibraryView() => new()
+    {
+        Properties = HGModel.ReadProperties(CurrentProperties(), proto: true),
+    };
+
+    private HGPropertyLibraryCommands PropertyLibraryCommands() => new()
+    {
+        Rename = RenamePropertyFromLibrary,
+        Remove = RemoveProperty,
+        Create = ShowCreatePropertyMenu,
+        IssueOf = PropertyIssue,
+        Move = MoveProperty,
+        SetInitialValue = SetPropertyInitialValue,
+        AddInitialItems = AddPropertyInitialItems,
+        RemoveInitialItem = RemovePropertyInitialItem,
+        MoveInitialItem = MovePropertyInitialItem,
+    };
+
+    /// <summary>目前這張圖的 Property 定義。沒有這個能力的文件回 null，面板不會被畫出來。</summary>
+    private List<GraphProperty> CurrentProperties() => HGReflect.Properties(model?.Data);
+
+    private bool RenamePropertyFromLibrary(GraphProperty property, string name)
+    {
+        if (model.RenameProperty(property, name, CurrentProperties(), out string error))
+        {
+            MarkGraphChanged();
+            return true;
+        }
+        ShowNotification(new GUIContent(error));
+        return false;
+    }
+
+    private void MoveProperty(GraphProperty property, GraphProperty target)
+    {
+        var scope = CurrentProperties();
+        if (scope == null) return;
+        int from = scope.IndexOf(property);
+        int to = scope.IndexOf(target);
+        if (from < 0 || to < 0 || from == to) return;
+        BreakUndoMerge();
+        scope.RemoveAt(from);
+        scope.Insert(to, property);
+        MarkGraphChanged();
+        BreakUndoMerge();
+    }
+
+    /// <summary>移除一顆 Property：指著它的讀取與寫入節點一起清空，變成空節點由驗證擋住。</summary>
+    private void RemoveProperty(GraphProperty property)
+    {
+        var scope = CurrentProperties();
+        if (property == null || scope == null) return;
+
+        BreakUndoMerge();                   // 刪除自成一個復原步驟
+        int references = HGModel.CountReferences(property, model.AllSlots());
+        model.DeleteProperty(property, scope, CurrentCarrierScope());
+        MarkGraphChanged();
+        BreakUndoMerge();
+
+        ShowNotification(new GUIContent(references > 0
+            ? $"已移除 '{property.Name}'，清空了 {references} 處引用；Ctrl+Z 可復原"
+            : $"已移除 '{property.Name}'；Ctrl+Z 可復原"));
+    }
+
+    /// <summary>庫的「＋ 新增」只建 ProtoProperty：型別決定族，建立後不再更動。</summary>
+    // 一般 Property 不從這裡建——它沒有可編的初始內容，建在庫裡等於在庫裡放一格點不開的東西。
+    private void ShowCreatePropertyMenu()
+    {
+        var scope = CurrentProperties();
+        if (scope == null) return;
+
+        var menu = new GenericMenu();
+        var kinds = model.FormulaKinds();
+        var names = new Dictionary<string, int>();
+        foreach (var kind in kinds)
+        {
+            string name = HGReflect.SlotKindName(kind.slotType);
+            names.TryGetValue(name, out int count);
+            names[name] = count + 1;
+        }
+        foreach (var (resultType, slotType) in kinds)
+        {
+            var captured = slotType;
+            // 用族名而非結果型別名：同結果型別的多個族否則會列出兩個一模一樣的項目。
+            string name = HGReflect.SlotKindName(slotType);
+            if (names[name] > 1) name += $" ({slotType.FullName}, {slotType.Assembly.GetName().Name})";
+            menu.AddItem(new GUIContent(name), false,
+                () => CreateProperty(scope, captured, true));
+        }
+        menu.ShowAsContext();
+    }
+
+    private GraphProperty CreateProperty(List<GraphProperty> scope, Type slotType, bool proto)
+    {
+        var property = model.CreateProperty(scope, slotType, proto, out string error);
+        if (property == null)
+        {
+            ShowNotification(new GUIContent(error));
+            return null;
+        }
+        MarkGraphChanged();
+        return property;
+    }
+
+    /// <summary>從畫布建一顆節點私有的 LocalProperty 並讓這個節點指向它。</summary>
+    private void CreatePropertyForNode(HGNodeView node, Type slotType)
+    {
+        if (node?.Carrier == null) return;
+
+        BreakUndoMerge();
+        GraphProperty property = model.CreateLocalProperty(slotType, out string error);
+        if (property == null) { ShowNotification(new GUIContent(error)); return; }
+
+        node.Carrier.SetLocalProperty(property);
+        Invalidate();
+        MarkGraphChanged();
+        BreakUndoMerge();
+    }
+
+    /// <summary>改 ProtoProperty 的初始內容。寫的是型別宣告欄位的常數，不是任何執行期的目前值。</summary>
+    private void SetPropertyInitialValue(GraphProperty property, object value)
+    {
+        if (property?.Slot == null) return;
+        property.Slot.DefaultObject = value;
+        MarkGraphChanged();
+    }
+
+    /// <summary>清單型初始內容的可寫容器。還沒有清單時就地建一個並寫回欄位。</summary>
+    // 就地改容器而不是每次換一份新的：目前值在初始化時與它共用引用，換掉容器會讓已經取得引用的
+    // 執行期讀取者指到舊清單（見 §2.2 的直接共用語意）。
+    private static IList PropertyInitialItems(GraphProperty property, bool create)
+    {
+        FormulaSlotBase slot = property?.Slot;
+        if (slot == null) return null;
+        if (slot.DefaultObject is IList existing) return existing;
+        if (!create) return null;
+
+        Type resultType = slot.ResultType;
+        if (resultType == null || !HGReflect.IsList(resultType, out _)) return null;
+        if (HGReflect.CreateInstance(resultType) is not IList created) return null;
+
+        slot.DefaultObject = created;
+        return created;
+    }
+
+    private void AddPropertyInitialItems(GraphProperty property, IReadOnlyList<UnityEngine.Object> items)
+    {
+        if (items == null || items.Count == 0) return;
+        IList list = PropertyInitialItems(property, true);
+        if (list == null) { ShowNotification(new GUIContent("這個型別的初始內容不是清單")); return; }
+
+        BreakUndoMerge();
+        int added = 0;
+        foreach (UnityEngine.Object item in items)
+        {
+            if (item == null || list.Contains(item)) continue;   // 去重比參照：同一顆資產加兩次沒有意義
+            list.Add(item);
+            added++;
+        }
+        if (added == 0) return;                                  // 全都已經在裡面，不留一個退回去看不出差別的 Undo 步
+        MarkGraphChanged();
+        BreakUndoMerge();
+    }
+
+    private void RemovePropertyInitialItem(GraphProperty property, int index)
+    {
+        IList list = PropertyInitialItems(property, false);
+        if (list == null || index < 0 || index >= list.Count) return;
+
+        BreakUndoMerge();
+        list.RemoveAt(index);
+        MarkGraphChanged();
+        BreakUndoMerge();
+    }
+
+    private void MovePropertyInitialItem(GraphProperty property, int from, int to)
+    {
+        IList list = PropertyInitialItems(property, false);
+        if (list == null || from == to) return;
+        if (from < 0 || from >= list.Count || to < 0 || to >= list.Count) return;
+
+        BreakUndoMerge();
+        object item = list[from];
+        list.RemoveAt(from);
+        list.Insert(to, item);
+        MarkGraphChanged();
+        BreakUndoMerge();
+    }
+
+    private (string reason, bool isError) PropertyIssue(HGProperty property)
+        => HasPropertyIssue(property, out string reason, out bool isError) ? (reason, isError) : (null, false);
+
+    private bool HasPropertyIssue(HGProperty property, out string reason, out bool isError)
+    {
+        reason = null; isError = false;
+        object target = property?.Property;
+        if (target == null) return false;
+
+        foreach (var issue in Rep.Issues)
+        {
+            if (!ReferenceEquals(issue.Node, target)) continue;
+            reason = issue.Line;
+            isError = issue.IsError;
+            if (isError) return true;
+        }
+        return reason != null;
     }
 
     /// <summary>Token庫選了一筆：再點一次目前這格＝退出，不必去找返回鈕。</summary>

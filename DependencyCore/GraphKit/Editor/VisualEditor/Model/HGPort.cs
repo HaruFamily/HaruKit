@@ -68,6 +68,25 @@ public interface IHGPortSource
     bool Accepts(GraphSlotBase input);
 }
 
+/// <summary>Action 的寫入輸出；持久化關係由目標 Slot 保存，不是 Action Header 的讀取來源。</summary>
+internal sealed class HGPropertyWriteSource : IHGPortSource
+{
+    public PropertySlotBase Slot { get; }
+    public GraphNode OutputNode { get; }
+    public object CycleRoot => null;
+    public HGPropertyWriteSource(PropertySlotBase slot, GraphNode owner)
+    { Slot = slot; OutputNode = owner; }
+    public bool Accepts(GraphSlotBase input) => false;
+    internal HGPortConnectionResult CheckTarget(GraphNode target)
+    {
+        if (target?.Kind != NodeKind.Property) return HGPortConnectionResult.IncompatibleType;
+        if (!target.IsProtoProperty) return HGPortConnectionResult.Allowed;
+        if (target.Property == null) return HGPortConnectionResult.MissingBinding;
+        return Slot.AcceptsProperty(target.Property)
+            ? HGPortConnectionResult.Allowed : HGPortConnectionResult.IncompatibleFamily;
+    }
+}
+
 /// <summary>Optional detailed source compatibility contract shared by Port linking and direct source drops.</summary>
 public interface IHGPortSourceAcceptance : IHGPortSource
 {
@@ -326,6 +345,18 @@ internal static class HGLinkPortResolver
         if (link == null) return HGLinkPortResolution.InputUnresolved;
         link.InputPort = null;
         link.OutputPort = null;
+        if (link.ParentRow?.InputSlot is PropertySlotBase)
+        {
+            var writerKey = new HGPortKey(link.ParentRow.OwnerNodeId, link.ParentRow.Path, HGPortRole.Output);
+            var targetKey = new HGPortKey(link.OutputOwner?.Id, "/property/input", HGPortRole.Input);
+            if (portsByKey == null || !portsByKey.TryGetValue(writerKey, out var writer)
+                || writer.Generation != generation) return HGLinkPortResolution.OutputUnresolved;
+            if (!portsByKey.TryGetValue(targetKey, out var target)
+                || target.Generation != generation) return HGLinkPortResolution.InputUnresolved;
+            link.OutputPort = writer;
+            link.InputPort = target;
+            return HGLinkPortResolution.Resolved;
+        }
         HGPort input = null;
         if (link.ParentRow?.InputSlot != null && primaryInputs != null)
             primaryInputs.TryGetValue(link.ParentRow.InputSlot, out input);
@@ -335,7 +366,7 @@ internal static class HGLinkPortResolver
             return HGLinkPortResolution.InputUnresolved;
 
         link.InputPort = input;
-        GraphNode source = link.TargetRow?.OutputNode ?? link.OutputOwner?.Carrier;
+        GraphNode source = link.OutputOwner?.Carrier;
         if (source == null) return HGLinkPortResolution.OutputUnresolved;
         if (primaryOutputs == null || !primaryOutputs.TryGetValue(source, out HGPort output) || output.Generation != generation)
             return HGLinkPortResolution.PrimaryOutputMissing;
@@ -701,10 +732,10 @@ public sealed class HGPortBuildContext
         foreach (var node in graph.Nodes)
         {
             if (node.Carrier != null) allowedOutputs.Add(node.Carrier);
+            if (node.PropertyInput != null) allowedInputs.Add(node.PropertyInput);
             foreach (var row in HGGraph.AllRows(node.Rows))
             {
                 if (row.InputSlot != null) allowedInputs.Add(row.InputSlot);
-                if (row.OutputNode != null) allowedOutputs.Add(row.OutputNode);
             }
         }
     }

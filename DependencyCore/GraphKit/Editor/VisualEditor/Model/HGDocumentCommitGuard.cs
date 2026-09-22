@@ -167,10 +167,9 @@ internal sealed class HGMissingTypeCleanup
     private readonly HashSet<string> brokenTokenPaths = new();
     private readonly Dictionary<string, List<int>> missingItems = new();
 
-    // 公開 SetBody/SetCatalog/SetToken 在傳入 null 時皆切成 Empty；以下是序列化遺失殘留，並非編輯中的空節點。
+    // 公開 SetBody/SetToken 在傳入 null 時皆切成 Empty；以下是序列化遺失殘留，並非編輯中的空節點。
     private static bool HasLostContent(GraphNode node)
         => (node.Kind == NodeKind.Inline && node.BodyObject == null)
-            || (node.Kind == NodeKind.Catalog && node.CatalogObject == null)
             || (node.Kind == NodeKind.Token && node.Token == null);
 
     internal static bool HasLostContent(IGraphDocument document)
@@ -234,14 +233,6 @@ internal sealed class HGMissingTypeCleanup
                 cleanup.broken.Add(node);
                 if (!string.IsNullOrEmpty(node.Id)) cleanup.brokenIds.Add(node.Id);
                 if (nodePaths.TryGetValue(node, out string path)) cleanup.brokenPaths.Add(path);
-            }
-        foreach (var value in objects)
-            if (value is GraphNode node && node.BodyObject is IGraphInlineNode cell
-                && cell.InputSlot?.Node != null && cleanup.broken.Contains(cell.InputSlot.Node))
-            {
-                cleanup.affectedCells.Add(node);
-                if (!string.IsNullOrEmpty(node.Id)) cleanup.affectedCellIds.Add(node.Id);
-                if (nodePaths.TryGetValue(node, out string path)) cleanup.affectedCellPaths.Add(path);
             }
         return cleanup;
     }
@@ -310,7 +301,6 @@ internal sealed class HGMissingTypeCleanup
         bool IsBroken(GraphNode node) => node != null
             && (broken.Contains(node) || (!string.IsNullOrEmpty(node.Id) && brokenIds.Contains(node.Id)))
             && (broken.Contains(node) || (node.Kind == NodeKind.Inline && node.BodyObject == null)
-                || (node.Kind == NodeKind.Catalog && node.CatalogObject == null)
                 || (node.Kind == NodeKind.Token && node.Token?.Slot == null));
 
         // 先移除壞動作的清單項目，再斷線；否則清空 Slot 後會遺失它來自 missing class 的依據。
@@ -333,11 +323,6 @@ internal sealed class HGMissingTypeCleanup
                 foreach (var node in broken) nodeOwner.RemoveChild(node);
             if (value is GraphSlotBase slot && (IsBroken(slot.Node) || brokenSlots.Contains(slot))) slot.SetNode(null);
         }
-        // 只有遺失轉換公式導致輸出型別改變的 Cell 才清理不相容使用者；原本就錯的連線保留給驗證。
-        foreach (var value in objects)
-            if (value is GraphSlotBase slot && slot.Node is GraphNode node
-                && (affectedCells.Contains(node) || (!string.IsNullOrEmpty(node.Id) && affectedCellIds.Contains(node.Id)))
-                && node.BodyObject is GraphNodeContent body && !slot.AcceptsBody(body)) slot.SetNode(null);
     }
 
     private static object ResolvePath(object root, string path)

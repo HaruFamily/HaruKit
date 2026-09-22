@@ -25,7 +25,7 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
         private static GUIStyle statusStyle;
         private static readonly HGEditorExtensionContext GraphContext =
             new HGEditorExtensionContext(new AssetPipelineGraphProvider(), profile: new HGEditorProfile(
-                HGCapabilities.Catalogs));
+                HGCapabilities.Properties));
 
         private static readonly Color OkColor = new Color(0.36f, 0.90f, 0.52f);
         private static readonly Color FailColor = new Color(1f, 0.42f, 0.42f);
@@ -100,7 +100,7 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
             using (new EditorGUI.DisabledScope(multi || pipeline == null))
             {
                 var verify = pipeline != null
-                    ? new GUIContent("驗證", "驗證節點圖與原型資產來源，結果輸出到 Console 與下方 Log。")
+                    ? new GUIContent("驗證", "驗證節點圖，結果輸出到 Console 與下方 Log。")
                     : new GUIContent("驗證", "這張圖不在 AssetPipeline 上，無法從 Inspector 驗證。");
                 if (GUI.Button(verifyRect, verify)) Verify(property, pipeline);
             }
@@ -175,7 +175,7 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
             if (pipeline == null) return;
 
             property.serializedObject.ApplyModifiedProperties();
-            pipeline.VerifyPipelineAssets();
+            pipeline.VerifyGraph();
             EditorUtility.SetDirty(pipeline);
             property.serializedObject.Update();
         }

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using HaruFamily.DependencyCore.GraphKit;
 
 namespace HaruFamily.Tools.AssetPipeline
@@ -28,13 +27,5 @@ namespace HaruFamily.Tools.AssetPipeline
         internal void Execute(PipelineActionContext context) => OnExecute(context);
 
         protected abstract void OnExecute(PipelineActionContext context);
-    }
-
-    /// <summary>
-    /// 會讀 prototype key 的公式。驗證器據此檢查 key 有沒有對應的資產群組。
-    /// </summary>
-    public interface IPrototypeKeyReader
-    {
-        IEnumerable<string> PrototypeInputKeys { get; }
     }
 }

@@ -133,7 +133,7 @@ public class ActionSlot<TPack> : ActionSlotBase
             {
                 var asset = _node.GetAsset<ActionAssetBase<TPack>>();
                 if (asset == null) { Mismatch("動作資產"); return; }
-                await asset.Execute(pack, tokens, _node.Bindings);
+                await asset.Execute(pack, tokens, _node, _node.Bindings);
                 return;
             }
             default:

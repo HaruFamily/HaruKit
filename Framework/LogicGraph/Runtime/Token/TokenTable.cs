@@ -19,6 +19,7 @@ public class TokenTable<TPack>
     internal GraphExecutionSession Execution;
     internal string ExecutionScope = "";
     internal CancellationToken ExecutionCancellation;
+    internal PropertyScope Properties;
 
     /// <summary>本次執行鏈的合作式取消；節點內的非同步工作應沿用此 token。</summary>
     public CancellationToken CancellationToken => ExecutionCancellation;
@@ -44,7 +45,7 @@ public class TokenTable<TPack>
     // 沒有登記任何端點、也不會被寫入，所以共用一份就夠。
     private static readonly TokenTable<TPack> EmptyCaller = new();
 
-    internal static TokenTable<TPack> CreateAssetScope(ScriptableObject asset,
+    internal static TokenTable<TPack> CreateAssetScope(ScriptableObject asset, GraphNode callerNode,
         IReadOnlyList<NamedFormulaSlot> bindings, TokenTable<TPack> caller)
     {
         var table = new TokenTable<TPack>
@@ -53,6 +54,7 @@ public class TokenTable<TPack>
             Execution = caller?.Execution,
             ExecutionCancellation = caller?.ExecutionCancellation ?? default,
             ExecutionScope = "asset:" + asset.GetInstanceID(),
+            Properties = caller?.Properties?.Asset(asset, callerNode, (asset as IPropertyOwner)?.Properties),
         };
         if (asset is IGraphAsset graphAsset) table.Execution?.RegisterScope(table.ExecutionScope, graphAsset.Root);
         foreach (var parameter in AssetGraphSchema.ReadCached(asset))

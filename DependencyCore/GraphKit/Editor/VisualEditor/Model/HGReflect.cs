@@ -260,6 +260,9 @@ public static class HGReflect
     /// <summary>圖主人的具名Token清單（LogicGraph、公式／動作資產各一份）。</summary>
     public static List<GraphToken> Tokens(object owner) => (owner as ITokenOwner)?.Tokens;
 
+    /// <summary>圖主人的 Property 定義清單。沒有這個能力的文件回 null。</summary>
+    public static List<GraphProperty> Properties(object owner) => (owner as IPropertyOwner)?.Properties;
+
     // ===== 清單欄位 =====
 
     /// <summary>欄位是否為 List&lt;T&gt; 或 T[]；是的話回傳元素型別。陣列是固定長度，呼叫端要擋增刪。</summary>
@@ -540,19 +543,6 @@ public static class HGReflect
     }
 
     /// <summary>結果型別的短名，給節點 chip、Token 分頁與型別檢查提示用。族的 Slot 標了 [HGKind] 就用它。</summary>
-    /// <summary>這個欄位要不要畫成「選一個目錄」的下拉（<see cref="HGCatalogAttribute"/>）。</summary>
-    public static bool IsCatalogField(FieldInfo field)
-        => field != null && field.FieldType == typeof(string) && field.IsDefined(typeof(HGCatalogAttribute), false);
-
-    /// <summary>依 Id 找目錄。找不到回 null——目錄住在 Owner，隨時可能被刪掉，節點只留著 id。</summary>
-    public static IGraphCatalogLibrary FindCatalog(IReadOnlyList<IGraphCatalogLibrary> catalogs, string id)
-    {
-        if (catalogs == null || string.IsNullOrEmpty(id)) return null;
-        foreach (var catalog in catalogs)
-            if (catalog != null && catalog.Id == id) return catalog;
-        return null;
-    }
-
     public static string ResultTypeName(Type t)
     {
         if (t == null) return "動作";

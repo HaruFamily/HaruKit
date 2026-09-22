@@ -57,6 +57,8 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
     // 只認同族，不認同結果型別：string 同時有 String 與 Key 兩族，收下別族的Token等於從側門繞過那一族的規則。
     public override bool AcceptsToken(GraphToken endpoint) => endpoint?.Slot?.FamilyType == FamilyType;
 
+    public override bool AcceptsProperty(GraphProperty property) => property?.FamilyType == FamilyType;
+
     /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
     public TResult Default { get => _default; set => _default = value; }
 
@@ -98,7 +100,7 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
                 if (asset == null) return Mismatch("資產");
                 // 資產根停用與 inline 停用相同：採用呼叫欄位自己的保底值，不求值參數。
                 if (asset.Root?.Disabled == true) return _default;
-                return await asset.Evaluate(pack, tokens, _node.Bindings);
+                return await asset.Evaluate(pack, tokens, _node, _node.Bindings);
             }
             case NodeKind.Token:
             {
@@ -108,6 +110,12 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
                 if (endpoint == null || string.IsNullOrEmpty(endpoint.Name)) return _default;
                 if (tokens == null || !tokens.Has(FamilyType, endpoint.Name)) return _default;
                 return await tokens.Resolve<TResult>(FamilyType, endpoint.Name, pack);
+            }
+            case NodeKind.Property:
+            {
+                GraphProperty property = _node.Property;
+                if (property?.FamilyType != FamilyType || tokens?.Properties == null) return _default;
+                return tokens.Properties.Read<TResult>(property);
             }
             default:
                 return _default;   // Empty：編輯中的空節點，存檔驗證會擋，runtime 走保底值續跑。

@@ -7,12 +7,13 @@ using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 
 // 非泛型 base：給 Editor walker 不必反射就能取根節點與候選池。
-public abstract class FormulaAssetBase : ScriptableObject, IGraphAsset
+public abstract class FormulaAssetBase : ScriptableObject, IGraphAsset, IPropertyOwner
 {
     /// <summary>本資產的候選節點清單。僅視覺化編輯器使用。</summary>
     public abstract List<GraphNode> Orphans { get; }
     public abstract object ContentObject { get; }
     public abstract List<GraphToken> Tokens { get; }
+    public abstract List<GraphProperty> Properties { get; }
 
     /// <summary>根內容的載體。根節點的 Id／座標／備註都住在它身上，和圖上其他節點同一套。</summary>
     public abstract GraphNode Root { get; }
@@ -66,13 +67,20 @@ public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
     [SerializeReference, HideInInspector]
     private List<GraphToken> _endpoints = new();
 
-    public async UniTask<T> Evaluate(TPack pack, TokenTable<TPack> caller, IReadOnlyList<NamedFormulaSlot> bindings = null)
+    [SerializeReference, HideInInspector]
+    private List<GraphProperty> _properties = new();
+
+    public UniTask<T> Evaluate(TPack pack, TokenTable<TPack> caller, IReadOnlyList<NamedFormulaSlot> bindings = null)
+        => Evaluate(pack, caller, null, bindings);
+
+    internal async UniTask<T> Evaluate(TPack pack, TokenTable<TPack> caller, GraphNode callerNode,
+        IReadOnlyList<NamedFormulaSlot> bindings)
     {
         var root = Root;
         if (root?.Disabled == true) return default;
         var target = root?.GetBody<FormulaBase<T, TPack>>();
         if (target == null) return default;
-        var tokens = TokenTable<TPack>.CreateAssetScope(this, bindings, caller);
+        var tokens = TokenTable<TPack>.CreateAssetScope(this, callerNode, bindings, caller);
         using var visit = tokens.EnterNode(root);
         try
         {
@@ -93,6 +101,11 @@ public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
     public override List<GraphToken> Tokens
     {
         get { _endpoints ??= new List<GraphToken>(); return _endpoints; }
+    }
+
+    public override List<GraphProperty> Properties
+    {
+        get { _properties ??= new List<GraphProperty>(); return _properties; }
     }
 
     /// <summary>根內容的載體。舊格式（裸公式）在這裡就地補上載體，呼叫端只需要認 GraphNode。</summary>

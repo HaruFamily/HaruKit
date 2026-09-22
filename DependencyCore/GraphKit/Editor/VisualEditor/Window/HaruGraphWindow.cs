@@ -27,10 +27,10 @@ public partial class HaruGraphWindow : EditorWindow
     private const float DuplicateOffset = 28f;
     /// <summary>引用列比清單格矮：它只有名稱與驗證狀態，沒有 chip 也沒有第二行。</summary>
     /// <summary>左欄Token區的最小高度：三顆固定控制項 + 一列，再小就有東西被切掉（標題由面板標題兼任）。</summary>
-    private const float MinCatalogSection = 120f;
     private const float MinTokenSection = 106f;
     private const float MinAssetSection = 80f;
-    /// <summary>目錄庫與其他區並存時的固定高度：新增鈕 + 搜尋列 + 三列，再小就只剩控制項沒有內容。</summary>
+    /// <summary>Property 庫與其他區並存時的固定高度：兩顆鈕 + 搜尋列 + 兩列 + 初始值列。</summary>
+    private const float MinPropertySection = 146f;
     /// <summary>引用區的最小高度：標題列 + 一筆引用。它只在資產焦點出現，另外兩區跟著讓出高度。</summary>
     private const float MinRefSection = 76f;
     private const float DefaultTokenSection = 240f;
@@ -111,9 +111,8 @@ public partial class HaruGraphWindow : EditorWindow
     /// <summary>左欄資產庫。搜尋字與捲動在面板裡，拖曳與改名向框架借。</summary>
     private readonly HGAssetLibraryPanel assetLibrary = new();
 
-    private readonly HGCatalogLibraryPanel catalogLibrary = new();
-
-    /// <summary>左欄目錄庫。內容住 Owner，每個命令都是立即寫檔，不跟著存檔交易走。</summary>
+    /// <summary>左欄 ProtoProperty 庫。定義住圖的工作副本，所以跟著存檔交易與同一個 Undo 堆疊走。</summary>
+    private readonly HGPropertyLibraryPanel propertyLibrary = new();
 
     // 互動
     private HGNodeView dragNode;
@@ -170,7 +169,7 @@ public partial class HaruGraphWindow : EditorWindow
     private int dragListIndex = -1;
     // 拖曳期間只算目標位置、畫插入線；MouseUp 才真的搬動。拖曳中改資料會讓整張圖重建、列在指標底下亂跳。
     private int dragListTarget = -1;
-    // 清單折疊只是視覺狀態，不進資料：key 見 HGGraph.CollapseKey，沒有記錄的清單依項數自動決定。
+    // 清單折疊只是視覺狀態，不進資料：key 見 HGGraph.CollapseKey。
     private readonly Dictionary<string, bool> listCollapse = new();
     // Slot 的分支收合狀態，key 同樣是 HGGraph.CollapseKey。只認手動切換過的記錄，沒記錄就是展開。
     // 純視覺，切換只能設 graphDirty，不可以走 Invalidate。
@@ -181,7 +180,7 @@ public partial class HaruGraphWindow : EditorWindow
     private string soloSlotKey;
     private readonly Dictionary<string, bool> soloRestore = new();
     private object pendingCenterTarget;
-    // 剪貼簿存的是**載體**複本，不是內容本體：資產、Token、目錄節點的內容是引用不是 body，
+    // 剪貼簿存的是**載體**複本，不是內容本體：資產、Token、Property 節點的內容是引用不是 body，
     // 只抄 GraphNodeContent 就等於這三種永遠複製不了。座標存相對值，貼上時整團平移到滑鼠。
     private static readonly List<GraphNode> clipboard = new();
 
@@ -200,14 +199,7 @@ public partial class HaruGraphWindow : EditorWindow
     // 資產的復原歷程。資產不在 Owner 的工作副本裡，HGModel 那份 Undo 蓋不到，得自己記一份。
     private readonly HGAssetHistory assetHistory = new();
 
-    /// <summary>
-    /// 目錄庫有未落盤的改動。
-    /// </summary>
-    // 目錄立即寫 Owner、不進工作副本，所以它不碰 model.Dirty。未存檔狀態獨立記一份：
-    // 寫進記憶體中的 SO 不等於寫進檔案，沒落盤的目錄會在下一次 domain reload 消失。
-    private bool catalogDirty;
-
-    private bool HasUnsavedWork => model?.Dirty == true || assetDirty || catalogDirty;
+    private bool HasUnsavedWork => model?.Dirty == true || assetDirty;
 
     /// <summary>引用清單只在資產焦點有意義，作為左欄第三區出現（2026-08-20 由整條右欄改成分區）。</summary>
     /// <summary>資產庫與引用區要不要存在。由圖宣告，不從「現在有幾筆資產」推。</summary>
@@ -217,14 +209,14 @@ public partial class HaruGraphWindow : EditorWindow
     private bool HasTokenSection => model?.Doc is ITokenOwner
         && HGGraph.Has(activeContext, model.Doc, HGCapabilities.Tokens);
 
-    /// <summary>目錄庫要不要存在。能力由圖宣告，內容由 Owner 提供，兩件事分開。</summary>
-    // 圖宣告了但 Owner 沒實作 ICatalogOwner 時區塊照出現，面板畫一句說明——
-    // 這是使用端接線漏了，靜默收掉區塊只會讓人找不到原因。
-    private bool HasCatalogSection => HGGraph.Has(activeContext, model?.Doc, HGCapabilities.Catalogs);
+    /// <summary>Property 庫要不要存在。能力由圖宣告，清單由圖自己持有，兩者都要成立。</summary>
+    private bool HasPropertySection => model?.Doc is IPropertyOwner
+        && HGGraph.Has(activeContext, model.Doc, HGCapabilities.Properties);
 
     /// <summary>左欄還有沒有東西可放。沒綁定時維持原版型，閒置畫面不因此改變。</summary>
     // 一區都沒有就整框不畫：空框會讓人一直找「內容為什麼沒出現」，而那個框永遠不會有東西。
-    private bool HasLeftColumn => model?.Doc == null || HasTokenSection || HasAssetSection || HasCatalogSection;
+    private bool HasLeftColumn => model?.Doc == null
+        || HasTokenSection || HasAssetSection || HasPropertySection;
 
     private bool HasReferenceSection => HasAssetSection && focus.Kind == HGFocusKind.Asset;
     private bool IsCurrentReportFresh => focus.Kind == HGFocusKind.Asset
@@ -268,7 +260,7 @@ public partial class HaruGraphWindow : EditorWindow
         wantsMouseMove = true;
         wantsMouseEnterLeaveWindow = true;
         drag.DrawTokenGhost();
-        drag.DrawCatalogGhost();
+        drag.DrawPropertyGhost();
         if (placingSlot != null) DrawPlacingGhost();
         if (Event.current.rawType == EventType.MouseUp)
         {
@@ -481,7 +473,6 @@ public partial class HaruGraphWindow : EditorWindow
         }
 
         ApplyVisibility();
-        MarkCatalogPorts();
         RebuildPorts();
         var targetReport = focus.Kind == HGFocusKind.Asset ? assetReport : report;
         targetReport.ReplaceGraphViewDiagnostics(graph.Diagnostics);
@@ -904,6 +895,10 @@ public partial class HaruGraphWindow : EditorWindow
             diagnostics.Add(new GraphDiagnostic("graphkit.capability.tokens-owner-missing", GraphDiagnosticSeverity.Error,
                 "文件宣告了具名 Token 能力，但沒有實作 ITokenOwner。",
                 fix: "移除 Tokens capability，或讓文件實作 ITokenOwner。"));
+        if (HGGraph.Has(activeContext, model?.Doc, HGCapabilities.Properties) && model.Doc is not IPropertyOwner)
+            diagnostics.Add(new GraphDiagnostic("graphkit.capability.properties-owner-missing", GraphDiagnosticSeverity.Error,
+                "文件宣告了 Property 能力，但沒有實作 IPropertyOwner。",
+                fix: "移除 Properties capability，或讓文件實作 IPropertyOwner。"));
         activeContext.CollectDiagnostics(model.Owner, model.Doc, diagnostics);
         target.ReplaceExtensionDiagnostics(diagnostics);
     }
@@ -1043,12 +1038,8 @@ public partial class HaruGraphWindow : EditorWindow
     private void AfterHistorySwap(HGStepKind step)
     {
         ClearPortInteractionState();
-        // 只退回目錄的那一步不換圖，焦點與選取要留著——那一步在使用者眼裡只是左欄的一列變回來。
-        if (step != HGStepKind.Catalogs)
-        {
-            focus = focus.Kind == HGFocusKind.Root ? AllRootsFocus() : new HGFocus();
-            selectedIds.Clear();
-        }
+        focus = focus.Kind == HGFocusKind.Root ? AllRootsFocus() : new HGFocus();
+        selectedIds.Clear();
 
         graphDirty = true;
         DoVerify(true);
@@ -1071,7 +1062,7 @@ public partial class HaruGraphWindow : EditorWindow
         // 共用資產存檔會把引用它的 Owner 標成未驗證，但工作副本一個字都沒改（Dirty=false）。
         // 存檔是唯一會重跑 Core Verify 並寫回 Owner 的入口，這時候不開它就沒有任何路可以把圖救回已驗證。
         bool needsRevalidate = !inAsset && !model.IsStoredDocumentValidated;
-        bool hasChanges = inAsset ? assetDirty : (model.Dirty || catalogDirty);
+        bool hasChanges = inAsset ? assetDirty : model.Dirty;
         bool canSave = (hasChanges || needsRevalidate) && !blocked;
 
         return new HGToolbarView

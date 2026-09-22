@@ -42,7 +42,7 @@ namespace HaruFamily.Tools.AssetPipeline
     // 找的是「型別實作 IGraphDocument 的欄位」，並對那個欄位 DeepCopy 出工作副本。
     // SO 本身是 UnityEngine.Object，深複製會原樣沿用，取消就救不回來了。
     [Serializable]
-    public class Graph : IGraphDocument, ITokenOwner
+    public class Graph : IGraphDocument, ITokenOwner, IPropertyOwner
     {
         /// <summary>整張圖唯一的 root 識別值。編輯器只拿它做 Equals 比較與 ToString 顯示。</summary>
         public const string PipelineKey = "Pipeline";
@@ -55,6 +55,10 @@ namespace HaruFamily.Tools.AssetPipeline
 
         [SerializeReference]
         private List<GraphToken> _endpoints = new List<GraphToken>();
+
+        // Property 定義。與 Token 一樣住圖裡，所以跟著工作副本、存檔交易與同一個 Undo 堆疊走。
+        [SerializeReference]
+        private List<GraphProperty> _properties = new List<GraphProperty>();
 
         [SerializeField, HideInInspector]
         private bool _validated;
@@ -91,6 +95,11 @@ namespace HaruFamily.Tools.AssetPipeline
             get { _endpoints ??= new List<GraphToken>(); return _endpoints; }
         }
 
+        public List<GraphProperty> Properties
+        {
+            get { _properties ??= new List<GraphProperty>(); return _properties; }
+        }
+
         public bool IsValidated => _validated;
 
         /// <summary>內容變動，撤銷已驗證狀態。改圖後一定要呼叫，否則 Run 會用過期的驗證結果。</summary>
@@ -118,10 +127,9 @@ namespace HaruFamily.Tools.AssetPipeline
 
         string IGraphDocument.WindowTitle => "AssetPipelineGraph";
 
-        // 只宣告目錄：Slot 的 AssetBaseType 是 null、AcceptsAsset 永遠 false，管線的欄位接不到共用資產；
-        // Token 則是管線用不到——動作欄位不收 Token（ActionSlot.AcceptsToken 永遠 false），
-        // 公式欄位要的是「哪一批資產」而不是具名常數。目錄的內容由 Owner（AssetPipeline）提供，見 ICatalogOwner。
-        HGCapabilities IGraphDocument.Capabilities => HGCapabilities.Catalogs;
+        // 不宣告共用資產：Slot 的 AssetBaseType 是 null、AcceptsAsset 永遠 false，管線的欄位接不到共用資產。
+        // Token 也用不到——動作欄位不收 Token（ActionSlot.AcceptsToken 永遠 false）。
+        HGCapabilities IGraphDocument.Capabilities => HGCapabilities.Properties;
 
         IList IGraphDocument.ItemsOf(object root) => (root as ActionGroup)?.Actions;
 

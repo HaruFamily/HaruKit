@@ -112,14 +112,6 @@ public sealed class HGDescriptionAttribute : Attribute
     }
 }
 
-/// <summary>
-/// 把 string 欄位繪製成「選一個目錄」的下拉，存的是 <see cref="IGraphCatalogLibrary.Id"/>。
-/// </summary>
-// 候選來自 Owner 的目錄庫（ICatalogOwner），所以只有宣告了 Catalogs 能力的圖才畫得出來；
-// 存 id 不存名字：左欄改名不該讓引用失聯。
-[AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
-public sealed class HGCatalogAttribute : Attribute { }
-
 /// <summary>把 enum 欄位繪製成按鈕列；支援 [Flags] enum 多選。</summary>
 [AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
 public sealed class HGEnumAttribute : Attribute { }

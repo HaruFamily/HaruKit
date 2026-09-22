@@ -1,5 +1,7 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using HaruFamily.DependencyCore.GraphKit;
 using UnityEditor;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -80,15 +82,40 @@ namespace HaruFamily.Tools.AssetPipeline
         }
     }
 
+    /// <summary>一次管線執行結束時擷取的 Property 顯示資料，不持有可變目前值的 live reference。</summary>
+    public sealed class PipelinePropertySnapshot
+    {
+        public string Name { get; }
+        public string TypeName { get; }
+        public bool HasValue { get; }
+        public string Value { get; }
+
+        internal PipelinePropertySnapshot(GraphProperty property)
+        {
+            Name = property?.Name ?? "（未命名）";
+            TypeName = property?.ResultType?.Name ?? "（未指定型別）";
+            HasValue = property?.HasValue == true;
+            Value = Describe(property?.CurrentValue);
+        }
+
+        private static string Describe(object value)
+        {
+            if (value == null) return "null";
+            if (value is IList list) return $"{value.GetType().Name}（{list.Count} 項）";
+            if (value is Object asset) return asset.name;
+            return value.ToString();
+        }
+    }
+
     public sealed class PipelineRunResult
     {
         public DateTime StartedAt { get; } = DateTime.Now;
         public List<PipelineActionResult> Steps { get; } = new();
         public List<string> Errors { get; } = new();
-        public List<PipelineCatalogSnapshot> Catalogs { get; } = new();
+        public List<PipelinePropertySnapshot> Properties { get; } = new();
         public PipelineTransactionStatus Transaction { get; internal set; }
         public string RecoveryDirectory { get; internal set; }
-        internal Func<List<string>> RestoreCatalogs;
+        internal Func<List<string>> RestoreProperties;
         public string Summary => $"交易：{Transaction}；動作成功 {Count(PipelineStepStatus.Success)}，跳過 {Count(PipelineStepStatus.Skipped)}，"
             + $"部分完成 {Count(PipelineStepStatus.Partial)}，失敗 {Count(PipelineStepStatus.Failed)}，未執行 {Count(PipelineStepStatus.NotRun)}。"
             + $"\n資產操作：新增 {ItemCount(PipelineItemStatus.Created)}，修改 {ItemCount(PipelineItemStatus.Modified)}，"
@@ -101,6 +128,13 @@ namespace HaruFamily.Tools.AssetPipeline
             foreach (var step in Steps) count += step.Count(status);
             return count;
         }
+
+        internal void CaptureProperties(IEnumerable<GraphProperty> properties)
+        {
+            Properties.Clear();
+            foreach (GraphProperty property in properties ?? Array.Empty<GraphProperty>())
+                if (property != null) Properties.Add(new PipelinePropertySnapshot(property));
+        }
     }
 
     /// <summary>Action 只寫正向操作；資產寫入與回復由共用交易承接。</summary>
@@ -108,18 +142,13 @@ namespace HaruFamily.Tools.AssetPipeline
     {
         public PipelineAssetWriter Assets { get; }
         public PipelineActionResult Result { get; }
-        private readonly Dictionary<CatalogCell, PipelineValueSnapshot> observations;
-
-        internal PipelineActionContext(PipelineAssetTransaction transaction, PipelineActionResult result,
-            Dictionary<CatalogCell, PipelineValueSnapshot> observations)
+        internal PipelineActionContext(PipelineAssetTransaction transaction, PipelineActionResult result)
         {
             Result = result;
             Assets = new PipelineAssetWriter(transaction, result);
-            this.observations = observations;
         }
 
         public void Fail(string message, string path = null) => Result.Fail(message, path);
         public void Skip(string message) { Result.WasSkipped = true; Result.Message(message); }
-        internal void Observe(CatalogCell cell, object value) => observations[cell] = PipelineValueSnapshot.Capture(value);
     }
 }

@@ -21,7 +21,9 @@ public sealed class HGInlineRename
     public const string SiteAssetLib = "assetLib";
 
     /// <summary>左欄目錄庫的清單格。</summary>
-    public const string SiteCatalogLib = "catalogLib";
+
+    /// <summary>左欄 Property 庫的清單格。</summary>
+    public const string SitePropertyLib = "propertyLib";
 
     /// <summary>節點參數列的動作標籤。</summary>
     public const string SiteRow = "row";

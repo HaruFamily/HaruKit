@@ -67,8 +67,6 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
     {
         [TestCase("graph")]
         [TestCase("empty")]
-        [TestCase("cell-filter")]
-        [TestCase("cleared-record")]
         [TestCase("carrier")]
         [TestCase("orphan-carrier")]
         [TestCase("orphan-mixed")]
@@ -77,7 +75,6 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [TestCase("session")]
         [TestCase("unrelated-empty")]
         [TestCase("unrelated-null")]
-        [TestCase("incompatible")]
         [TestCase("conflict")]
         public void MissingTypeCleanupRemovesOnlyAffectedDataAndStillRequiresValidGraph(string mode)
             => RunMissingTypeCleanupCase(mode, false);
@@ -99,7 +96,6 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 EditorSettings.serializationMode = SerializationMode.ForceText;
                 AssetDatabase.CreateFolder("Assets", Path.GetFileName(folder));
                 pipeline = ScriptableObject.CreateInstance<AssetPipeline>();
-                pipeline.collectKey = "KeepThisKey";
                 var root = (ActionGroup)((IGraphDocument)pipeline.graph).AddRoot(Graph.PipelineKey);
                 root.Actions.Add(new ActionSlot(new RepairMissingBody()));
                 root.Actions.Add(new ActionSlot(new RepairValidBody { value = 42 }));
@@ -125,25 +121,6 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 root.Actions[0].Node.EnsureId();
                 root.Actions[1].Node.EnsureId();
                 string validId = root.Actions[1].Node.Id;
-                if (mode == "cell-filter" || mode == "cleared-record" || mode == "incompatible")
-                {
-                    var catalog = new DynamicAssetCatalog { initialization = DynamicAssetCatalog.InitializationMode.Retain };
-                    var carrier = new GraphNode();
-                    carrier.SetCatalog(catalog);
-                    pipeline.graph.Orphans.Add(carrier);
-                    GraphNode cell = ((IGraphNodeOwner)catalog).CreateChild();
-                    cell.EnsureId();
-                    if (mode == "cell-filter" || mode == "cleared-record")
-                    {
-                        var filter = new GraphNode(new RepairMissingFilter());
-                        filter.EnsureId();
-                        ((CatalogCell)cell.BodyObject).InputSlot.SetNode(filter);
-                        pipeline.graph.Orphans.Add(filter);
-                    }
-                    var action = (RepairValidBody)root.Actions[1].Node.BodyObject;
-                    action.sourcePrefab.SetNode(cell);
-                    action.otherPrefab.SetNode(cell);
-                }
                 if (mode == "unrelated-empty")
                 {
                     var empty = new ActionSlot();
@@ -159,7 +136,6 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 string yaml = File.ReadAllText(path);
                 Assert.That(yaml, Does.Contain(nameof(RepairMissingBody)));
                 File.WriteAllText(path, yaml.Replace(nameof(RepairMissingBody), "DeletedRepairMissingBody")
-                    .Replace(nameof(RepairMissingFilter), "DeletedRepairMissingFilter")
                     .Replace(nameof(RepairMissingCarrier), "DeletedRepairMissingCarrier")
                     .Replace(nameof(RepairMissingTokenSlot), "DeletedRepairMissingTokenSlot"));
                 AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
@@ -232,15 +208,6 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 bool invalid = unrelatedEmpty || mode == "incompatible" || mode == "token-mixed";
                 ((RepairValidBody)items[0].Node.BodyObject).value = 99;
                 if (mode == "empty") items.Clear();
-                if (mode == "cell-filter" || mode == "cleared-record")
-                {
-                    var action = (RepairValidBody)items[0].Node.BodyObject;
-                    Assert.That(action.sourcePrefab.Node, Is.Null);
-                    Assert.That(action.otherPrefab.Node, Is.Null);
-                    Assert.That(working.Orphans.Count, Is.EqualTo(1), "遺失公式不可殘留候選池。");
-                    var catalog = (DynamicAssetCatalog)working.Orphans[0].CatalogObject;
-                    Assert.That(((CatalogCell)((IGraphNodeOwner)catalog).ChildNodes[0].BodyObject).InputSlot.Node, Is.Null);
-                }
                 model.MarkDirty();
                 if (mode == "conflict") pipeline.graph = GraphDeepCopy.Copy(pipeline.graph);
                 var oldGraph = pipeline.graph;
@@ -276,13 +243,11 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 Assert.That(model.Data, Is.SameAs(working));
                 Assert.That(model.Dirty, Is.False);
                 Assert.That(model.Save(), Is.True, "清理後可繼續正常驗證與存檔。");
-                Assert.That(pipeline.collectKey, Is.EqualTo("KeepThisKey"));
                 Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
 
                 AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
                 pipeline = AssetDatabase.LoadAssetAtPath<AssetPipeline>(path);
                 Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
-                Assert.That(pipeline.collectKey, Is.EqualTo("KeepThisKey"));
                 Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
                 Assert.That(pipeline.graph.Actions.Count, Is.EqualTo(count));
                 Assert.That(pipeline.graph.IsValidated, Is.True);
@@ -338,8 +303,6 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         { protected override void OnExecute(PipelineActionContext context) { } }
         [Serializable] private sealed class RepairMissingCarrier : GraphNode
         { public RepairMissingCarrier(GraphNodeContent body) : base(body) { } }
-        [Serializable] private sealed class RepairMissingFilter : Formula_GameObject<List<Object>>
-        { protected override GameObject OnEvaluate(List<Object> pack) => null; }
         [Serializable] private sealed class RepairMissingTokenSlot : IntSlot { }
         [Serializable] private sealed class RepairValidBody : ActionBase
         {
@@ -434,29 +397,6 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         }
 
         [Test]
-        public void SequentialCatalogWriteIsVisibleToTheNextChildInTheSameStep()
-        {
-            var catalog = new DynamicAssetCatalog();
-            var carrier = new GraphNode();
-            carrier.SetCatalog(catalog);
-            GraphNode cell = ((IGraphNodeOwner)catalog).CreateChild();
-            var writer = new WriteCatalogAction { value = pipeline };
-            writer.output.SetNode(carrier);
-            var reader = new ObserveCatalogAction();
-            reader.input.SetNode(cell);
-            Add(new SequenceAction
-            {
-                actions = new() { new ActionSlot(writer), new ActionSlot(reader) },
-            });
-
-            var result = pipeline.RunPipeline();
-
-            Assert.That(result.Transaction, Is.EqualTo(PipelineTransactionStatus.Committed));
-            Assert.That(result.Steps.Count, Is.EqualTo(1));
-            Assert.That(reader.observed, Is.EqualTo(new Object[] { pipeline }));
-        }
-
-        [Test]
         public void RepeatedEditsRollbackToOriginalBytesAndGuid()
         {
             string path = Prefab("Original");
@@ -511,37 +451,6 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(storage.value, Is.EqualTo(7));
         }
 
-        [TestCase(DynamicAssetCatalog.InitializationMode.EachRun, 0)]
-        [TestCase(DynamicAssetCatalog.InitializationMode.Retain, 1)]
-        public void InitializationModeControlsDataAtRunStart(DynamicAssetCatalog.InitializationMode mode, int expected)
-        {
-            var catalog = new DynamicAssetCatalog { initialization = mode };
-            var node = new GraphNode();
-            node.SetCatalog(catalog);
-            pipeline.graph.Orphans.Add(node);
-            catalog.Write(new Object[] { pipeline }, false);
-            Add(new NoOpAction());
-
-            Assert.That(pipeline.RunPipeline().Transaction, Is.EqualTo(PipelineTransactionStatus.Committed));
-            Assert.That(catalog.Read().Count, Is.EqualTo(expected));
-        }
-
-        [Test]
-        public void FailureRestoresDynamicDataFromBeforeInitialization()
-        {
-            var catalog = new DynamicAssetCatalog();
-            var node = new GraphNode();
-            node.SetCatalog(catalog);
-            pipeline.graph.Orphans.Add(node);
-            catalog.Write(new Object[] { pipeline }, false);
-            Add(new FailAction());
-
-            Assert.That(pipeline.RunPipeline().Transaction, Is.EqualTo(PipelineTransactionStatus.RolledBack));
-            Assert.That(catalog.Read(), Is.EquivalentTo(new Object[] { pipeline }));
-            Assert.That(AssetPipeline.current, Is.Null);
-            Assert.That(AssetPipeline.CurrentAction, Is.Null);
-        }
-
         [Test]
         public void ExplicitPartialFailureRollsBackAndSkipDoesNot()
         {
@@ -555,6 +464,116 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             var skipped = pipeline.RunPipeline();
             Assert.That(skipped.Steps[0].Status, Is.EqualTo(PipelineStepStatus.Skipped));
             Assert.That(skipped.Transaction, Is.EqualTo(PipelineTransactionStatus.Committed));
+        }
+
+        [Test]
+        public void FailureRestoresPropertyValueAndSharedListContents()
+        {
+            var initial = new List<Object> { pipeline };
+            var property = new GraphProperty("Objects", new ObjectListSlot(), true);
+            ((ObjectListSlot)property.Slot).Default = initial;
+            pipeline.graph.Properties.Add(property);
+            var node = new GraphNode();
+            node.SetProperty(property);
+            var replacement = new List<Object>();
+            Add(new MutateAndWritePropertyAction(property, node, replacement));
+            Add(new FailAction());
+
+            var result = pipeline.RunPipeline();
+
+            Assert.That(result.Transaction, Is.EqualTo(PipelineTransactionStatus.RolledBack));
+            Assert.That(property.CurrentValue, Is.SameAs(initial));
+            Assert.That(initial, Is.EqualTo(new Object[] { pipeline }));
+        }
+
+        [Test]
+        public void RunCapturesPropertySnapshotWithoutKeepingTheLiveList()
+        {
+            var property = new GraphProperty("Objects", new ObjectListSlot(), true);
+            ((ObjectListSlot)property.Slot).Default = new List<Object>();
+            pipeline.graph.Properties.Add(property);
+            var node = new GraphNode();
+            node.SetProperty(property);
+            var written = new List<Object> { pipeline };
+            Add(new MutateAndWritePropertyAction(property, node, written));
+
+            var result = pipeline.RunPipeline();
+            written.Add(null);
+
+            Assert.That(result.Properties, Has.Count.EqualTo(1));
+            Assert.That(result.Properties[0].Name, Is.EqualTo("Objects"));
+            Assert.That(result.Properties[0].HasValue, Is.True);
+            Assert.That(result.Properties[0].Value, Is.EqualTo("List`1（1 項）"));
+        }
+
+        [Test]
+        public void SequentialChildrenReadTheValueWrittenEarlierInTheSameRun()
+        {
+            var property = new GraphProperty(null, new ObjectListSlot());
+            pipeline.graph.Properties.Add(property);
+            var node = new GraphNode();
+            node.SetProperty(property);
+            var written = new List<Object> { pipeline };
+            var reader = new ReadPropertyAction(node);
+            Add(new SequenceAction
+            {
+                actions = new()
+                {
+                    new ActionSlot(new WritePropertyAction(node, written)),
+                    new ActionSlot(reader),
+                },
+            });
+
+            var result = pipeline.RunPipeline();
+
+            Assert.That(result.Transaction, Is.EqualTo(PipelineTransactionStatus.Committed));
+            Assert.That(reader.Observed, Is.SameAs(written));
+        }
+
+        [Test]
+        public void LaterRunKeepsPropertyValueWhenNoActionWritesAgain()
+        {
+            var property = new GraphProperty(null, new ObjectListSlot());
+            pipeline.graph.Properties.Add(property);
+            var node = new GraphNode();
+            node.SetProperty(property);
+            var written = new List<Object> { pipeline };
+            Add(new WritePropertyAction(node, written));
+
+            Assert.That(pipeline.RunPipeline().Transaction, Is.EqualTo(PipelineTransactionStatus.Committed));
+            root.Actions.Clear();
+            var reader = new ReadPropertyAction(node);
+            Add(reader);
+
+            Assert.That(pipeline.RunPipeline().Transaction, Is.EqualTo(PipelineTransactionStatus.Committed));
+            Assert.That(reader.Observed, Is.SameAs(written));
+        }
+
+        [Test]
+        public void NodePrivateLocalPropertyIsRestoredOnFailureAndAppearsInTheSnapshot()
+        {
+            // LocalProperty 住在 GraphNode 上，不在 graph.Properties 裡；備份與快照必須走整張圖的走訪才找得到。
+            var property = new GraphProperty(null, new ObjectListSlot());
+            var node = new GraphNode();
+            node.SetLocalProperty(property);
+            var written = new List<Object> { pipeline };
+            Add(new WritePropertyAction(node, written));
+
+            var committed = pipeline.RunPipeline();
+
+            Assert.That(pipeline.graph.Properties, Is.Empty);
+            Assert.That(committed.Transaction, Is.EqualTo(PipelineTransactionStatus.Committed));
+            Assert.That(committed.Properties, Has.Count.EqualTo(1));
+            Assert.That(committed.Properties[0].HasValue, Is.True);
+
+            root.Actions.Clear();
+            Add(new WritePropertyAction(node, new List<Object>()));
+            Add(new FailAction());
+
+            var failed = pipeline.RunPipeline();
+
+            Assert.That(failed.Transaction, Is.EqualTo(PipelineTransactionStatus.RolledBack));
+            Assert.That(property.CurrentValue, Is.SameAs(written));
         }
 
         [Test]
@@ -625,30 +644,6 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(result.Transaction, Is.EqualTo(PipelineTransactionStatus.RolledBack));
         }
 
-        [Test]
-        public void RunSnapshotDoesNotReevaluateCellsAndExplicitRefreshDoes()
-        {
-            CountingFilter.Calls = 0;
-            var catalog = new DynamicAssetCatalog { initialization = DynamicAssetCatalog.InitializationMode.Retain };
-            catalog.Write(new Object[] { pipeline }, false);
-            var carrier = new GraphNode();
-            carrier.SetCatalog(catalog);
-            pipeline.graph.Orphans.Add(carrier);
-            GraphNode cell = ((IGraphNodeOwner)catalog).CreateChild();
-            ((CatalogCell)cell.BodyObject).InputSlot.SetNode(new GraphNode(new CountingFilter()));
-            var reader = new ReadCellAction();
-            reader.value.SetNode(cell);
-            Add(reader);
-
-            var result = pipeline.RunPipeline();
-
-            Assert.That(result.Transaction, Is.EqualTo(PipelineTransactionStatus.Committed));
-            Assert.That(CountingFilter.Calls, Is.EqualTo(1));
-            Assert.That(result.Catalogs[0].Cells[0].Value.Value, Is.EqualTo("1"));
-            pipeline.RefreshCatalogPreview();
-            Assert.That(CountingFilter.Calls, Is.EqualTo(2));
-        }
-
         [Serializable] private sealed class SequenceAction : ActionBase, ISequentialActionContainer
         {
             public List<ActionSlot> actions = new();
@@ -662,42 +657,59 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 }
             }
         }
-        [Serializable] private sealed class WriteCatalogAction : ActionBase
-        {
-            public CatalogOutputSlot output = new();
-            public Object value;
-            protected override void OnExecute(PipelineActionContext context) => output.Write(new[] { value });
-        }
-        [Serializable] private sealed class ObserveCatalogAction : ActionBase
-        {
-            public ObjectListSlot input = new();
-            [NonSerialized] public List<Object> observed;
-            protected override void OnExecute(PipelineActionContext context) => observed = input.Evaluate();
-        }
         [Serializable] private sealed class ChildAction : ActionBase, ISequentialActionContainer
         {
             public ActionSlot child = new();
             public IReadOnlyList<ActionSlotBase> SequentialActions => new ActionSlotBase[] { child };
             protected override void OnExecute(PipelineActionContext context) => child.Execute(context);
         }
-        [Serializable] private sealed class NoOpAction : ActionBase
-        { protected override void OnExecute(PipelineActionContext context) { } }
         [Serializable] private sealed class SkipAction : ActionBase
         { protected override void OnExecute(PipelineActionContext context) => context.Skip("符合跳過條件"); }
         [Serializable] private sealed class FailAction : ActionBase
         { protected override void OnExecute(PipelineActionContext context) => context.Fail("測試失敗"); }
+        [Serializable] private sealed class MutateAndWritePropertyAction : ActionBase
+        {
+            private readonly GraphProperty property;
+            private readonly List<Object> replacement;
+            public ObjectListPropertySlot output = new();
+
+            public MutateAndWritePropertyAction(GraphProperty property, GraphNode node, List<Object> replacement)
+            {
+                this.property = property;
+                this.replacement = replacement;
+                output.SetNode(node);
+            }
+
+            protected override void OnExecute(PipelineActionContext context)
+            {
+                ((List<Object>)property.CurrentValue).Add(null);
+                output.Write(replacement);
+            }
+        }
+        [Serializable] private sealed class WritePropertyAction : ActionBase
+        {
+            private readonly List<Object> value;
+            public ObjectListPropertySlot output = new();
+
+            public WritePropertyAction(GraphNode node, List<Object> value)
+            {
+                this.value = value;
+                output.SetNode(node);
+            }
+
+            protected override void OnExecute(PipelineActionContext context) => output.Write(value);
+        }
+        [Serializable] private sealed class ReadPropertyAction : ActionBase
+        {
+            public ObjectListSlot input = new();
+            [NonSerialized] public List<Object> Observed;
+
+            public ReadPropertyAction(GraphNode node) => input.SetNode(node);
+
+            protected override void OnExecute(PipelineActionContext context) => Observed = input.Evaluate();
+        }
         [Serializable] private sealed class LoggedErrorAction : ActionBase
         { protected override void OnExecute(PipelineActionContext context) => Debug.LogError("AP 測試錯誤"); }
-        [Serializable] private sealed class CountingFilter : Formula_Int<List<Object>>
-        {
-            public static int Calls;
-            protected override int OnEvaluate(List<Object> pack) { Calls++; return pack.Count; }
-        }
-        [Serializable] private sealed class ReadCellAction : ActionBase
-        {
-            public IntSlot value = new();
-            protected override void OnExecute(PipelineActionContext context) => context.Result.Message(value.Evaluate().ToString());
-        }
         [Serializable] private sealed class CopyAction : ActionBase
         {
             public string source, target;

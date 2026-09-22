@@ -7,7 +7,7 @@ namespace HaruFamily.Tools.AssetPipeline
     public partial class AssetPipeline
     {
         [NonSerialized]
-        private string prototypeValidationSnapshot;
+        private string validationSnapshot;
 
         /// <summary>管線資產回報訊息：寫入 pipelineLog 並輸出 Console。</summary>
         public static void Report(string message)
@@ -16,9 +16,12 @@ namespace HaruFamily.Tools.AssetPipeline
             CurrentAction?.Result.Message(message);
         }
 
-        internal bool VerifyPipelineAssets()
+        internal bool VerifyGraph()
         {
-            return ValidatePipelinePrototypeSources();
+            graph.Verify();
+            validationSnapshot = graph.IsValidated ? EditorJsonUtility.ToJson(this) : null;
+            pipelineLog = graph.IsValidated ? "管線驗證通過。" : "管線驗證失敗，請查看 Console。";
+            return graph.IsValidated;
         }
 
         internal void RunPipelineAssets()
@@ -37,9 +40,9 @@ namespace HaruFamily.Tools.AssetPipeline
 
         internal string ExecutePipelineAssets(string actionName)
         {
-            if (!IsPrototypeSourceValidationCurrent())
+            if (!IsGraphValidationCurrent())
             {
-                pipelineLog = $"{actionName}已鎖定：請先驗證管線原型資產來源。";
+                pipelineLog = $"{actionName}已鎖定：請先驗證管線圖。";
                 Debug.LogWarning($"[AssetPipeline] {pipelineLog}");
                 return pipelineLog;
             }
@@ -51,20 +54,10 @@ namespace HaruFamily.Tools.AssetPipeline
             return pipelineLog;
         }
 
-        internal bool IsPrototypeSourceValidationCurrent()
+        internal bool IsGraphValidationCurrent()
         {
-            return !string.IsNullOrEmpty(prototypeValidationSnapshot)
-                && prototypeValidationSnapshot == EditorJsonUtility.ToJson(this);
-        }
-
-        private void MarkPrototypeSourceValidationPassed()
-        {
-            prototypeValidationSnapshot = EditorJsonUtility.ToJson(this);
-        }
-
-        private void ClearPrototypeSourceValidation()
-        {
-            prototypeValidationSnapshot = null;
+            return !string.IsNullOrEmpty(validationSnapshot)
+                && validationSnapshot == EditorJsonUtility.ToJson(this);
         }
     }
 }

@@ -6,7 +6,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 
-public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAsset
+public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAsset, IPropertyOwner
 {
     // 根內容的載體。存 GraphNode 而不是裸 Action，根節點才有地方放 Id／座標／備註／停用旗標，
     // 跟圖上其他節點同一套規則；只存裸內容時每次開畫布都要現包一顆，位置永遠留不住。
@@ -25,6 +25,9 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAss
     [SerializeReference, HideInInspector]
     private List<GraphToken> _endpoints = new();
 
+    [SerializeReference, HideInInspector]
+    private List<GraphProperty> _properties = new();
+
     // 資產畫布 HEAD 的座標。HEAD 那個容器槽是編輯期現做的，沒有地方落腳，所以記在資產本體上，
     // 形狀與 ActionSlot／GraphToken／ActionTimingGroup 一致（Pos／HasPos／ClearPos）。
     [SerializeField, HideInInspector]
@@ -36,7 +39,11 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAss
     /// <summary>動作資產沒有結果型別。</summary>
     public Type ResultType => null;
 
-    public async UniTask Execute(TPack pack, TokenTable<TPack> caller, IReadOnlyList<NamedFormulaSlot> bindings = null)
+    public UniTask Execute(TPack pack, TokenTable<TPack> caller, IReadOnlyList<NamedFormulaSlot> bindings = null)
+        => Execute(pack, caller, null, bindings);
+
+    internal async UniTask Execute(TPack pack, TokenTable<TPack> caller, GraphNode callerNode,
+        IReadOnlyList<NamedFormulaSlot> bindings)
     {
         var root = Root;
         if (root?.Disabled == true) return;
@@ -46,7 +53,7 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAss
             Debug.LogWarning($"[LogicGraph] 動作資產 '{name}' 沒有內容，已跳過。");
             return;
         }
-        var tokens = TokenTable<TPack>.CreateAssetScope(this, bindings, caller);
+        var tokens = TokenTable<TPack>.CreateAssetScope(this, callerNode, bindings, caller);
         using var visit = tokens.EnterNode(root);
         try
         {
@@ -67,6 +74,11 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAss
     public List<GraphToken> Tokens
     {
         get { _endpoints ??= new List<GraphToken>(); return _endpoints; }
+    }
+
+    public List<GraphProperty> Properties
+    {
+        get { _properties ??= new List<GraphProperty>(); return _properties; }
     }
 
     /// <summary>根內容的載體。舊格式（裸 Action）在這裡就地補上載體，呼叫端只需要認 GraphNode。</summary>

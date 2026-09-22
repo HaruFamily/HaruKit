@@ -130,6 +130,23 @@ public static class HGValidator
             ValidateToken(report, model, focus, t);
         }
 
+        // ProtoProperty 的 Key 跨族也是全域身分；同名會讓 Key 選擇與外部顯示無法判定指向哪一顆。
+        var propertyKeys = new HashSet<string>();
+        foreach (var property in model.OwnerProperties)
+        {
+            if (property?.Proto != true) continue;
+            if (string.IsNullOrWhiteSpace(property.Name))
+            {
+                Err(report, "graphkit.property.key-missing", null, "ProtoProperty", "ProtoProperty 沒有 Key",
+                    "在左欄 ProtoProperty 庫設定全域唯一的 Key。", null, property);
+            }
+            else if (!propertyKeys.Add(property.Name))
+            {
+                Err(report, "graphkit.property.key-duplicate", null, "ProtoProperty", $"ProtoProperty Key '{property.Name}' 重複",
+                    "改成圖內全域唯一的 Key。", null, property);
+            }
+        }
+
         // 2. 每個動作、每個 Token 的節點樹
         foreach (var g in model.ReadRootGroups())
         {
@@ -372,6 +389,27 @@ public static class HGValidator
                     "改接本圖 Token 清單裡的 Token；求值是用名字在本圖的 Token 表查的，跨圖引用永遠查不到，會靜默取預設值。",
                     slot, HGReflect.GetNode(slot));
         }
+        else if (contentKind == NodeKind.Property)
+        {
+            // 定義被刪掉時參照會變 null（`HGModel.DeleteProperty` 把節點清成空節點），所以這裡看得到。
+            // 一律不往下走：Property 沒有求值子樹，它的型別欄位只保存初始常數。
+            var property = carrier.Property;
+            if (property == null)
+            {
+                if (carrier.IsProtoProperty)
+                    Warn(report, "graphkit.property.key-missing", focus, where, "ProtoProperty 尚未選擇 Key",
+                        "在節點的 Key 列選擇一顆 ProtoProperty。", slot, carrier);
+                else
+                    Issue(report, "graphkit.slot.property-missing", disabled, focus, where, "欄位設為 Property，但沒有指定 Property",
+                        "選一顆 Property，或把模式改回常數。", slot, carrier);
+            }
+            else if (!slot.AcceptsProperty(property))
+                Err(report, "graphkit.property.type-incompatible", focus, where, $"接的 Property '{property.Name}' 型別不相容",
+                    "改接同族的 Property。", slot, carrier);
+            else if (!InScope(model, focus, property))
+                Err(report, "graphkit.property.out-of-scope", focus, where, $"接的 Property '{property.Name}' 不屬於這張圖",
+                    "改接本圖 Property 庫裡的定義；跨圖引用不會共用儲存位置。", slot, carrier);
+        }
     }
 
     /// <summary>
@@ -385,6 +423,18 @@ public static class HGValidator
         if (scope == null) return true;   // 讀不到清單就不判，寧可不報也不要誤報
         foreach (var other in scope)
             if (ReferenceEquals(other, endpoint)) return true;
+        return false;
+    }
+
+    /// <summary>這顆定義在不在當前這張圖的 Property 清單裡。</summary>
+    // 與Token同一個理由：儲存位置是「這張圖的這一顆定義」，指向別張圖的定義物件不會共用儲存位置。
+    private static bool InScope(HGModel model, HGFocus focus, GraphProperty property)
+    {
+        if (!property.Proto) return true; // LocalProperty 住在引用它的 GraphNode，不在圖層清單。
+        var scope = HGReflect.Properties(model?.Data);
+        if (scope == null) return true;   // 讀不到清單就不判，寧可不報也不要誤報
+        foreach (var other in scope)
+            if (ReferenceEquals(other, property)) return true;
         return false;
     }
 

@@ -83,12 +83,12 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 ((IGraphDocument)owner.graph).AddRoot(Graph.PipelineKey);
                 var carrier = new GraphNode();
                 carrier.EnsureId();
-                carrier.SetCatalog(new DynamicAssetCatalog());
+                carrier.SetProperty(new GraphProperty("Property", new ObjectListSlot(), false));
                 owner.graph.Orphans.Add(carrier);
                 Graph original = owner.graph;
                 var binding = new HGDocumentBinding<Graph>("AssetPipeline.Graph",
                     value => ((AssetPipeline)value).graph, (value, graph) => ((AssetPipeline)value).graph = graph);
-                Assert.That(window.BindDocument(owner, binding, ContextFor<Graph>(HGCapabilities.Catalogs)), Is.True);
+                Assert.That(window.BindDocument(owner, binding, ContextFor<Graph>(HGCapabilities.Properties)), Is.True);
                 var commands = window.GetDocumentCommands();
                 bool dirty = commands.Query().IsDirty;
 
@@ -122,7 +122,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 Assert.That(window.BindDocument(logicOwner, logicBinding, ContextFor<LogicGraph<CrossTiming, CrossPack>>(HGCapabilities.Tokens)), Is.True);
                 HGWindowSession old = window.GetDocumentCommands();
                 Assert.That(old.Query(), Is.Not.Null);
-                Assert.That(window.BindDocument(pipelineOwner, pipelineBinding, ContextFor<Graph>(HGCapabilities.Catalogs)), Is.True);
+                Assert.That(window.BindDocument(pipelineOwner, pipelineBinding, ContextFor<Graph>(HGCapabilities.Properties)), Is.True);
                 Assert.That(old.Query(), Is.Null);
                 Assert.That(old.Commit(), Is.EqualTo(HGSessionCommandResult.StaleGeneration));
                 HGWindowSnapshot current = window.GetDocumentCommands().Query();
@@ -163,7 +163,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(consumerOwner, consumerBinding, out var consumer), Is.True);
 
             var logicContext = ContextFor<LogicGraph<CrossTiming, CrossPack>>(HGCapabilities.SharedAssets | HGCapabilities.Tokens);
-            var pipelineContext = ContextFor<Graph>(HGCapabilities.Catalogs);
+            var pipelineContext = ContextFor<Graph>(HGCapabilities.Properties);
             var consumerContext = ContextFor<ConsumerDocument>(HGCapabilities.None);
 
             Assert.That(logic.DocumentId, Is.EqualTo("LogicGraph.Cross"));
@@ -178,7 +178,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(pipelineContext.Supports(consumerOwner, consumer.Document), Is.False);
             Assert.That(consumerContext.Supports(consumerOwner, consumer.Document), Is.True);
             Assert.That(logicContext.CapabilitiesOf(logic.Document), Is.EqualTo(HGCapabilities.SharedAssets | HGCapabilities.Tokens));
-            Assert.That(pipelineContext.CapabilitiesOf(pipeline.Document), Is.EqualTo(HGCapabilities.Catalogs));
+            Assert.That(pipelineContext.CapabilitiesOf(pipeline.Document), Is.EqualTo(HGCapabilities.Properties));
             Assert.That(consumerContext.CapabilitiesOf(consumer.Document), Is.EqualTo(HGCapabilities.None));
 
             var logicRegistry = logic.CreatePortRegistry();

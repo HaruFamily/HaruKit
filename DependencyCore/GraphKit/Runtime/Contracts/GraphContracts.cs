@@ -65,22 +65,10 @@ public interface IGraphNodeOwner
     void RemoveChild(GraphNode child);
 }
 
-/// <summary>子節點由容器本體繪製成一列，而不是各自成為畫布節點的容器。</summary>
-public interface IGraphInlineNodeOwner : IGraphNodeOwner
-{
-}
-
-/// <summary>內嵌列的資料來源：左側輸出由載體提供，右側輸入走 <see cref="InputSlot"/>。</summary>
-public interface IGraphInlineNode
-{
-    FormulaSlotBase InputSlot { get; }
-    Type ResultType { get; }
-}
-
 /// <summary>答得出自己結果型別與求值封包型別的節點內容。</summary>
 // 型別自述，**不是求值介面**：框架只需要知道「這顆回什麼、吃什麼」就足以做候選過濾、
 // 相容判定與型別顯示；怎麼呼叫它留給使用端——同步或非同步、要不要 await，兩個使用端的答案不同，
-// 而 GraphKit 不依賴任何非同步函式庫。同一個理由讓 IGraphInlineNode 也只宣告型別、不宣告求值。
+// 而 GraphKit 不依賴任何非同步函式庫。
 public interface ITypedFormulaNode
 {
     /// <summary>求值結果型別。</summary>
@@ -110,6 +98,17 @@ public interface ITokenOwner
 }
 
 /// <summary>
+/// 擁有 ProtoProperty 定義清單的圖主人。定義是圖的內容，跟著工作副本與存檔交易走。
+/// </summary>
+// 與 ITokenOwner 分開而不是合併成一個「具名清單」介面：Token 是取值來源（有自己的畫布與候選池），
+// Property 是可寫的儲存位置（沒有畫布），兩者的 CRUD、驗證與刪除連帶處理都不同。
+public interface IPropertyOwner
+{
+    /// <summary>本圖的 ProtoProperty 定義。LocalProperty 住在 GraphNode，不在這份清單。</summary>
+    List<GraphProperty> Properties { get; }
+}
+
+/// <summary>
 /// 一張圖可選擇啟用的能力。未列入的能力，編輯器把對應的區塊、選單項與右鍵整組收掉。
 /// </summary>
 // 用旗標而不是一個能力一個 bool：新增可選區只加一個列舉值，介面不會每次長出一個新成員。
@@ -124,93 +123,8 @@ public enum HGCapabilities
     /// <summary>具名 Token：左欄 Token 庫、右鍵「轉存為 Token」、換來源選單的 Token 分組。</summary>
     Tokens = 2,
 
-    /// <summary>資產目錄：左欄目錄庫。內容住在 Owner，不在圖的工作副本裡。</summary>
-    Catalogs = 4,
-}
-
-/// <summary>
-/// 一份具名的資產目錄：手動蒐集的一批專案資產。
-/// </summary>
-// Id 與 Name 分開：節點引用的是 Id，顯示的是 Name。改名不該讓引用失聯——
-// 「節點存名字去找目標」那個設計已經淘汰過一次，見 GraphNode 的 NodeKind 註解。
-public interface IGraphCatalogLibrary
-{
-    /// <summary>穩定識別碼。建立後不再變動，改名不影響它。</summary>
-    string Id { get; }
-
-    /// <summary>顯示名稱。可就地改名。</summary>
-    string Name { get; }
-
-    /// <summary>這個庫裝的是哪一種東西。節點靠它判斷自己接不接得上。</summary>
-    // 由庫自己宣告而不是從 Items 推：空的庫也要答得出來，否則第一筆加進去之前無法判定相容性。
-    Type ItemType { get; }
-
-    /// <summary>目錄內容，依目前清單順序提供。</summary>
-    // 非泛型：泛型參數會逼 ICatalogOwner 跟著泛型化，編輯器就只能反射掃泛型介面實例去找「全部的庫」，
-    // 那正是框架明令禁止的作法。型別由 ItemType 自述，內容怎麼畫由 Editor 側的繪製契約決定。
-    IReadOnlyList<object> Items { get; }
-}
-
-/// <summary>會從目錄庫取內容的節點：宣告自己接得上哪一種庫。</summary>
-// 多個庫並存時，「這顆節點的下拉該列哪些目錄」只有節點自己答得出來。
-// 不比庫的具體型別而比 ItemType：同一種內容可以有多個庫，節點要的是內容種類，不是某一個庫。
-public interface ICatalogLibraryConsumer
-{
-    /// <summary>接得上的庫的 <see cref="IGraphCatalogLibrary.ItemType"/>；null＝不從庫取內容。</summary>
-    Type CatalogItemType { get; }
-}
-
-/// <summary>
-/// 擁有資產目錄的編輯對象。**實作在 Owner 上，不在 <see cref="IGraphDocument"/> 上**。
-/// </summary>
-// 目錄的內容是「專案資產的分組」，不是圖的內容：它不進編輯器的工作副本，改了就直接寫 Owner，
-// 和共用資產庫同一個模式。掛在圖的契約上會讓它跟著存檔交易走，語意反而不對。
-// 復原是另一件事：編輯器靠 CaptureCatalogs／RestoreCatalogs 把每次修改記進與圖同一個 Undo 堆疊。
-public interface ICatalogOwner
-{
-    /// <summary>全部目錄。</summary>
-    IReadOnlyList<IGraphCatalogLibrary> Catalogs { get; }
-
-    /// <summary>建一個新目錄並回傳它。名稱由實作自動產生，之後再改名。</summary>
-    IGraphCatalogLibrary CreateCatalog();
-
-    /// <summary>改名。失敗時回 false 並給出原因（例如重名）。</summary>
-    bool RenameCatalog(string id, string name, out string error);
-
-    /// <summary>刪掉整個目錄。</summary>
-    void DeleteCatalog(string id);
-
-    /// <summary>加入項目。重複項與型別不符的由實作跳過，回傳實際加入幾個。</summary>
-    // 收 object 不收具體型別：驗型是庫自己的事（它才知道自己的 ItemType），
-    // 編輯器只負責把使用者給的東西交過來。
-    int AddToCatalog(string id, IReadOnlyList<object> items);
-
-    /// <summary>移除單一項目。</summary>
-    void RemoveFromCatalog(string id, object item);
-
-    /// <summary>
-    /// 把一份目錄做成畫布上的節點內容（包）。回 null＝這個領域不支援把目錄拉進畫布。
-    /// </summary>
-    // 由 Owner 建而不是編輯器建：包的具體型別住在使用端，泛型層只負責把它塞進 GraphNode.SetCatalog。
-    GraphNodeContent CreateCatalogNode(IGraphCatalogLibrary catalog);
-
-    /// <summary>抄一份目前的全部目錄，交給編輯器的復原歷程保管。</summary>
-    // 回傳 object：目錄的實體型別由實作決定，編輯器只負責保管與交還，不讀裡面的內容。
-    // 抄的時候清單容器必須是新的——就地增刪的容器共用出去，快照會跟著被改掉。
-    object CaptureCatalogs();
-
-    /// <summary>用 <see cref="CaptureCatalogs"/> 的快照覆寫全部目錄。認不得的快照直接忽略。</summary>
-    void RestoreCatalogs(object snapshot);
-}
-
-/// <summary>目錄 Owner 可選的重排能力。成功移動才回 true；保留目錄 Id 與項目引用。</summary>
-public interface IReorderableCatalogOwner
-{
-    /// <summary>將目錄移至目標原先的索引；向上移到目標之前，向下移到目標之後。</summary>
-    bool MoveCatalog(string id, string targetId);
-
-    /// <summary>在同一目錄內移動項目，toIndex 是移動完成後的索引。</summary>
-    bool MoveCatalogItem(string id, int fromIndex, int toIndex);
+    /// <summary>Property：左欄 Property 庫、換來源選單的 Property 分組。定義住圖的工作副本。</summary>
+    Properties = 8,
 }
 
 /// <summary>Optional observation capability. Copies share a source, but retain their own document revision.</summary>

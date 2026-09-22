@@ -16,13 +16,11 @@ public partial class HaruGraphWindow
     }
 
     private static HGPortKey InputKey(HGRow row)
-        => new HGPortKey(row?.OwnerNodeId, row?.Path, HGPortRole.Input);
+        => new HGPortKey(row?.OwnerNodeId, row?.Path,
+            row?.InputSlot is PropertySlotBase ? HGPortRole.Output : HGPortRole.Input);
 
     private static HGPortKey OutputKey(HGNodeView node)
         => new HGPortKey(node?.Id, "", HGPortRole.Output);
-
-    private static HGPortKey OutputKey(HGRow row)
-        => new HGPortKey(row?.OutputNode?.EnsureId(), "", HGPortRole.Output);
 
     private static Rect PortRect(Vector2 position)
         => new Rect(position - Vector2.one * HGGraph.PortRadius, Vector2.one * HGGraph.PortDiameter);
@@ -47,15 +45,15 @@ public partial class HaruGraphWindow
                 if (row.HasInputPort && row.InputSlot != null)
                     AddInputPort(context, node, row);
 
-                if (row.OutputNode != null)
-                    AddCellOutputPort(context, node, row);
-
                 if (row.Kind == HGRowKind.List)
                     AddAggregatePort(context, node, row);
             }
 
             if (!node.IsRoot && node.Carrier != null)
                 AddNodeOutputPort(context, node);
+
+            if (node.IsPropertyNode && node.PropertyInput != null)
+                AddPropertyInputPort(context, node);
         }
 
         try
@@ -78,10 +76,14 @@ public partial class HaruGraphWindow
     private void AddInputPort(HGPortBuildContext context, HGNodeView node, HGRow row)
     {
         var presentation = new HGDelegatePortPresentation(row, node, row,
-            () => row.InputPortPosition,
-            () => PortRect(row.InputPortPosition),
-            () => !node.Hidden && row.IsInputPortVisible,
-            () => row.Locked || node.InLockedSubtree);
+            () => row.InputPortPosition, () => PortRect(row.InputPortPosition),
+            () => !node.Hidden && row.IsInputPortVisible, () => row.Locked || node.InLockedSubtree);
+        if (row.InputSlot is PropertySlotBase writer)
+        {
+            context.AddOutput(InputKey(row), new HGPropertyWriteSource(writer, node.Carrier),
+                new HGDelegatePortPolicy(() => true), presentation);
+            return;
+        }
         var policy = new HGDelegatePortPolicy(
             () => true,
             checkAcceptance: source =>
@@ -96,6 +98,20 @@ public partial class HaruGraphWindow
         context.AddInput(InputKey(row), row.InputSlot, policy, presentation);
     }
 
+    private void AddPropertyInputPort(HGPortBuildContext context, HGNodeView node)
+    {
+        var slot = node.PropertyInput;
+        var presentation = new HGDelegatePortPresentation(slot, node, node.PropertyInputRow,
+            () => node.PropertyInputPortPosition, () => PortRect(node.PropertyInputPortPosition),
+            () => !node.Hidden, () => node.InLockedSubtree);
+        var policy = new HGDelegatePortPolicy(() => true, checkAcceptance: source =>
+        {
+            if (source is not HGPropertyWriteSource writer) return HGPortConnectionResult.IncompatibleType;
+            return writer.CheckTarget(node.Carrier);
+        });
+        context.AddInput(new HGPortKey(node.Id, "/property/input", HGPortRole.Input), slot, policy, presentation);
+    }
+
     private void AddNodeOutputPort(HGPortBuildContext context, HGNodeView node)
     {
         var presentation = new HGDelegatePortPresentation(node, node, null,
@@ -106,21 +122,6 @@ public partial class HaruGraphWindow
         var source = new HGDelegatePortSource(node.Carrier, CycleRoot(node), input => SourceAccepts(node, input),
             input => SourceAcceptance(node, input));
         context.AddOutput(OutputKey(node), source, new HGDelegatePortPolicy(() => true), presentation, true);
-    }
-
-    private void AddCellOutputPort(HGPortBuildContext context, HGNodeView node, HGRow row)
-    {
-        var presentation = new HGDelegatePortPresentation(row, node, row,
-            () => row.OutputPortPosition,
-            () => PortRect(row.OutputPortPosition),
-            () => !node.Hidden && !row.Hidden,
-            () => row.Locked || node.InLockedSubtree);
-        var source = new HGDelegatePortSource(row.OutputNode, row.OutputNode,
-            input => input.AcceptsBody(row.OutputNode?.BodyObject),
-            input => row.OutputNode?.BodyObject is GraphNodeContent body
-                ? input.AcceptsBody(body) ? HGPortConnectionResult.Allowed : HGPortConnectionResult.IncompatibleType
-                : HGPortConnectionResult.MissingBinding);
-        context.AddOutput(OutputKey(row), source, new HGDelegatePortPolicy(() => true), presentation, true);
     }
 
     private void AddAggregatePort(HGPortBuildContext context, HGNodeView node, HGRow row)
@@ -147,7 +148,7 @@ public partial class HaruGraphWindow
                 continue;
             }
 
-            GraphNode source = link.TargetRow?.OutputNode ?? link.OutputOwner?.Carrier;
+            GraphNode source = link.OutputOwner?.Carrier;
             if (resolution == HGLinkPortResolution.OutputUnresolved)
             {
                 AddPortResolutionDiagnostic("output-unresolved", "連線的來源載體無法在目前圖形中定位。",
@@ -182,7 +183,9 @@ public partial class HaruGraphWindow
 
     private static object CycleRoot(HGNodeView node)
     {
-        if (node == null || node.IsCatalogNode) return null;
+        // Property 不是求值節點：它沒有往下的求值子樹，
+        // 所以「讀 Property → 算 → 寫回同一顆」在圖上成一圈但不是遞迴求值，不可當環根。
+        if (node == null || node.IsPropertyNode) return null;
         return node.IsTokenNode ? node.Token?.Slot : node.Carrier;
     }
 
@@ -192,6 +195,7 @@ public partial class HaruGraphWindow
     private HGPortConnectionResult SourceAcceptance(HGNodeView source, GraphSlotBase input)
     {
         if (source?.Carrier == null || input == null) return HGPortConnectionResult.MissingBinding;
+        if (input is PropertySlotBase) return HGPortConnectionResult.IncompatibleType;
         if (source.IsAssetNode)
         {
             if (source.Asset == null) return HGPortConnectionResult.MissingBinding;
@@ -206,13 +210,14 @@ public partial class HaruGraphWindow
                 ? HGPortConnectionResult.Allowed
                 : HGPortConnectionResult.IncompatibleFamily;
         }
-        if (source.IsCatalogNode)
+        // 讀取欄位與寫入目標欄位共用這一條：兩者的差別是欄位型別（PropertySlotBase），不是節點種類，
+        // 而兩邊的 AcceptsProperty 都是比族。
+        if (source.IsPropertyNode)
         {
-            if (source.Carrier.CatalogObject == null) return HGPortConnectionResult.MissingBinding;
-            if (input is not CatalogSlotBase catalogSlot) return HGPortConnectionResult.IncompatibleFamily;
-            return catalogSlot.AcceptsCatalogObject(source.Carrier.CatalogObject)
+            if (source.Property == null) return HGPortConnectionResult.MissingBinding;
+            return input.AcceptsProperty(source.Property)
                 ? HGPortConnectionResult.Allowed
-                : HGPortConnectionResult.DomainRejected;
+                : HGPortConnectionResult.IncompatibleFamily;
         }
 
         if (source.IsPlaceholder)
@@ -269,6 +274,8 @@ public partial class HaruGraphWindow
 
     private bool CanAcceptExternal(HGRow row, IHGPortSource source)
     {
+        if (row?.InputSlot is PropertySlotBase)
+            return HGPortConnection.CheckSourceAcceptance(source, row.InputSlot) == HGPortConnectionResult.Allowed;
         var input = PortFor(row);
         return HGPortConnection.CheckInputSource(input, source, graphGeneration)
             == HGPortConnectionResult.Allowed;
@@ -334,7 +341,7 @@ public partial class HaruGraphWindow
         return port?.Presentation.Owner as HGRow;
     }
 
-    private HGNodeView NodeOfId(string nodeId)
+    internal HGNodeView NodeOfId(string nodeId)
     {
         if (graph == null || string.IsNullOrEmpty(nodeId)) return null;
         foreach (var node in graph.Nodes)
@@ -431,7 +438,7 @@ public partial class HaruGraphWindow
             return;
         }
 
-        if (linkPort.IsOutput)
+        if (linkPort.IsOutput && linkPort.Source is not HGPropertyWriteSource)
         {
             ShowNotification(new GUIContent("請拖到相容的參數接點"));
             return;
@@ -443,13 +450,25 @@ public partial class HaruGraphWindow
             return;
         }
 
-        var slot = linkPort.InputSlot;
+        var slot = (linkPort.Source as HGPropertyWriteSource)?.Slot ?? linkPort.InputSlot;
         if (slot == null) return;
+        if (slot is GraphPropertyInputSlot)
+        {
+            ShowNotification(new GUIContent("請連到 Action 的寫入 OutputSlot"));
+            return;
+        }
         if (!TryMutateContent(() =>
         {
             PreserveVisibleNodePositions();
             GraphNode carrier = NewSource(slot);
-            if ((slot as CatalogSlotBase)?.CreateDefaultCatalog() is GraphNodeContent pack) carrier.SetCatalog(pack);
+            if (slot is PropertySlotBase propertySlot)
+            {
+                // 從寫入 Slot 拉到空白處就是建立新的普通 Property：定義一建立，
+                // 這顆 Property 節點的 Header Output 便可立即作為後續讀取來源。
+                GraphProperty property = model.CreateLocalProperty(propertySlot.FamilyType, out string propertyError);
+                if (property == null) throw new InvalidOperationException(propertyError ?? "無法建立一般 Property。");
+                carrier.SetLocalProperty(property);
+            }
             else if ((slot as FormulaSlotBase)?.CreateDefaultBody() is GraphNodeContent body) carrier.SetBody(body);
             carrier.Pos = SnapToGrid(graphMouse);
         }, out var error))
@@ -471,9 +490,33 @@ public partial class HaruGraphWindow
         }
         HGPort input = first.IsInput ? first : second;
         HGPort output = first.IsOutput ? first : second;
+        if (output.Source is HGPropertyWriteSource writer)
+        {
+            var target = OwnerNodeOfPort(input);
+            if (target?.Carrier == null || !target.IsPropertyNode) return PortCommandResult.Rejected;
+            if (ReferenceEquals(writer.Slot.Node, target.Carrier)
+                && writer.Slot.AcceptsProperty(target.Property)) return PortCommandResult.NoChange;
+            if (!TryMutateContent(() =>
+            {
+                PreserveVisibleNodePositions();
+                if (!target.Carrier.IsProtoProperty && target.Property?.FamilyType != writer.Slot.FamilyType)
+                {
+                    var local = model.CreateLocalProperty(writer.Slot.FamilyType, out string typeError);
+                    if (local == null) throw new InvalidOperationException(typeError);
+                    target.Carrier.SetLocalProperty(local);
+                    BreakIncompatiblePropertyLinks(target.Carrier, local);
+                }
+                AttachSource(writer.Slot, target.Carrier);
+            }, out string writeError))
+            {
+                ShowNotification(new GUIContent(writeError));
+                return PortCommandResult.Rejected;
+            }
+            Invalidate();
+            return PortCommandResult.Changed;
+        }
         if (input.InputSlot == null || output.Source?.OutputNode == null) return PortCommandResult.Rejected;
-        if (!graph.PrimaryInputs.ContainsKey(input.InputSlot)
-            || !graph.ByCarrier.ContainsKey(output.Source.OutputNode) && !graph.CellRows.ContainsKey(output.Source.OutputNode))
+        if (!graph.PrimaryInputs.ContainsKey(input.InputSlot) || !graph.ByCarrier.ContainsKey(output.Source.OutputNode))
             return PortCommandResult.Rejected;
         if (ReferenceEquals(input.InputSlot.Node, output.Source.OutputNode)) return PortCommandResult.NoChange;
 
@@ -491,10 +534,29 @@ public partial class HaruGraphWindow
     }
 
     // 線的輸入端一律走 Port：命中測試（LinkAt）已經要求兩端都解析得到，走不到沒有 Port 的線。
-    private PortCommandResult CutLink(HGLink link) => CutLink(link?.InputPort?.InputSlot);
+    private PortCommandResult CutLink(HGLink link) => CutLink(link?.ParentRow?.InputSlot);
 
     private PortCommandResult CutLink(GraphSlotBase slot)
     {
+        if (slot is GraphPropertyInputSlot)
+        {
+            var writers = new List<GraphSlotBase>();
+            foreach (var link in graph.Links)
+                if (ReferenceEquals(link.InputPort?.InputSlot, slot) && link.ParentRow?.InputSlot is PropertySlotBase)
+                    writers.Add(link.ParentRow.InputSlot);
+            if (writers.Count == 0) return PortCommandResult.NoChange;
+            if (!TryMutateContent(() =>
+            {
+                PreserveVisibleNodePositions();
+                foreach (var writer in writers) AttachSource(writer, null);
+            }, out var message))
+            {
+                ShowNotification(new GUIContent(message));
+                return PortCommandResult.Rejected;
+            }
+            Invalidate();
+            return PortCommandResult.Changed;
+        }
         if (slot?.Node == null) return PortCommandResult.NoChange;
         if (!TryMutateContent(() =>
         {
@@ -544,48 +606,6 @@ public partial class HaruGraphWindow
         carrier.EnsureId();
         AttachSource(slot, carrier);
         return carrier;
-    }
-
-    /// <summary>把已經失效的包連線就地斷開，回傳斷了幾條。</summary>
-    private int BreakInvalidPackLinks()
-    {
-        var stale = new List<CatalogSlotBase>();
-        foreach (var slot in SlotsInCurrentGraph())
-        {
-            if (slot is not CatalogSlotBase catalogSlot) continue;
-            GraphNodeContent pack = catalogSlot.Node?.CatalogObject;
-            if (pack == null || catalogSlot.AcceptsCatalogObject(pack)) continue;
-            stale.Add(catalogSlot);
-        }
-        if (stale.Count == 0) return 0;
-
-        PreserveVisibleNodePositions();
-        foreach (var catalogSlot in stale)
-        {
-            GraphNode carrier = catalogSlot.Node;
-            catalogSlot.SetNode(null);
-            model.AddOrphan(carrier);
-        }
-        return stale.Count;
-    }
-
-    private void MarkCatalogPorts()
-    {
-        foreach (var node in graph.Nodes)
-        {
-            if (!node.IsCatalogNode) continue;
-            GraphNodeContent pack = node.Carrier?.CatalogObject;
-            node.HasOutputPort = pack == null;
-            node.ReceivesCatalogWrites = false;
-            foreach (var slot in SlotsInCurrentGraph())
-            {
-                if (slot is not CatalogSlotBase catalogSlot) continue;
-                bool accepts = pack != null && catalogSlot.AcceptsCatalogObject(pack);
-                // 已存在但不合法的引用仍保留接點，讓使用者看得到並能解除問題連線。
-                if (accepts || ReferenceEquals(catalogSlot.Node, node.Carrier)) node.HasOutputPort = true;
-                if (accepts && catalogSlot.WritesToCatalog) node.ReceivesCatalogWrites = true;
-            }
-        }
     }
 
     private static bool WouldCreateCycle(GraphSlotBase slot, object node)

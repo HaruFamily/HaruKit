@@ -20,17 +20,27 @@ public enum NodeKind
     Token = 4,
 
     /// <summary>
-    /// 目錄（內容是 <see cref="CatalogNodeShape{T}"/>）：內容住在節點自己身上，但它不是公式——沒有結果型別、求不出值。
+    /// 圖內的具名變數（<see cref="GraphProperty"/>）。節點只是引用，定義住圖層清單。
     /// </summary>
-    // 與 Inline 的差別只在「會不會被求值」：目錄是容器，值要從它底下的子節點取。
-    // 因此相容判定走 CatalogSlotBase.AcceptsCatalogObject，不走 AcceptsBody——族對容器沒有意義。
-    // 值是 5 不是 3：3 是這個列舉更早一版留下的空號，補號會讓既有資產的數字對到別的種類。
-    Catalog = 5,
+    // 與 Token 同構：定義不住節點，所以多個讀寫引用共用同一份儲存位置，改名不斷線。
+    // 它讀得出目前值，所以一般求值欄位指得到它；相容判定走 AcceptsProperty。
+    Property = 6,
+}
+
+/// <summary>Property 節點接收端的穩定身分。寫入連線由 Action 的 PropertySlot 保存。</summary>
+[Serializable]
+public sealed class GraphPropertyInputSlot : GraphSlotBase
+{
+    [SerializeReference]
+    private GraphNode node;
+
+    public override GraphNode Node => node;
+    public override void SetNode(GraphNode value) => node = value;
 }
 
 /// <summary>
 /// 節點圖的唯一載體：一個畫面上的節點＝一個 GraphNode。
-/// 換來源＝換載體裡的內容（SetBody / SetAsset / SetToken），Id、座標、備註與所有連入邊全部保留。
+    /// 換來源＝換載體裡的內容（SetBody / SetAsset / SetToken / SetProperty），Id、座標、備註與所有連入邊全部保留。
 /// </summary>
 // 非泛型才能讓候選池、複製貼上、座標與編輯器走訪全部走同一條路徑；
 // 型別安全收斂在 Slot 的 GetBody<T>() / GetAsset<T>() 一處，不合型別由 Verify() 於編輯期擋下。
@@ -67,10 +77,20 @@ public class GraphNode
     [SerializeReference]
     private GraphToken _endpoint;
 
-    // 目錄的內容。與 _body 分開存：BodyObject 的語意是「這顆節點求值時用的公式」，
-    // 目錄求不出值，混用同一個欄位會讓所有「有 body 就是 Inline」的判斷靜默出錯。
+    // LocalProperty 的私有定義。舊資料也使用這個欄位；_protoProperty 為 null 時一律視為 LocalProperty。
     [SerializeReference]
-    private GraphNodeContent _catalog;
+    private GraphProperty _property;
+
+    // ProtoProperty 的圖層定義。Proto 模式可尚未選 Key，因此要和模式旗標分開保存。
+    [SerializeReference]
+    private GraphProperty _protoProperty;
+
+    [SerializeField]
+    private bool _isProtoProperty;
+
+    // Property 的下方 Input 必須有自己的持久綁定，不能借用指向這顆節點的 ParentSlot。
+    [SerializeReference]
+    private GraphPropertyInputSlot _propertyInput = new();
 
     // 資產呼叫點的參數綁定。它屬於這次引用，不屬於共用資產。
     [SerializeField]
@@ -113,8 +133,20 @@ public class GraphNode
     /// <summary>Token 模式指向的具名Token頭端；其他模式為 null。</summary>
     public GraphToken Token => _kind == NodeKind.Token ? _endpoint : null;
 
-    /// <summary>目錄模式的內容；其他模式為 null。</summary>
-    public GraphNodeContent CatalogObject => _kind == NodeKind.Catalog ? _catalog : null;
+    /// <summary>Property 模式指向的定義；其他模式為 null。</summary>
+    public GraphProperty Property => _kind != NodeKind.Property ? null : _isProtoProperty ? _protoProperty : _property;
+
+    /// <summary>Property 節點目前是否為 ProtoProperty 模式。Proto 模式可以尚未選擇 Key。</summary>
+    public bool IsProtoProperty => _kind == NodeKind.Property && _isProtoProperty;
+
+    /// <summary>Property 節點下方輸入的持久綁定；Proto 尚未選 Key 時也存在。</summary>
+    public GraphPropertyInputSlot PropertyInput => _propertyInput ??= new GraphPropertyInputSlot();
+
+    /// <summary>保留來源資料的相容入口；不寫入共享定義，也不參與 Property 求值。</summary>
+    public void SetPropertyInput(GraphNode source)
+    {
+        PropertyInput.SetNode(source);
+    }
 
     public List<NamedFormulaSlot> Bindings
     {
@@ -146,10 +178,13 @@ public class GraphNode
     /// <summary>換成內嵌 Action / Formula。Id、座標、備註與連入邊不變。</summary>
     public void SetBody(GraphNodeContent body)
     {
+        ClearPropertyInput();
         _body = body;
         _asset = null;
         _endpoint = null;
-        _catalog = null;
+        _property = null;
+        _protoProperty = null;
+        _isProtoProperty = false;
         Bindings.Clear();
         _kind = body != null ? NodeKind.Inline : NodeKind.Empty;
     }
@@ -161,10 +196,13 @@ public class GraphNode
     {
         if (endpoint == null) { Clear(); return; }
 
+        ClearPropertyInput();
         _endpoint = endpoint;
         _body = null;
         _asset = null;
-        _catalog = null;
+        _property = null;
+        _protoProperty = null;
+        _isProtoProperty = false;
         Bindings.Clear();
         _kind = NodeKind.Token;
     }
@@ -174,36 +212,70 @@ public class GraphNode
     // 所以這裡清掉 Bindings 反而會把剛保留的東西洗掉。SetBody / Clear 是換成另一種內容，才清。
     public void SetAsset(ScriptableObject asset)
     {
+        ClearPropertyInput();
         _asset = asset;
         _body = null;
         _endpoint = null;
-        _catalog = null;
+        _property = null;
+        _protoProperty = null;
+        _isProtoProperty = false;
         _kind = NodeKind.Asset;
     }
 
-    /// <summary>換成目錄。內容住在節點自己身上，但它不求值——值要從底下的子節點取。</summary>
-    // 內容為 null 時退成空節點，理由與 SetToken 相同：畫得出來也存得下去，卻永遠沒有內容。
-    public void SetCatalog(GraphNodeContent catalog)
+    /// <summary>換成 Property 引用。定義住圖層清單，這裡只存引用。</summary>
+    // 定義為 null 時退成空節點，理由與 SetToken 相同：畫得出來也存得下去，卻永遠沒有內容。
+    public void SetProperty(GraphProperty property)
     {
-        if (catalog == null) { Clear(); return; }
+        if (property == null) { Clear(); return; }
 
-        _catalog = catalog;
+        if (property.Proto) SetProtoProperty(property);
+        else SetLocalProperty(property);
+    }
+
+    /// <summary>換成節點私有的 LocalProperty。</summary>
+    public void SetLocalProperty(GraphProperty property)
+    {
+        if (property == null) { Clear(); return; }
+        _property = property;
+        _protoProperty = null;
+        _isProtoProperty = false;
         _body = null;
         _asset = null;
         _endpoint = null;
         Bindings.Clear();
-        _kind = NodeKind.Catalog;
+        _kind = NodeKind.Property;
+    }
+
+    /// <summary>換成 ProtoProperty 模式。null 代表尚未選擇 Key，仍保留節點與連線。</summary>
+    public void SetProtoProperty(GraphProperty property)
+    {
+        _protoProperty = property;
+        _property = null;
+        _isProtoProperty = true;
+        _body = null;
+        _asset = null;
+        _endpoint = null;
+        Bindings.Clear();
+        _kind = NodeKind.Property;
     }
 
     /// <summary>清成空節點（編輯中狀態）。</summary>
     public void Clear()
     {
+        ClearPropertyInput();
         _body = null;
         _asset = null;
         _endpoint = null;
-        _catalog = null;
+        _property = null;
+        _protoProperty = null;
+        _isProtoProperty = false;
         Bindings.Clear();
         _kind = NodeKind.Empty;
+    }
+
+    private void ClearPropertyInput()
+    {
+        PropertyInput.SetNode(null);
     }
 }
 

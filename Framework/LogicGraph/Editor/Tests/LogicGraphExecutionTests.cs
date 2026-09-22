@@ -27,6 +27,54 @@ public sealed class LogicGraphExecutionTests
     private sealed class TestActionAsset : ActionAssetBase<Pack> { }
 
     [Serializable]
+    private sealed class IntFormula : FormulaBase<int, Pack>
+    {
+        protected override UniTask<int> OnEvaluate(Pack pack, TokenTable<Pack> tokens) => UniTask.FromResult(0);
+    }
+
+    private sealed class IntFormulaAsset : FormulaAsset<int, Pack> { }
+
+    [Serializable]
+    private sealed class IntSlot : FormulaSlot<int, IntFormulaAsset, IntFormula, Pack>
+    {
+        public IntSlot() { }
+        public IntSlot(int value) : base(value) { }
+    }
+
+    [Serializable]
+    private sealed class IntPropertySlot : SetPropertySlot<int, IntSlot> { }
+
+    [Serializable]
+    private sealed class IncrementProperty : ActionBase<Pack>
+    {
+        public IntSlot Input = new();
+        public IntPropertySlot Target = new();
+        protected override async UniTask OnExecute(Pack pack, TokenTable<Pack> tokens)
+            => Target.Write(await Input.Evaluate(pack, tokens) + 1, tokens);
+    }
+
+    [Serializable]
+    private sealed class ReadProperty : ActionBase<Pack>
+    {
+        public IntSlot Input = new();
+        protected override async UniTask OnExecute(Pack pack, TokenTable<Pack> tokens)
+            => pack.Count += await Input.Evaluate(pack, tokens);
+    }
+
+    [Serializable]
+    private sealed class IncrementAndReadProperty : ActionBase<Pack>
+    {
+        public IntSlot Input = new();
+        public IntPropertySlot Target = new();
+        protected override async UniTask OnExecute(Pack pack, TokenTable<Pack> tokens)
+        {
+            int value = await Input.Evaluate(pack, tokens) + 1;
+            Target.Write(value, tokens);
+            pack.Count += value;
+        }
+    }
+
+    [Serializable]
     private sealed class Waiting : ActionBase<Pack>
     {
         [NonSerialized] public CancellationToken Seen;
@@ -217,6 +265,147 @@ public sealed class LogicGraphExecutionTests
         await graph.TriggerAction(Timing.Run, pack);
         Assert.That(pack.Count, Is.EqualTo(1));
         Assert.That(graph.ExecutionSource.Sessions[0].MappingDiagnostic.Code, Is.EqualTo("graphkit.execution.node-id-missing"));
+    }
+
+    [Test]
+    public async Task PropertiesPersistPerRuntimeGraphUntilExplicitlyInitialized()
+    {
+        var property = new GraphProperty("Count", new IntSlot(0));
+        var graph = PropertyGraph(property, out _);
+        var copy = graph.DeepCopy();
+
+        var first = new Pack();
+        await graph.TriggerAction(Timing.Run, first);
+        await graph.TriggerAction(Timing.Run, first);
+        Assert.That(first.Count, Is.EqualTo(3)); // 1 then 2
+
+        var isolated = new Pack();
+        await copy.TriggerAction(Timing.Run, isolated);
+        Assert.That(isolated.Count, Is.EqualTo(1));
+
+        graph.InitializeProperties();
+        var reset = new Pack();
+        await graph.TriggerAction(Timing.Run, reset);
+        Assert.That(reset.Count, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task EditingTheGraphDoesNotResetPropertiesThatOnlyExplicitInitializationClears()
+    {
+        var property = new GraphProperty("Count", new IntSlot(0));
+        var graph = PropertyGraph(property, out _);
+
+        var first = new Pack();
+        await graph.TriggerAction(Timing.Run, first);
+        Assert.That(first.Count, Is.EqualTo(1));
+
+        graph.MarkDirty();
+        graph.MarkValidated();
+
+        var second = new Pack();
+        await graph.TriggerAction(Timing.Run, second);
+        Assert.That(second.Count, Is.EqualTo(2), "MarkDirty 是編輯與驗證狀態，不是明確初始化。");
+    }
+
+    [Test]
+    public async Task PropertiesAddedAfterTheFirstRunGetTheirOwnStorageInsteadOfDroppingWrites()
+    {
+        var graph = PropertyGraph(new GraphProperty("Count", new IntSlot(0)), out _);
+        await graph.TriggerAction(Timing.Run, new Pack());
+
+        // root scope 在第一次執行時就建好了；之後才加進圖的定義仍然要有儲存位置，否則寫入會無聲失敗。
+        var added = new GraphProperty("Added", new IntSlot(0), true);
+        graph.Properties.Add(added);
+        var group = graph.ActionGroups[0];
+        group.Actions.Clear();
+        group.Actions.Add(Slot(new GraphNode(new IncrementProperty { Input = PropertyInput(added), Target = PropertyTarget(added) })));
+        group.Actions.Add(Slot(new GraphNode(new ReadProperty { Input = PropertyInput(added) })));
+        graph.MarkDirty();
+        graph.MarkValidated();
+
+        var pack = new Pack();
+        await graph.TriggerAction(Timing.Run, pack);
+        Assert.That(pack.Count, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task SharedAssetPropertiesAreScopedByCallingNode()
+    {
+        var property = new GraphProperty("Count", new IntSlot(0));
+        var asset = UnityEngine.ScriptableObject.CreateInstance<TestActionAsset>();
+        asset.Properties.Add(property);
+        asset.SetRoot(new GraphNode(new IncrementAndReadProperty
+        {
+            Input = PropertyInput(property),
+            Target = PropertyTarget(property),
+        }));
+
+        var graph = new LogicGraph<Timing, Pack>();
+        graph.ActionGroups.Add(new ActionTimingGroup<Timing, Pack>
+        {
+            Timing = Timing.Run,
+            Actions = new() { AssetSlot(asset), AssetSlot(asset) },
+        });
+        graph.MarkValidated();
+        try
+        {
+            var first = new Pack();
+            await graph.TriggerAction(Timing.Run, first);
+            Assert.That(first.Count, Is.EqualTo(2));
+            var second = new Pack();
+            await graph.TriggerAction(Timing.Run, second);
+            Assert.That(second.Count, Is.EqualTo(4));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(asset); }
+    }
+
+    private static LogicGraph<Timing, Pack> PropertyGraph(GraphProperty property, out GraphNode node)
+    {
+        node = new GraphNode(new IncrementProperty { Input = PropertyInput(property), Target = PropertyTarget(property) });
+        var reader = new GraphNode(new ReadProperty { Input = PropertyInput(property) });
+        var graph = new LogicGraph<Timing, Pack>();
+        graph.Properties.Add(property);
+        graph.ActionGroups.Add(new ActionTimingGroup<Timing, Pack>
+        {
+            Timing = Timing.Run,
+            Actions = new() { Slot(node), Slot(reader) },
+        });
+        graph.MarkValidated();
+        return graph;
+    }
+
+    private static IntSlot PropertyInput(GraphProperty property)
+    {
+        var input = new IntSlot();
+        var node = new GraphNode();
+        node.SetProperty(property);
+        input.SetNode(node);
+        return input;
+    }
+
+    private static IntPropertySlot PropertyTarget(GraphProperty property)
+    {
+        var target = new IntPropertySlot();
+        var node = new GraphNode();
+        node.SetProperty(property);
+        target.SetNode(node);
+        return target;
+    }
+
+    private static ActionSlot<Pack> Slot(GraphNode node)
+    {
+        var slot = new ActionSlot<Pack>();
+        slot.SetNode(node);
+        return slot;
+    }
+
+    private static ActionSlot<Pack> AssetSlot(TestActionAsset asset)
+    {
+        var slot = new ActionSlot<Pack>();
+        var node = new GraphNode();
+        node.SetAsset(asset);
+        slot.SetNode(node);
+        return slot;
     }
 }
 }

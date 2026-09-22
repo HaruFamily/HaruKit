@@ -48,63 +48,26 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>
-    /// 目錄落到畫布上：落在收得下包的欄位就直接接上，空白處就建立候選節點。與Token那條同一種形狀。
+    /// Property 落到畫布上：落在讀寫得下它的欄位就直接接上，空白處就建立引用節點。與Token那條同一種形狀。
     /// </summary>
-    // 拉進來的是一顆「原型來源、已指向這份目錄」的目錄節點，不是引用節點——
-    // 目錄的內容仍住在 Owner，節點只記 id，差別在於它同時能開格子。
-    private void DropCatalogOn(IGraphCatalogLibrary catalog, Vector2 graphMouse)
+    // 拉進來的是對既有定義的引用，不是複製一份新的儲存位置——多個節點指同一顆定義是正常狀態。
+    private void DropPropertyOn(GraphProperty property, Vector2 graphMouse)
     {
-        if (catalog == null) return;
+        if (property == null) return;
         var row = RowAt(graphMouse, out _);
         if (row == null)
         {
-            AddCatalogReferenceNode(catalog, graphMouse);
+            AddPropertyReferenceNode(property, graphMouse);
             return;
         }
-        if (row.InputSlot is not CatalogSlotBase)
+        var source = PropertyDropSource(property);
+        if (row.IsActionSlot || !CanAcceptExternal(row, source))
         {
-            ShowNotification(new GUIContent("這個欄位收不下目錄"));
+            ShowNotification(new GUIContent("Property 型別不符，無法接到這個欄位"));
             return;
         }
-
-        GraphNodeContent pack = CatalogOwner?.CreateCatalogNode(catalog);
-        if (pack == null) return;
-
-        // 目錄庫的目錄是「內容由目錄庫供應」的那一種：往裡面寫的欄位接上去什麼都不會發生。
-        var source = CatalogDropSource(pack);
-        if (!CanAcceptExternal(row, source))
-        {
-            ShowNotification(new GUIContent("這個欄位收不下目錄庫的目錄"));
-            return;
-        }
-
         BreakUndoMerge();
-        PreserveVisibleNodePositions();
-        SoloSource(row.InputSlot).SetCatalog(pack);
-        Invalidate();
-        MarkGraphChanged();
-    }
-
-    /// <summary>把目錄拖到空白畫布：建立一個沒有連線的候選載體。</summary>
-    private void AddCatalogReferenceNode(IGraphCatalogLibrary catalog, Vector2 graphMouse)
-    {
-        if (!CanCreateReferenceNode())
-        {
-            ShowNotification(new GUIContent("先指定根公式或動作，才能放入參照節點"));
-            return;
-        }
-
-        GraphNodeContent pack = CatalogOwner?.CreateCatalogNode(catalog);
-        if (pack == null) return;
-
-        BreakUndoMerge();
-        var carrier = new GraphNode();
-        carrier.EnsureId();
-        carrier.SetCatalog(pack);
-        carrier.Pos = SnapToGrid(graphMouse);
-        model.AddOrphan(carrier);
-        Invalidate();
-        MarkGraphChanged();
+        AssignProperty(row.InputSlot, property);
     }
 
     /// <summary>把Token拖到空白畫布：建立一個沒有連線的候選載體。</summary>
@@ -121,6 +84,25 @@ public partial class HaruGraphWindow
         var carrier = new GraphNode();
         carrier.EnsureId();
         carrier.SetToken(endpoint);
+        carrier.Pos = SnapToGrid(graphMouse);
+        model.AddOrphan(carrier);
+        Invalidate();
+    }
+
+    /// <summary>把 Property 拖到空白畫布：建立一個沒有連線的候選載體，指向同一顆定義。</summary>
+    private void AddPropertyReferenceNode(GraphProperty property, Vector2 graphMouse)
+    {
+        if (!CanCreateReferenceNode())
+        {
+            ShowNotification(new GUIContent("先指定根公式或動作，才能放入參照節點"));
+            return;
+        }
+        if (property == null) return;
+
+        BreakUndoMerge();
+        var carrier = new GraphNode();
+        carrier.EnsureId();
+        carrier.SetProperty(property);
         carrier.Pos = SnapToGrid(graphMouse);
         model.AddOrphan(carrier);
         Invalidate();
@@ -203,25 +185,25 @@ public partial class HaruGraphWindow
             endpoint == null ? HGPortConnectionResult.MissingBinding
             : input.AcceptsToken(endpoint) ? HGPortConnectionResult.Allowed : HGPortConnectionResult.IncompatibleFamily);
 
-    private static IHGPortSource CatalogDropSource(GraphNodeContent catalog)
-        => new HGDelegatePortSource(null, null,
-            input => (input as CatalogSlotBase)?.AcceptsCatalogObject(catalog) == true,
-            input => catalog == null ? HGPortConnectionResult.MissingBinding
-            : input is not CatalogSlotBase slot ? HGPortConnectionResult.IncompatibleFamily
-            : slot.AcceptsCatalogObject(catalog) ? HGPortConnectionResult.Allowed : HGPortConnectionResult.DomainRejected);
+    // 第二個參數刻意給 null 而不是 property.Slot：那顆 Slot 只宣告型別與初始常數，不是求值來源，
+    // 當成來源會讓「讀 Property → 算 → 寫回同一顆」被算進求值依賴。
+    private static IHGPortSource PropertyDropSource(GraphProperty property)
+        => new HGDelegatePortSource(null, null, input => input.AcceptsProperty(property), input =>
+            property == null ? HGPortConnectionResult.MissingBinding
+            : input.AcceptsProperty(property) ? HGPortConnectionResult.Allowed
+            : HGPortConnectionResult.IncompatibleFamily);
 
     private void ShowNodeSourceSelector(HGNodeView node, Rect selector)
     {
         if (node == null) return;
 
-        if (node.IsCatalogNode)
-        {
-            ShowCatalogSourceSelector(node, selector);
-            return;
-        }
-
         var options = new List<HGSourceOption>();
         object slot = SourceSlot(node);
+        if (node.IsPropertyNode)
+        {
+            ShowPropertyNodeTypeSelector(node, slot as GraphSlotBase, selector);
+            return;
+        }
 
         // 同一族的 Formula／Asset／Token 一律可以互換，包含候選池裡沒有父欄位的節點：
         // 族靠「代表性的 Slot 型別」推導，推不出來才退回用目前內容的基底型別。
@@ -232,7 +214,7 @@ public partial class HaruGraphWindow
         Type baseType = slotType != null
             ? (isAction ? HGReflect.ActionBaseType(slotType) : HGReflect.FormulaBaseType(slotType))
             : HGReflect.NodeBaseType(node.Obj?.GetType());
-        // 有些欄位的族是「pack 固定、結果型別任意」（例如目錄格子的篩選欄），
+        // 有些欄位的族是「pack 固定、結果型別任意」，
         // 那個條件 BodyBaseType 表達不出來，由 Slot 另外宣告 CandidatePackType 收窄。
         Type packFilter = !isAction && slotType != null ? HGReflect.CandidatePackType(slotType) : null;
         if (baseType != null)
@@ -297,42 +279,150 @@ public partial class HaruGraphWindow
             }
         }
 
+        // Property 的兩種模式由 Proto 決定：一般 Property 是目前節點私有的未命名暫存位置，
+        // 不可從名稱清單重指向；ProtoProperty 才是可選、可改名的圖內定義。
+        // 寫入目標欄位（PropertySlotBase）宣告的是「要寫哪一族」而不是自己的族，所以判準另外算一次；
+        // 直接拿 slotKind 比會永遠對不上，那一格的下拉就會是空的。
+        Type propertyKind = slot is PropertySlotBase writeSlot ? writeSlot.FamilyType : slotKind;
+        propertyKind ??= node.Property?.FamilyType;
+        if (HasPropertySection && (propertyKind != null || resultType != null))
+        {
+            // 這是模式切換，不是另一個「建立」入口：選中後把目前載體換成節點專屬的一般 Property。
+            if (propertyKind != null)
+            {
+                Type captured = propertyKind;
+                options.Add(new HGSourceOption
+                {
+                    Group = "Property 類型",
+                    Name = "LocalProperty",
+                    IsCurrent = node.Property?.Proto == false,
+                    Apply = () =>
+                    {
+                        if (node.Property?.Proto == false) return;
+                        CreatePropertyForNode(node, captured);
+                    },
+                });
+            }
+
+            // Header 的「換來源」可從一般 Property 切成任一相容 ProtoProperty。
+            foreach (var property in HGModel.ReadProperties(CurrentProperties()))
+            {
+                if (propertyKind != null ? property.FamilyType != propertyKind : property.ResultType != resultType) continue;
+                if (property.Property?.Proto != true) continue;
+                var definition = property.Property;
+                options.Add(new HGSourceOption
+                {
+                    Group = "ProtoProperty",
+                    Name = property.Key,
+                    IsCurrent = ReferenceEquals(node.Property, definition),
+                    Apply = () => ChangeNodeToProperty(node, definition),
+                });
+            }
+
+        }
+
         HGTypeCatalog.ShowSourcePicker(selector, options);
     }
 
-    private void ShowCatalogSourceSelector(HGNodeView node, Rect selector)
+    /// <summary>Property Header 只切換 LocalProperty／ProtoProperty 模式；Key 只在 Proto 節點本體選擇。</summary>
+    private void ShowPropertyNodeTypeSelector(HGNodeView node, GraphSlotBase slot, Rect selector)
     {
-        if (node.Obj is not IHGCatalogSourceSelector source) return;
-        var options = new List<HGSourceOption>();
-        foreach (var type in source.SourceTypes)
+        var options = new List<HGSourceOption>
         {
-            Type captured = type;
-            options.Add(new HGSourceOption
+            new()
             {
-                Group = "目錄",
-                Name = HGReflect.TypeName(type),
-                IsCurrent = node.Obj.GetType() == type,
-                Apply = () => ReplaceCatalogSource(node.Carrier, source, captured),
-            });
-        }
-        HGTypeCatalog.ShowSourcePicker(selector, options, "變更目錄來源");
+                Name = "LocalProperty",
+                IsCurrent = node.Carrier?.IsProtoProperty == false,
+                Apply = () => ChangePropertyMode(node, false),
+            },
+            new()
+            {
+                Name = "ProtoProperty",
+                IsCurrent = node.Carrier?.IsProtoProperty == true,
+                Apply = () => ChangePropertyMode(node, true),
+            },
+        };
+
+        HGTypeCatalog.ShowSourcePicker(selector, options, "Property 類型");
     }
 
-    private void ReplaceCatalogSource(GraphNode carrier, IHGCatalogSourceSelector source, Type type)
+    internal void ChangePropertyMode(HGNodeView node, bool proto)
     {
-        // 選單開啟後可能已換焦點或復原；不能修改舊工作副本上的載體。
-        EnsureGraph();
-        if (graph == null || carrier == null || !graph.ByCarrier.ContainsKey(carrier)
-            || !ReferenceEquals(carrier.CatalogObject, source) || carrier.CatalogObject.GetType() == type) return;
-        if (!source.TryReplaceSource(carrier, type, SlotsInCurrentGraph(), out string error))
-        {
-            ShowNotification(new GUIContent(error));
-            return;
-        }
+        if (node?.Carrier == null || node.Carrier.IsProtoProperty == proto) return;
+
         BreakUndoMerge();
         PreserveVisibleNodePositions();
+        if (proto)
+        {
+            GraphProperty match = FirstCompatibleProtoProperty(node);
+            node.Carrier.SetProtoProperty(match);
+            // 未選 Key 的 ProtoProperty 尚無型別；保留實際連線與接點，選定 Key 後才能修正它。
+            if (match != null) BreakIncompatiblePropertyLinks(node.Carrier, match);
+        }
+        else
+        {
+            // 沒有 Key 的 ProtoProperty 推不出族：切成未定型的 LocalProperty，由第一條寫入線定型。
+            Type family = node.Property?.FamilyType ?? PropertyFamilyFromConnections(node);
+            GraphProperty local = model.CreateLocalProperty(family, out string error);
+            if (local == null)
+            {
+                ShowNotification(new GUIContent(error ?? "無法建立 LocalProperty。"));
+                return;
+            }
+
+            node.Carrier.SetLocalProperty(local);
+            BreakIncompatiblePropertyLinks(node.Carrier, local);
+        }
+
         Invalidate();
-        Repaint();
+        MarkGraphChanged();
+        BreakUndoMerge();
+    }
+
+    private GraphProperty FirstCompatibleProtoProperty(HGNodeView node)
+    {
+        var properties = CurrentProperties();
+        if (properties == null) return null;
+
+        foreach (bool input in new[] { true, false })
+        {
+            foreach (var link in graph?.Links ?? new List<HGLink>())
+            {
+                if (!ReferenceEquals(link.OutputOwner, node)) continue;
+                GraphSlotBase linkedSlot = link.ParentRow?.InputSlot;
+                if (linkedSlot == null || (linkedSlot is PropertySlotBase) != input) continue;
+                foreach (var property in properties)
+                    if (property?.Proto == true && linkedSlot.AcceptsProperty(property)) return property;
+            }
+        }
+
+        foreach (var property in properties)
+            if (property?.Proto == true) return property;
+        return null;
+    }
+
+    private Type PropertyFamilyFromConnections(HGNodeView node)
+    {
+        foreach (bool input in new[] { true, false })
+            foreach (var link in graph?.Links ?? new List<HGLink>())
+            {
+                if (!ReferenceEquals(link.OutputOwner, node)) continue;
+                GraphSlotBase linkedSlot = link.ParentRow?.InputSlot;
+                if (linkedSlot == null || (linkedSlot is PropertySlotBase) != input) continue;
+                return linkedSlot is PropertySlotBase writeSlot ? writeSlot.FamilyType : linkedSlot.GetType();
+            }
+        return null;
+    }
+
+    /// <summary>斷開接不上新定義的讀寫連線。載體留在畫布上，沒有任何欄位再接它時才回到候選池。</summary>
+    // 必須走 AttachSource：直接 SetNode(null) 會讓失去最後一個引用的 Property 節點從整張圖失聯，
+    // 操作起來就是「換個 Header 模式，節點連同座標一起不見」。要斷的是線，不是節點。
+    private void BreakIncompatiblePropertyLinks(GraphNode carrier, GraphProperty property)
+    {
+        // 先收成清單：AttachSource 會把失去引用的載體加進候選池，邊走邊改會中斷走訪。
+        var linked = new List<GraphSlotBase>(SlotsInCurrentGraph());
+        foreach (var linkedSlot in linked)
+            if (ReferenceEquals(linkedSlot?.Node, carrier) && !linkedSlot.AcceptsProperty(property)) AttachSource(linkedSlot, null);
     }
 
     private GraphSlotBase SourceSlot(HGNodeView node)
@@ -518,6 +608,13 @@ public partial class HaruGraphWindow
         Invalidate();
     }
 
+    private void AssignProperty(GraphSlotBase slot, GraphProperty property)
+    {
+        PreserveVisibleNodePositions();
+        SoloSource(slot).SetProperty(property);
+        Invalidate();
+    }
+
     /// <summary>放置模式落下：在點擊處長一顆空節點並接上欄位，內容由使用者在節點 Header 選。</summary>
     // 和「拉線到空白處」同一條路徑，只是起點是右鍵選單而不是接點。
     private void PlaceNewSource(GraphSlotBase slot, Vector2 graphMouse)
@@ -573,6 +670,7 @@ public partial class HaruGraphWindow
     private void DeleteCarrier(GraphNode carrier, string nodeId = null, bool pushUndo = true)
     {
         if (carrier == null) return;
+        GraphProperty property = carrier.Property;
         if (pushUndo) BreakUndoMerge();
         PreserveVisibleNodePositions();
 
@@ -584,8 +682,18 @@ public partial class HaruGraphWindow
         model.RemoveOrphan(carrier);
         RemoveFromNodeOwners(carrier);
 
+        // ProtoProperty 是庫定義，刪掉畫布引用不可連帶刪庫；一般 Property 才跟最後一個引用一起回收。
+        if (property != null && !property.Proto && !HasPropertyCarrier(property)) CurrentProperties()?.Remove(property);
+
         if (!string.IsNullOrEmpty(nodeId)) selectedIds.Remove(nodeId);
         Invalidate();
+    }
+
+    private bool HasPropertyCarrier(GraphProperty property)
+    {
+        foreach (GraphNode other in model.AllCarriers())
+            if (ReferenceEquals(other?.Property, property)) return true;
+        return false;
     }
 
     /// <summary>把載體從任何「帶子節點」的擁有者身上摘掉。</summary>
@@ -746,7 +854,9 @@ public partial class HaruGraphWindow
         // Token節點自己就是Token，沒有「再轉存成Token」這回事。
         // 空 Node 收：族已知、沒有內容，轉出來就是具名常數（動作格沒有結果型別，自然被擋掉）。
         // 沒宣告 Token 能力的圖連這一項都不出現——轉出來的東西沒有地方可列。
-        if (canExtract && HasTokenSection && !node.IsTokenNode && node.Carrier != null && node.ResultType != null)
+        // Property 節點也收不了：它沒有可轉出的內容，值是執行期由動作寫進去的。
+        if (canExtract && HasTokenSection && !node.IsTokenNode && !node.IsPropertyNode
+            && node.Carrier != null && node.ResultType != null)
             menu.AddItem(new GUIContent("轉存為 Token"), false, () => ExtractToken(node));
 
         // 資產要有本體才存得進 SetTarget，所以空 Node 只能轉Token：Obj 為 null 這裡就過不了。

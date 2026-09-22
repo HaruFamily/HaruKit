@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using HaruFamily.DependencyCore.GraphKit;
 using HaruFamily.DependencyCore.GraphKit.Editor;
@@ -24,7 +25,6 @@ namespace HaruFamily.Tools.AssetPipeline
             if (lastRun?.Transaction == PipelineTransactionStatus.RecoveryRequired && string.IsNullOrEmpty(lastRun.RecoveryDirectory))
                 return lastRun;
             lastRun = run;
-            catalogPreview = null;
             var pending = PipelineAssetTransaction.PendingRecoveryDirectories();
             if (pending.Count > 0)
             {
@@ -38,8 +38,9 @@ namespace HaruFamily.Tools.AssetPipeline
             AssetPipeline previous = current;
             Action<string> previousWarnings = formulaWarningHandler;
             var transaction = new PipelineAssetTransaction();
-            var observations = new Dictionary<CatalogCell, PipelineValueSnapshot>();
-            var dynamicBefore = new List<(DynamicAssetCatalog Catalog, List<PipelineAssetRecord> Data, bool Initialized)>();
+            // Property 的執行前狀態。Live 是當時的清單實體，Items 是它當時的內容——
+            // 只記目前值的引用回復不了「原地增刪」，而仍持有同一份引用的讀取者看的就是那個實體。
+            var propertiesBefore = new List<(GraphProperty Property, object Value, bool Written, IList Live, List<object> Items)>();
             bool began = false;
             bool committed = false;
             executing = true;
@@ -50,9 +51,9 @@ namespace HaruFamily.Tools.AssetPipeline
             };
             try
             {
-                if (!VerifyPipelineAssets())
+                if (!VerifyGraph())
                 {
-                    run.Errors.Add(PrototypeValidationLog);
+                    run.Errors.Add(PipelineLog);
                     return run;
                 }
                 List<ActionSlot> actions = graph.Actions;
@@ -65,36 +66,41 @@ namespace HaruFamily.Tools.AssetPipeline
                     run.Steps.Add(step);
                 }
 
-                foreach (GraphNode node in PipelineCatalogSnapshot.FindCatalogs(graph))
+                foreach (GraphProperty property in GraphPropertyWalk.Collect(graph))
                 {
-                    if (node.CatalogObject is not DynamicAssetCatalog catalog) continue;
-                    var data = new List<PipelineAssetRecord>();
-                    foreach (Object asset in catalog.Read()) data.Add(new PipelineAssetRecord(asset, null, PipelineItemStatus.Collected, ""));
-                    dynamicBefore.Add((catalog, data, catalog.IsInitialized));
+                    (object value, bool written) = property.CaptureValue();
+                    // 讀 CurrentValue 而不是 value：未寫入時目前值是初始內容，而 Proto 的初始清單
+                    // 與目前值共用引用，本次執行的原地修改一樣會改到它。
+                    var live = property.CurrentValue as IList;
+                    List<object> items = null;
+                    if (live != null)
+                    {
+                        items = new List<object>(live.Count);
+                        foreach (object item in live) items.Add(item);
+                    }
+                    propertiesBefore.Add((property, value, written, live, items));
                 }
                 began = true;
-                run.RestoreCatalogs = () =>
+                run.RestoreProperties = () =>
                 {
                     var errors = new List<string>();
-                    foreach (var before in dynamicBefore)
+                    foreach (var before in propertiesBefore)
                     {
                         try
                         {
-                            var data = new List<Object>();
-                            foreach (var item in before.Data)
+                            // 先還原清單內容再換回指標：只換指標會把已被原地修改的清單留給仍持有它的讀取者。
+                            if (before.Live != null && before.Items != null)
                             {
-                                Object asset = item.Resolve();
-                                if (asset == null) throw new InvalidOperationException("無法回綁目錄原始資產：" + item.Path);
-                                data.Add(asset);
+                                before.Live.Clear();
+                                foreach (object item in before.Items) before.Live.Add(item);
                             }
-                            before.Catalog.RestoreData(data, before.Initialized);
+                            before.Property.RestoreValue((before.Value, before.Written));
                         }
-                        catch (Exception exception) { errors.Add("目錄回復失敗：" + exception.Message); }
+                        catch (Exception exception) { errors.Add("Property 回復失敗：" + exception.Message); }
                     }
                     return errors;
                 };
                 BeginRun();
-                foreach (var before in dynamicBefore) before.Catalog.InitializeForRun();
                 Application.logMessageReceived += captureError;
                 formulaWarningHandler = message => CurrentAction?.Result.Message("公式警告：" + message);
 
@@ -109,7 +115,7 @@ namespace HaruFamily.Tools.AssetPipeline
                         step.Message("動作已停用。");
                         continue;
                     }
-                    CurrentAction = new PipelineActionContext(transaction, step, observations);
+                    CurrentAction = new PipelineActionContext(transaction, step);
                     double start = EditorApplication.timeSinceStartup;
                     try { ((ActionBase)slot.Node.BodyObject).Execute(CurrentAction); }
                     catch (Exception exception) { step.Fail(exception.ToString(), exception.Data["AssetPipeline.AssetPath"] as string); }
@@ -122,8 +128,6 @@ namespace HaruFamily.Tools.AssetPipeline
                     run.Errors.Add($"第 {i + 1} 步「{step.Name}」失敗，後續未執行。");
                     break;
                 }
-                // 只讀目錄與已觀察值，不為顯示重新執行篩選公式。
-                run.Catalogs.AddRange(PipelineCatalogSnapshot.Capture(graph, observations, false));
                 if (run.Errors.Count == 0)
                 {
                     transaction.Commit();
@@ -144,14 +148,15 @@ namespace HaruFamily.Tools.AssetPipeline
                     run.Errors.AddRange(recoveryErrors);
                     run.Transaction = recoveryErrors.Count == 0 ? PipelineTransactionStatus.RolledBack : PipelineTransactionStatus.RecoveryRequired;
                     if (recoveryErrors.Count > 0) run.RecoveryDirectory = transaction.DirectoryPath;
-                    var catalogErrors = run.RestoreCatalogs?.Invoke() ?? new List<string>();
-                    run.Errors.AddRange(catalogErrors);
-                    if (catalogErrors.Count > 0) run.Transaction = PipelineTransactionStatus.RecoveryRequired;
+                    var propertyErrors = run.RestoreProperties?.Invoke() ?? new List<string>();
+                    run.Errors.AddRange(propertyErrors);
+                    if (propertyErrors.Count > 0) run.Transaction = PipelineTransactionStatus.RecoveryRequired;
                 }
                 formulaWarningHandler = previousWarnings;
                 current = previous;
                 executing = false;
-                if (run.Transaction != PipelineTransactionStatus.RecoveryRequired) run.RestoreCatalogs = null;
+                if (run.Transaction != PipelineTransactionStatus.RecoveryRequired) run.RestoreProperties = null;
+                run.CaptureProperties(GraphPropertyWalk.Collect(graph));
                 pipelineLog = run.Summary;
                 foreach (string error in run.Errors) pipelineLog += "\n" + error;
             }
@@ -163,15 +168,16 @@ namespace HaruFamily.Tools.AssetPipeline
             var errors = PipelineAssetTransaction.Recover(directory);
             if (errors.Count > 0 || lastRun?.RecoveryDirectory != directory) return errors;
             lastRun.RecoveryDirectory = null;
-            return RecoverCatalogState();
+            return RecoverPropertyState();
         }
 
-        internal List<string> RecoverCatalogState()
+        internal List<string> RecoverPropertyState()
         {
-            var errors = lastRun?.RestoreCatalogs?.Invoke() ?? new List<string>();
+            var errors = lastRun?.RestoreProperties?.Invoke() ?? new List<string>();
             if (lastRun == null) return errors;
             lastRun.Transaction = errors.Count == 0 ? PipelineTransactionStatus.RolledBack : PipelineTransactionStatus.RecoveryRequired;
-            if (errors.Count == 0) lastRun.RestoreCatalogs = null;
+            if (errors.Count == 0) lastRun.RestoreProperties = null;
+            lastRun.CaptureProperties(GraphPropertyWalk.Collect(graph));
             pipelineLog = lastRun.Summary;
             foreach (string error in errors) pipelineLog += "\n" + error;
             return errors;

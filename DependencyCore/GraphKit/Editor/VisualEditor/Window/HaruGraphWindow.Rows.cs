@@ -31,9 +31,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         if (row.IsItem) DrawListElementControls(row, rowRect, nodeRect);
                         DrawInputPortRow(row, rowRect);
                         break;
-                    case HGRowKind.InputOutputPort:
-                        DrawInputOutputPortRow(row, rowRect);
-                        break;
                     case HGRowKind.Group:
                         if (row.IsItem) DrawListElementControls(row, rowRect, nodeRect);
                         DrawGroupRow(node, row, rowRect, nodeRect);
@@ -57,39 +54,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     HGStyles.RowLabel);
             }
             DrawRows(node, row.Children, nodeRect);
-        }
-
-        /// <summary>
-        /// 容器內的一格：左緣是自己的輸出接點，右緣是篩選欄位的輸入接點，中間寫這一格的結果型別。
-        /// </summary>
-        // 右端由右往左固定是「接點 → ✕」：接點永遠貼齊節點右緣，讓開的是 ✕。
-        // 兩顆接點的圓由 DrawNodePorts 統一畫（它在外框之後跑），這裡只處理命中與列上的內容。
-        private void DrawInputOutputPortRow(HGRow row, Rect rowRect)
-        {
-            HGStyles.Fill(rowRect, row.ItemIndex % 2 == 0 ? HGStyles.ListStripeEven : HGStyles.ListStripeOdd);
-
-            var inputPort = PortRect(PortFor(row).Presentation.Position + pan);
-
-            var remove = new Rect(inputPort.x - HGGraph.ListDeleteWidth, rowRect.y + 3f, 14f, rowRect.height - 6f);
-            // 走一般的刪載體路徑：指著這一格的欄位要一起斷開，否則它只是離開容器，
-            // 繼續掛在下游欄位上變成一顆沒有母容器的孤兒。
-            if (GUI.Button(remove, new GUIContent("✕", "刪除這一格"), HGStyles.ListAdd))
-            {
-                DeleteCarrier(row.OutputNode);
-                return;
-            }
-
-            float left = rowRect.x + HGGraph.PortDiameter + 5f;
-            var label = new Rect(left, rowRect.y + 1f, remove.xMin - left - 5f, rowRect.height - 2f);
-            GUI.Label(label,
-                HGStyles.Elide(row.Label, HGStyles.RowLabel, label.width, "這一格的輸出結果型別"), HGStyles.RowLabel);
-
-            // 接點一個熱區兩種手勢，與一般欄位同一套：原地放開＝收合，拖出去＝拉線。
-            var e = Event.current;
-            if (e.type != EventType.MouseDown || e.button != 0 || !inputPort.Contains(e.mousePosition)) return;
-            inputPortClickPort = PortFor(row);
-            inputPortClickStart = e.mousePosition - pan;
-            e.Use();
         }
 
         /// <summary>
@@ -472,7 +436,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             // 輸出格沒有常數模式：沒接線就是沒人收，畫一格可編的保底值只會讓人以為那個值會被用到。
             else if (row.IsProducedValue)
             {
-                string text = (contentKind is NodeKind.Inline or NodeKind.Empty) && HGReflect.GetFormula(slot) is object target
+                string text = contentKind == NodeKind.Property
+                    ? "→ " + (slot.Node.IsProtoProperty ? slot.Node.Property?.Name ?? "未選 Key" : "LocalProperty")
+                    : (contentKind is NodeKind.Inline or NodeKind.Empty) && HGReflect.GetFormula(slot) is object target
                     ? $"→ {HGReflect.TypeName(target.GetType())}"
                     : "（未接，產出不會被收走）";
                 string tip = "這一格是產出：執行時由這個步驟寫進接上的節點，不是從它取值。";
@@ -489,8 +455,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     NodeKind.Inline or NodeKind.Empty => HGReflect.GetFormula(slot) is object uf ? HGReflect.TypeName(uf.GetType()) : "（空公式）",
                     NodeKind.Asset => HGReflect.GetAsset(slot) is UnityEngine.Object ua ? ua.name : "（空資產）",
                     NodeKind.Token => HGReflect.GetToken(slot)?.Name is string un && !string.IsNullOrEmpty(un) ? $"（Token {un}）" : "（已接 Token）",
-                    // 目錄名要向 Owner 查，這一格拿不到；顯示身分就夠，名字在節點本體那兩列看得到。
-                    NodeKind.Catalog => "（已接目錄）",
                     _ => "（未接，用欄位預設）",
                 };
                 string tip = $"{HGReflect.ResultTypeName(row.ResultType)} 沒有常數保底可編，只能從接點拉線指定來源。";
@@ -514,7 +478,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     NodeKind.Inline or NodeKind.Empty => "已接公式：公式解析失敗時回到這個值",
                     NodeKind.Asset => "已接資產：資產缺內容時回到這個值",
                     NodeKind.Token => "已接 Token：Token 不存在或循環時回到這個值",
-                    NodeKind.Catalog => "已接目錄：目錄不存在時回到這個值",
                     _ => null,
                 };
                 EditorGUI.BeginChangeCheck();
@@ -606,9 +569,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
             if (row.Field != null && row.Target != null)
             {
-                // 目錄欄位存的是 id，畫成下拉才看得到名字；手打 id 沒有任何可讀性。
-                if (HGReflect.IsCatalogField(row.Field)) { DrawCatalogIdField(row, fieldRect); return; }
-
                 EditorGUI.BeginChangeCheck();
                 var value = HGValueField.Draw(fieldRect, row.Field.FieldType, row.Field.GetValue(row.Target), row.ForceEnumButtons);
                 if (EditorGUI.EndChangeCheck()) { row.Field.SetValue(row.Target, value); AfterValueEdit(); }
@@ -663,7 +623,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             {
                 if (!row.Descriptor.TryWrite(row.Target, value, out var error))
                     throw error ?? new ArgumentException("Drawer result does not match the field contract.");
-                if (BreakInvalidPackLinks() > 0) ShowNotification(new GUIContent("已斷開接不上的連線"));
             }, out var message))
             {
                 ReportDrawerFailure(row, message);
@@ -726,56 +685,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         }
 
         /// <summary>值欄位改完的收尾。</summary>
-        // 改掉的值可能是某顆包「收不收得下」的依據，那條線當場就不再成立；
-        // 留到驗證才報，使用者要自己回來拆一條看起來仍然正常的線。斷線會動到資料，所以要讓人知道。
         private void AfterValueEdit()
         {
-            if (BreakInvalidPackLinks() > 0) ShowNotification(new GUIContent("已斷開接不上的連線"));
             Invalidate();
-        }
-
-        /// <summary>
-        /// 目錄欄位：顯示目錄名稱，點開是目錄庫裡的全部目錄。欄位本身存的是 id。
-        /// </summary>
-        // 目錄被刪掉時欄位還留著 id：畫成「（已刪除）」而不是空白，否則看起來像還沒選。
-        private void DrawCatalogIdField(HGRow row, Rect fieldRect)
-        {
-            var field = row.Field;
-            var target = row.Target;
-            string current = field.GetValue(target) as string;
-            var catalog = FindCatalog(current);
-            string label = catalog?.Name ?? (string.IsNullOrEmpty(current) ? "（未指定）" : "（已刪除）");
-
-            if (!EditorGUI.DropdownButton(fieldRect,
-                    HGStyles.Elide(label, EditorStyles.miniPullDown, fieldRect.width - 20f), FocusType.Keyboard))
-                return;
-
-            var owner = CatalogOwner;
-            if (owner?.Catalogs == null || owner.Catalogs.Count == 0)
-            {
-                ShowNotification(new GUIContent("左欄還沒有任何目錄"));
-                return;
-            }
-
-            // 只列型別接得上的庫：接得上卻取不到內容是最難查的一種錯，擋在選單比擋在求值好。
-            // 節點沒宣告要哪一種（沒實作 ICatalogLibraryConsumer）就不過濾，維持舊行為。
-            Type wantedItemType = (target as ICatalogLibraryConsumer)?.CatalogItemType;
-
-            var menu = new GenericMenu();
-            foreach (var candidate in owner.Catalogs)
-            {
-                if (candidate == null) continue;
-                if (wantedItemType != null && candidate.ItemType != wantedItemType) continue;
-                var captured = candidate;
-                menu.AddItem(new GUIContent(candidate.Name), candidate.Id == current, () =>
-                {
-                    BreakUndoMerge();
-                    field.SetValue(target, captured.Id);
-                    MarkGraphChanged();
-                    Invalidate();
-                });
-            }
-            menu.DropDown(fieldRect);
         }
 
         /// <summary>清單標題：折疊箭頭 + 名稱 + 項數。箭頭與文字整塊都是開關，不必瞄準小三角。</summary>

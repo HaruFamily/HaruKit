@@ -301,7 +301,7 @@ public partial class HaruGraphWindow
         }
         if (linking && linkPort != null)
         {
-            bool producedValue = IsCatalogWritePort(linkPort);
+            bool producedValue = IsPropertyWritePort(linkPort);
             DrawGraphLine(linkPort.Presentation.Position, LinkPreviewEnd(graphMouse), false, false, producedValue);
         }
         Handles.EndGUI();
@@ -613,11 +613,11 @@ public partial class HaruGraphWindow
             to = HGStyles.HeaderFormula;
             return;
         }
-        // 包是單色目錄青藍：它與目錄庫的目錄同樣裝一批資產，但內容住在自己身上，不是引用，
-        // 所以不畫成「引用 → 內容」的漸層。
-        if (node.IsCatalogNode)
+        // Property 色 → 公式色：節點本身是引用，但它對下游提供的是一個型別化的值，兩種身分都要看得出來。
+        if (node.IsPropertyNode)
         {
-            from = to = HGStyles.HeaderCatalog;
+            from = HGStyles.HeaderProperty;
+            to = HGStyles.HeaderFormula;
             return;
         }
         if (node.IsAssetNode)
@@ -626,11 +626,10 @@ public partial class HaruGraphWindow
             to = node.ResultType == null ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
             return;
         }
-        // 被寫入的節點（IGraphSink）走「目錄色 → 公式色」：內容是別人交進來的一批東西，
-        // 但它仍然是求值得出結果的公式，兩種身分都要看得出來。
+        // 被寫入的節點（IGraphSink）仍是求值得出結果的公式。
         if (node.Obj is IGraphSink)
         {
-            from = HGStyles.HeaderCatalog;
+            from = HGStyles.HeaderFormula;
             to = HGStyles.HeaderFormula;
             return;
         }
@@ -650,7 +649,8 @@ public partial class HaruGraphWindow
         // 節點問題與執行狀態共用 Header 下緣色帶；參數列問題仍標在列上。
         // 資產／空節點自己沒有物件，問題掛在父欄位上，改查父欄位才看得到。
         object issueTarget = node.Obj
-            ?? (node.IsAssetNode || node.IsTokenNode || node.IsPlaceholder ? node.ParentSlot : null);
+            ?? (node.IsAssetNode || node.IsTokenNode || node.IsPropertyNode || node.IsPlaceholder
+                ? node.ParentSlot : null);
         bool hasNodeIssue = Rep.HasIssue(issueTarget, out bool nodeError);
         var execution = NodeExecution(node);
 
@@ -705,11 +705,18 @@ public partial class HaruGraphWindow
             : nodeError ? "此節點有錯誤，詳見 Console" : "此節點有警告，詳見 Console";
         GUI.Label(titleRect, HGStyles.Elide(node.Title, HGStyles.NodeTitle, textWidth, titleTip), HGStyles.NodeTitle);
 
-        // 資產與Token的本體是一列「選哪一個」的下拉；一般節點畫自己的參數列；空節點兩者都沒有。
+        // 資產、Token 與 ProtoProperty 的本體是一列「選哪一個」的下拉。
+        // 一般 Property 是在這顆節點建立的私有暫存位置，沒有可重指向的名稱清單。
         // 掛在未勾覆蓋的參數底下＝這一段不會被採用，整顆節點鎖住：控制項灰掉、拉線與清單編輯都擋掉。
         using (new EditorGUI.DisabledScope(node.InLockedSubtree))
         {
-            if (node.IsAssetNode || node.IsTokenNode)
+            if (node.IsPropertyNode)
+            {
+                if (node.Carrier?.IsProtoProperty == true) DrawReferencePickerRow(node, rect);
+                DrawPropertyValueRow(node, rect);
+                DrawRows(node, node.Rows, rect);
+            }
+            else if (node.IsAssetNode || node.IsTokenNode)
             {
                 DrawReferencePickerRow(node, rect);
                 DrawRows(node, node.Rows, rect);
@@ -717,9 +724,7 @@ public partial class HaruGraphWindow
             else if (node.Obj is IGraphNodeOwner nodeOwner)
             {
                 DrawRows(node, node.Rows, rect);
-                if (nodeOwner is IGraphInlineNodeOwner inlineOwner)
-                    DrawCellAddRow(node, new HGCellItemSource(inlineOwner), rect);
-                else DrawChildNodeRow(node, nodeOwner, rect);
+                DrawChildNodeRow(node, nodeOwner, rect);
             }
             else if (!node.IsPlaceholder) DrawRows(node, node.Rows, rect);
         }
@@ -794,13 +799,9 @@ public partial class HaruGraphWindow
     /// 資產節點本體唯一的一列：像一般參數列那樣「標籤 + 下拉」，選的是「指到哪一個資產」。
     /// 換身分（Formula／Asset）是 Header 那顆 ▾ 的事，這裡只換對象。
     /// </summary>
-    /// <summary>依 Id 找目錄。找不到回 null——目錄可能已經被刪掉，節點還留著 id。</summary>
-    private IGraphCatalogLibrary FindCatalog(string id) => HGReflect.FindCatalog(CatalogOwner?.Catalogs, id);
-
     /// <summary>
     /// 子節點擁有者的本體第一列：顯示現在有幾格，右邊一顆「＋」加一格。
     /// </summary>
-    // 只有非內嵌的 owner 走這條：內嵌容器的每一格都是自己的 InputOutputPort 列，尾端另有一條新增列。
     private void DrawChildNodeRow(HGNodeView node, IGraphNodeOwner owner, Rect nodeRect)
     {
         var row = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight, nodeRect.width, HGGraph.RowHeight);
@@ -824,43 +825,82 @@ public partial class HaruGraphWindow
     }
 
 
-    /// <summary>容器尾端那條「＋ 新增」列。每一格本身是 Rows 裡的 InputOutputPort 列，由 DrawRows 畫。</summary>
-    // 整列寬而不是小鈕：0.45 倍縮放下 60px 的鈕只剩 27px，讀不到也按不到。
-    private void DrawCellAddRow(HGNodeView node, HGCellItemSource items, Rect nodeRect)
-    {
-        var addRow = new Rect(nodeRect.x, nodeRect.y + node.CellAddRowY, nodeRect.width, HGGraph.RowHeight);
-        var add = new Rect(addRow.x + 4f, addRow.y + 2f, addRow.width - 8f, addRow.height - 4f);
-        HGStyles.RoundedFrame(add, HGStyles.ListRule, 3f);
-
-        string label = items.IsEmpty ? "＋ 新增第一格" : "＋ 新增";
-        if (!GUI.Button(add, new GUIContent(label, "新增一格，未接篩選公式時直接輸出整包內容"), HGStyles.ListAdd)) return;
-
-        BreakUndoMerge();
-        PreserveVisibleNodePositions();
-        items.CreateChild();
-        Invalidate();
-        MarkGraphChanged();
-    }
-
     private void DrawReferencePickerRow(HGNodeView node, Rect nodeRect)
     {
+        if (node.IsPropertyNode && node.Carrier?.IsProtoProperty != true) return;
+
         var row = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight, nodeRect.width, HGGraph.RowHeight);
         float labelWidth = row.width * 0.34f;
 
         bool isToken = node.IsTokenNode;
+        bool isProperty = node.IsPropertyNode;
+        // Property 這一列的標籤同時是身分標記：Header 顯示的是名稱，所以「有沒有初始內容」只剩這裡說得出來。
+        string kindLabel = isToken ? "Token"
+            : isProperty ? "Key"
+            : "資產";
         GUI.Label(new Rect(row.x + 6f, row.y + 1f, labelWidth - 8f, row.height - 2f),
-            isToken ? "Token" : "資產", HGStyles.RowLabel);
+            HGStyles.Elide(kindLabel, HGStyles.RowLabel, labelWidth - 8f), HGStyles.RowLabel);
 
         var picker = new Rect(row.x + labelWidth, row.y + 1f, row.width - labelWidth - 8f, row.height - 3f);
         string label = isToken
             ? (node.Token != null ? node.Token.Name ?? "（未命名）" : "（未指定）")
-            : (node.Asset != null ? node.Asset.name : "（未指定）");
+            : isProperty
+                ? (node.Property != null ? node.Property.Name ?? "（未命名）" : "（未指定）")
+                : (node.Asset != null ? node.Asset.name : "（未指定）");
 
         if (!EditorGUI.DropdownButton(picker,
                 HGStyles.Elide(label, EditorStyles.miniPullDown, picker.width - 20f), FocusType.Keyboard)) return;
 
         if (isToken) ShowTokenPicker(node, picker);
+        else if (isProperty) ShowPropertyPicker(node, picker);
         else ShowAssetPicker(node, picker);
+    }
+
+    /// <summary>Property 寫入 Input 固定在這列左側；讀取 Output 仍在 Header。</summary>
+    private static void DrawPropertyValueRow(HGNodeView node, Rect nodeRect)
+    {
+        float offset = node.Carrier?.IsProtoProperty == true ? HGGraph.RowHeight : 0f;
+        var row = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight + offset, nodeRect.width, HGGraph.RowHeight);
+        GUI.Label(new Rect(row.x + HGGraph.PortDiameter + 6f, row.y + 1f,
+                row.width - HGGraph.PortDiameter - 12f, row.height - 2f),
+            new GUIContent("寫入", "由左側 Input 指定寫入這顆 Property 的目標"), HGStyles.RowLabel);
+    }
+
+    /// <summary>只列這個欄位讀寫得下的 Property（族相同）。</summary>
+    private void ShowPropertyPicker(HGNodeView node, Rect anchor)
+    {
+        var options = new List<HGSourceOption>();
+        foreach (var property in CurrentProperties() ?? new List<GraphProperty>())
+        {
+            if (property == null) continue;
+            if (!property.Proto) continue;
+            // 父欄位存在時以它的相容判定為準；候選池裡的節點沒有父欄位，一律可選。
+            if (node.ParentSlot != null && !node.ParentSlot.AcceptsProperty(property)) continue;
+            var captured = property;
+            options.Add(new HGSourceOption
+            {
+                Name = property.Name ?? "（未命名）",
+                IsCurrent = ReferenceEquals(node.Property, property),
+                Apply = () => ChangeNodeToProperty(node, captured),
+            });
+        }
+
+        if (options.Count == 0)
+        {
+            ShowNotification(new GUIContent("沒有相容的 Property；先到左欄 Property 庫新增一顆"));
+            return;
+        }
+        HGTypeCatalog.ShowSourcePicker(anchor, options, "選擇 Property");
+    }
+
+    /// <summary>換這顆節點指到的 Property。載體不變，所以 Id、座標與所有連入邊都保留。</summary>
+    private void ChangeNodeToProperty(HGNodeView node, GraphProperty property)
+    {
+        if (node?.Carrier == null || property == null) return;
+        node.Carrier.SetProtoProperty(property);
+        BreakIncompatiblePropertyLinks(node.Carrier, property);
+        Invalidate();
+        MarkGraphChanged();
     }
 
     /// <summary>只列這個欄位收得下的資產。</summary>
@@ -905,22 +945,23 @@ public partial class HaruGraphWindow
             }
             var inputPort = PortFor(row);
             if (inputPort?.Presentation.Visible != true) continue;
+            if (inputPort.Presentation is IHGPortPresentationAnchor anchor && !ReferenceEquals(anchor.Node, node)) continue;
             var inputPortRect = PortRect(inputPort.Presentation.Position + pan);
             DrawSemanticPort(inputPort, InputPortColor(row), dim || row.Locked || row.InputSlot.Node?.Disabled == true, snappedPort);
-            DrawInputPortGlyph(row, inputPortRect);
+            if (row.InputSlot is not PropertySlotBase) DrawInputPortGlyph(row, inputPortRect);
 
-            // InputOutputPort：右側輸入之外，左緣有一顆自己的輸出接點——那一列自己就是一顆載體。
-            if (row.OutputNode != null && graph.PortsByKey.TryGetValue(OutputKey(row), out var outputPort)
-                && outputPort.Presentation.Visible)
-                DrawSemanticPort(outputPort, PortErrorColor(row.OutputNode.BodyObject, HGStyles.OutputPortLive),
-                    dim || row.Locked || row.OutputNode.Disabled, snappedPort);
         }
 
         if (node.IsRoot || !node.HasOutputPort) return;
+        if (node.IsPropertyNode)
+        {
+            var inputKey = new HGPortKey(node.Id, "/property/input", HGPortRole.Input);
+            if (graph.PortsByKey.TryGetValue(inputKey, out var propertyInput) && propertyInput.Presentation.Visible)
+                DrawSemanticPort(propertyInput, HGStyles.OutputPortColor, dim, snappedPort);
+        }
         var headerPort = PortFor(node);
         if (headerPort?.Presentation.Visible == true)
-            DrawSemanticPort(headerPort, PortErrorColor(node.Obj ?? node.ParentSlot,
-                node.ReceivesCatalogWrites ? HGStyles.OutputPortColor : HGStyles.OutputPortLive), dim, snappedPort);
+            DrawSemanticPort(headerPort, PortErrorColor(node.Obj ?? node.ParentSlot, HGStyles.OutputPortLive), dim, snappedPort);
     }
 
     /// <summary>Ports owned by Tool-specific adapters are drawn without adding a central concrete-type branch.</summary>
@@ -931,10 +972,10 @@ public partial class HaruGraphWindow
             bool hasBuiltInAnchor = port.Presentation is IHGPortPresentationAnchor anchor
                 && (anchor.Node != null || anchor.Row != null);
             if (hasBuiltInAnchor || !port.Presentation.Visible) continue;
-            Color color = IsCatalogWritePort(port) ? HGStyles.OutputPortColor
+            Color color = IsPropertyWritePort(port) ? HGStyles.OutputPortColor
                 : port.IsInput && port.InputSlot?.Node == null ? HGStyles.InputPortEmpty : HGStyles.OutputPortLive;
             object issueTarget = port.IsInput ? port.InputSlot
-                : (object)port.Source?.OutputNode?.CatalogObject ?? port.Source?.OutputNode?.BodyObject;
+                : port.Source?.OutputNode?.BodyObject;
             var owner = OwnerNodeOfPort(port);
             bool dim = port.Presentation.Locked || owner?.InDisabledSubtree == true
                 || owner?.InLockedSubtree == true || port.Source?.OutputNode?.Disabled == true;
@@ -942,11 +983,11 @@ public partial class HaruGraphWindow
         }
     }
 
-    private bool IsCatalogWritePort(HGPort port)
+    private bool IsPropertyWritePort(HGPort port)
     {
-        if (port?.InputSlot is CatalogSlotBase slot) return slot.WritesToCatalog;
-        return port?.Source?.OutputNode is GraphNode carrier && graph != null
-            && graph.ByCarrier.TryGetValue(carrier, out var node) && node.ReceivesCatalogWrites;
+        // 寫入 Property 的欄位走輸出色，圖上才看得出資料往哪邊流。
+        if (port?.Source is HGPropertyWriteSource || port?.InputSlot is GraphPropertyInputSlot) return true;
+        return false;
     }
 
     private Color PortErrorColor(object target, Color color)
@@ -1027,9 +1068,6 @@ public partial class HaruGraphWindow
         {
             row.ScreenRect = new Rect(node.Pos.x, node.Pos.y + row.LocalY, node.Width, row.Height);
             row.InputPortPosition = new Vector2(node.Pos.x + node.Width - HGGraph.PortRadius,
-                node.Pos.y + row.LocalY + row.Height * 0.5f);
-            // 左側輸出貼齊節點左緣，與節點 Header 的輸出接點同一條垂直線。
-            row.OutputPortPosition = new Vector2(node.Pos.x + HGGraph.PortRadius,
                 node.Pos.y + row.LocalY + row.Height * 0.5f);
             UpdateRowGeometry(node, row.Children);
         }

@@ -16,7 +16,7 @@ namespace HaruFamily.Tools.AssetPipeline
     {
         private const string DefaultAssetPath = "Assets/Editor/HaruFamily/AssetPipeline/AssetPipeline.asset";
         internal static Action<string> formulaWarningHandler;
-        /// <summary>目前正在執行的管線。動作與公式靠它讀資產群組、登記 dynamic 資產。</summary>
+        /// <summary>目前正在執行的管線。</summary>
         // 使用端可讀取目前管線；執行與預覽的狀態切換由 AP 組件管理。
         public static AssetPipeline current { get; internal set; }
 
@@ -29,17 +29,6 @@ namespace HaruFamily.Tools.AssetPipeline
 
         [NonSerialized] private PipelineRunResult lastRun;
         public PipelineRunResult LastRun => lastRun;
-        [NonSerialized] private List<PipelineCatalogSnapshot> catalogPreview;
-        public IReadOnlyList<PipelineCatalogSnapshot> CatalogPreview => catalogPreview;
-
-        public void RefreshCatalogPreview()
-        {
-            AssetPipeline previous = current;
-            current = this;
-            try { catalogPreview = PipelineCatalogSnapshot.Capture(graph, new Dictionary<CatalogCell, PipelineValueSnapshot>(), true); }
-            finally { current = previous; }
-        }
-
         [MenuItem("HaruFamily/Asset Pipeline/Open")]
         private static void OpenTool()
         {
@@ -59,10 +48,6 @@ namespace HaruFamily.Tools.AssetPipeline
             EditorGUIUtility.PingObject(tool);
         }
 
-        public string collectKey = "Default";
-
-        public string clearKey = "Default";
-
         /// <summary>
         /// 管線的節點圖。編輯器靠「欄位型別實作 IGraphDocument」找到它，不必認識 AssetPipeline。
         /// </summary>
@@ -71,13 +56,6 @@ namespace HaruFamily.Tools.AssetPipeline
         [NonSerialized]
         private string pipelineLog = string.Empty;
 
-        [FormerlySerializedAs("groups")]
-        public List<AssetPipelineAssetGroup> prototypeAssets = new List<AssetPipelineAssetGroup>();
-
-        [NonSerialized]
-        private string assetLog = string.Empty;
-
-        internal string PrototypeValidationLog => assetLog;
         internal string PipelineLog => pipelineLog;
 
         internal void MarkDirty()

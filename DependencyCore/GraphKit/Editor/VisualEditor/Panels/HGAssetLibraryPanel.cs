@@ -30,18 +30,22 @@ public sealed class HGAssetLibraryPanel
 
     private string search = "";
     private Vector2 scroll;
+    private readonly HGLibraryReorder order = new();
 
     /// <summary>換編輯對象時把面板自己的視圖狀態歸零。</summary>
     public void Reset()
     {
         search = "";
         scroll = Vector2.zero;
+        order.Clear();
     }
 
     /// <summary>繪製資產列；選取、改名與重排由命令接回視窗。</summary>
     public void Draw(Rect r, float top, in HGAssetLibraryView view,
         HGInlineRename inlineName, HGLibraryDrag drag, HGAssetLibraryCommands cmd)
     {
+        order.BeginFrame();
+
         // 重掃縮成搜尋列旁的圖示鈕：上下分區後高度是兩區共用的，整條寬按鈕不值那一列。
         var searchRect = new Rect(r.x + 4f, top, r.width - 30f, 20f);
         GUI.Label(new Rect(searchRect.x + 4f, searchRect.y + 2f, 16f, 16f),
@@ -74,16 +78,15 @@ public sealed class HGAssetLibraryPanel
             Color payload = entry.IsAction ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
             HGStyles.CellBackground(row, HGStyles.HeaderAsset, payload, i % 2 == 1, isFocus);
 
-            int direction = HGLibraryOrder.Draw(new Rect(row.x + 3f, row.y + 5f, HGLibraryOrder.Width, 18f),
-                cmd.Move != null && i > 0, cmd.Move != null && i + 1 < shown.Count);
-            if (direction != 0)
-            {
-                var target = shown[i + direction].entry.Asset;
-                pendingMove = () => cmd.Move(asset, target);
-            }
+            if (order.IsTarget(i, out bool below)) HGLibraryReorder.InsertLine(row, below);
+            if (cmd.Move != null)
+                order.Row(new Rect(row.x + 3f, row.y + 2f, HGLibraryReorder.HandleWidth, row.height - 4f),
+                    // 資產沒有自己的 Id，用 instance id 當這一輪的識別；順序本來就只是本機視圖偏好。
+                    asset == null ? null : asset.GetInstanceID().ToString(), i, row.y + row.height * 0.5f);
 
-            var nameRect = new Rect(row.x + 8f + HGLibraryOrder.Width, row.y + 2f,
-                Mathf.Max(0f, row.width - 64f - HGLibraryOrder.Width), 18f);
+            float orderWidth = cmd.Move != null ? HGLibraryReorder.HandleWidth + 3f : 0f;
+            var nameRect = new Rect(row.x + 8f + orderWidth, row.y + 2f,
+                Mathf.Max(0f, row.width - 64f - orderWidth), 18f);
             bool renaming = inlineName.Draw(nameRect, asset, HGInlineRename.SiteAssetLib,
                 asset.name, asset.name, HGStyles.RowLabel, "雙擊可改名（改的是 .asset 檔名）",
                 name => cmd.Rename(asset, name));
@@ -110,7 +113,16 @@ public sealed class HGAssetLibraryPanel
                 e.Use();
             }
         }
+        // 在 ScrollView 內結算：滑鼠位置與記下來的中線要在同一個座標系。
+        bool move = order.EndFrame(out int from, out int to);
         GUI.EndScrollView();
+
+        if (move && from < shown.Count && to < shown.Count)
+        {
+            var source = shown[from].entry.Asset;
+            var target = shown[to].entry.Asset;
+            pendingMove = () => cmd.Move(source, target);
+        }
         pendingMove?.Invoke();
     }
 

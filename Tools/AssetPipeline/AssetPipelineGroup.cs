@@ -38,19 +38,19 @@ namespace HaruFamily.Tools.AssetPipeline
                     continue;
                 }
 
-                bool passed = pipeline.ValidatePipelinePrototypeSources();
+                bool passed = pipeline.VerifyGraph();
                 pipelineValidationResults.Add(passed);
                 if (passed)
                 {
                     passedCount++;
                     sb.AppendLine($"[通過] {pipeline.name}");
-                    sb.AppendLine(pipeline.PrototypeValidationLog);
+                    sb.AppendLine(pipeline.PipelineLog);
                 }
                 else
                 {
                     failedCount++;
                     sb.AppendLine($"[失敗] {pipeline.name}");
-                    sb.AppendLine(pipeline.PrototypeValidationLog);
+                    sb.AppendLine(pipeline.PipelineLog);
                 }
             }
 
@@ -93,7 +93,7 @@ namespace HaruFamily.Tools.AssetPipeline
                     continue;
                 }
 
-                if (!pipelineValidationResults[i] || !pipeline.IsPrototypeSourceValidationCurrent())
+                if (!pipelineValidationResults[i] || !pipeline.IsGraphValidationCurrent())
                 {
                     skippedCount++;
                     sb.AppendLine($"[SKIP] {pipeline.name} 未通過目前驗證。");
@@ -127,7 +127,7 @@ namespace HaruFamily.Tools.AssetPipeline
             if (pipelineValidationResults == null || pipelineValidationResults.Count != pipelines.Count) return false;
 
             for (int i = 0; i < pipelines.Count; i++)
-                if (pipelineValidationResults[i] && (pipelines[i] == null || !pipelines[i].IsPrototypeSourceValidationCurrent())) return false;
+                if (pipelineValidationResults[i] && (pipelines[i] == null || !pipelines[i].IsGraphValidationCurrent())) return false;
 
             return true;
         }

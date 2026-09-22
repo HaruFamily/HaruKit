@@ -14,7 +14,7 @@ using UnityEditor;
 
 
 [Serializable]
-public partial class LogicGraph<TTiming, TPack> : IGraphDocument, ITokenOwner, IGraphExecutionDocument, IGraphDocumentValidation
+public partial class LogicGraph<TTiming, TPack> : IGraphDocument, ITokenOwner, IPropertyOwner, IGraphExecutionDocument, IGraphDocumentValidation
 where TTiming : Enum
 {
     [SerializeReference]
@@ -62,7 +62,7 @@ where TTiming : Enum
 
     string IGraphDocument.WindowTitle => "LogicGraph";
 
-    HGCapabilities IGraphDocument.Capabilities => HGCapabilities.SharedAssets | HGCapabilities.Tokens;
+    HGCapabilities IGraphDocument.Capabilities => HGCapabilities.SharedAssets | HGCapabilities.Tokens | HGCapabilities.Properties;
 
     IList IGraphDocument.ItemsOf(object root)
         => root is ActionTimingGroup<TTiming, TPack> g ? g.Actions : null;
@@ -103,11 +103,20 @@ where TTiming : Enum
         get { _endpoints ??= new List<GraphToken>(); return _endpoints; }
     }
 
+    [SerializeReference, HideInInspector]
+    private List<GraphProperty> _properties = new();
+
+    public List<GraphProperty> Properties
+    {
+        get { _properties ??= new List<GraphProperty>(); return _properties; }
+    }
+
     [NonSerialized] private bool _hasLoggedValidationFailure;
     [NonSerialized] private GraphExecutionSource executionSource;
     [NonSerialized] private string executionRevision;
     [NonSerialized] private List<GraphExecutionSession> activeExecutions;
     [NonSerialized] private int executionInstance;
+    [NonSerialized] private PropertyStore propertyStore;
     private static int nextExecutionInstance;
 
     public GraphExecutionSource ExecutionSource => executionSource ??= new GraphExecutionSource();
@@ -145,8 +154,14 @@ where TTiming : Enum
     {
         return (ActionGroups?.Count ?? 0) > 0
             || (_orphans?.Count ?? 0) > 0
-            || (_endpoints?.Count ?? 0) > 0;
+            || (_endpoints?.Count ?? 0) > 0
+            || (_properties?.Count ?? 0) > 0;
     }
+
+    /// <summary>明確捨棄此圖實例及其 Asset 呼叫 scope 的所有 Property 目前值。</summary>
+    // 只有這個入口重設。改圖的 MarkDirty() 不清目前值：那是編輯與驗證狀態，不是「作者要求初始化」。
+    // 清的是 scope 裡的值而不是 store 本身，已經拿到 scope 的 TokenTable 才會一起回到未寫入狀態。
+    public void InitializeProperties() => propertyStore?.Initialize();
 
     /// <summary>建立本圖的具名求值表。未驗證時記錄錯誤並回空表；獨立查詢不建立時機執行觀察 session。</summary>
     public TokenTable<TPack> CreateTokenTable()
@@ -161,7 +176,7 @@ where TTiming : Enum
             return new TokenTable<TPack>();
         }
 
-        var table = new TokenTable<TPack>();
+        var table = new TokenTable<TPack> { Properties = (propertyStore ??= new PropertyStore()).Root(Properties) };
         foreach (var endpoint in Tokens) table.Register(endpoint);
         return table;
     }

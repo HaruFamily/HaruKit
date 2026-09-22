@@ -73,8 +73,6 @@ public partial class HaruGraphWindow
         foreach (var node in graph.Nodes)
         {
             if (node.Id == nodeId) { target = node; break; }
-            foreach (var row in HGGraph.AllRows(node.Rows))
-                if (row.OutputNode?.Id == nodeId) { target = node; break; }
             if (target != null) break;
         }
         if (target == null)
@@ -131,9 +129,11 @@ public partial class HaruGraphWindow
     internal HGSessionCommandResult DisconnectDocument(HGModel expected, int generation, HGPortKey key)
     {
         if (QueryDocument(expected) == null || generation != graphGeneration) return HGSessionCommandResult.StaleGeneration;
-        if (!graph.PortsByKey.TryGetValue(key, out var port) || !port.IsInput || port.Presentation.Locked || !port.Presentation.Visible)
+        if (!graph.PortsByKey.TryGetValue(key, out var port)
+            || (!port.IsInput && port.Source is not HGPropertyWriteSource)
+            || port.Presentation.Locked || !port.Presentation.Visible)
             return HGSessionCommandResult.Rejected;
-        return CutLink(port.InputSlot) switch
+        return CutLink((port.Source as HGPropertyWriteSource)?.Slot ?? port.InputSlot) switch
         {
             PortCommandResult.Changed => HGSessionCommandResult.Changed,
             PortCommandResult.NoChange => HGSessionCommandResult.NoChange,
@@ -379,8 +379,6 @@ public partial class HaruGraphWindow
 
         focus = new HGFocus();
         ClearViewState();
-        // 旗標跟著 Owner：換對象時歸零。
-        catalogDirty = false;
         graphDirty = true;
         verifiedOnce = false;
         report = HGValidator.Run(model, includeMissingTypes: true);
@@ -527,11 +525,10 @@ public partial class HaruGraphWindow
         assetReportStale = false;
         tokenLibrary.Reset();
         assetLibrary.Reset();
-        catalogLibrary.Reset();
+        propertyLibrary.Reset();
         pendingTarget = null;
         returnFocus = null;
         ClearAssetDirty();
-        catalogDirty = false;
         ClearViewState();
         UpdateUnsavedState();
         Repaint();
@@ -699,7 +696,6 @@ public partial class HaruGraphWindow
         // Owner 的引用內容變了，反向索引跟著失效。下次要用時才重算，這裡不掃。
         HGReferenceIndex.Invalidate();
         AssetDatabase.SaveAssets();
-        catalogDirty = false;
         DoVerify(true);
         UpdateUnsavedState();
         ShowNotification(new GUIContent("已存檔"));

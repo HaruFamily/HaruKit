@@ -19,8 +19,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         NoPort,
         /// <summary>右側一顆輸入接點：參數欄位，四種狀態（常數／公式／資產／Token）。</summary>
         InputPort,
-        /// <summary>左輸出 + 右輸入：容器內的一格（見 IGraphInlineNode），左側由自己的載體輸出。</summary>
-        InputOutputPort,
         /// <summary>巢狀資料的分組標題。</summary>
         Group,
         /// <summary>清單型參數的標題列。折疊時標題列會畫一顆代表接點，那是 List 這個形狀自己的特例。</summary>
@@ -49,11 +47,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// </summary>
         public Dictionary<GraphNode, int> CarrierUsers = new();
 
-        /// <summary>容器上那些自己是載體的列（InputOutputPort）：載體 → 那一列。下游欄位指的就是這些載體。</summary>
-        public Dictionary<GraphNode, HGRow> CellRows = new();
-
-        /// <summary>每一格屬於哪顆容器節點。連線要靠它決定「線的起點在不在畫面上」。</summary>
-        public Dictionary<GraphNode, HGNodeView> CellOwners = new();
     }
 
     /// <summary>編輯區上的一個節點。</summary>
@@ -66,12 +59,15 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// <summary>這顆節點指到的具名Token（不是Token節點就是 null）。內容住在Token自己的畫布。</summary>
         public GraphToken Token;
         public bool IsTokenNode;           // Token節點（不論有沒有指定Token）
-        /// <summary>包節點：內容住在節點自己身上，但它不求值，值要從底下的子節點取。</summary>
-        public bool IsCatalogNode;
+        /// <summary>這顆節點指到的 Property 定義（不是 Property 節點就是 null）。定義住圖層清單。</summary>
+        public GraphProperty Property;
+        /// <summary>Property 節點下方輸入的持久綁定；不是 ParentSlot 的重畫。</summary>
+        public GraphPropertyInputSlot PropertyInput;
+        public HGRow PropertyInputRow;
+        /// <summary>Property 節點（不論有沒有指定定義）。讀它只取目前值，不執行寫入它的動作。</summary>
+        public bool IsPropertyNode;
         /// <summary>Header 左緣那顆接點畫不畫。沒有任何欄位指得到的包節點沒有它：接不上就不該看得到圓。</summary>
         public bool HasOutputPort = true;
-        /// <summary>Header 接點可接受目前文件的目錄寫入欄位，使用寫入色。</summary>
-        public bool ReceivesCatalogWrites;
         public Type ResultType;               // 資產／Token節點的結果型別
         public string Id;
         public string Title;                  // Header 主文字＝具體型別／Token／資產名稱，節點靠它辨識
@@ -82,8 +78,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public bool IsTimingGroup;
         public bool IsPlaceholder;            // Slot 尚未指定具體 Action／Formula
         public bool IsActionNode;
-        /// <summary>容器節點底下的「＋ 新增」列位置（<see cref="IGraphInlineNodeOwner"/> 才有）。</summary>
-        public float CellAddRowY;
         /// <summary>自己或某個祖先被停用：整段不會求值，畫布上要一起壓暗。多路徑共用時只要有一條啟用就是 false。</summary>
         public bool InDisabledSubtree;
         /// <summary>
@@ -113,14 +107,14 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public float ContentHeight;
         public float TipsHeight;
         // 換來源的入口是 Header 右端的 ▾；Root HEAD 的來源走它自己的「來源」參數列接點，所以不畫。
-        // 目錄只開放使用端明確提供的替換種類，不借用 Action／Formula 的型別候選。
-        public bool HasSourceSelector => !IsRoot && (IsCatalogNode
-            ? Obj is IHGCatalogSourceSelector selector && selector.SourceTypes.Count > 1
-            : IsPlaceholder || Obj != null || IsAssetNode || IsTokenNode);
+        public bool HasSourceSelector => !IsRoot && (IsPlaceholder || Obj != null || IsAssetNode || IsTokenNode || IsPropertyNode);
 
         public Rect Rect => new Rect(Pos.x, Pos.y, Width, Height);
         public Vector2 OutputPortPosition => new Vector2(Pos.x + HGGraph.PortRadius,
             Pos.y + HGGraph.HeaderHeight * 0.5f);
+
+        public Vector2 PropertyInputPortPosition => new Vector2(Pos.x + HGGraph.PortRadius,
+            Pos.y + HGGraph.HeaderHeight + (Carrier?.IsProtoProperty == true ? HGGraph.RowHeight : 0f) + HGGraph.RowHeight * 0.5f);
 
     }
 
@@ -132,18 +126,11 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public string Label;
         public int Depth;
 
-        public GraphSlotBase InputSlot;  // payload：欄位（InputPort 的輸入、InputOutputPort 的右側輸入）
+        public GraphSlotBase InputSlot;  // payload：欄位的輸入
         public Type ResultType;          // Slot 的結果型別；ActionSlot 為 null
         public bool IsActionSlot;
 
-        /// <summary>
-        /// payload：這一列自己就是一顆載體，左側輸出接點指的就是它。只有 InputOutputPort 有。
-        /// </summary>
-        // 連線只存節點參照，沒有列位址，所以「一列可以被別人指」在資料上必然等於「那一列是一顆載體」。
-        // 列只是畫法：載體、Id、座標與所有連入邊都照舊。
-        public GraphNode OutputNode;
-
-        /// <summary>這一列寫入目錄（<see cref="CatalogSlotBase.WritesToCatalog"/>）：接點與線改用輸出色，不畫常數框。</summary>
+        /// <summary>這一列寫入 Property：接點與線改用輸出色，不畫常數框。</summary>
         public bool IsProducedValue;
         public NamedFormulaSlot AssetBinding;
 
@@ -206,9 +193,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public Rect ScreenRect;
         public Vector2 InputPortPosition;
 
-        /// <summary>左側輸出接點的圖面座標。只有 InputOutputPort 有意義。</summary>
-        public Vector2 OutputPortPosition;
-
         /// <summary>
         /// 這一列掛著一個欄位。<b>payload 判定，與 <see cref="Kind"/> 無關</b>——
         /// 形狀說的是畫幾顆接點，這裡說的是有沒有東西可以接。
@@ -216,7 +200,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public bool HasSlot => InputSlot != null;
 
         /// <summary>右側輸入接點畫不畫。</summary>
-        public bool HasInputPort => Kind is HGRowKind.InputPort or HGRowKind.InputOutputPort;
+        public bool HasInputPort => Kind == HGRowKind.InputPort;
 
         /// <summary>右側輸入接點是否可見：折疊起來的列不算，否則會接到看不見的東西。</summary>
         public bool IsInputPortVisible => HasInputPort && !Hidden;
@@ -342,8 +326,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 foreach (var o in orphans)
                 {
                     if (o is not GraphNode carrier) continue;
-                    // 格子畫在它的容器上，不獨立成節點；容器不在圖上時它也沒有可畫的位置。
-                    if (carrier.BodyObject is IGraphInlineNode) continue;
                     if (view.ByCarrier.ContainsKey(carrier)) continue;
                     // 候選沒有父欄位，型別只能靠建立當下記下的族。沒有族就是純空節點，接上欄位後自然有型別。
                     Type hint = null;
@@ -354,8 +336,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 }
             }
 
-            // 端點解析要等整張圖走完：指著某一格的欄位可能比它的容器更早走到。
-            ResolveCellLinks(view);
             ApplyViewState(model, view, noteOpenId, noteCollapsed);
             foreach (var node in view.Nodes)
                 foreach (var row in AllRows(node.Rows))
@@ -471,15 +451,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     node = MakeNodeForObject(carrier.BodyObject, parentSlot, parentRow, slotResultType, metadata, diagnostics);
                     break;
 
-                // 包與 Inline 走同一條建法（Header 標籤、參數列都來自內容物），差別只在它不求值：
-                // 結果型別一律 null，相容判定改看 CatalogSlotBase.AcceptsCatalogObject。
-                case NodeKind.Catalog when carrier.CatalogObject != null:
-                    node = MakeNodeForObject(carrier.CatalogObject, parentSlot, parentRow, null, metadata, diagnostics);
-                    node.IsCatalogNode = true;
-                    node.ResultType = null;
-                    node.Chip = null;
-                    break;
-
                 case NodeKind.Asset:
                     {
                         Type assetResult = slotResultType ?? HGReflect.AssetResultType(carrier.AssetObject);
@@ -504,6 +475,24 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         break;
                     }
 
+                // 與Token節點同構：定義住圖層清單，節點只是引用，所以本體也是一列「選哪一顆」的下拉。
+                // 差別是 Header 直接顯示名稱——Property 沒有可下鑽的畫布，名稱是它在圖上唯一的識別。
+                case NodeKind.Property:
+                    {
+                        var property = carrier.Property;
+                        Type propertyResult = property?.ResultType;
+                        node = new HGNodeView
+                        {
+                            Property = property,
+                            PropertyInput = carrier.PropertyInput,
+                            IsPropertyNode = true,
+                            ResultType = propertyResult,
+                            Title = carrier.IsProtoProperty ? "ProtoProperty" : "LocalProperty",
+                            Chip = property?.FamilyType == null ? "未定型" : ChipText(property.FamilyType, propertyResult, false),
+                        };
+                        break;
+                    }
+
                 case NodeKind.Token:
                     {
                         var endpoint = carrier.Token;
@@ -522,13 +511,20 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
                 default:
                     {
+                        // 寫入目標尚未指定 Property 時，仍要保留它的身分與來源選單；
+                        // 否則會落入一般公式 placeholder，顯示錯誤的黃色「選擇 Formula」。
+                        var propertySlot = parentSlot as PropertySlotBase;
+                        bool isProperty = propertySlot != null;
+                        Type propertyFamily = propertySlot?.FamilyType;
+                        Type propertyResult = propertyFamily != null ? HGReflect.ResultType(propertyFamily) : slotResultType;
                         node = new HGNodeView
                         {
-                            Title = slotIsAction ? "（選擇 Action）" : "（選擇 Formula）",
-                            Chip = ChipText(slotIsAction ? null : slotType, slotResultType, slotIsAction),
-                            ResultType = slotResultType,
+                            Title = isProperty ? "（選擇 Property）" : slotIsAction ? "（選擇 Action）" : "（選擇 Formula）",
+                            Chip = ChipText(isProperty ? propertyFamily : slotIsAction ? null : slotType, propertyResult, slotIsAction),
+                            ResultType = propertyResult,
                             IsPlaceholder = true,
-                            IsActionNode = slotIsAction,
+                            IsActionNode = !isProperty && slotIsAction,
+                            IsPropertyNode = isProperty,
                         };
                         break;
                     }
@@ -560,9 +556,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             IHGEditorMetadataProvider metadata, List<GraphDiagnostic> diagnostics)
         {
             bool isAction = HGReflect.IsActionNodeType(obj.GetType());
-            Type resultType = obj is IGraphInlineNode inline
-                ? inline.ResultType
-                : !isAction && slotResultType != null
+            Type resultType = !isAction && slotResultType != null
                 ? slotResultType
                 : obj is ITypedFormulaNode formula
                 ? formula.ResultType
@@ -594,14 +588,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             if (node.Carrier != null) view.ByCarrier[node.Carrier] = node;
             if (node.ParentSlot != null) view.BySlot[node.ParentSlot] = node;
 
-            // 內嵌容器的子節點畫成容器上的一列（InputOutputPort），不獨立成節點。
-            if (node.Obj is IGraphInlineNodeOwner inlineOwner)
-            {
-                BuildCellRows(node, inlineOwner, view);
-            }
-            // 其餘容器的子節點各自是一顆完整節點：沒有 ParentSlot，所以不從擁有者畫一條線過去——
+            // 容器的子節點各自是一顆完整節點：沒有 ParentSlot，所以不從擁有者畫一條線過去——
             // 它們的連入線來自真正指著它們的那些欄位。
-            else if (node.Obj is IGraphNodeOwner owner)
+            if (node.Obj is IGraphNodeOwner owner)
             {
                 foreach (var child in owner.ChildNodes)
                 {
@@ -634,16 +623,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 view.CarrierUsers.TryGetValue(carrier, out int users);
                 view.CarrierUsers[carrier] = users + 1;
 
-                // 內嵌格畫在它的容器上，不獨立成節點。容器的走訪順序不保證在前，所以端點留到最後一趟解析。
-                if (carrier.BodyObject is IGraphInlineNode)
-                {
-                    view.Links.Add(new HGLink { ParentRow = row, InputOwner = node, PendingCarrier = carrier });
-                    continue;
-                }
-
                 // 共用來源：同一個載體被多個欄位指到時只有一個節點，這裡只補連線。
                 if (view.ByCarrier.TryGetValue(carrier, out var existing))
                 {
+                    // 讀寫關係都保存；Port resolver 依 Slot 契約解析實際方向。
                     view.Links.Add(new HGLink { ParentRow = row, OutputOwner = existing, InputOwner = node });
                     view.BySlot[row.InputSlot] = existing;
                     // 這條路徑沒被停用就整顆恢復：共用節點只要還有一條會求值的路徑，它就不是停用的。
@@ -664,63 +647,27 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 if (view.ByCarrier.TryGetValue(carrier, out var placed) && ReferenceEquals(placed, child))
                     view.Links.Add(new HGLink { ParentRow = row, OutputOwner = child, InputOwner = node });
             }
+
+            CollectPropertyInput(model, node, view, depth, listCollapse, metadata, diagnostics);
+        }
+
+        private static void CollectPropertyInput(HGModel model, HGNodeView node, HGGraphView view, int depth,
+            IReadOnlyDictionary<string, bool> listCollapse, IHGEditorMetadataProvider metadata, List<GraphDiagnostic> diagnostics)
+        {
+            if (!node.IsPropertyNode || node.PropertyInput == null) return;
+            var row = new HGRow
+            {
+                Kind = HGRowKind.InputPort,
+                InputSlot = node.PropertyInput,
+                OwnerNodeId = node.Id,
+                Path = "/property/input",
+            };
+            node.PropertyInputRow = row;
+            // 寫入關係由 Action 的 PropertySlot 保存；此接收端不另外求值來源子樹。
         }
 
         /// <summary>這一列自己的載體被停用了：掛在它右側的子樹跟著壓暗。</summary>
-        private static bool RowCarrierDisabled(HGRow row) => row.OutputNode != null && row.OutputNode.Disabled;
-
-        /// <summary>把容器的子節點建成容器上的一列。每一格是完整載體，只是不獨立成節點。</summary>
-        // 一顆載體只屬於一個容器：已經被認過就不再認第二次，否則同一顆會出現在兩個容器的列裡。
-        private static void BuildCellRows(HGNodeView node, IGraphInlineNodeOwner owner, HGGraphView view)
-        {
-            var items = new HGCellItemSource(owner);
-            for (int i = 0; i < items.Count; i++)
-            {
-                if (items.Get(i) is not GraphNode child) continue;
-                if (child.BodyObject is not IGraphInlineNode cell) continue;
-                if (view.CellRows.ContainsKey(child)) continue;
-
-                string id = child.EnsureId();
-                node.Rows.Add(new HGRow
-                {
-                    Kind = HGRowKind.InputOutputPort,
-                    OutputNode = child,
-                    InputSlot = cell.InputSlot,
-                    ResultType = cell.ResultType,
-                    Label = HGReflect.ResultTypeName(cell.ResultType),
-                    // Path 帶載體 Id：折疊與分支收合的 key 靠它，重排格子不會讓兩格共用狀態。
-                    Path = "/cell/" + id,
-                    // 格子有來源與序號（斑馬紋要用），但沒有標題列，項目控制項也是自己畫的：
-                    // ItemOwnerRow 與 IsItem 都留空，共用的序號欄與 ✕ 不套到它身上。
-                    ItemSource = items,
-                    ItemIndex = i,
-                });
-                view.CellRows[child] = node.Rows[node.Rows.Count - 1];
-                view.CellOwners[child] = node;
-            }
-        }
-
-        /// <summary>把指向內嵌格的線接到它容器上那一列。容器不在這張圖上時整條線不畫。</summary>
-        // 格子取不到內容時驗證會報「沒有母容器」，線沒有端點可畫，留著就是一條從空白處拉出的線。
-        private static void ResolveCellLinks(HGGraphView view)
-        {
-            for (int i = view.Links.Count - 1; i >= 0; i--)
-            {
-                HGLink link = view.Links[i];
-                if (link.PendingCarrier == null) continue;
-
-                if (view.CellRows.TryGetValue(link.PendingCarrier, out var row)
-                    && view.CellOwners.TryGetValue(link.PendingCarrier, out var owner))
-                {
-                    link.TargetRow = row;
-                    link.OutputOwner = owner;
-                    link.PendingCarrier = null;
-                    continue;
-                }
-
-                view.Links.RemoveAt(i);
-            }
-        }
+        private static bool RowCarrierDisabled(HGRow row) => false;
 
         /// <summary>
         /// 共用節點先被停用路徑走到、之後又被啟用路徑指上時，把整棵子樹的壓暗狀態撤回。
@@ -1058,6 +1005,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         private static HGRow SlotRow(GraphSlotBase slot, string label, int depth)
         {
             bool isAction = HGReflect.IsActionSlotType(slot.GetType());
+            // 寫入目標欄位宣告的是「要寫哪一族」，自己不是那一族，所以 chip 的型別要問 FamilyType。
+            var propertySlot = slot as PropertySlotBase;
             return new HGRow
             {
                 Kind = HGRowKind.InputPort,
@@ -1065,8 +1014,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 Depth = depth,
                 InputSlot = slot,
                 IsActionSlot = isAction,
-                IsProducedValue = slot is CatalogSlotBase catalogSlot && catalogSlot.WritesToCatalog,
-                ResultType = isAction ? null : HGReflect.ResultType(slot.GetType()),
+                IsProducedValue = propertySlot != null,
+                ResultType = isAction ? null
+                    : propertySlot != null ? HGReflect.ResultType(propertySlot.FamilyType)
+                    : HGReflect.ResultType(slot.GetType()),
             };
         }
 
@@ -1091,9 +1042,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 case NodeKind.Asset:
                     var a = HGReflect.GetAsset(slot);
                     return a != null ? a.name : "（空資產）";
-                case NodeKind.Catalog:
-                    // 目錄名住在 Owner，這個靜態函式拿不到；顯示身分就夠，名字在節點本體那兩列看得到。
-                    return "（目錄）";
                 default:
                     // 動作列右半已經不畫狀態文字，操作提示併進標籤裡，否則空著的列看不出下一步要做什麼。
                     return isAction ? "（未啟用，從接點拉線指定動作）" : "常數";
@@ -1155,17 +1103,12 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 node.Height = leafY + NodeBottomPad;
                 return;
             }
-            // 資產與Token的本體第一列是「選哪一個」的下拉；一般子節點擁有者則是「幾格＋新增」。
-            // 內嵌容器的子節點與新增列接在自己的 Rows 後面，不另外加頂端列。
-            bool inlineOwner = node.Obj is IGraphInlineNodeOwner;
-            float refRows = node.IsAssetNode || node.IsTokenNode || (node.Obj is IGraphNodeOwner && !inlineOwner) ? RowHeight : 0f;
+            // 資產、Token 與 ProtoProperty 的本體第一列是「選哪一個」的下拉。
+            // 一般 Property 直接代表自身，沒有可選名稱，故不預留空白列。
+            float refRows = node.IsPropertyNode
+                ? RowHeight + (node.Carrier?.IsProtoProperty == true ? RowHeight : 0f)
+                : node.IsAssetNode || node.IsTokenNode || node.Obj is IGraphNodeOwner ? RowHeight : 0f;
             float y = MeasureRows(node.Rows, HeaderHeight + refRows, node.Width);
-            // 格子是 Rows 裡的 InputOutputPort 列，量測與其他列共用同一條路；這裡只補尾端那條新增列。
-            if (inlineOwner)
-            {
-                node.CellAddRowY = y;
-                y += RowHeight;
-            }
             if (node.TipsHeight > 0f) y += node.TipsHeight + 10f;
             node.ContentHeight = Mathf.Max(y, HeaderHeight + 8f);
             node.Height = node.ContentHeight + NodeBottomPad;
@@ -1311,7 +1254,16 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             float childX = SnapUpToGrid(x + node.Width + ColumnGap);
             float childY = y;
             foreach (var c in children[node])
-                childY = Place(c, childX, childY, children) + NodeGap;
+            {
+                float nextY = childY;
+                if (c.IsPropertyNode && c.ParentRow?.InputSlot is PropertySlotBase)
+                {
+                    float inputOffset = c.PropertyInputPortPosition.y - c.Pos.y;
+                    float writerOffset = c.ParentRow.LocalY + c.ParentRow.Height * 0.5f;
+                    nextY = Mathf.Max(childY, node.Pos.y + writerOffset - inputOffset);
+                }
+                childY = Place(c, childX, nextY, children) + NodeGap;
+            }
 
             return Mathf.Max(y + node.Height, childY - NodeGap);
         }

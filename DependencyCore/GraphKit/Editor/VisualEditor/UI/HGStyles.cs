@@ -40,12 +40,13 @@ public static class HGStyles
     public static readonly Color NodeNoteBorder = new(0.62f, 0.62f, 0.62f);
 
     // Header 底色表示身分；下緣共用色帶另表達驗證與執行狀態。
-    // 五種身分分開色相與明度，縮小或色弱時仍可辨識。
+    // 六種身分分開色相與明度，縮小或色弱時仍可辨識。
     public static readonly Color HeaderAction = new(0.722f, 0.231f, 0.451f);  // 洋紅 #B83B73
     public static readonly Color HeaderFormula = new(0.750f, 0.520f, 0.200f); // 琥珀 #BF8533
     public static readonly Color HeaderAsset = new(0.270f, 0.450f, 0.770f);   // 靛藍 #4573C4
     public static readonly Color HeaderToken = new(0.160f, 0.420f, 0.310f);   // 深綠 #296B4F
-    public static readonly Color HeaderCatalog = new(0.235f, 0.455f, 0.475f); // 青藍 #3C747A
+    // 紫藍：比 HeaderHead 的暗紫更藍更飽和，才不會和 HEAD 混在一起。
+    public static readonly Color HeaderProperty = new(0.420f, 0.360f, 0.720f); // 紫藍 #6B5CB8
 
     /// <summary>Header 是深色，上面的字與小圖示一律近白。</summary>
     public static readonly Color HeaderInk = new(0.97f, 0.93f, 0.95f);
@@ -59,7 +60,6 @@ public static class HGStyles
     public static readonly Color InputPortLive = new(0.80f, 0.80f, 0.82f);
     public static readonly Color OutputPortLive = new(0.80f, 0.80f, 0.82f);
 
-    // 目錄寫入端、接受寫入的 Header 與寫入連線共用青藍；Cell 的取值輸出不使用此色。
     // 停用只壓暗，錯誤優先；選取連線仍使用暖金。
     public static readonly Color OutputPortColor = new(0.42f, 0.72f, 0.74f);
 

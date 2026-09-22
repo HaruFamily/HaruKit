@@ -23,8 +23,7 @@ namespace HaruFamily.Tools.AssetPipeline
     /// 管線的公式欄位：常數、內嵌公式或具名Token三選一，由載體節點決定。
     /// </summary>
     // 對應舊的 FormulaAssetBase：@default → _default，data / assetData 三態 → GraphNode.Kind，
-    // formula 欄位 → 載體節點。舊的 AssetSource 模式改成「接一個讀 AssetPipelineSource 的葉節點公式」。
-    // 公式家族固定唯一結果與 NullPack；Catalog 結果由 Cell 以相同 TResult 接入。
+        // formula 欄位 → 載體節點。
     [Serializable]
     public abstract class FormulaSlot<TResult, TFormula> : FormulaSlotBase
         where TFormula : FormulaBase<TResult, NullPack>
@@ -68,12 +67,14 @@ namespace HaruFamily.Tools.AssetPipeline
             }
         }
 
-        public override bool AcceptsBody(GraphNodeContent body)
-            => body is CatalogCell cell ? cell.ResultType == typeof(TResult) : body is TFormula;
+        public override bool AcceptsBody(GraphNodeContent body) => body is TFormula;
 
         public override bool AcceptsAsset(ScriptableObject asset) => false;
 
         public override bool AcceptsToken(GraphToken endpoint) => endpoint?.Slot?.FamilyType == FamilyType;
+
+        /// <summary>收同族的 Property。讀 Property 只取目前值，不執行寫入它的動作。</summary>
+        public override bool AcceptsProperty(GraphProperty property) => property?.FamilyType == FamilyType;
 
         /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
         public TResult Default { get => _default; set => _default = value; }
@@ -95,20 +96,6 @@ namespace HaruFamily.Tools.AssetPipeline
             {
                 case NodeKind.Inline:
                 {
-                    if (_node.BodyObject is CatalogCell cell)
-                    {
-                        try
-                        {
-                            object value = cell.EvaluateObject();
-                            if (value == null && default(TResult) is null) return default;
-                            return value is TResult typed ? typed : Mismatch("目錄格");
-                        }
-                        catch (Exception e)
-                        {
-                            AssetPipeline.ReportFormulaWarning($"目錄格求值失敗：{e.Message}，改用預設值。");
-                            return Fallback();
-                        }
-                    }
                     var formula = _node.GetBody<TFormula>();
                     if (formula == null) return Mismatch("公式");
                     try
@@ -120,6 +107,17 @@ namespace HaruFamily.Tools.AssetPipeline
                         AssetPipeline.ReportFormulaWarning($"{formula.GetType().Name} 求值失敗：{e.Message}，改用預設值。");
                         return Fallback();
                     }
+                }
+                case NodeKind.Property:
+                {
+                    GraphProperty property = _node.Property;
+                    if (property == null || property.FamilyType != FamilyType) return Mismatch("Property");
+
+                    // 未寫入不是錯誤：一般 Property 回值型別預設值（清單是 null），Proto 回它設定的初始內容。
+                    // 參考型別取得同一份引用，不做複製隔離。
+                    object value = property.CurrentValue;
+                    if (value == null && default(TResult) is null) return default;
+                    return value is TResult typed ? typed : Mismatch("Property");
                 }
                 case NodeKind.Token:
                 {

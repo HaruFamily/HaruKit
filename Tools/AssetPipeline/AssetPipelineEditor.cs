@@ -13,8 +13,6 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
 
         private SerializedProperty graph;
         private int selectedStep = -1;
-        private bool showCatalogs;
-        private bool showPreview;
         private Vector2 resultScroll;
         private System.Collections.Generic.List<string> recoveryDirectories = new();
         private double nextRecoveryScan;
@@ -86,18 +84,23 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
                     foreach (string message in step.Messages) EditorGUILayout.LabelField(message, EditorStyles.wordWrappedLabel);
                     foreach (var item in step.Items) DrawAsset(item, true);
                 }
-                showCatalogs = EditorGUILayout.Foldout(showCatalogs, "執行結束快照（回復前，Cell 僅列實際求值結果）", true);
-                if (showCatalogs) DrawCatalogs(pipeline, run.Catalogs);
+                DrawProperties(run);
                 EditorGUILayout.EndScrollView();
             }
+        }
+
+        private static void DrawProperties(PipelineRunResult run)
+        {
+            if (run.Properties.Count == 0) return;
+
             EditorGUILayout.Space();
-            if (GUILayout.Button("刷新目前 Catalog／Cell 內容（使用已儲存圖）"))
+            EditorGUILayout.LabelField("Property 目前值快照", EditorStyles.miniBoldLabel);
+            foreach (PipelinePropertySnapshot property in run.Properties)
             {
-                pipeline.RefreshCatalogPreview();
-                showPreview = true;
+                string source = property.HasValue ? "目前值" : "初始值";
+                EditorGUILayout.LabelField($"{property.Name} · {property.TypeName} · {source}");
+                EditorGUILayout.SelectableLabel(property.Value, GUILayout.Height(EditorGUIUtility.singleLineHeight));
             }
-            showPreview = EditorGUILayout.Foldout(showPreview, "手動刷新快照（不隨 Repaint 重算）", true);
-            if (showPreview && pipeline.CatalogPreview != null) DrawCatalogs(pipeline, pipeline.CatalogPreview);
         }
 
         private static string StepLabel(PipelineStepStatus status) => status switch
@@ -108,35 +111,6 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
             PipelineStepStatus.Failed => "失敗",
             _ => "未執行",
         };
-
-        private static void DrawCatalogs(AssetPipeline pipeline, System.Collections.Generic.IReadOnlyList<PipelineCatalogSnapshot> catalogs)
-        {
-            if (catalogs.Count == 0) EditorGUILayout.LabelField("沒有目錄。");
-            foreach (var catalog in catalogs)
-            {
-                EditorGUILayout.BeginHorizontal();
-                EditorGUILayout.LabelField($"{catalog.Name} · {catalog.State}", EditorStyles.boldLabel);
-                DrawNavigate(pipeline, catalog.NodeId);
-                EditorGUILayout.EndHorizontal();
-                DrawValue(catalog.Contents);
-                for (int i = 0; i < catalog.Cells.Count; i++)
-                {
-                    var cell = catalog.Cells[i];
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.LabelField($"Cell {i + 1}");
-                    DrawNavigate(pipeline, cell.NodeId);
-                    EditorGUILayout.EndHorizontal();
-                    DrawValue(cell.Value);
-                }
-            }
-        }
-
-        private static void DrawValue(PipelineValueSnapshot value)
-        {
-            if (!string.IsNullOrEmpty(value.Value)) EditorGUILayout.LabelField(value.Value, EditorStyles.wordWrappedLabel);
-            if (value.Observed && value.Assets.Count == 0 && value.Value == null) EditorGUILayout.LabelField("空資料");
-            foreach (var item in value.Assets) DrawAsset(item, false);
-        }
 
         private static void DrawAsset(PipelineAssetRecord item, bool showStatus)
         {
@@ -162,7 +136,7 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
                 && string.IsNullOrEmpty(pipeline.LastRun.RecoveryDirectory)
                 && GUILayout.Button("重試回復目錄資料"))
             {
-                var errors = pipeline.RecoverCatalogState();
+                var errors = pipeline.RecoverPropertyState();
                 if (errors.Count > 0) Debug.LogError(string.Join("\n", errors));
             }
             if (EditorApplication.timeSinceStartup >= nextRecoveryScan)
@@ -183,7 +157,7 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
 
         private void DrawRunButton(AssetPipeline pipeline)
         {
-            bool ready = pipeline.IsPrototypeSourceValidationCurrent();
+            bool ready = pipeline.IsGraphValidationCurrent();
             var content = ready
                 ? new GUIContent("執行管線", "依節點圖上的動作順序實際修改資產。")
                 : new GUIContent("執行管線（需先驗證）", "卡片上的「驗證」通過之後才能執行；改過圖或資產就要再驗一次。");
@@ -197,7 +171,7 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
 
         private static void DrawLog(AssetPipeline pipeline)
         {
-            string log = string.IsNullOrEmpty(pipeline.PipelineLog) ? pipeline.PrototypeValidationLog : pipeline.PipelineLog;
+            string log = pipeline.PipelineLog;
             if (string.IsNullOrEmpty(log)) return;
 
             EditorGUILayout.Space();

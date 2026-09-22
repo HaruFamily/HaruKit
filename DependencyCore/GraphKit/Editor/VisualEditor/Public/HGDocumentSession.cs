@@ -131,6 +131,7 @@ public sealed class HGDocumentSession<TDocument>
             return HGSessionCommandResult.Rejected;
         if (!Owns(input.InputSlot) || input.Presentation.Locked || !input.Presentation.Visible)
             return HGSessionCommandResult.Rejected;
+        if (RejectsPropertyInputSlot(input.InputSlot)) return HGSessionCommandResult.Rejected;
 
         GraphNode previous = input.InputSlot.Node;
         if (previous == null) return HGSessionCommandResult.NoChange;
@@ -268,9 +269,21 @@ public sealed class HGDocumentSession<TDocument>
     private bool IsCurrentRegistry(HGPortRegistry registry)
         => registry != null && registry.Generation == Generation && ReferenceEquals(registry.Scope, this);
 
+    /// <summary>A Property node's lower input is a receiving identity, not the record of a write link.</summary>
+    // The write relation is stored on the writing PropertySlot, so mutating this slot would leave a source
+    // that drives nothing while reporting success. Callers connect and disconnect the writer's own Port instead.
+    private bool RejectsPropertyInputSlot(GraphSlotBase slot)
+    {
+        if (slot is not GraphPropertyInputSlot) return false;
+        LastDiagnostic = Failure("connection", DocumentId,
+            "A Property write link is owned by the writing PropertySlot, not by the Property node input.");
+        return true;
+    }
+
     private HGSessionCommandResult ReplaceInputSource(HGPort input, IHGPortSource source)
     {
         if (!Owns(input.InputSlot)) return HGSessionCommandResult.Rejected;
+        if (RejectsPropertyInputSlot(input.InputSlot)) return HGSessionCommandResult.Rejected;
         var acceptance = HGPortConnection.CheckInputSource(input, source, Generation);
         if (acceptance != HGPortConnectionResult.Allowed)
         {
@@ -339,7 +352,6 @@ public sealed class HGDocumentSession<TDocument>
                 direct.Clear();
                 var references = new HashSet<object>(ReferenceComparer.Instance);
                 CollectDirectChildren(node.BodyObject, direct, references);
-                CollectDirectChildren(node.CatalogObject, direct, references);
                 CollectDirectChildren(node.Bindings, direct, references);
                 foreach (var child in direct) pending.Enqueue(child);
             }
@@ -347,7 +359,6 @@ public sealed class HGDocumentSession<TDocument>
             {
                 var children = new HashSet<GraphNode>();
                 CollectDirectChildren(carrier.BodyObject, children, new HashSet<object>(ReferenceComparer.Instance));
-                CollectDirectChildren(carrier.CatalogObject, children, new HashSet<object>(ReferenceComparer.Instance));
                 CollectDirectChildren(carrier.Bindings, children, new HashSet<object>(ReferenceComparer.Instance));
                 var pool = FindOrphanPool(carrier);
                 source.Apply(carrier, shared);
@@ -374,7 +385,6 @@ public sealed class HGDocumentSession<TDocument>
 
         var children = new HashSet<GraphNode>();
         CollectDirectChildren(node.BodyObject, children, new HashSet<object>(ReferenceComparer.Instance));
-        CollectDirectChildren(node.CatalogObject, children, new HashSet<object>(ReferenceComparer.Instance));
         CollectDirectChildren(node.Bindings, children, new HashSet<object>(ReferenceComparer.Instance));
 
         foreach (object root in Document.Roots)
@@ -687,43 +697,48 @@ public sealed class HGCarrierSource
     internal GraphNodeContent Content => content;
     private readonly ScriptableObject asset;
     internal GraphToken Token { get; }
+    internal GraphProperty Property { get; }
     internal bool IsValid => kind switch
     {
-        NodeKind.Inline or NodeKind.Catalog => content != null,
+        NodeKind.Inline => content != null,
         NodeKind.Asset => asset is IGraphAsset,
         NodeKind.Token => Token != null,
+        NodeKind.Property => Property != null,
         _ => false,
     };
 
-    private HGCarrierSource(NodeKind kind, GraphNodeContent content = null, ScriptableObject asset = null, GraphToken token = null)
-    { this.kind = kind; this.content = content; this.asset = asset; Token = token; }
+    private HGCarrierSource(NodeKind kind, GraphNodeContent content = null, ScriptableObject asset = null,
+        GraphToken token = null, GraphProperty property = null)
+    { this.kind = kind; this.content = content; this.asset = asset; Token = token; Property = property; }
 
     public static HGCarrierSource Body(GraphNodeContent body) => new(NodeKind.Inline, body);
-    public static HGCarrierSource Catalog(GraphNodeContent catalog) => new(NodeKind.Catalog, catalog);
     public static HGCarrierSource Asset(ScriptableObject asset) => new(NodeKind.Asset, asset: asset);
     public static HGCarrierSource NamedToken(GraphToken token) => new(NodeKind.Token, token: token);
+    public static HGCarrierSource NamedProperty(GraphProperty property) => new(NodeKind.Property, property: property);
 
     internal bool Accepts(GraphSlotBase slot) => kind switch
     {
         NodeKind.Inline => slot.AcceptsBody(content),
-        NodeKind.Catalog => slot is CatalogSlotBase catalog && catalog.AcceptsCatalogObject(content),
         NodeKind.Asset => slot.AcceptsAsset(asset),
         NodeKind.Token => slot.AcceptsToken(Token),
+        NodeKind.Property => slot.AcceptsProperty(Property),
         _ => false,
     };
 
     internal bool Matches(GraphNode carrier) => carrier.Kind == kind && (kind switch
     {
         NodeKind.Inline => ReferenceEquals(carrier.BodyObject, content),
-        NodeKind.Catalog => ReferenceEquals(carrier.CatalogObject, content),
         NodeKind.Asset => carrier.AssetObject == asset,
         NodeKind.Token => ReferenceEquals(carrier.Token, Token),
+        NodeKind.Property => ReferenceEquals(carrier.Property, Property),
         _ => false,
     });
 
     internal void Apply(GraphNode carrier, IEnumerable<object> shared)
     {
         if (kind == NodeKind.Token) { carrier.SetToken(Token); return; }
+        // 與Token同樣是引用：定義住圖層清單，不跟著複製，否則會抄出一份沒有人管的儲存位置。
+        if (kind == NodeKind.Property) { carrier.SetProperty(Property); return; }
         if (kind == NodeKind.Asset)
         {
             var parameters = AssetGraphSchema.Read(asset, out var duplicates);
@@ -736,8 +751,7 @@ public sealed class HGCarrierSource
         var copy = GraphDeepCopy.Copy(content, shared);
         if (copy == null || ReferenceEquals(copy, content)) throw new InvalidOperationException("Source clone failed.");
         HGModel.ResetNodeIds(copy, shared);
-        if (kind == NodeKind.Inline) carrier.SetBody(copy);
-        else carrier.SetCatalog(copy);
+        carrier.SetBody(copy);
     }
 }
 }

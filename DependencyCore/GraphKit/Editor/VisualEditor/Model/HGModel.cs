@@ -23,6 +23,26 @@ public class HGToken
     public string TypeName => HGReflect.SlotKindName(Token?.Slot);
 }
 
+/// <summary>左欄清單用的一筆 Property 視圖。資料住在 <see cref="GraphProperty"/>，這裡只是查詢結果。</summary>
+public class HGProperty
+{
+    public GraphProperty Property;
+
+    public string Key => Property?.Name;
+    public Type ResultType => Property?.ResultType;
+
+    /// <summary>族身份（＝型別宣告用的 Slot 型別）。撞名判定與讀寫相容都用它。</summary>
+    public Type FamilyType => Property?.FamilyType;
+
+    /// <summary>有沒有可編輯的初始內容。清單上靠它區分 Property 與 ProtoProperty。</summary>
+    public bool Proto => Property?.Proto == true;
+
+    /// <summary>族名。沒有型別欄位時顯示「未定型」，與畫布上的 chip 一致。</summary>
+    // 不可直接丟給 SlotKindName：它對 null 回「動作」，那是給動作欄位用的保底值，
+    // 掛到 Property 上會把「型別遺失」講成「這是一顆動作」。
+    public string TypeName => Property?.Slot == null ? "未定型" : HGReflect.SlotKindName(Property.Slot);
+}
+
 /// <summary>畫布上的一個 root：識別值與它底下的項目清單。</summary>
 // RootKey 宣告成 object 而不是 Enum：編輯器只做相等比較與 ToString()，
 // 「識別值是什麼型別」由 IGraphDocument 的實作決定（LogicGraph 給的是時機 enum）。
@@ -44,8 +64,6 @@ public enum HGStepKind
     /// <summary>圖的工作副本整份被換掉。</summary>
     Graph,
 
-    /// <summary>只換了 Owner 上的目錄，圖沒動。</summary>
-    Catalogs,
 }
 
 /// <summary>
@@ -205,7 +223,6 @@ public class HGModel
             redoStack.Clear();
             baseline = nextBaseline;
             lastPushTime = 0d;
-            lastCatalogPush = 0d;
             return true;
         }
         catch (Exception exception)
@@ -248,7 +265,7 @@ public class HGModel
         var undo = undoStack.ToArray();
         var redo = redoStack.ToArray();
         var previousBaseline = baseline;
-        double push = lastPushTime, catalogPush = lastCatalogPush;
+        double push = lastPushTime;
         bool dirty = Dirty;
         return () =>
         {
@@ -256,7 +273,7 @@ public class HGModel
             undoStack.Clear(); undoStack.AddRange(undo);
             redoStack.Clear(); redoStack.AddRange(redo);
             baseline = previousBaseline;
-            lastPushTime = push; lastCatalogPush = catalogPush;
+            lastPushTime = push;
             Dirty = dirty;
         };
     }
@@ -265,30 +282,22 @@ public class HGModel
     // 圖是 SerializeReference 多型樹，逐項記錄變更比整份快照還難維護；節點數是幾十個等級，快照最直接。
     // 快照掛在 MarkDirty：每個修改點本來就要呼叫它，不會有「忘了記錄 Undo」的漏洞。
     //
-    // 目錄與圖共用這一個堆疊，但**一步只記變動的那一半**（見 <see cref="HGStep"/>）：目錄住在 Owner 上，
-    // 視窗外還有 Inspector 那個入口會改它，每一步都連目錄一起抄的話，退一步圖的編輯會把視窗外改的目錄
-    // 一起還原掉。反過來也一樣——退一步目錄不該把圖整份換掉、清掉選取。
-
     private const int UndoLimit = 40;
     private const double MergeWindow = 0.4;          // 連續輸入合併成一步
 
-    /// <summary>一步復原的內容。兩個欄位只有一個有值，另一個是 null＝這一步沒動它。</summary>
+    /// <summary>一步復原的內容。</summary>
     private sealed class HGStep
     {
         public IGraphDocument Graph;                  // 圖的工作副本快照
-        public object Catalogs;                       // Owner 上的目錄快照（型別由 ICatalogOwner 自己決定）
     }
 
     private readonly List<HGStep> undoStack = new();
     private readonly List<HGStep> redoStack = new();
     private IGraphDocument baseline;                  // 圖在上一次記錄點的狀態（＝本次修改前的狀態）
     private double lastPushTime;
-    private double lastCatalogPush;                   // 上一個目錄步的時間，只給目錄步之間的合併用
 
     public bool CanUndo => undoStack.Count > 0;
     public bool CanRedo => redoStack.Count > 0;
-
-    private ICatalogOwner CatalogOwner => Owner as ICatalogOwner;
 
     public void MarkDirty()
     {
@@ -312,36 +321,6 @@ public class HGModel
 
     /// <summary>強制切一個 Undo 記錄點，讓下一次修改不會跟前一次合併。</summary>
     public void BreakUndoMerge() => lastPushTime = 0d;
-
-    /// <summary>抄一份目前的目錄，給 <see cref="PushCatalogStep"/> 當「修改前」。Owner 沒有目錄時回 null。</summary>
-    public object CaptureCatalogs() => CatalogOwner?.CaptureCatalogs();
-
-    /// <summary>
-    /// 把一次目錄修改記成一步。<paramref name="before"/> 是修改**之前**抄的快照。
-    /// </summary>
-    public void PushCatalogStep(object before) => PushCatalogStep(before, true);
-
-    /// <summary>記錄目錄修改；mergeWithPrevious 為 false 時，與前後修改各自成為獨立一步。</summary>
-    // 目錄是先抄再改，圖是改完才抄 baseline：目錄直接寫在 Owner 上、沒有工作副本，記著的 baseline 會被
-    // 視窗外的入口改掉，只有當場抄的那份一定對得上。
-    public void PushCatalogStep(object before, bool mergeWithPrevious)
-    {
-        if (!TrackChanges || before == null) return;
-        double now = EditorApplication.timeSinceStartup;
-
-        // 只跟「緊接著的上一個目錄步」合併：把資產拖到「＋ 新增目錄」上是一次手勢，卻會跑 Create 與
-        // Add 兩條命令，分成兩步就得按兩次 Ctrl+Z 才回得到原狀。併進前一步記的是更早的狀態，退回去仍正確。
-        bool merge = mergeWithPrevious && undoStack.Count > 0
-                     && undoStack[undoStack.Count - 1].Catalogs != null
-                     && now - lastCatalogPush < MergeWindow;
-
-        if (merge) redoStack.Clear();
-        else Push(new HGStep { Catalogs = before });
-
-        // 獨立手勢（重排）也隔開下一次修改，避免下一個快速操作併回這一步。
-        lastCatalogPush = mergeWithPrevious ? now : double.NegativeInfinity;
-        lastPushTime = 0d;                            // 下一次圖的修改不跟這一步合併
-    }
 
     public HGStepKind Undo()
     {
@@ -370,17 +349,14 @@ public class HGModel
         redoStack.Clear();
     }
 
-    /// <summary>抄一份現在的狀態進另一個堆疊。範圍跟著 step 走：它沒動過的那一半不記，也就不會被退回。</summary>
+    /// <summary>抄一份現在的狀態進另一個堆疊。</summary>
     private HGStep Capture(HGStep step) => new()
     {
         Graph = step.Graph != null ? DeepCopy(Data) : null,
-        Catalogs = step.Catalogs != null ? CatalogOwner?.CaptureCatalogs() : null,
     };
 
     private HGStepKind Apply(HGStep step)
     {
-        lastCatalogPush = 0d;                         // 剛退回來的那一步不再吃合併
-
         if (step.Graph != null)
         {
             Data = step.Graph;
@@ -390,11 +366,7 @@ public class HGModel
             return HGStepKind.Graph;
         }
 
-        // 目錄不走存檔交易，退回去就是立刻寫回 Owner，所以這裡不碰 Dirty，直接 SetDirty。
-        CatalogOwner?.RestoreCatalogs(step.Catalogs);
-        if (Owner != null) EditorUtility.SetDirty(Owner);
-        lastPushTime = 0d;
-        return HGStepKind.Catalogs;
+        return HGStepKind.None;
     }
 
     /// <summary>先以 Core 規則驗證副本；通過後才寫回 Owner。</summary>
@@ -595,12 +567,22 @@ public class HGModel
     {
         var kinds = new List<(Type, Type)>();
         if (PackType == null) return kinds;
+        var testAssemblies = new Dictionary<Assembly, bool>();
 
         // 不以結果型別去重：同一個結果型別可以有多個族（例：string 同時有 String 與 Key），
         // 族的身份是 Slot 型別本身。需要「唯一挑一個」的呼叫端必須自己帶 Slot 型別來，不能用結果型別反查。
         foreach (var t in UnityEditor.TypeCache.GetTypesDerivedFrom<FormulaSlotBase>())
         {
             if (t.IsAbstract || t.ContainsGenericParameters) continue;
+            // 測試組件的替身也會進 TypeCache，不可提供給企劃序列化為正式族。
+            if (!testAssemblies.TryGetValue(t.Assembly, out bool isTestAssembly))
+            {
+                isTestAssembly = false;
+                foreach (var reference in t.Assembly.GetReferencedAssemblies())
+                    if (reference.Name == "nunit.framework") { isTestAssembly = true; break; }
+                testAssemblies.Add(t.Assembly, isTestAssembly);
+            }
+            if (isTestAssembly) continue;
             if (HGReflect.FormulaSlotPack(t) != PackType) continue;
             var rt = HGReflect.ResultType(t);
             if (rt == null) continue;
@@ -718,6 +700,7 @@ public class HGModel
         if (node.Kind == NodeKind.Asset && node.AssetObject != null)
             return HGReflect.AssetResultType(node.AssetObject);
         if (node.Kind == NodeKind.Token) return node.Token?.ResultType;
+        if (node.Kind == NodeKind.Property) return node.Property?.ResultType;
         return null;
     }
 
@@ -756,6 +739,10 @@ public class HGModel
         var shared = new List<object>();
         foreach (var other in scope)
             if (other != null && !ReferenceEquals(other, source)) shared.Add(other);
+        // 子樹讀到的 ProtoProperty 是庫定義，理由與其他Token相同：抄一份就變成不在庫裡的孤兒定義。
+        // LocalProperty 不列入——它是節點私有的，本來就該跟著複製。
+        foreach (var slot in WalkSlots(source, new HashSet<object>(HGRefComparer.Instance)))
+            if (slot?.Node?.Property is GraphProperty property && property.Proto) shared.Add(property);
 
         var copy = GraphDeepCopy.Copy(source, shared);
         if (copy == null) { error = "複製這個 Token 失敗，詳見 Console。"; return null; }
@@ -844,6 +831,139 @@ public class HGModel
         int n = 0;
         foreach (var slot in slots)
             if (ReferenceEquals(slot?.Node?.Token, endpoint)) n++;
+        return n;
+    }
+
+    // ===== Property =====
+    // 一個 Property＝一顆 GraphProperty：名字、型別宣告欄位，以及 Proto 的初始常數。
+    // 它沒有自己的畫布與候選池——值由動作寫入，不是算出來的，所以沒有取值子樹可編。
+    // 圖裡引用它的是 NodeKind.Property 節點，存的是物件參照，不是名字字串。
+
+    /// <summary>Owner 工作副本的 Property 清單。文件沒有這個能力時回空清單。</summary>
+    public List<GraphProperty> OwnerProperties
+        => HGReflect.Properties(Data) ?? new List<GraphProperty>();
+
+    /// <summary>
+    /// 把一份定義清單讀成顯示用的視圖，保留清單順序。
+    /// <paramref name="proto"/> 為 true 時只取有初始內容的那些（左欄庫用）。
+    /// </summary>
+    public static List<HGProperty> ReadProperties(IEnumerable<GraphProperty> properties, bool proto = false)
+    {
+        var result = new List<HGProperty>();
+        if (properties == null) return result;
+        foreach (var property in properties)
+        {
+            if (property == null) continue;
+            if (proto && !property.Proto) continue;
+            result.Add(new HGProperty { Property = property });
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 建一個新 Property 並加進清單。ProtoProperty 需要名稱供庫管理；一般 Property 可保持未命名。
+    /// slotType 就是族，建立後不再更動——要換族就刪掉重建。
+    /// </summary>
+    public GraphProperty CreateProperty(List<GraphProperty> scope, Type slotType, bool proto, out string error)
+    {
+        error = null;
+        if (scope == null) { error = "這張圖沒有 Property 清單。"; return null; }
+        if (HGReflect.CreateInstance(slotType) is not FormulaSlotBase slot)
+        {
+            error = "建不出這一族的型別欄位。";
+            return null;
+        }
+
+        var property = new GraphProperty(proto ? NextPropertyName(scope, slot.FamilyType) : null, slot, proto);
+        property.EnsureId();
+        scope.Add(property);
+        MarkDirty();
+        return property;
+    }
+
+    /// <summary>
+    /// 建一顆只屬於單一 GraphNode 的 LocalProperty，不登記到圖層清單。
+    /// <paramref name="slotType"/> 為 null 時建未定型的 Local，由第一條寫入線決定型別。
+    /// </summary>
+    // 未定型是合法狀態而不是失敗：沒有 Key 的 ProtoProperty 換成 Local 時手上還沒有族，
+    // 這時回 null 會讓節點留在 Proto 卻被當成已切換。未定型的 Property 接不了任何線（AcceptsProperty 一律 false），
+    // 畫布顯示「未定型」，接上寫入端才定型。
+    public GraphProperty CreateLocalProperty(Type slotType, out string error)
+    {
+        error = null;
+        FormulaSlotBase slot = null;
+        if (slotType != null)
+        {
+            slot = HGReflect.CreateInstance(slotType) as FormulaSlotBase;
+            if (slot == null)
+            {
+                error = "建不出這一族的型別欄位。";
+                return null;
+            }
+        }
+
+        var property = new GraphProperty(null, slot);
+        property.EnsureId();
+        return property;
+    }
+
+    /// <summary>替 ProtoProperty 改名。名稱在整張圖內不可重複；空名稱不允許。</summary>
+    public bool RenameProperty(GraphProperty property, string name, List<GraphProperty> scope, out string error)
+    {
+        error = null;
+        if (property == null) { error = "沒有可改名的 Property。"; return false; }
+        if (string.IsNullOrWhiteSpace(name)) { error = "名稱不可為空。"; return false; }
+        name = name.Trim();
+        if (name == property.Name) return true;
+
+        foreach (var other in scope ?? new List<GraphProperty>())
+        {
+            if (other == null || !other.Proto || ReferenceEquals(other, property)) continue;
+            if (other.Name != name) continue;
+            error = $"已存在名為 '{name}' 的 Property。";
+            return false;
+        }
+
+        property.Name = name;
+        MarkDirty();
+        return true;
+    }
+
+    /// <summary>取一個在 scope 內全域不重複的預設名（Property1、Property2…）。</summary>
+    public string NextPropertyName(IEnumerable<GraphProperty> scope, Type kind)
+    {
+        var used = new HashSet<string>();
+        foreach (var other in scope ?? new List<GraphProperty>())
+            if (other?.Proto == true && !string.IsNullOrEmpty(other.Name))
+                used.Add(other.Name);
+
+        for (int i = 1; ; i++)
+        {
+            string key = "Property" + i;
+            if (!used.Contains(key)) return key;
+        }
+    }
+
+    /// <summary>
+    /// 刪掉一個 Property。指著它的節點（讀取與寫入都算）會一起清空——
+    /// 留著會變成「參照得到但沒有儲存位置」的靜默失效，清空後那些節點是空節點，存檔驗證擋得住。
+    /// </summary>
+    public void DeleteProperty(GraphProperty property, List<GraphProperty> scope, IEnumerable<GraphNode> carriers)
+    {
+        if (property == null) return;
+        scope?.Remove(property);
+        foreach (var node in carriers ?? AllCarriers())
+            if (node != null && ReferenceEquals(node.Property, property)) node.Clear();
+        MarkDirty();
+    }
+
+    /// <summary>這顆 Property 在圖內被幾個欄位接著（讀取與寫入合計）。0 不是錯誤。</summary>
+    public static int CountReferences(GraphProperty property, IEnumerable<GraphSlotBase> slots)
+    {
+        if (property == null || slots == null) return 0;
+        int n = 0;
+        foreach (var slot in slots)
+            if (ReferenceEquals(slot?.Node?.Property, property)) n++;
         return n;
     }
 
@@ -1070,6 +1190,8 @@ public class HGModel
     {
         if (node == null || !visited.Add(node)) return;
         if (node is GraphNode carrier) carrier.ResetId();
+        // LocalProperty 是節點私有定義，複本要有自己的識別碼；ProtoProperty 是共用的庫定義，動它會改到原件。
+        else if (node is GraphProperty property && !property.Proto) { property.ResetId(); property.EnsureId(); }
         else if (HGReflect.IsActionSlotType(node.GetType())) HGReflect.ResetSlotEditorId(node);
 
         foreach (var f in HGReflect.Fields(node.GetType()))

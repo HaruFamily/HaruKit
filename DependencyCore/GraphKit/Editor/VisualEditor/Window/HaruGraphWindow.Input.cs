@@ -214,10 +214,10 @@ public partial class HaruGraphWindow
                     drag.ClearToken();
                     e.Use();
                 }
-                if (drag.DroppingCatalog)
+                if (drag.DroppingProperty)
                 {
-                    DropCatalogOn(drag.Catalog, graphMouse);
-                    drag.ClearCatalog();
+                    DropPropertyOn(drag.Property, graphMouse);
+                    drag.ClearProperty();
                     e.Use();
                 }
                 break;
@@ -282,10 +282,12 @@ public partial class HaruGraphWindow
     /// Token 是葉：它的內容住在自己的畫布，跟進去會把整張圖都算成這棵子樹。
     /// </summary>
     // 形狀刻意比照 HGModel.ResetNodeIdsInternal——同一種走訪規則散成兩套遲早會不一致。
-    private static void ScanSubgraph(object node, HashSet<object> visited, HashSet<object> carriers, HashSet<object> tokens)
+    private static void ScanSubgraph(object node, HashSet<object> visited, HashSet<object> carriers,
+        HashSet<object> tokens, HashSet<object> properties)
     {
         if (node == null || !visited.Add(node)) return;
         if (node is GraphToken token) { tokens.Add(token); return; }
+        if (node is GraphProperty property) { properties.Add(property); return; }
         if (node is GraphNode carrier) carriers.Add(carrier);
 
         foreach (var f in HGReflect.Fields(node.GetType()))
@@ -298,10 +300,10 @@ public partial class HaruGraphWindow
 
             if (val is IList list)
             {
-                foreach (var item in list) ScanSubgraph(item, visited, carriers, tokens);
+                foreach (var item in list) ScanSubgraph(item, visited, carriers, tokens, properties);
                 continue;
             }
-            ScanSubgraph(val, visited, carriers, tokens);
+            ScanSubgraph(val, visited, carriers, tokens, properties);
         }
     }
 
@@ -316,7 +318,7 @@ public partial class HaruGraphWindow
     // 兩者都先原樣沿用（shared 的語意就是「不複製、沿用同一個」），抄完再把指向**組外載體**的槽清掉；
     // Token 刻意留著不清，那才是「複本引用同一個 Token」該有的結果。
     // copies 與 sources 依索引對齊：GraphDeepCopy 複製 IList 時逐項 Add，順序不變，呼叫端靠它配對座標。
-    private static List<GraphNode> CloneSubgraph(IReadOnlyList<GraphNode> sources, out List<GraphNode> roots)
+    internal static List<GraphNode> CloneSubgraph(IReadOnlyList<GraphNode> sources, out List<GraphNode> roots)
     {
         roots = new List<GraphNode>();
         if (sources == null || sources.Count == 0) return null;
@@ -326,13 +328,18 @@ public partial class HaruGraphWindow
 
         var carriers = new HashSet<object>(HGRefComparer.Instance);
         var tokens = new HashSet<object>(HGRefComparer.Instance);
+        var properties = new HashSet<object>(HGRefComparer.Instance);
         var scanned = new HashSet<object>(HGRefComparer.Instance);
-        foreach (var c in sources) ScanSubgraph(c, scanned, carriers, tokens);
+        foreach (var c in sources) ScanSubgraph(c, scanned, carriers, tokens, properties);
 
         var boundary = new HashSet<object>(HGRefComparer.Instance);
         foreach (var c in carriers) if (!selection.Contains(c)) boundary.Add(c);
 
         var shared = new List<object>(tokens);
+        // ProtoProperty 是庫定義的引用：必須沿用同一顆，否則會抄出一份不在庫裡的定義。
+        // LocalProperty 相反，它是節點私有的——跟著節點複製才不會讓複本與原件共用同一個儲存位置與型別宣告。
+        foreach (var item in properties)
+            if (item is GraphProperty property && property.Proto) shared.Add(property);
         shared.AddRange(boundary);
 
         var copies = GraphDeepCopy.Copy(new List<GraphNode>(sources), shared);
@@ -381,8 +388,9 @@ public partial class HaruGraphWindow
 
         var carriers = new HashSet<object>(HGRefComparer.Instance);
         var tokens = new HashSet<object>(HGRefComparer.Instance);
+        var properties = new HashSet<object>(HGRefComparer.Instance);
         var visited = new HashSet<object>(HGRefComparer.Instance);
-        foreach (var n in nodes) ScanSubgraph(n, visited, carriers, tokens);
+        foreach (var n in nodes) ScanSubgraph(n, visited, carriers, tokens, properties);
 
         foreach (var t in tokens) if (!known.Contains(t)) return true;
         return false;

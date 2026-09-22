@@ -10,6 +10,19 @@ using UnityEngine;
 public sealed class HGPublicConsumerTests
 {
     [Test]
+    public void DeepCopyCanKeepPropertyDefinitionsShared()
+    {
+        var property = new GraphProperty("Value", new ConsumerFormulaSlot());
+        var node = new GraphNode();
+        node.SetProperty(property);
+
+        GraphNode copy = GraphDeepCopy.Copy(node, new object[] { property });
+
+        Assert.That(copy, Is.Not.SameAs(node));
+        Assert.That(copy.Property, Is.SameAs(property));
+    }
+
+    [Test]
     public void WindowConsumerRebuildsCustomEndpointsAndCommitsUndoableValuesThroughPublicCommands()
     {
         var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
@@ -88,6 +101,31 @@ public sealed class HGPublicConsumerTests
             Assert.That(owner.B.Root.Items[0].Node, Is.Not.Null);
             Assert.That(session.Cancel(), Is.EqualTo(HGSessionCommandResult.Changed));
             Assert.That(session.Document.Root.Items[0].Node, Is.Not.Null);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void PublicSessionRefusesToTreatThePropertyNodeInputAsTheWriteLink()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, Binding(), out var session), Is.True);
+            // 寫入關係的正本是 Action 的 PropertySlot；Property 節點下方的 Input 只是接收端身分。
+            GraphNode property = session.Document.Orphans[0];
+            property.SetLocalProperty(new GraphProperty());
+            GraphNode source = session.Document.Orphans[1];
+            var key = new HGPortKey(property.Id, "/property/input", HGPortRole.Input);
+            var registry = session.CreatePortRegistry();
+            registry.AddInput(key, property.PropertyInput, new HGDelegatePortPolicy(() => true, _ => true), ConsumerPresentation());
+
+            Assert.That(session.ReconnectInput(registry, key, Source(source)), Is.EqualTo(HGSessionCommandResult.Rejected));
+            Assert.That(session.LastDiagnostic.Message, Does.Contain("PropertySlot"));
+            Assert.That(session.Disconnect(registry, key), Is.EqualTo(HGSessionCommandResult.Rejected));
+            Assert.That(property.PropertyInput.Node, Is.Null);
+            Assert.That(session.IsDirty, Is.False);
         }
         finally { UnityEngine.Object.DestroyImmediate(owner); }
     }
@@ -575,34 +613,6 @@ public sealed class HGPublicConsumerTests
     }
 
     [Test]
-    public void PublicSession_DeleteNodeRemovesInlineCellAndReturnsItsDirectSource()
-    {
-        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
-        owner.B = ConsumerDocument.Create();
-        var inlineOwner = new ConsumerInlineOwner();
-        var directSource = new GraphNode(new ConsumerBody());
-        directSource.EnsureId();
-        var cell = new GraphNode(new ConsumerBody { Input = new ConsumerSlot() });
-        ((ConsumerBody)cell.BodyObject).Input.SetNode(directSource);
-        inlineOwner.ChildNodes.Add(cell);
-        owner.B.Root.Items[0].SetNode(new GraphNode(inlineOwner));
-        var binding = new HGDocumentBinding<ConsumerDocument>("Consumer.B", target => ((ConsumerOwner)target).B,
-            (target, document) => ((ConsumerOwner)target).B = document, ConsumerDocument.Create);
-
-        Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, binding, out var session), Is.True);
-        var copiedOwner = (ConsumerInlineOwner)session.Document.Root.Items[0].Node.BodyObject;
-        var copiedSource = ((ConsumerBody)copiedOwner.ChildNodes[0].BodyObject).Input.Node;
-
-        Assert.That(session.DeleteNode(copiedOwner.ChildNodes[0]), Is.EqualTo(HGSessionCommandResult.Changed));
-        Assert.That(copiedOwner.ChildNodes, Is.Empty);
-        Assert.That(session.Document.Orphans, Contains.Item(copiedSource));
-        Assert.That(session.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
-        Assert.That(((ConsumerInlineOwner)session.Document.Root.Items[0].Node.BodyObject).ChildNodes, Has.Count.EqualTo(1));
-
-        UnityEngine.Object.DestroyImmediate(owner);
-    }
-
-    [Test]
     public void PublicSession_DeletesFromATokenFreeDocument()
     {
         var owner = ScriptableObject.CreateInstance<TokenFreeConsumerOwner>();
@@ -1032,20 +1042,5 @@ public sealed class HGPublicConsumerTests
             => new HGValueDrawerResult(true, new ConsumerPercent(0.75f));
     }
 
-    [Serializable]
-    private sealed class ConsumerInlineOwner : GraphNodeContent, IGraphInlineNodeOwner
-    {
-        private List<GraphNode> childNodes = new List<GraphNode>();
-        public List<GraphNode> ChildNodes => childNodes;
-        public GraphNode CreateChild()
-        {
-            var child = new GraphNode();
-            child.EnsureId();
-            childNodes.Add(child);
-            return child;
-        }
-
-        public void RemoveChild(GraphNode child) => childNodes.Remove(child);
-    }
 }
 }
