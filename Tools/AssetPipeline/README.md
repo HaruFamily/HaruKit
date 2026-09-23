@@ -1,29 +1,36 @@
-# HaruKit Tools AssetPipeline
+# AssetPipeline
 
-Current package version: `2.0.0` (Unity 2021.3+).
+目前套件版本：`2.0.0`（Unity 2021.3 以上）。
 
-Editor-only UPM package for ordered asset processing. It has no Runtime assembly
-and does not enter player builds.
+> **使用 AI Agent 修改本套件、新增管線 Action／Formula，或排查執行結果前，請要求它先閱讀並遵守 [`Documentation~/Maintenance.md`](Documentation~/Maintenance.md)（維護手冊）。**
+> 可以直接對 Agent 說：「先讀 AssetPipeline 和 GraphKit 的維護手冊，照裡面的規則做。」
+> 透過 UPM 安裝時，手冊位於 `Library/PackageCache/com.harufamily.tools.assetpipeline@<hash>/Documentation~/Maintenance.md`。Agent 的搜尋工具可能略過 `Library/`，請把路徑直接告訴它，或使用 [GraphKit README 的路由範本](../../DependencyCore/GraphKit/README.md#給-agent-的路由範本)。
 
-The package is a **framework only**. It provides the pipeline asset, Catalog
-model, synchronous formula families, action/Slot bases, and validator. Concrete
-steps and formulas that touch project assets live in the consuming project, so
-adding a pipeline step does not require editing this package.
+Editor-only 的資產處理管線框架。用 GraphKit 節點圖排出一串動作，依序同步執行；所有資產寫入共用一份交易，任何一步失敗就整次回復。沒有 Runtime 組件，不會進入 player build。
+
+本套件**只提供框架**：管線資產、同步 Action／Formula 基底、公式族與輸入欄位、Property 寫入欄位、驗證、交易與結果檢視。碰到專案資產的具體步驟與公式寫在使用端專案，新增步驟不需要修改本套件。
 
 ## Requirements
 
-- Unity 2021.3 or later
-- [GraphKit](../../DependencyCore/GraphKit):
+- Unity 2021.3 或更新版本
+- [GraphKit](../../DependencyCore/GraphKit)：
   `https://github.com/HaruFamily/HaruKit.git?path=/DependencyCore/GraphKit`
 
-Unity Package Manager cannot resolve the GraphKit Git dependency from this
-package manifest, so install it first; otherwise compilation fails by design.
+UPM 無法從本套件的 manifest 解析 GraphKit 這個 Git 依賴，請先安裝，否則會直接編譯失敗。
 
-No other external packages. Addressables is **not** a dependency — the
-Addressable formula family is part of the concrete content layer and belongs in
-the consuming project.
+不需要其他外部套件。Addressables **不是**依賴；Addressables 相關的節點屬於使用端。
+
+執行本套件的 EditMode 測試時，專案還需要安裝 [LogicGraph](../../Framework/LogicGraph) 與 UniTask（測試組件引用它們）。
 
 ## Install
+
+在 Unity Package Manager 加入這個 Git URL：
+
+```
+https://github.com/HaruFamily/HaruKit.git?path=/Tools/AssetPipeline
+```
+
+或加進 `Packages/manifest.json`：
 
 ```json
 {
@@ -34,109 +41,112 @@ the consuming project.
 }
 ```
 
-`HaruFamily/Asset Pipeline/Open` creates or selects the default asset at
-`Assets/Editor/HaruFamily/AssetPipeline/AssetPipeline.asset`. Select it and
-press **開啟節點圖編輯器** on the graph card to edit the pipeline in the GraphKit
-node editor.
+選單 `HaruFamily/Asset Pipeline/Open` 會建立或選取預設資產 `Assets/Editor/HaruFamily/AssetPipeline/AssetPipeline.asset`。
 
-## Flow
+## 使用流程
 
-1. 在 AssetPipeline 視窗的目錄庫建立資產群組，或把 Project 資產拖進既有群組。
-2. 在節點圖建立 `PrototypeAssetCatalog` 讀取既有群組，或建立
-   `DynamicAssetCatalog` 接收前面動作產生的資產。
-3. Catalog 底下的每個 ListCell 可接一個 packed filter；未接時輸出完整 Catalog。
-   一般公式欄位接 ListCell 的輸出，而不是直接接 Catalog 容器。
-4. 產出資產的動作使用 `CatalogOutputSlot.Write(...)` 寫入 Dynamic Catalog。
-   `reset` 決定這次寫入先清空或繼續累積；Prototype Catalog 是唯讀的，不能接產出端。
-5. 驗證會檢查動作與公式相容性、Token、Catalog 結構、Prototype 群組引用，以及
-   Dynamic Catalog 是否先寫後讀。Prototype Catalog 隨時可讀，不受動作順序限制。
-6. 「執行管線」在執行前再次驗證，通過後依 root 動作清單順序同步執行並輸出報告。
+1. 選取 AP 資產，在 Inspector 的圖卡片按「開啟節點圖編輯器」。
+2. 在管線的動作清單加入動作，並替各欄位指定來源：常數、內嵌公式、具名 Token，或 Property。
+3. 產出資產的動作把結果寫進 Property；後面的動作欄位接同一顆 Property 讀取。
+4. 存檔後回到 Inspector，在圖卡片按「驗證」。**改過圖或欄位都要重新驗證**，否則執行按鈕會鎖住。
+5. 按「執行管線」並確認。執行使用已儲存的圖，執行前會再驗證一次，依動作清單順序同步執行。
+6. 結果面板逐步列出狀態、耗時、訊息與資產；「定位」跳回對應節點，最後列出每顆 Property 的值快照。
 
-## Editing
+### 結果與回復
 
-節點圖由 GraphKit 提供。`AssetPipeline.graph` 是一個實作 `IGraphDocument` 的
-序列化欄位，編輯器靠這個介面認出它，不認識 AssetPipeline 任何型別。
+- 每步的狀態是成功、跳過、部分完成、失敗或未執行。失敗或部分完成時停止後續步驟，並回復這次執行的所有資產修改與 Property 值。
+- 執行中出現的 Error／Exception／Assert log 也會讓該步失敗。
+- 回復失敗時會保留 `Library/AssetPipelineTransactions/` 裡的日誌並在 Inspector 顯示重試按鈕；未處理的日誌會擋住下一次執行。
+- Property 的目前值不存檔：同一次 Editor session 內跨次執行保留，Domain Reload 後回到未寫入狀態。
 
-Inspector 把這個欄位畫成一張卡片（`GraphDrawer`）：左緣色條是驗證狀態，卡上
-只有「開啟節點圖編輯器」與「驗證」兩個入口，圖的內容不在 Inspector 展開。資產
-群組與維護操作收在下方的折疊分區裡。
+### 遺失的節點型別
 
-一個公式欄位可以是常數、接一顆內嵌公式節點、指向具名Token，或接到 Catalog
-ListCell 的輸出。AssetPipeline 不提供共用公式／動作資產節點；Slot 的
-`AssetBaseType` 為空。目錄本身不是公式，也不能直接接到一般公式欄位。
+節點類別被刪除或改名時，開啟圖會自動清除遺失的內容與因此失效的連線，不備份、不詢問。清理後仍須通過正常驗證才能存檔。Inspector 偵測到遺失型別時會顯示提示與「開啟節點圖修正並存檔」按鈕。
 
-順序仍然是唯一真相：節點圖只換了編輯方式，動作依然嚴格照清單順序跑。
+## 擴充
 
-### 遺失節點型別的修復
-
-開啟圖時先清理 Unity 回報的遺失型別資料，再建立工作副本；驗證／存檔前也會清理新出現的遺失記錄。不備份、不詢問，不需要額外 Inspector 操作。
-
-清理依 managed-reference ID 定位遺失 class，移除對應的 Node／Action 清單項目與引用。CatalogCell 的轉換公式遺失時，會清空遺失公式，並斷開因該 Cell 輸出變回 `List<Object>` 而失效的型別連線；其他原本就接錯的線不會被一併刪掉。
-
-先前已清除 missing-type 記錄、但留下「Inline 等來源標記仍在、內容為 null」的破損 Node，也會清理。正常的 Empty 節點與未指定來源的 ActionSlot 仍交由正常驗證，不會一概刪除。
-
-**清理後仍須通過正常驗證才能存檔，沒有草稿存檔。** 無關的空 Action、型別錯誤、版本衝突等仍會阻擋。清理只修改記憶體並標記未儲存，驗證通過才寫回 SO；`RunPipeline()` 的執行前驗證亦維持。
-
-## Extending
-
-新增一個動作或公式**不需要改這個套件**。在使用端專案的 Editor 資料夾裡：
+新增動作或公式都寫在使用端專案的 Editor 資料夾：
 
 ```csharp
 using System;
+using System.Collections.Generic;
 using HaruFamily.DependencyCore.GraphKit;
 using HaruFamily.Tools.AssetPipeline;
+using Object = UnityEngine.Object;
 
-[HGNode("我的動作", "做一件事", "動作")]
 [Serializable]
-public class MyAction : ActionBase
+[HGNode("篩選名稱", "只保留名稱包含指定文字的物件", "ObjectList")]
+public class FilterByName : Formula_ObjectList<NullPack>
+{
+    public ObjectListSlot source = new ObjectListSlot();
+    public StringSlot text = new StringSlot();
+
+    protected override List<Object> OnEvaluate(NullPack pack)
+    {
+        var result = new List<Object>();
+        string keyword = text.Evaluate() ?? string.Empty;
+        foreach (Object item in source.Evaluate() ?? new List<Object>())
+            if (item != null && item.name.Contains(keyword)) result.Add(item);
+        return result;
+    }
+}
+
+[Serializable]
+[HGNode("記錄物件", "把物件清單寫進 Property", "動作")]
+public class RecordObjects : ActionBase
 {
     public ObjectListSlot targets = new ObjectListSlot();
+    public PropertySlot<List<Object>, ObjectListSlot> output = new();
 
     protected override void OnExecute(PipelineActionContext context)
     {
-        foreach (var target in targets.Evaluate())
-            context.Result.Record(PipelineItemStatus.Collected, target);
+        List<Object> items = targets.Evaluate();
+        if (items == null || items.Count == 0) { context.Skip("沒有目標。"); return; }
+        output.Write(items);
+        foreach (Object item in items) context.Result.Record(PipelineItemStatus.Collected, item);
     }
 }
 ```
 
-- 動作繼承 `ActionBase` 並覆寫同步的 `protected OnExecute(PipelineActionContext context)`。本體的 `ActionBase.Execute` 是框架內部入口；由 `RunPipeline()` 管理完整執行流程。
-- 組合動作宣告 `public ActionSlot child = new();`，在 `OnExecute` 內呼叫公開的 `child.Execute(context)`，沿用收到的 context。子動作的資產寫入與結果歸入父步驟及同一次交易，不另建管線或步驟。回傳 bool 只表示是否呼叫並正常返回，不表示工作成功；執行後可用 `if (context.Result.HasFailure) return;` 停止後續子動作。
-- 資產修改透過 `context.Assets` 納入交易；失敗使用 `context.Fail(...)`，正常無事可做使用 `context.Skip(...)`。需要停止目前方法時明確 `return`。
-- 交易型別與提交／回復生命週期由 AP 內部管理，使用端不自行建立交易。
-- 公式繼承對應輸出家族並明確指定 Pack，如 `Formula_Int<NullPack>`、`Formula_Object<NullPack>`。
-- 公式統一使用 `FormulaBase<TResult, TPack>`，只覆寫 `protected OnEvaluate(pack)`。一般公式繼承 `Formula_Int<NullPack>`；Catalog 公式繼承 `Formula_Int<List<UnityEngine.Object>>`。`IntSlot` 等輸入槽的 `Evaluate()` 自動提供 NullPack。
-- 每顆公式只有一種 TResult，AudioClip／GameObject／TextAsset 及清單家族同樣覆寫 `OnEvaluate(pack)`。公式求值入口與 Catalog 非泛型派發屬 AP 內部。
-- 具體物件／清單公式不隱式轉成 Object／ObjectList 公式。需要不同輸出時，使用同一 Catalog 的不同 List Cell，例如 GameObject 清單與全部資產清單。
-- 讀舊式 prototype key 的公式實作 `IPrototypeKeyReader`；新圖優先使用
-  `PrototypeAssetCatalog` 與目錄庫的穩定 id。
-- 需要輸出資產給後續動作時，在動作上宣告 `CatalogOutputSlot`，並呼叫
-  `output.Write(assets)`；不要自行維護 Dynamic Catalog 的生命週期。
-- `AssetPipeline.current` 與 `CurrentAction` 對使用端唯讀，狀態切換由 AP 管理；`Report` 與 `ReportFormulaWarning` 提供訊息回報。
+- 動作繼承 `ActionBase`，覆寫同步的 `OnExecute(PipelineActionContext context)`。**資產修改一律經由 `context.Assets`**（`CopyPrefab`、`EditPrefab`、`EditAssetSet`、`CreateAssetSet`）才會納入交易；失敗用 `context.Fail(...)`，正常無事可做用 `context.Skip(...)`。
+- 組合動作宣告 `public ActionSlot child = new();`，在 `OnExecute` 裡呼叫 `child.Execute(context)`；子動作的寫入與結果歸入同一步、同一份交易。
+- 公式繼承對應族的 NullPack 版本（例如 `Formula_Int<NullPack>`），只覆寫 `OnEvaluate(pack)`。輸入欄位的 `Evaluate()` 自動提供 NullPack。
+- 每顆公式只有一種結果型別；`List<AudioClip>` 不會自動當成 `List<Object>`。`ObjectSlot` 例外，可接受結果是任何 Unity Object 子類的公式。
+- 寫出資料用 `PropertySlot<TResult, TSlot>.Write(value)`，只替換目前值。
+- 需要在執行中建立資產的公式，只在 `AssetPipeline.CurrentAction` 不為 null 時透過它的 `Assets` 建立；預覽時不可產生副作用。
+- `AssetPipeline.Report` 寫入該步訊息，`AssetPipeline.ReportFormulaWarning` 寫入公式警告。
 
-## Package Contents
+## 內建公式族
 
-- `Node` / `Slot`：同步動作與公式基底、欄位基底、動作頭端
-- `Graph` / `GraphVerifier`：`IGraphDocument` 實作與驗證（含 Dynamic Catalog 時序）
-- `AssetCatalog`：Prototype／Dynamic Catalog、ListCell 與產出 Slot
-- `Formula_*`：泛型輸出家族與 `*Slot` 欄位容器（Bool / Float / Int / String / Folder /
-  Object / AudioClip / GameObject / TextAsset）
-- `AssetPipeline*`：管線資產、資產群組、群組批次執行、Inspector
+| 族 | 輸入欄位 |
+|---|---|
+| Bool | `BoolSlot` |
+| Int／List Int | `IntSlot`、`ListIntSlot` |
+| Float／List Float | `FloatSlot`、`ListFloatSlot` |
+| String／String List | `StringSlot`、`StringListSlot` |
+| Folder | `FolderSlot`（常數可以是資料夾資產或路徑字串） |
+| Object／Object List | `ObjectSlot`、`ObjectListSlot` |
+| AudioClip／List | `AudioClipSlot`、`AudioClipListSlot` |
+| GameObject／List | `GameObjectSlot`、`GameObjectListSlot` |
+| TextAsset／List | `TextAssetSlot`、`TextAssetListSlot` |
 
-## Existing Assets Migration
+本套件只提供族與欄位，具體公式由使用端撰寫。
 
-輸入槽使用 `IntSlot`、`ObjectListSlot`、`FolderSlot` 等名稱；由 `FormulaAsset_*` 改名的型別以 `MovedFrom` 記錄原 namespace／assembly／class。既有欄位名稱、內容與腳本 GUID 保留。升級後需在 Unity 確認既有圖、Token 及欄位資料正常載入；序列化遷移測試與實際資產載入通過前不視為完成驗收。
+## 套件內容
 
-原始腳本的 `.meta` GUID 保留，`m_Script` 參照仍然有效。但 **v2.0.0 的資料模型
-與 v1 不相容**：`IPipelineAsset` 清單換成節點圖、`FormulaAssetBase` 換成
-`FormulaSlotBase` 子類。既有的 v1 序列化資料需要重建，沒有自動遷移。型別名前綴移除也不提供 `MovedFrom` 相容層，現有節點圖資料須重建。
+- `AssetPipeline*`：管線資產、執行流程、Inspector
+- `Graph`／`GraphDrawer`／`GraphVerifier`／`GraphPropertyWalk`：`IGraphDocument` 實作、圖卡片、驗證、Property 收集
+- `Node`／`Slot`／`PropertySlot`：同步 Action／Formula 基底、輸入與動作欄位、Property 寫入欄位
+- `Formula_*`：公式族與輸入欄位
+- `PipelineResult`／`PipelineAssetTransaction`：結果、Context、交易與資產寫入器
+- `Documentation~/Maintenance.md`：維護手冊
 
-## Tests And Limits
+## 舊資料遷移
 
-`Tests/Editor/GraphVerifierTests.cs` covers Catalog compatibility, Prototype
-references, Dynamic Catalog read/write ordering, disabled actions, and invalid
-Slots. `GraphKitCrossToolSessionTests.cs` verifies that the package consumes
-GraphKit's public session API. Run both as EditMode tests in Unity Test Runner.
+輸入欄位從 `FormulaAsset_*` 改名為 `*Slot` 時，以 `MovedFrom` 記錄原 namespace／assembly／class，欄位名與腳本 GUID 保留。v2 的資料模型與 v1 不相容（v1 的 `IPipelineAsset` 清單改成節點圖），v1 的序列化資料需要重建，沒有自動遷移。
 
-執行期仍使用 static `AssetPipeline.current` 與 report handler，因此不支援同時
-執行多條管線。
+## 測試與限制
+
+`Tests/Editor/` 涵蓋執行與交易回復、Property 讀寫與回復、驗證、跨工具 session 與庫內順序。在 Unity Test Runner 以 EditMode 執行；從 UPM 安裝時，要把 `com.harufamily.tools.assetpipeline` 加進 `manifest.json` 的 `testables`，並安裝 LogicGraph 與 UniTask。
+
+執行期使用 static 的 `AssetPipeline.current` 與回報 handler，**不支援同時執行多條管線**。交易只涵蓋經由 `context.Assets` 登記的寫入，不攔截任意 `AssetDatabase`、檔案或第三方回呼的副作用。

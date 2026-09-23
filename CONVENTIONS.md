@@ -68,6 +68,13 @@ HaruKit/                       ← repo root
 - 缺 .meta → 使用端 Unity 重生 GUID，破壞引用、每次 clone 產生 diff。
 - 重命名檔案時 `.meta` 一起 `git mv`（保留 GUID）。
 
+### 2.5 README 與維護手冊
+- 有非顯性規則的套件（目前是 GraphKit、LogicGraph、AssetPipeline）附一份繁中維護手冊 `<Category>/<Tool>/Documentation~/Maintenance.md`，給 AI Agent 與維護者看。檔名用 ASCII，避免路徑在非 UTF-8 的 shell 或工具中損毀。
+- `Documentation~` 結尾的 `~` 讓 Unity 不匯入該資料夾：**不需要也不要建立 `.meta`**。UPM 用 git 安裝時仍會一起下載。
+- 套件 README 開頭必須有提醒區塊：請使用者要求 Agent 先讀手冊，並附 UPM 安裝後的手冊路徑。
+- 手冊是該套件維護知識的正本，README 只放安裝、快速使用與限制。同一條規則不要兩邊各寫一份。
+- **改到手冊描述的行為、契約、檔案位置或限制時，同一個 commit 更新手冊與 README。** 手冊只寫現在成立的事實；歷史與理由寫進 commit 訊息。
+
 ---
 
 ## 3. 安裝與版本

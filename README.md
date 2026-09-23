@@ -4,6 +4,18 @@ Unity Editor / runtime 工具集，以 UPM (Unity Package Manager) 分發。每�
 
 > 新增工具 / AI 上架規範見 [`CONVENTIONS.md`](./CONVENTIONS.md)。
 
+## 維護手冊（給 AI Agent）
+
+GraphKit、LogicGraph、AssetPipeline 各自附有繁中維護手冊 `Documentation~/Maintenance.md`，會跟著 UPM 一起下載。**請 AI Agent 修改、擴充或串接這些套件前，先要求它閱讀並遵守對應的手冊**：
+
+| 套件 | 維護手冊 |
+|---|---|
+| GraphKit | [`DependencyCore/GraphKit/Documentation~/Maintenance.md`](./DependencyCore/GraphKit/Documentation~/Maintenance.md) |
+| LogicGraph | [`Framework/LogicGraph/Documentation~/Maintenance.md`](./Framework/LogicGraph/Documentation~/Maintenance.md) |
+| AssetPipeline | [`Tools/AssetPipeline/Documentation~/Maintenance.md`](./Tools/AssetPipeline/Documentation~/Maintenance.md) |
+
+從 UPM 安裝時，手冊在使用端的 `Library/PackageCache/<package name>@<hash>/Documentation~/`。Agent 的搜尋工具常會略過 `Library/`，請把路徑直接告訴它，或把 [GraphKit README 的路由範本](./DependencyCore/GraphKit/README.md#給-agent-的路由範本)貼進專案的 `CLAUDE.md`／`AGENTS.md`。
+
 ## 安裝
 
 Unity → `Window > Package Manager` → `+` → `Add package from git URL...`，貼上對應 URL。
