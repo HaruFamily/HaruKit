@@ -483,7 +483,7 @@ public sealed class HGPropertyLibraryPanel
         bool dropping = drag.DroppingProperty;
         bool hover = rect.Contains(e.mousePosition);
 
-        if (dropping && hover) HGStyles.Fill(rect, new Color(0.62f, 0.24f, 0.26f, 0.75f));
+        if (dropping && hover) HGStyles.Fill(rect, HGStyles.DropRemove);
 
         bool wasEnabled = GUI.enabled;
         GUI.enabled = wasEnabled && dropping;

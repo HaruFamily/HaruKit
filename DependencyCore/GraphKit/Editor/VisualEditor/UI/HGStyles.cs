@@ -4,80 +4,92 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
-/// <summary>編輯器共用的顏色與 GUIStyle。GUIStyle 只能在 OnGUI 期間建立，全部走 lazy。</summary>
+/// <summary>
+/// 編輯器共用的顏色與 GUIStyle。顏色一律讀目前的 <see cref="HGTheme"/>；GUIStyle 只能在 OnGUI 期間建立，全部走 lazy，
+/// 換主題時由 <see cref="ResetCache"/> 清掉重建。
+/// </summary>
 public static class HGStyles
 {
-    // 配色原則：**灰是結構，色只留給語意**。畫布、面板、節點本體、線全部無彩，
-    // 只有「節點身分」（五種 Header）與「狀態」（選取、錯誤、警告）帶色相，色彩因此永遠等於資訊。
-    public static readonly Color Canvas = new(0.145f, 0.145f, 0.145f);
-    public static readonly Color Grid = new(0.19f, 0.19f, 0.19f);
-    public static readonly Color GridBold = new(0.24f, 0.24f, 0.24f);
-    public static readonly Color Toolbar = new(0.18f, 0.18f, 0.18f);
-    public static readonly Color Panel = new(0.17f, 0.17f, 0.17f);
-    public static readonly Color PanelSection = new(0.21f, 0.21f, 0.21f);
-    public static readonly Color PanelList = new(0.13f, 0.13f, 0.13f);
-    public static readonly Color Console = new(0.15f, 0.15f, 0.15f);
+    private static HGTheme T => HGTheme.Current;
 
-    public static readonly Color NodeBody = new(0.28f, 0.28f, 0.28f);
-    public static readonly Color NodeBorder = new(0.11f, 0.11f, 0.11f);
-    public static readonly Color NodeBorderSelected = new(1f, 0.80f, 0.38f);   // 選取＝狀態，用暖金；全灰畫面裡一眼可見
+    // 配色原則：**灰是結構，色只留給語意**。預設主題的畫布、面板、節點本體、線全部無彩，
+    // 只有「節點身分」（Header）與「狀態」（選取、錯誤、警告）帶色相，色彩因此永遠等於資訊。
+    // 自訂主題可以換整體色調，但同一個語意仍只用同一個鍵。
+    public static Color Canvas => T.canvas;
+    public static Color Grid => T.grid;
+    public static Color GridBold => T.gridBold;
+    public static Color Toolbar => T.toolbar;
+    public static Color Panel => T.panel;
+    public static Color PanelSection => T.panelSection;
+    public static Color PanelList => T.panelList;
+    public static Color Console => T.console;
 
-    /// <summary>HEAD 專用外框：純白灰，靠明度而不是色相和選取分開。</summary>
-    public static readonly Color HeadBorder = new(0.93f, 0.93f, 0.93f);
+    public static Color NodeBody => T.nodeBody;
+    public static Color NodeBorder => T.nodeBorder;
+    public static Color NodeBorderSelected => T.nodeBorderSelected;   // 選取＝狀態；預設暖金，全灰畫面裡一眼可見
+
+    /// <summary>HEAD 專用外框：靠明度而不是色相和選取分開（預設純白灰）。</summary>
+    public static Color HeadBorder => T.headBorder;
 
     /// <summary>
-    /// HEAD 專用 Header 底色。深紫紅代表流程入口，和 Action 的洋紅以明度與色相分開：前者是從哪裡開始，後者是做什麼。
+    /// HEAD 專用 Header 底色，代表流程入口，和 Action 以明度與色相分開：前者是從哪裡開始，後者是做什麼。
     /// 保留白外框與光暈，在任何縮放下都認得出起點。
     /// </summary>
-    public static readonly Color HeaderHead = new(0.447f, 0.227f, 0.408f);       // 深紫紅 #723A68
+    public static Color HeaderHead => T.headerHead;
 
     /// <summary>停用節點蓋在最上層的暗紗：停用是狀態不是身分，所以壓明度、不換色相。</summary>
-    public static readonly Color DisabledVeil = new(0.08f, 0.08f, 0.08f, 0.55f);
+    public static Color DisabledVeil => T.disabledVeil;
 
     /// <summary>接到停用節點的連線：同樣只壓明度，維持「灰是結構」的規則。</summary>
-    public static readonly Color LinkDisabled = new(1f, 1f, 1f, 0.22f);
-    public static readonly Color NodeNote = new(0.26f, 0.26f, 0.26f);
-    public static readonly Color NodeNoteBorder = new(0.62f, 0.62f, 0.62f);
+    public static Color LinkDisabled => T.linkDisabled;
+    public static Color NodeNote => T.nodeNote;
+    public static Color NodeNoteBorder => T.nodeNoteBorder;
 
     // Header 底色表示身分；下緣共用色帶另表達驗證與執行狀態。
-    // 六種身分分開色相與明度，縮小或色弱時仍可辨識。
-    public static readonly Color HeaderAction = new(0.722f, 0.231f, 0.451f);  // 洋紅 #B83B73
-    public static readonly Color HeaderFormula = new(0.750f, 0.520f, 0.200f); // 琥珀 #BF8533
-    public static readonly Color HeaderAsset = new(0.270f, 0.450f, 0.770f);   // 靛藍 #4573C4
-    public static readonly Color HeaderToken = new(0.160f, 0.420f, 0.310f);   // 深綠 #296B4F
-    // 紫藍：比 HeaderHead 的暗紫更藍更飽和，才不會和 HEAD 混在一起。
-    public static readonly Color HeaderProperty = new(0.420f, 0.360f, 0.720f); // 紫藍 #6B5CB8
+    // 六種身分分開色相與明度，縮小或色弱時仍可辨識。主題調色時要維持：暖色（Action／Formula）是會執行的邏輯，
+    // 冷色（Asset／Token）是可重用的引用；Property 要和 HEAD 分得開。
+    public static Color HeaderAction => T.headerAction;
+    public static Color HeaderFormula => T.headerFormula;
+    public static Color HeaderAsset => T.headerAsset;
+    public static Color HeaderToken => T.headerToken;
+    public static Color HeaderProperty => T.headerProperty;
 
-    /// <summary>Header 是深色，上面的字與小圖示一律近白。</summary>
-    public static readonly Color HeaderInk = new(0.97f, 0.93f, 0.95f);
+    /// <summary>Header 上的字與小圖示。Header 底色要深到讓這個顏色讀得出來。</summary>
+    public static Color HeaderInk => T.headerInk;
 
     /// <summary>Header 上的疊層底色（chip、名稱區）。</summary>
-    public static readonly Color HeaderOverlay = new(1f, 1f, 1f, 0.14f);
+    public static Color HeaderOverlay => T.headerOverlay;
 
     // 取值接點用明度分層：空槽暗灰、接上與提供值的接點亮灰白；相容提示使用獨立外圈。
-    public static readonly Color Link = new(0.80f, 0.80f, 0.82f);
-    public static readonly Color InputPortLive = new(0.80f, 0.80f, 0.82f);
-    public static readonly Color OutputPortLive = new(0.80f, 0.80f, 0.82f);
+    public static Color Link => T.link;
+    public static Color InputPortLive => T.inputPortLive;
+    public static Color OutputPortLive => T.outputPortLive;
 
     // 停用只壓暗，錯誤優先；選取連線仍使用暖金。
-    public static readonly Color OutputPortColor = new(0.42f, 0.72f, 0.74f);
+    public static Color OutputPortColor => T.outputPortColor;
 
-    public static readonly Color Muted = new(0.74f, 0.74f, 0.75f);
-    public static readonly Color RowAlt = new(1f, 1f, 1f, 0.04f);
-    public static readonly Color LibraryCellBorder = new(0.11f, 0.11f, 0.11f);
+    /// <summary>接點環內的底色：節點與畫布底色不同，空心處統一成同一色，環才讀得出來。</summary>
+    public static Color PortHole => T.portHole;
+
+    /// <summary>節點內與面板上的一般文字。原生樣式的字色跟 Unity 主題走，所以每個樣式都要明確指定。</summary>
+    public static Color Text => T.text;
+
+    public static Color Muted => T.muted;
+    public static Color RowAlt => T.rowAlt;
+    public static Color LibraryCellBorder => T.libraryCellBorder;
 
     // 清單是「一段」而不是「一堆長得一樣的列」：底帶、斑馬紋與縱線都是結構訊息，所以只用明度不用色相。
     // 底帶壓暗而不是提亮：節點本體已經是中灰，往下沉才分得出「這一段是凹進去的清單」。
-    public static readonly Color ListBand = new(0f, 0f, 0f, 0.24f);
+    public static Color ListBand => T.listBand;
     // 斑馬紋做成雙向（一亮一暗）而不是單向疊一層淡白：Slot 元素右半被 HGValueField 的欄位框蓋住，
     // 只剩左半在比對，單向 5% 的差異等於看不見。
-    public static readonly Color ListStripeEven = new(1f, 1f, 1f, 0.07f);
-    public static readonly Color ListStripeOdd = new(0f, 0f, 0f, 0.084f);
-    public static readonly Color ListRule = new(1f, 1f, 1f, 0.13f);   // 新增列與整段清單的外框
+    public static Color ListStripeEven => T.listStripeEven;
+    public static Color ListStripeOdd => T.listStripeOdd;
+    public static Color ListRule => T.listRule;   // 新增列與整段清單的外框
     // 疊在底帶上的標題列：比斑馬紋暗一階，相鄰兩段清單靠「新的一段從這裡開始」分開。只用明度，不佔色相。
-    public static readonly Color ListHeader = new(0f, 0f, 0f, 0.176f);
-    public static readonly Color ListRowHover = new(1f, 1f, 1f, 0.07f);
-    public static readonly Color ListRowDragging = new(1f, 1f, 1f, 0.13f);
+    public static Color ListHeader => T.listHeader;
+    public static Color ListRowHover => T.listRowHover;
+    public static Color ListRowDragging => T.listRowDragging;
 
     /// <summary>
     /// 左右欄清單格的底色：用節點 Header 的身分色沖淡，讓「清單上的一列」和「畫布上的那顆節點」是同一個顏色語彙。
@@ -96,139 +108,156 @@ public static class HGStyles
     public static readonly Color InputPortError = new(1f, 0.42f, 0.42f);
     public static readonly Color Error = new(1f, 0.42f, 0.42f);
     public static readonly Color Warning = new(1f, 0.78f, 0.34f);
-    public static readonly Color ExecutionNotVisited = new(0.20f, 0.22f, 0.23f);
-    public static readonly Color ExecutionRunning = new(0.25f, 0.86f, 1f);
-    public static readonly Color ExecutionCompleted = new(0.34f, 0.65f, 0.43f);
-    public static readonly Color ExecutionCancelled = new(0.55f, 0.57f, 0.60f);
+    public static Color ExecutionNotVisited => T.executionNotVisited;
+    public static Color ExecutionRunning => T.executionRunning;
+    public static Color ExecutionCompleted => T.executionCompleted;
+    public static Color ExecutionCancelled => T.executionCancelled;
+
+    public static Color OverlayPanel => T.overlayPanel;
+    public static Color BoxSelect => T.boxSelect;
+    public static Color ResizeGrip => T.resizeGrip;
+    public static Color FocusBanner => T.focusBanner;
+
+    /// <summary>拖到「新增」按鈕上的落點底色（複製）。</summary>
+    public static Color DropCreate => T.dropCreate;
+
+    /// <summary>拖到「移除」按鈕上的落點底色。</summary>
+    public static Color DropRemove => T.dropRemove;
+
+    /// <summary>工具列按鈕的染色，乘在按鈕底色上（<c>GUI.backgroundColor</c>）。</summary>
+    public static Color ToolbarLocked => T.toolbarLocked;
+    public static Color SaveHighlight => T.saveHighlight;
+
+    /// <summary>換主題後丟掉已建立的 GUIStyle 與漸層貼圖，下次取用時依新主題重建。</summary>
+    public static void ResetCache()
+    {
+        nodeTitle = nodeDesc = focusTitle = rowLabel = rowLabelError = chip = nodeChip = slotChip = null;
+        inputPortGlyph = headerButton = headerButtonDim = overlayTitle = panelHeader = consoleRow = tiny = listIndex = listAdd = null;
+        foreach (var tex in gradientCache.Values) if (tex != null) UnityEngine.Object.DestroyImmediate(tex);
+        gradientCache.Clear();
+        elideCache.Clear();
+    }
+
+    /// <summary>
+    /// 所有狀態的字色設成同一色。從 EditorStyles 複製出來的樣式帶著 Unity 主題的字色，只設 normal 的話
+    /// hover／focused 等狀態仍會跟著 Unity 主題變。
+    /// </summary>
+    private static GUIStyle Ink(GUIStyle style, Color color)
+    {
+        style.normal.textColor = style.hover.textColor = style.active.textColor = style.focused.textColor = color;
+        style.onNormal.textColor = style.onHover.textColor = style.onActive.textColor = style.onFocused.textColor = color;
+        return style;
+    }
 
     private static GUIStyle nodeTitle, nodeDesc, focusTitle, rowLabel, rowLabelError, chip, nodeChip, slotChip, inputPortGlyph, headerButton, headerButtonDim, overlayTitle, panelHeader, consoleRow, tiny, listIndex, listAdd;
 
-    public static GUIStyle NodeTitle => nodeTitle ??= new GUIStyle(EditorStyles.boldLabel)
+    public static GUIStyle NodeTitle => nodeTitle ??= Ink(new GUIStyle(EditorStyles.boldLabel)
     {
         fontSize = 12,
         alignment = TextAnchor.MiddleLeft,
         padding = new RectOffset(6, 6, 0, 0),
-        normal = { textColor = HeaderInk },
-    };
+    }, HeaderInk);
 
-    public static GUIStyle NodeDesc => nodeDesc ??= new GUIStyle(EditorStyles.miniLabel)
+    public static GUIStyle NodeDesc => nodeDesc ??= Ink(new GUIStyle(EditorStyles.miniLabel)
     {
         padding = new RectOffset(6, 6, 0, 0),
-        normal = { textColor = Muted },
         wordWrap = true,
-    };
+    }, Muted);
 
-    public static GUIStyle FocusTitle => focusTitle ??= new GUIStyle(EditorStyles.boldLabel)
+    public static GUIStyle FocusTitle => focusTitle ??= Ink(new GUIStyle(EditorStyles.boldLabel)
     {
         fontSize = 15,
         alignment = TextAnchor.MiddleLeft,
         padding = new RectOffset(4, 4, 0, 0),
-    };
+    }, Text);
 
-    public static GUIStyle RowLabel => rowLabel ??= new GUIStyle(EditorStyles.label)
+    public static GUIStyle RowLabel => rowLabel ??= Ink(new GUIStyle(EditorStyles.label)
     {
         fontSize = 11,
         padding = new RectOffset(4, 2, 0, 0),
-    };
+    }, Text);
 
-    public static GUIStyle RowLabelError => rowLabelError ??= new GUIStyle(RowLabel)
-    {
-        normal = { textColor = Error },
-    };
+    public static GUIStyle RowLabelError => rowLabelError ??= Ink(new GUIStyle(RowLabel), Error);
 
-    public static GUIStyle Chip => chip ??= new GUIStyle(EditorStyles.miniLabel)
+    public static GUIStyle Chip => chip ??= Ink(new GUIStyle(EditorStyles.miniLabel)
     {
         alignment = TextAnchor.MiddleLeft,
         padding = new RectOffset(6, 4, 0, 0),
-        normal = { textColor = new Color(0.80f, 0.68f, 1f) },
-    };
+    }, T.chipText);
 
-    /// <summary>畫布左上角說明面板的標題：底是深色，字要白，不能沿用 Header 的深色字。</summary>
-    public static GUIStyle OverlayTitle => overlayTitle ??= new GUIStyle(NodeTitle)
-    {
-        normal = { textColor = Color.white },
-    };
+    /// <summary>畫布左上角說明面板的標題：底色與 Header 不同，字色另設，不沿用 Header 的字。</summary>
+    public static GUIStyle OverlayTitle => overlayTitle ??= Ink(new GUIStyle(NodeTitle), T.overlayTitle);
 
     /// <summary>
-    /// 參數列最前面的型別 chip 底色。**中性色，不用色相**：洋紅／琥珀／藍／綠已經被「來源種類」用掉，
+    /// 參數列最前面的型別 chip 底色。**中性色，不用色相**：Header 的身分色已經被「來源種類」用掉，
     /// 再開一套型別色相會讓整張圖只剩顏色在吵。型別靠字，不靠色。
     /// </summary>
-    public static readonly Color SlotChipBody = new(1f, 1f, 1f, 0.10f);
+    public static Color SlotChipBody => T.slotChipBody;
 
     /// <summary>參數列型別 chip 的字：比標籤小一階、置中，讓它讀起來是標記而不是另一段文字。</summary>
-    public static GUIStyle SlotChip => slotChip ??= new GUIStyle(EditorStyles.miniLabel)
+    public static GUIStyle SlotChip => slotChip ??= Ink(new GUIStyle(EditorStyles.miniLabel)
     {
         fontSize = 10,
         alignment = TextAnchor.MiddleCenter,
         padding = new RectOffset(2, 2, 0, 0),
-        normal = { textColor = new Color(0.78f, 0.78f, 0.80f) },
-    };
+    }, T.slotChipText);
 
     /// <summary>Header 右側的結果型別標籤。</summary>
-    public static GUIStyle NodeChip => nodeChip ??= new GUIStyle(EditorStyles.miniLabel)
+    public static GUIStyle NodeChip => nodeChip ??= Ink(new GUIStyle(EditorStyles.miniLabel)
     {
         alignment = TextAnchor.MiddleCenter,
         padding = new RectOffset(4, 4, 0, 0),
-        normal = { textColor = new Color(HeaderInk.r, HeaderInk.g, HeaderInk.b, 0.80f) },
-    };
+    }, new Color(HeaderInk.r, HeaderInk.g, HeaderInk.b, 0.80f));
 
     /// <summary>
-    /// 接點上的收合符號 `+`／`-`：字要壓在亮色的圓上，所以用深色而不是沿用 Header 的淺色圖示。
+    /// 接點上的收合符號 `+`／`-`：字壓在接點的實心圓上，所以另設字色，不沿用 Header 的圖示色。
     /// </summary>
-    public static GUIStyle InputPortGlyph => inputPortGlyph ??= new GUIStyle(EditorStyles.miniLabel)
+    public static GUIStyle InputPortGlyph => inputPortGlyph ??= Ink(new GUIStyle(EditorStyles.miniLabel)
     {
         fontSize = 11,
         alignment = TextAnchor.MiddleCenter,
         padding = new RectOffset(0, 0, 0, 0),
-        normal = { textColor = new Color(0.10f, 0.10f, 0.11f) },
-    };
+    }, T.portGlyph);
 
     /// <summary>Header 上的小圖示（換來源 ▾、註解 ✎）：無背景。</summary>
-    public static GUIStyle HeaderButton => headerButton ??= new GUIStyle(EditorStyles.miniLabel)
+    public static GUIStyle HeaderButton => headerButton ??= Ink(new GUIStyle(EditorStyles.miniLabel)
     {
         alignment = TextAnchor.MiddleCenter,
         padding = new RectOffset(0, 0, 0, 0),
-        normal = { textColor = HeaderInk },
-    };
+    }, HeaderInk);
 
     /// <summary>同上但半透明：表示「這個開關目前是關的」。</summary>
-    public static GUIStyle HeaderButtonDim => headerButtonDim ??= new GUIStyle(HeaderButton)
-    {
-        normal = { textColor = new Color(HeaderInk.r, HeaderInk.g, HeaderInk.b, 0.45f) },
-    };
+    public static GUIStyle HeaderButtonDim => headerButtonDim ??= Ink(new GUIStyle(HeaderButton), new Color(HeaderInk.r, HeaderInk.g, HeaderInk.b, 0.45f));
 
-    public static GUIStyle PanelHeader => panelHeader ??= new GUIStyle(EditorStyles.boldLabel)
+    public static GUIStyle PanelHeader => panelHeader ??= Ink(new GUIStyle(EditorStyles.boldLabel)
     {
         padding = new RectOffset(6, 6, 2, 2),
-    };
+    }, Text);
 
-    public static GUIStyle ConsoleRow => consoleRow ??= new GUIStyle(EditorStyles.label)
+    public static GUIStyle ConsoleRow => consoleRow ??= Ink(new GUIStyle(EditorStyles.label)
     {
         fontSize = 11,
         padding = new RectOffset(6, 4, 1, 1),
-    };
+    }, Text);
 
-    public static GUIStyle Tiny => tiny ??= new GUIStyle(EditorStyles.miniLabel)
+    public static GUIStyle Tiny => tiny ??= Ink(new GUIStyle(EditorStyles.miniLabel)
     {
         fontSize = 10,
-        normal = { textColor = Muted },
-    };
+    }, Muted);
 
     /// <summary>清單元素的序號欄：右對齊才能對成一直排，掃視時才看得出順序。</summary>
-    public static GUIStyle ListIndex => listIndex ??= new GUIStyle(EditorStyles.miniLabel)
+    public static GUIStyle ListIndex => listIndex ??= Ink(new GUIStyle(EditorStyles.miniLabel)
     {
         fontSize = 10,
         alignment = TextAnchor.MiddleRight,
         padding = new RectOffset(0, 2, 0, 0),
-        normal = { textColor = new Color(0.62f, 0.62f, 0.63f) },
-    };
+    }, T.listIndex);
 
-    public static GUIStyle ListAdd => listAdd ??= new GUIStyle(EditorStyles.miniLabel)
+    public static GUIStyle ListAdd => listAdd ??= Ink(new GUIStyle(EditorStyles.miniLabel)
     {
         fontSize = 10,
         alignment = TextAnchor.MiddleCenter,
-        normal = { textColor = Muted },
-    };
+    }, Muted);
 
     // 節點同寬後，過長的文字沒有把節點撐開的機會，必須自己截字；截掉的部分靠 tooltip 補回來。
     private static readonly Dictionary<string, string> elideCache = new();
@@ -381,8 +410,7 @@ public static class HGStyles
     private static void DrawPort(Rect r, Color c, bool connected)
     {
         float radius = Mathf.Min(r.width, r.height) * 0.5f;
-        // 環內壓暗：節點底色與畫布底色不同，空心處統一成深色，環才讀得出來。
-        RoundedFill(r, new Color(0f, 0f, 0f, 0.45f), radius);
+        RoundedFill(r, PortHole, radius);
         RoundedFrame(r, c, radius, 2f);
         if (!connected) return;
 

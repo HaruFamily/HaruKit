@@ -72,7 +72,7 @@ public static class HGToolbarPanel
         // 找不到時每一幀都吐錯誤；純文字按鈕沒有這個風險，狀態也直接寫在臉上。
         var lockRect = new Rect(ownerPickerRect.xMax + 4f, r.y + 1f, 58f, 19f);
         var lockColor = GUI.backgroundColor;
-        if (view.Locked) GUI.backgroundColor = new Color(1f, 0.85f, 0.5f);
+        if (view.Locked) GUI.backgroundColor = HGStyles.ToolbarLocked;
         if (GUI.Button(lockRect, new GUIContent(view.Locked ? "已鎖定" : "鎖定",
                 view.Locked
                     ? "已鎖定：在 Project／Hierarchy 點別的東西不會把這個視窗切走。點此解鎖"
@@ -97,7 +97,7 @@ public static class HGToolbarPanel
         var saveRect = new Rect(x, r.y + 1f, 94f, 19f);
         GUI.enabled = view.SaveEnabled;
         var saveColor = GUI.backgroundColor;
-        if (view.SaveHighlight) GUI.backgroundColor = new Color(0.85f, 0.28f, 0.28f);
+        if (view.SaveHighlight) GUI.backgroundColor = HGStyles.SaveHighlight;
         if (GUI.Button(saveRect, new GUIContent(view.SaveLabel, view.SaveTooltip))) cmd.Save();
         GUI.backgroundColor = saveColor;
         GUI.enabled = true;
@@ -124,7 +124,7 @@ public static class HGToolbarPanel
         var label = new GUIContent($"切換→{view.PendingTargetName}",
             "剛才選取了別的對象，按此切換（目前的修改會依提示處理）");
         var old = GUI.backgroundColor;
-        GUI.backgroundColor = new Color(1f, 0.85f, 0.5f);
+        GUI.backgroundColor = HGStyles.ToolbarLocked;
         if (GUI.Button(switchRect, label)) cmd.SwitchTarget();
         GUI.backgroundColor = old;
     }

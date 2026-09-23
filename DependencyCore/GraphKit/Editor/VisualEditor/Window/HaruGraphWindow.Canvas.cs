@@ -219,7 +219,7 @@ public partial class HaruGraphWindow
                 {
                     var box = BoxRect();
                     var visual = new Rect(box.position + pan, box.size);
-                    HGStyles.Fill(visual, new Color(0.42f, 0.78f, 1f, 0.10f));
+                    HGStyles.Fill(visual, HGStyles.BoxSelect);
                     HGStyles.Frame(visual, HGStyles.Link);
                 }
                 if (headerActionsNode != null) DrawHeaderActions(headerActionsNode);
@@ -530,7 +530,7 @@ public partial class HaruGraphWindow
         float descHeight = desc == null ? 0f : HGStyles.NodeDesc.CalcHeight(new GUIContent(desc), textWidth);
         var panel = new Rect(canvas.x + 8f, canvas.y + 8f, width, 20f + descHeight + 10f);
 
-        HGStyles.RoundedFill(panel, new Color(0.10f, 0.11f, 0.13f, 0.88f), 4f);
+        HGStyles.RoundedFill(panel, HGStyles.OverlayPanel, 4f);
         HGStyles.RoundedFrame(panel, HGStyles.NodeBorder, 4f);
         GUI.Label(new Rect(panel.x + 2f, panel.y + 4f, textWidth, 18f),
             HGStyles.Elide(node.Title, HGStyles.OverlayTitle, textWidth), HGStyles.OverlayTitle);

@@ -259,6 +259,17 @@ public partial class HaruGraphWindow : EditorWindow
 
     private void OnGUI()
     {
+        // 原生控制項與整個視窗底色都走主題，不跟 Unity 的 Light／Dark 主題變化。
+        using (HGSkin.Scope())
+        {
+            if (Event.current.type == EventType.Repaint)
+                HGStyles.Fill(new Rect(0f, 0f, position.width, position.height), HGStyles.Panel);
+            DrawWindow();
+        }
+    }
+
+    private void DrawWindow()
+    {
         if (Event.current.type == EventType.MouseDown)
         {
             resizingLeftPanel = resizingRightPanel = resizingRefSplit = false;
@@ -433,7 +444,7 @@ public partial class HaruGraphWindow : EditorWindow
     private static void DrawResizeGrip(Rect handle, bool vertical, bool dragging)
     {
         bool hover = handle.Contains(Event.current.mousePosition);
-        var color = dragging || hover ? HGStyles.Link : new Color(0.34f, 0.36f, 0.40f, 0.65f);
+        var color = dragging || hover ? HGStyles.Link : HGStyles.ResizeGrip;
         if (vertical)
         {
             float x = handle.center.x;

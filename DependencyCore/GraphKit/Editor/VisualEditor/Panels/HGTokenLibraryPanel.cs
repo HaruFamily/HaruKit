@@ -166,7 +166,7 @@ public sealed class HGTokenLibraryPanel
         bool dropping = drag.DroppingToken;
         bool hover = rect.Contains(e.mousePosition);
 
-        if (dropping && hover) HGStyles.Fill(rect, new Color(0.24f, 0.50f, 0.34f, 0.75f));
+        if (dropping && hover) HGStyles.Fill(rect, HGStyles.DropCreate);
 
         bool clicked = GUI.Button(rect, new GUIContent(
             dropping ? "複製 Token" : "＋ 新增 Token",
@@ -196,7 +196,7 @@ public sealed class HGTokenLibraryPanel
 
         // 拖曳中鋪一層紅底當落點：拖著Token在畫面上跑時，看得到「放這裡會刪掉」才敢放手。
         // 字只拿掉開頭的「－」，不改寫成一句話——按鈕上的字換來換去比底色還吵。
-        if (dropping && hover) HGStyles.Fill(rect, new Color(0.62f, 0.24f, 0.26f, 0.75f));
+        if (dropping && hover) HGStyles.Fill(rect, HGStyles.DropRemove);
 
         bool hasFocusToken = view.FocusedToken != null;
         bool wasEnabled = GUI.enabled;

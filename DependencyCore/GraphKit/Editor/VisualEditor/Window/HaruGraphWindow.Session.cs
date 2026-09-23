@@ -8,8 +8,45 @@ using UnityEngine;
 /// <summary>
 /// 開窗入口、Owner 綁定、選取切換、存檔／取消／驗證交易，以及共用資產焦點的進出與引用者重驗。
 /// </summary>
-public partial class HaruGraphWindow
+public partial class HaruGraphWindow : IHasCustomMenu
 {
+    // ===== 主題（分頁右上角 ⋮ 選單） =====
+
+    /// <summary>主題切換放在分頁選單：它是本機視圖偏好，不佔工具列空間，也不進文件或 Undo。</summary>
+    public void AddItemsToMenu(GenericMenu menu)
+    {
+        string current = HGTheme.CurrentGuid;
+        menu.AddItem(new GUIContent("主題/" + HGTheme.DefaultName), string.IsNullOrEmpty(current), () => HGTheme.Select(""));
+        foreach (var (guid, label) in HGTheme.Available())
+        {
+            string pick = guid;
+            menu.AddItem(new GUIContent("主題/" + label), guid == current, () => HGTheme.Select(pick));
+        }
+        menu.AddSeparator("主題/");
+        menu.AddItem(new GUIContent("主題/重新載入"), false, HGTheme.Reload);
+        menu.AddItem(new GUIContent("主題/匯出目前主題為範本…"), false, ExportTheme);
+    }
+
+    private void ExportTheme()
+    {
+        string path = EditorUtility.SaveFilePanelInProject("匯出節點圖主題", "MyTheme.graphtheme", "json",
+            "檔名需以 .graphtheme.json 結尾，節點圖才找得到。");
+        if (string.IsNullOrEmpty(path)) return;
+        if (!path.EndsWith(HGTheme.FileSuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            ShowNotification(new GUIContent($"檔名要以 {HGTheme.FileSuffix} 結尾"));
+            return;
+        }
+        if (!HGTheme.Export(path, out string error))
+        {
+            Debug.LogError($"[GraphKit] 主題匯出失敗：{path}。{error}");
+            ShowNotification(new GUIContent("主題匯出失敗，詳見 Console"));
+            return;
+        }
+        AssetDatabase.ImportAsset(path);
+        ShowNotification(new GUIContent("已匯出：" + path));
+    }
+
     // ===== 開啟 =====
 
     /// <summary>開窗並聚焦到指定對象。Owner 直接編輯，共用資產則借引用者當上下文下鑽。</summary>

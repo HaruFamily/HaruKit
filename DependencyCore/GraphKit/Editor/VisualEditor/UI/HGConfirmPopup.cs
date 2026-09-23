@@ -35,6 +35,15 @@ public class HGConfirmPopup : PopupWindowContent
 
     public override void OnGUI(Rect rect)
     {
+        using (HGSkin.Scope())
+        {
+            if (Event.current.type == EventType.Repaint) HGStyles.Fill(rect, HGStyles.Panel);
+            DrawContent(rect);
+        }
+    }
+
+    private void DrawContent(Rect rect)
+    {
         var e = Event.current;
         // 鍵盤要在畫按鈕之前判：按鈕會把事件吃掉，畫完再問就問不到。
         if (e.type == EventType.KeyDown)

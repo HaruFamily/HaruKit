@@ -38,7 +38,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 | `Editor/VisualEditor/Panels/` | 工具列、焦點列、Console、執行面板、Token 庫、變數庫、資產庫、引用清單 |
 | `Editor/VisualEditor/Project/` | `HGTypeIndex`（可建立型別與選單）、資產索引與落點、Owner 索引、引用索引 |
 | `Editor/VisualEditor/Public/` | `HGDocumentSession`（非視窗交易）與視窗命令 `HGWindowSession` |
-| `Editor/VisualEditor/UI/` | 樣式、值欄位、就地改名、拖曳、庫內重排、確認框、節點狀態色 |
+| `Editor/VisualEditor/UI/` | 樣式與主題（`HGStyles`、`HGTheme`、`HGSkin`）、值欄位、就地改名、拖曳、庫內重排、確認框、節點狀態色 |
 | `Editor/Tests/` | `HGPortTests`、`HGPublicConsumerTests`、`GraphExecutionTests` |
 
 ## 3. 核心模型
@@ -134,7 +134,14 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - hover 才顯示的控制項：`GUI.Button` 本身每次都要建立，只換內容，否則 control id 會錯位。
 - 拉線相容性在起手時對整張圖算一次並快取；拖曳中若改圖，必須重新計算。
 
-### 5.2 Undo
+### 5.2 主題與配色
+
+- 顏色的唯一來源是 `HGTheme` 的欄位（初始值＝預設主題）；`HGStyles` 以同名屬性轉讀。繪製碼不寫 `new Color(...)` 常數，只能從主題色衍生。套件只內建預設主題；新增顏色鍵時，初始值就是預設主題的值，使用者的主題檔缺這個鍵時會沿用它。錯誤紅與警告琥珀留在 `HGStyles`，不進主題。
+- 主題檔 `*.graphtheme.json` 放在專案或套件內任何位置，只寫要改的鍵，顏色可寫 `"#RRGGBB(AA)"`。選擇存 EditorPrefs `HaruGraph.Theme`（主題檔 GUID），入口是視窗分頁的 ⋮ 選單；讀不到時 Log 並退回預設。
+- 節點圖不跟 Unity Light／Dark 主題：視窗與確認框的 `OnGUI` 包在 `HGSkin.Scope()`，只在 Repaint 暫時改寫 EditorStyles／`GUI.skin` 的字色與底圖並在 finally 還原；`HGStyles` 的 GUIStyle 一律用 `Ink` 設滿所有狀態字色。新增繪製入口要同樣包 Scope。ObjectField 選取鈕、Color／Curve／Gradient 欄位與選單仍由 Unity 繪製。
+- 新增會快取顏色的貼圖或樣式，要掛進 `HGStyles.ResetCache()` 或 `HGSkin.ResetCache()`，換主題時才會重建。
+
+### 5.3 Undo
 
 - 快照式，掛在 `HGModel.MarkContentChanged()`／`MarkLayoutChanged()`：0.4 秒內連續修改合併成一步，上限 40 步。Undo／Redo 會整份換掉 `Data`，之後要依穩定識別重新解析焦點。
 - 資產焦點不在 Owner 工作副本裡，有自己的 `HGAssetHistory`（同樣 0.4 秒、40 步）。視窗層一律走 `DoUndo`／`DoRedo`／`BreakUndoMerge` 路由。

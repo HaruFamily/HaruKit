@@ -101,7 +101,7 @@ public static class HGFocusHeaderPanel
     private static void DrawBanner(Rect r)
     {
         var banner = new Rect(r.x + 2f, r.y + 2f, r.width - 4f, 18f);
-        HGStyles.Fill(banner, new Color(0.45f, 0.32f, 0.18f));
+        HGStyles.Fill(banner, HGStyles.FocusBanner);
         GUI.Label(banner, AssetBanner, HGStyles.RowLabel);
     }
 
