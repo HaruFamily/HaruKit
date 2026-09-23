@@ -167,7 +167,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
             // 走 Slot 而非結果型別：同一結果型別可能有多個族（string 有 String 與 Key），
             // 只看結果型別的話兩者的 chip 會長得一樣，企劃分不出這格收的是哪一族。
-            string text = HGReflect.SlotKindName(row.InputSlot);
+            string text = row.InputSlot is PropertySlotBase propertySlot
+                ? HGReflect.SlotKindName(propertySlot.FamilyType)
+                : HGReflect.SlotKindName(row.InputSlot);
             float width = inset - HGGraph.SlotChipGap;   // 間距留在 chip 與接點之間
             float height = Mathf.Min(14f, rowRect.height);
             var chipRect = new Rect(rowRect.xMax - InputPortReserve - inset,

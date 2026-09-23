@@ -69,8 +69,8 @@ public sealed class HGPropertyLibraryPanel
     private string search = "";
     private Vector2 scroll;
 
-    /// <summary>目前攤開的是哪一顆（存 Id，改名與重排都不影響）。null＝全部收合。</summary>
-    private string expanded;
+    /// <summary>目前攤開的各顆 Property（存 Id，改名與重排都不影響）。</summary>
+    private readonly HashSet<string> expanded = new();
 
     // 外層清單與展開後的項目各一份：兩邊的索引空間不同，共用一份會互相覆寫。
     private readonly HGLibraryReorder rowOrder = new();
@@ -89,6 +89,7 @@ public sealed class HGPropertyLibraryPanel
     {
         search = "";
         scroll = Vector2.zero;
+        expanded.Clear();
         projectDrag = false;
         ClearOrderDrag();
     }
@@ -243,7 +244,7 @@ public sealed class HGPropertyLibraryPanel
     }
 
     private bool IsExpanded(GraphProperty property)
-        => property != null && !string.IsNullOrEmpty(property.Id) && property.Id == expanded;
+        => property != null && !string.IsNullOrEmpty(property.Id) && expanded.Contains(property.Id);
 
     /// <summary>這顆 Property 的值是不是清單，是的話給出元素型別。</summary>
     // 問結果型別而不是目前存了什麼：空清單與 null 都要答得出「這裡收哪一種東西」，
@@ -267,7 +268,7 @@ public sealed class HGPropertyLibraryPanel
         HGStyles.CellBackground(row, HGStyles.HeaderProperty, HGStyles.HeaderProperty, altRow, hoverDrop, Corner);
 
         var foldRect = new Rect(row.x + 4f, row.y + 3f, 14f, 14f);
-        if (GUI.Button(foldRect, open ? "▾" : "▸", HGStyles.Chip)) SetExpanded(open ? null : property.Id);
+        if (GUI.Button(foldRect, open ? "▾" : "▸", HGStyles.Chip)) SetExpanded(property.Id, !open);
 
         var typeRect = new Rect(row.xMax - 58f, row.y + 4f, 42f, 15f);
         HGStyles.RoundedFill(typeRect, HGStyles.HeaderFormula, Corner);
@@ -360,6 +361,8 @@ public sealed class HGPropertyLibraryPanel
         HGStyles.Fill(new Rect(SpineX, itemTop - 1f, 1f, count * ItemHeight - 4f), HGStyles.HeaderProperty);
 
         bool mine = itemOrderOwnerId == property.Id;
+        // 尚未起拖時每塊各自收集；起拖後只有擁有者能提供目標位置，避免混入其他清單的索引。
+        if (!itemOrder.Active) itemOrder.BeginFrame();
         Action pending = null;
         for (int k = 0; k < count; k++)
         {
@@ -371,7 +374,9 @@ public sealed class HGPropertyLibraryPanel
             {
                 var handle = new Rect(item.x, item.y, HandleWidth, item.height);
                 // 索引空間是「這一顆的項目」，所以 id 要帶上擁有者，展開兩顆時才不會互相認錯。
-                if (itemOrder.Row(handle, property.Id + "/" + k, k, item.y + item.height * 0.5f))
+                if (itemOrder.Active && itemOrderOwnerId != property.Id)
+                    GUI.Label(handle, new GUIContent("≡", "拖曳可調整順序"), HGStyles.Tiny);
+                else if (itemOrder.Row(handle, property.Id + "/" + k, k, item.y + item.height * 0.5f))
                 {
                     itemOrderOwnerId = property.Id;
                     rowOrder.Clear();
@@ -409,7 +414,12 @@ public sealed class HGPropertyLibraryPanel
         return result;
     }
 
-    private void SetExpanded(string id) => expanded = id;
+    private void SetExpanded(string id, bool open = true)
+    {
+        if (string.IsNullOrEmpty(id)) return;
+        if (open) expanded.Add(id);
+        else expanded.Remove(id);
+    }
 
     /// <summary>「＋ 新增 ProtoProperty」：單擊開型別選單。刻意不接受拖放——沒有複製入口。</summary>
     private static void DrawCreateButton(Rect rect, HGPropertyLibraryCommands cmd, HGLibraryDrag drag)
