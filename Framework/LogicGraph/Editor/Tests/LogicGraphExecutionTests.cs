@@ -323,7 +323,7 @@ public sealed class LogicGraphExecutionTests
         var graph = Create(new Increment(), out _);
         var runtime = graph.DeepCopy();
         string revision = runtime.ExecutionRevision;
-        graph.MarkDirty();
+        graph.InvalidateValidation();
         Assert.That(runtime.ExecutionRevision, Is.EqualTo(revision));
         Assert.That(graph.ExecutionRevision, Is.Not.EqualTo(revision));
         Assert.That(runtime.ExecutionSource, Is.SameAs(graph.ExecutionSource));
@@ -373,12 +373,12 @@ public sealed class LogicGraphExecutionTests
         await graph.TriggerAction(Timing.Run, first);
         Assert.That(first.Count, Is.EqualTo(1));
 
-        graph.MarkDirty();
+        graph.InvalidateValidation();
         graph.MarkValidated();
 
         var second = new Pack();
         await graph.TriggerAction(Timing.Run, second);
-        Assert.That(second.Count, Is.EqualTo(2), "MarkDirty 是編輯與驗證狀態，不是明確初始化。");
+        Assert.That(second.Count, Is.EqualTo(2), "InvalidateValidation 是編輯與驗證狀態，不是明確初始化。");
     }
 
     [Test]
@@ -394,7 +394,7 @@ public sealed class LogicGraphExecutionTests
         group.Actions.Clear();
         group.Actions.Add(Slot(new GraphNode(new IncrementProperty { Input = PropertyInput(added), Target = PropertyTarget(added) })));
         group.Actions.Add(Slot(new GraphNode(new ReadProperty { Input = PropertyInput(added) })));
-        graph.MarkDirty();
+        graph.InvalidateValidation();
         graph.MarkValidated();
 
         var pack = new Pack();

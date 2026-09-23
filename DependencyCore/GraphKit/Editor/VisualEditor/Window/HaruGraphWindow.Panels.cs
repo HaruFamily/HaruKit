@@ -309,6 +309,8 @@ public partial class HaruGraphWindow
         AddInitialItems = AddPropertyInitialItems,
         RemoveInitialItem = RemovePropertyInitialItem,
         MoveInitialItem = MovePropertyInitialItem,
+        AddInitialValue = AddPropertyInitialValue,
+        SetInitialItem = SetPropertyInitialItem,
     };
 
     /// <summary>目前這張圖的 Property 定義。沒有這個能力的文件回 null，面板不會被畫出來。</summary>
@@ -365,7 +367,7 @@ public partial class HaruGraphWindow
         if (scope == null) return;
 
         var menu = new GenericMenu();
-        foreach (var (slotType, path) in HGTypeCatalog.FormulaKindOptions(model.FormulaKinds()))
+        foreach (var (slotType, path) in HGTypeIndex.FormulaKindOptions(model.FormulaKinds()))
         {
             var captured = slotType;
             menu.AddItem(new GUIContent(path), false,
@@ -444,6 +446,31 @@ public partial class HaruGraphWindow
         if (added == 0) return;                                  // 全都已經在裡面，不留一個退回去看不出差別的 Undo 步
         MarkGraphChanged();
         BreakUndoMerge();
+    }
+
+    private void AddPropertyInitialValue(GraphProperty property)
+    {
+        IList list = PropertyInitialItems(property, true);
+        if (list == null || list.IsFixedSize) { ShowNotification(new GUIContent("這個型別的初始內容不是可增減的清單")); return; }
+        if (!HGReflect.IsList(property.Slot.ResultType, out Type elementType)) return;
+
+        // 元素預設值與畫布清單的「＋ 新增」同一套：string 給空字串、值型別給 default、資產給空引用。
+        if (!new HGListItemSource(list, elementType).TryCreateElement(out object item)) return;
+
+        BreakUndoMerge();
+        list.Add(item);
+        MarkGraphChanged();
+        BreakUndoMerge();
+    }
+
+    private void SetPropertyInitialItem(GraphProperty property, int index, object value)
+    {
+        IList list = PropertyInitialItems(property, false);
+        if (list == null || index < 0 || index >= list.Count) return;
+
+        // 就地改寫而不換容器，理由同 PropertyInitialItems。連續輸入交給 Undo 的時間合併。
+        list[index] = value;
+        MarkGraphChanged();
     }
 
     private void RemovePropertyInitialItem(GraphProperty property, int index)
@@ -558,7 +585,7 @@ public partial class HaruGraphWindow
         if (scope == null) return;
 
         var menu = new GenericMenu();
-        foreach (var (slotType, path) in HGTypeCatalog.FormulaKindOptions(model.FormulaKinds()))
+        foreach (var (slotType, path) in HGTypeIndex.FormulaKindOptions(model.FormulaKinds()))
         {
             var captured = slotType;
             menu.AddItem(new GUIContent(path), false, () =>

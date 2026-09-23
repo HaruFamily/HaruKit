@@ -7,7 +7,7 @@ using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 
 // 非泛型 base：給 Editor walker 不必反射就能取根節點與候選池。
-public abstract class FormulaAssetBase : ScriptableObject, IGraphAsset, IPropertyOwner
+public abstract class FormulaAssetBase : ScriptableObject, IGraphAsset, IPropertyOwner, IGraphViewStateOwner
 {
     /// <summary>本資產的候選節點清單。僅視覺化編輯器使用。</summary>
     public abstract List<GraphNode> Orphans { get; }
@@ -40,6 +40,12 @@ public abstract class FormulaAssetBase : ScriptableObject, IGraphAsset, IPropert
     public bool HasPos => _hasHeadPos;
 
     public void ClearPos() { _hasHeadPos = false; _headPos = Vector2.zero; }
+
+    // 資產畫布的收合版面。與 HEAD 座標同樣記在資產本體上，只給編輯器用。
+    [SerializeField, HideInInspector]
+    private GraphViewState _viewState = new();
+
+    GraphViewState IGraphViewStateOwner.ViewState => _viewState ??= new GraphViewState();
 
 #if UNITY_EDITOR
     internal abstract object EditorGetTargetObject();

@@ -4,7 +4,7 @@ using System.Collections.Generic;
 
 public interface IGraphOwner
 {
-    void MarkGraphDirty();
+    void InvalidateGraphValidation();
     bool IsGraphValidated();
 #if UNITY_EDITOR
     void VerifyGraph();

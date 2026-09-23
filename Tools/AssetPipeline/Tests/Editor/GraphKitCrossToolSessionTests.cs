@@ -257,7 +257,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             public HGCapabilities Capabilities => HGCapabilities.None;
             public string WindowTitle => "Consumer";
 
-            public void MarkDirty() => IsValidated = false;
+            public void InvalidateValidation() => IsValidated = false;
             public void Verify() => IsValidated = true;
             public object DeepCopy() => new ConsumerDocument();
             public IReadOnlyList<object> RootKeys(UnityEngine.Object owner) => Array.Empty<object>();

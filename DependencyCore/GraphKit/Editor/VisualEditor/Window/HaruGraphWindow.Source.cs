@@ -196,7 +196,7 @@ public partial class HaruGraphWindow
     private void ShowNodeSourceSelector(HGNodeView node, Rect selector)
     {
         if (node == null) return;
-        HGTypeCatalog.ShowSourcePicker(selector, NodeSourceOptions(node));
+        HGTypeIndex.ShowSourcePicker(selector, NodeSourceOptions(node));
     }
 
     internal List<HGSourceOption> NodeSourceOptions(HGNodeView node)
@@ -216,12 +216,12 @@ public partial class HaruGraphWindow
         Type packFilter = !isAction && slotType != null ? HGReflect.CandidatePackType(slotType) : null;
         var bodyTypes = new HashSet<Type>();
         if (!isAction && slotType != null && HGReflect.CreateInstance(slotType) is FormulaSlotBase formulaSlot)
-            foreach (var type in HGTypeCatalog.FormulasFor(formulaSlot)) bodyTypes.Add(type);
+            foreach (var type in HGTypeIndex.FormulasFor(formulaSlot)) bodyTypes.Add(type);
         else if (baseType != null)
-            foreach (var type in HGTypeCatalog.Concrete(baseType, packFilter)) bodyTypes.Add(type);
+            foreach (var type in HGTypeIndex.Concrete(baseType, packFilter)) bodyTypes.Add(type);
         else if (node.IsPropertyNode)
             foreach (var family in model.FormulaKinds())
-                foreach (var type in HGTypeCatalog.Concrete(HGReflect.FormulaBaseType(family.slotType),
+                foreach (var type in HGTypeIndex.Concrete(HGReflect.FormulaBaseType(family.slotType),
                     HGReflect.CandidatePackType(family.slotType))) bodyTypes.Add(type);
         if (bodyTypes.Count > 0)
         {
@@ -720,7 +720,7 @@ public partial class HaruGraphWindow
             ShowNotification(new GUIContent("這張圖還沒有型別相容的 Token"));
             return;
         }
-        HGTypeCatalog.ShowSourcePicker(anchor, options, "選擇 Token");
+        HGTypeIndex.ShowSourcePicker(anchor, options, "選擇 Token");
     }
 
     /// <summary>這個節點能不能換成這個Token。判定路徑與 <see cref="CanReplaceAssetNode"/> 一致。</summary>
@@ -884,7 +884,7 @@ public partial class HaruGraphWindow
         // 內容留到 Header 的 ▾ 再挑。族要先決定，否則空節點沒有型別關係，▾ 也列不出東西。
         // 沒有具體 inline 公式的族（例：Key 刻意不開放 inline 公式，鍵必須恆定）照列：
         // ▾ 仍然挑得到該族的資產與Token，那正是這種族唯一的來源。
-        foreach (var (slotType, path) in HGTypeCatalog.FormulaKindOptions(model.FormulaKinds()))
+        foreach (var (slotType, path) in HGTypeIndex.FormulaKindOptions(model.FormulaKinds()))
         {
             var captured = slotType;
             var content = new GUIContent($"建立公式/{path}");

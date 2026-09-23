@@ -756,6 +756,15 @@ public class HGPortTests
     }
 
     [Test]
+    public void AssetListElementIsAnEmptyReferenceNotANewSceneObject()
+    {
+        var source = new HGListItemSource(new List<GameObject>(), typeof(GameObject));
+
+        Assert.That(source.TryCreateElement(out object item), Is.True);
+        Assert.That(item, Is.Null);
+    }
+
+    [Test]
     public void TokenFreeDocumentBindsWithoutAnITokenOwner()
     {
         var owner = ScriptableObject.CreateInstance<TestDocumentOwner>();
@@ -989,9 +998,9 @@ public class HGPortTests
             var reopened = new HGModel();
             Assert.That(legacy ? reopened.Bind(owner) : reopened.Bind(owner, binding), Is.True);
             Assert.That(reopened.IsStoredDocumentValidated, Is.True, "重開後仍須讀到已寫回的驗證結果。");
-            model.MarkDirty();
+            model.MarkContentChanged();
             Assert.That(model.IsStoredDocumentValidated, Is.True, "工作副本未存修改不會改變已儲存文件。");
-            owner.Document.MarkDirty();
+            owner.Document.InvalidateValidation();
             Assert.That(model.IsStoredDocumentValidated, Is.False);
             owner.Document.Verify();
             Assert.That(model.IsStoredDocumentValidated, Is.True);
@@ -1074,7 +1083,7 @@ MonoBehaviour:
             var binding = new HGDocumentBinding<TestDocument>("Document", x => ((TestDocumentOwner)x).Document,
                 (x, document) => ((TestDocumentOwner)x).Document = document);
             Assert.That(legacy ? model.Bind(owner) : model.Bind(owner, binding), Is.True);
-            model.MarkDirty();
+            model.MarkContentChanged();
             var working = model.Data;
             var external = new TestDocument();
             owner.Document = external;
@@ -1104,7 +1113,7 @@ MonoBehaviour:
                 (x, document) => ((TestDocumentOwner)x).Document = document);
             var model = new HGModel();
             Assert.That(model.Bind(owner, binding), Is.True);
-            model.MarkDirty();
+            model.MarkContentChanged();
             var working = model.Data;
             owner.Document = new TestDocument();
             failRead = true;
@@ -1214,6 +1223,153 @@ MonoBehaviour:
         Assert.That(row.LabelWidthUnits, Is.EqualTo(4));
         Assert.That(row.LabelWidthRatio, Is.EqualTo(0.5f));
         Assert.That(row.ForceEnumButtons, Is.True);
+    }
+
+    [Test]
+    public void SlotClassEnumAttributeForcesButtonsWithoutFieldAttribute()
+    {
+        var marked = HGGraph.Build(new HGModel(), new object[] { new EnumButtonSlotOwner() }, null, "test", "Test");
+        var plain = HGGraph.Build(new HGModel(), new object[] { new TestSlotOwner() }, null, "test", "Test");
+
+        Assert.That(marked.Nodes[0].Rows[0].ForceEnumButtons, Is.True);
+        Assert.That(plain.Nodes[0].Rows[0].ForceEnumButtons, Is.False);
+    }
+
+    [Test]
+    public void ListDefaultSlotGetsAnEditableConstantListSection()
+    {
+        var owner = new ListDefaultSlotOwner();
+        owner.Input.DefaultObject = new List<TestRootKind> { default, default };
+        var view = HGGraph.Build(new HGModel(), new object[] { owner }, null, "test", "Test");
+        var rows = view.Nodes[0].Rows;
+
+        Assert.That(rows[0].InputSlot, Is.SameAs(owner.Input));
+        Assert.That(rows[1].Kind, Is.EqualTo(HGRowKind.List));
+        Assert.That(((HGListItemSource)rows[1].Items).List, Is.SameAs(owner.Input.DefaultObject));
+        Assert.That(rows[1].Children, Has.Count.EqualTo(2));
+        Assert.That(rows[1].Children[0].ForceEnumButtons, Is.True);
+        Assert.That(rows[1].HeaderRow, Is.SameAs(rows[0]));
+        Assert.That(rows[0].DefaultListRow, Is.SameAs(rows[1]));
+    }
+
+    [Test]
+    public void ListFieldEnumAttributeReachesValueElements()
+    {
+        var owner = new EnumListOwner { Values = new List<TestRootKind> { default } };
+        var view = HGGraph.Build(new HGModel(), new object[] { owner }, null, "test", "Test");
+        var list = view.Nodes[0].Rows[0];
+
+        Assert.That(list.Kind, Is.EqualTo(HGRowKind.List));
+        Assert.That(list.Children[0].ForceEnumButtons, Is.True);
+    }
+
+    [Test]
+    public void FormulaSlotListElementsHideLabel()
+    {
+        var owner = new FormulaSlotListOwner { Values = new List<TestFormulaSlot> { new() } };
+        var view = HGGraph.Build(new HGModel(), new object[] { owner }, null, "test", "Test");
+        var element = view.Nodes[0].Rows[0].Children[0];
+
+        Assert.That(element.InputSlot, Is.SameAs(owner.Values[0]));
+        Assert.That(element.HideLabel, Is.True);
+    }
+
+    [Test]
+    public void GraphViewStateReportsOnlyRealChangesAndKeepsFoldOverridesExclusive()
+    {
+        var state = new GraphViewState();
+
+        Assert.That(state.SetHidden("node#/a", true), Is.True);
+        Assert.That(state.SetHidden("node#/a", true), Is.False);
+        Assert.That(state.Hidden, Is.EquivalentTo(new[] { "node#/a" }));
+        Assert.That(state.SetHidden("node#/a", false), Is.True);
+        Assert.That(state.Hidden, Is.Empty);
+
+        Assert.That(state.SetFolded("node#/list", false), Is.True);
+        Assert.That(state.Unfolded, Is.EquivalentTo(new[] { "node#/list" }));
+        Assert.That(state.SetFolded("node#/list", true), Is.True);
+        Assert.That(state.Folded, Is.EquivalentTo(new[] { "node#/list" }));
+        Assert.That(state.Unfolded, Is.Empty);
+
+        Assert.That(state.SetNoteCollapsed("node", true), Is.True);
+        Assert.That(state.SetNoteCollapsed("", true), Is.False);
+        Assert.That(state.NotesCollapsed, Is.EquivalentTo(new[] { "node" }));
+    }
+
+    [Test]
+    public void GraphViewStateSurvivesDocumentDeepCopyAsAnIndependentCopy()
+    {
+        var document = new ViewStateDocument();
+        ((IGraphViewStateOwner)document).ViewState.SetHidden("node#/a", true);
+
+        var copy = GraphDeepCopy.Copy(document);
+        var copied = ((IGraphViewStateOwner)copy).ViewState;
+        Assert.That(copied.Hidden, Is.EquivalentTo(new[] { "node#/a" }));
+
+        copied.SetHidden("node#/b", true);
+        Assert.That(((IGraphViewStateOwner)document).ViewState.Hidden, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void ListAppendRegistersOnlyForEditableSlotLists()
+    {
+        var registry = new HGPortRegistry(1);
+        var list = new List<TestFormulaSlot>();
+        var key = new HGPortKey("owner", "/items", HGPortRole.Input);
+
+        Assert.That(registry.AddListAppend(key, list, typeof(TestFormulaSlot), null, Presentation(new object())), Is.True);
+        Assert.That(registry.TryGet(key, out var port), Is.True);
+        Assert.That(port.InputSlot, Is.InstanceOf<TestFormulaSlot>());
+        Assert.That(port.CanStart, Is.True);
+        Assert.That(list, Is.Empty);
+
+        Assert.That(registry.AddListAppend(new HGPortKey("owner", "/array", HGPortRole.Input), new TestFormulaSlot[0],
+            typeof(TestFormulaSlot), null, Presentation(new object())), Is.False);
+        Assert.That(registry.AddListAppend(new HGPortKey("owner", "/values", HGPortRole.Input), new List<int>(),
+            typeof(int), null, Presentation(new object())), Is.False);
+        Assert.That(registry.AddListAppend(new HGPortKey("owner", "/writes", HGPortRole.Input), new List<PropertyWriteSlot>(),
+            typeof(PropertyWriteSlot), null, Presentation(new object())), Is.False);
+    }
+
+    [Test]
+    public void ListAppendCommitAddsThePrototypeOnce()
+    {
+        var list = new List<TestFormulaSlot>();
+        var prototype = new TestFormulaSlot();
+        var binding = new HGListAppendPortBinding(prototype, new HGListItemSource(list, typeof(TestFormulaSlot)));
+
+        Assert.That(binding.Commit(), Is.True);
+        Assert.That(binding.Commit(), Is.True);
+        Assert.That(list, Has.Count.EqualTo(1));
+        Assert.That(list[0], Is.SameAs(prototype));
+    }
+
+    [Test]
+    public void ListAppendCycleAsksWhetherTheSourceReachesTheListOwner()
+    {
+        var owner = new GraphNode();
+        var unrelated = new GraphNode();
+
+        Assert.That(HGListAppend.WouldCreateCycle(owner, owner), Is.True);
+        Assert.That(HGListAppend.WouldCreateCycle(owner, unrelated), Is.False);
+        Assert.That(HGListAppend.WouldCreateCycle(null, owner), Is.False);
+    }
+
+    [Test]
+    public void PropertySlotListAppendIsAWriteOutput()
+    {
+        var registry = new HGPortRegistry(1);
+        var owner = new GraphNode();
+        owner.EnsureId();
+        var items = new HGListItemSource(new List<PropertyWriteSlot>(), typeof(PropertyWriteSlot));
+        var binding = new HGListAppendWriteBinding(new PropertyWriteSlot(), owner, items);
+        var key = new HGPortKey("owner", "/writes", HGPortRole.Input);
+
+        Assert.That(registry.AddListAppend(key, binding, new HGDelegatePortPolicy(() => true), Presentation(new object())), Is.True);
+        Assert.That(registry.TryGet(new HGPortKey("owner", "/writes", HGPortRole.Output), out var port), Is.True);
+        Assert.That(port.IsOutput, Is.True);
+        Assert.That(port.Source, Is.InstanceOf<HGPropertyWriteSource>());
+        Assert.That(items.Count, Is.EqualTo(0));
     }
 
     [Test]
@@ -1536,6 +1692,56 @@ MonoBehaviour:
         public override void SetNode(GraphNode value) => node = value;
     }
 
+    [HGEnum]
+    private sealed class EnumButtonSlot : GraphSlotBase
+    {
+        private GraphNode node;
+        public override GraphNode Node => node;
+        public override void SetNode(GraphNode value) => node = value;
+    }
+
+    private sealed class EnumButtonSlotOwner
+    {
+        public EnumButtonSlot Input;
+    }
+
+    [HGEnum]
+    private sealed class ListDefaultSlot : FormulaSlotBase
+    {
+        private GraphNode node;
+        private object defaultValue;
+
+        public override GraphNode Node => node;
+        public override Type ResultType => typeof(List<TestRootKind>);
+        public override Type PackType => typeof(object);
+        public override object DefaultObject { get => defaultValue; set => defaultValue = value; }
+        public override Type BodyBaseType => null;
+        public override Type AssetBaseType => null;
+        public override void SetNode(GraphNode value) => node = value;
+    }
+
+    private sealed class ListDefaultSlotOwner
+    {
+        public ListDefaultSlot Input = new();
+    }
+
+    private sealed class EnumListOwner
+    {
+        [HGEnum] public List<TestRootKind> Values;
+    }
+
+    private sealed class FormulaSlotListOwner
+    {
+        public List<TestFormulaSlot> Values;
+    }
+
+    [Serializable]
+    private sealed class ViewStateDocument : IGraphViewStateOwner
+    {
+        [SerializeField] private GraphViewState viewState = new();
+        GraphViewState IGraphViewStateOwner.ViewState => viewState;
+    }
+
     private sealed class TestFormulaSlot : FormulaSlotBase
     {
         private GraphNode node;
@@ -1629,7 +1835,7 @@ MonoBehaviour:
         public HGCapabilities Capabilities => HGCapabilities.None;
         public string WindowTitle => "Non-slot roots";
 
-        public void MarkDirty() => IsValidated = false;
+        public void InvalidateValidation() => IsValidated = false;
         public void Verify() => IsValidated = true;
         public object DeepCopy() => new NonSlotDocument();
         public IReadOnlyList<object> RootKeys(UnityEngine.Object owner) => new object[] { "first", "second" };
@@ -1706,7 +1912,7 @@ MonoBehaviour:
         public HGCapabilities Capabilities => HGCapabilities.Properties;
         public string WindowTitle => "Property Test";
 
-        public void MarkDirty() => IsValidated = false;
+        public void InvalidateValidation() => IsValidated = false;
         public void Verify() => IsValidated = true;
         public object DeepCopy() => GraphDeepCopy.Copy(this);
         public IReadOnlyList<object> RootKeys(UnityEngine.Object owner) => new List<object>();
@@ -1738,7 +1944,7 @@ MonoBehaviour:
         public HGCapabilities Capabilities => capabilities;
         public string WindowTitle => "Test";
 
-        public void MarkDirty() => IsValidated = false;
+        public void InvalidateValidation() => IsValidated = false;
         public void Verify() => IsValidated = true;
         public object DeepCopy() => deepCopy != null ? deepCopy(this) : new TestDocument();
         public IReadOnlyList<object> RootKeys(UnityEngine.Object owner) => new List<object>();

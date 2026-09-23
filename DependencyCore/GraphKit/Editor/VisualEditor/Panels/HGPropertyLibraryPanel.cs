@@ -44,6 +44,12 @@ public struct HGPropertyLibraryCommands
 
     /// <summary>在清單型初始內容裡搬動一項，toIndex 是搬完之後的索引。</summary>
     public Action<GraphProperty, int, int> MoveInitialItem;
+
+    /// <summary>可逐項編輯的清單：在尾端加一個元素型別的預設值（資產為空引用）。</summary>
+    public Action<GraphProperty> AddInitialValue;
+
+    /// <summary>可逐項編輯的清單：就地改寫第 index 項。</summary>
+    public Action<GraphProperty, int, object> SetInitialItem;
 }
 
 /// <summary>
@@ -240,8 +246,14 @@ public sealed class HGPropertyLibraryPanel
         if (!IsItemList(property, out _)) return RowHeight + ItemHeight + 4f;
 
         int count = (property.Slot?.DefaultObject as IList)?.Count ?? 0;
+        // 可逐項編輯的清單尾端多一列「＋ 新增」；元素畫不出輸入框的清單，空的時候留一列放提示。
+        if (IsEditableList(property)) return RowHeight + (count + 1) * ItemHeight + 4f;
         return RowHeight + Mathf.Max(1, count) * ItemHeight + 4f;
     }
+
+    /// <summary>元素畫得出輸入框的清單（純值與資產皆是）：逐項編輯，資產清單另外保留從 Project 拖入。</summary>
+    private static bool IsEditableList(GraphProperty property)
+        => IsItemList(property, out Type elementType) && HGValueField.CanDraw(elementType);
 
     private bool IsExpanded(GraphProperty property)
         => property != null && !string.IsNullOrEmpty(property.Id) && expanded.Contains(property.Id);
@@ -268,7 +280,8 @@ public sealed class HGPropertyLibraryPanel
         HGStyles.CellBackground(row, HGStyles.HeaderProperty, HGStyles.HeaderProperty, altRow, hoverDrop, Corner);
 
         var foldRect = new Rect(row.x + 4f, row.y + 3f, 14f, 14f);
-        if (GUI.Button(foldRect, open ? "▾" : "▸", HGStyles.Chip)) SetExpanded(property.Id, !open);
+        // 14px 的小鈕要用無內距、置中的樣式；Chip 的左右內距會把符號裁掉一半。
+        if (GUI.Button(foldRect, open ? "▾" : "▸", HGStyles.ListAdd)) SetExpanded(property.Id, !open);
 
         var typeRect = new Rect(row.xMax - 58f, row.y + 4f, 42f, 15f);
         HGStyles.RoundedFill(typeRect, HGStyles.HeaderFormula, Corner);
@@ -343,14 +356,15 @@ public sealed class HGPropertyLibraryPanel
             }
 
             object before = slot.DefaultObject;
-            object after = HGValueField.Draw(fieldRect, editType, before);
+            object after = HGValueField.Draw(fieldRect, editType, before, HGReflect.HasEnumButtons(slot.GetType()));
             if (Equals(before, after)) return null;
             return () => cmd.SetInitialValue?.Invoke(property, after);
         }
 
         var items = slot.DefaultObject as IList;
         int count = items?.Count ?? 0;
-        if (count == 0)
+        bool editable = IsEditableList(property);
+        if (count == 0 && !editable)
         {
             GUI.Label(new Rect(ItemIndent, itemTop, width, ItemHeight - 2f),
                 $"還是空的；把 {HGReflect.ResultTypeName(elementType)} 從 Project 拖到這一列上", HGStyles.Tiny);
@@ -358,7 +372,8 @@ public sealed class HGPropertyLibraryPanel
         }
 
         // 左側縱線把項目串回標題列：窄欄裡光靠縮排看不出層級。
-        HGStyles.Fill(new Rect(SpineX, itemTop - 1f, 1f, count * ItemHeight - 4f), HGStyles.HeaderProperty);
+        if (count > 0) HGStyles.Fill(new Rect(SpineX, itemTop - 1f, 1f, count * ItemHeight - 4f), HGStyles.HeaderProperty);
+        bool enumButtons = HGReflect.HasEnumButtons(slot.GetType());
 
         bool mine = itemOrderOwnerId == property.Id;
         // 尚未起拖時每塊各自收集；起拖後只有擁有者能提供目標位置，避免混入其他清單的索引。
@@ -385,15 +400,38 @@ public sealed class HGPropertyLibraryPanel
             }
 
             var deleteRect = new Rect(item.xMax - 16f, item.y + 1f, 14f, 16f);
-            string name = items[k] is UnityEngine.Object asset && asset != null ? asset.name : "（空）";
             var nameRect = new Rect(item.x + 2f, item.y + 1f, Mathf.Max(0f, deleteRect.x - item.x - 4f), 16f);
-            GUI.Label(nameRect, HGStyles.Elide(name, HGStyles.RowLabel, nameRect.width), HGStyles.RowLabel);
+            if (editable)
+            {
+                object before = items[k];
+                object after = HGValueField.Draw(nameRect, elementType, before, enumButtons);
+                if (!Equals(before, after))
+                {
+                    int index = k;
+                    pending = () => cmd.SetInitialItem?.Invoke(property, index, after);
+                }
+            }
+            else
+            {
+                string name = items[k] is UnityEngine.Object asset && asset != null ? asset.name : "（空）";
+                GUI.Label(nameRect, HGStyles.Elide(name, HGStyles.RowLabel, nameRect.width), HGStyles.RowLabel);
+            }
 
-            if (GUI.Button(deleteRect, new GUIContent("✕", "從初始內容移除這一項"), HGStyles.Chip))
+            if (GUI.Button(deleteRect, new GUIContent("✕", "從初始內容移除這一項"), HGStyles.ListAdd))
             {
                 int index = k;
                 pending = () => cmd.RemoveInitialItem(property, index);
             }
+        }
+
+        if (editable && cmd.AddInitialValue != null)
+        {
+            var addRect = new Rect(ItemIndent, itemTop + count * ItemHeight, width, ItemHeight - 2f);
+            string tip = typeof(UnityEngine.Object).IsAssignableFrom(elementType)
+                ? "在清單尾端加一格空引用；也可以把 Project 資產拖到標題列一次加入多個"
+                : "在清單尾端加一項";
+            if (GUI.Button(addRect, new GUIContent("＋ 新增", tip), HGStyles.ListAdd))
+                pending = () => cmd.AddInitialValue(property);
         }
 
         return pending;

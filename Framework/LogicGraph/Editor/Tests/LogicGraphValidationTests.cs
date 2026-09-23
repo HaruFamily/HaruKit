@@ -256,7 +256,7 @@ public sealed class LogicGraphValidationTests
         public bool Throw;
         [NonSerialized] public IGraphDocument Inspected;
         public IReadOnlyList<Enum> AllowedTimings => new Enum[] { Timing.Start };
-        public void MarkGraphDirty() => Second.MarkDirty();
+        public void InvalidateGraphValidation() => Second.InvalidateValidation();
         public bool IsGraphValidated() => Second.IsValidated;
         public void VerifyGraph() => Second.Verify(domain: this);
 

@@ -7,8 +7,8 @@ using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 
-/// <summary>可建立的節點型別清單，依 LogicGraph [HGNodeView] 的分組整理。</summary>
-public static class HGTypeCatalog
+/// <summary>可建立型別的索引：掃描具體節點型別、篩選公式候選，並依 [HGNode]／[HGKind] 的分組建立選單。</summary>
+public static class HGTypeIndex
 {
     private static readonly Dictionary<Type, List<Type>> cache = new();
     private static readonly Dictionary<System.Reflection.Assembly, bool> testAssemblies = new();

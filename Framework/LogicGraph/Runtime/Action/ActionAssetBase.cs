@@ -6,7 +6,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 
-public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAsset, IPropertyOwner
+public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAsset, IPropertyOwner, IGraphViewStateOwner
 {
     // 根內容的載體。存 GraphNode 而不是裸 Action，根節點才有地方放 Id／座標／備註／停用旗標，
     // 跟圖上其他節點同一套規則；只存裸內容時每次開畫布都要現包一顆，位置永遠留不住。
@@ -35,6 +35,12 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAss
 
     [SerializeField, HideInInspector]
     private bool _hasHeadPos;
+
+    // 資產畫布的收合版面。與 HEAD 座標同樣記在資產本體上，只給編輯器用。
+    [SerializeField, HideInInspector]
+    private GraphViewState _viewState = new();
+
+    GraphViewState IGraphViewStateOwner.ViewState => _viewState ??= new GraphViewState();
 
     /// <summary>動作資產沒有結果型別。</summary>
     public Type ResultType => null;

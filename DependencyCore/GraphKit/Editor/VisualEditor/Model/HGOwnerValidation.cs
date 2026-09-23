@@ -56,7 +56,7 @@ public static class HGOwnerValidation
     }
 
     /// <summary>Inspector 指定的單一欄位；null 文件只在這個明確操作中建立。</summary>
-    public static bool VerifyField(Object owner, FieldInfo field, bool markDirty = false)
+    public static bool VerifyField(Object owner, FieldInfo field, bool invalidate = false)
     {
         if (owner == null || field == null || field.IsStatic
             || !typeof(IGraphDocument).IsAssignableFrom(field.FieldType)) return false;
@@ -74,13 +74,13 @@ public static class HGOwnerValidation
                 created = true;
             }
             was = document.IsValidated;
-            if (markDirty) document.MarkDirty();
+            if (invalidate) document.InvalidateValidation();
             VerifyDocument(document, owner);
             return document.IsValidated;
         }
         catch (Exception exception)
         {
-            document?.MarkDirty();
+            document?.InvalidateValidation();
             Debug.LogError($"[GraphKit] '{owner.name}.{field.Name}' 驗證失敗：{exception.Message}", owner);
             return false;
         }
@@ -91,18 +91,18 @@ public static class HGOwnerValidation
     }
 
     /// <summary>全部文件重驗；保留既有 IGraphOwner 的自訂整合行為。</summary>
-    public static bool Verify(Object owner, bool markDirty = false)
-        => Verify(owner, out _, markDirty);
+    public static bool Verify(Object owner, bool invalidate = false)
+        => Verify(owner, out _, invalidate);
 
     /// <summary>changed 依逐文件的狀態變更計算，不以 Owner 的彙總 bool 推測。</summary>
-    public static bool Verify(Object owner, out bool changed, bool markDirty = false)
+    public static bool Verify(Object owner, out bool changed, bool invalidate = false)
     {
         changed = false;
         if (owner == null) return false;
         if (owner is IGraphOwner legacy)
         {
             bool was = legacy.IsGraphValidated();
-            if (markDirty) legacy.MarkGraphDirty();
+            if (invalidate) legacy.InvalidateGraphValidation();
             legacy.VerifyGraph();
             bool now = legacy.IsGraphValidated();
             changed = was != now;
@@ -117,7 +117,7 @@ public static class HGOwnerValidation
             // 批次驗證不初始化未配置的文件。
             if (field.GetValue(owner) is not IGraphDocument document) { valid = false; continue; }
             bool was = document.IsValidated;
-            bool now = VerifyField(owner, field, markDirty);
+            bool now = VerifyField(owner, field, invalidate);
             if (!now) valid = false;
             if (was != document.IsValidated) changed = true;
         }

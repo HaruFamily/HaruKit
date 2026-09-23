@@ -208,7 +208,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 bool invalid = unrelatedEmpty || mode == "incompatible" || mode == "token-mixed";
                 ((RepairValidBody)items[0].Node.BodyObject).value = 99;
                 if (mode == "empty") items.Clear();
-                model.MarkDirty();
+                model.MarkContentChanged();
                 if (mode == "conflict") pipeline.graph = GraphDeepCopy.Copy(pipeline.graph);
                 var oldGraph = pipeline.graph;
 

@@ -24,6 +24,60 @@ public interface IGraphHead
 }
 
 /// <summary>
+/// 把節點圖的版面收合狀態存在自己身上的文件或資產。與座標一樣是作者安排的版面、進版控，但不影響執行。
+/// 沒實作的文件，編輯器只在記憶體裡記，換對象或重新編譯就消失。
+/// </summary>
+public interface IGraphViewStateOwner
+{
+    GraphViewState ViewState { get; }
+}
+
+/// <summary>
+/// 一份文件的版面收合狀態。key 由編輯器產生（節點 Id＋欄位路徑，或節點 Id），這裡只負責存取，不解讀。
+/// 只記手動切換過的項目：沒有記錄就是展開、清單則交給編輯器的自動折疊規則。
+/// </summary>
+[Serializable]
+public sealed class GraphViewState
+{
+    // 欄位（Slot 或清單標題）收起子樹。只存 true，沒有記錄就是展開。
+    [SerializeField] private List<string> _hidden = new();
+
+    // 清單折疊要存兩邊：沒有記錄時編輯器依項數自動折疊，手動展開也得記得住。
+    [SerializeField] private List<string> _folded = new();
+    [SerializeField] private List<string> _unfolded = new();
+
+    // 有內容的註解框預設展開，這裡記使用者收起來的節點。
+    [SerializeField] private List<string> _notesCollapsed = new();
+
+    public IReadOnlyList<string> Hidden => _hidden ??= new List<string>();
+    public IReadOnlyList<string> Folded => _folded ??= new List<string>();
+    public IReadOnlyList<string> Unfolded => _unfolded ??= new List<string>();
+    public IReadOnlyList<string> NotesCollapsed => _notesCollapsed ??= new List<string>();
+
+    /// <summary>回傳這次有沒有真的改到；沒改到時呼叫端不該標未存檔。</summary>
+    public bool SetHidden(string key, bool hidden) => Toggle(_hidden ??= new List<string>(), key, hidden);
+
+    public bool SetFolded(string key, bool folded)
+    {
+        bool changed = Toggle(_folded ??= new List<string>(), key, folded);
+        changed |= Toggle(_unfolded ??= new List<string>(), key, !folded);
+        return changed;
+    }
+
+    public bool SetNoteCollapsed(string nodeId, bool collapsed) => Toggle(_notesCollapsed ??= new List<string>(), nodeId, collapsed);
+
+    private static bool Toggle(List<string> list, string key, bool present)
+    {
+        if (string.IsNullOrEmpty(key)) return false;
+        bool contains = list.Contains(key);
+        if (contains == present) return false;
+        if (present) list.Add(key);
+        else list.Remove(key);
+        return true;
+    }
+}
+
+/// <summary>
 /// 內容是被寫進來的節點：值由執行期的某個擁有者交給它，不是自己算出來的。
 /// </summary>
 // 純標記，只給編輯器換 Header 身分色用——一顆「等別人寫進來」的節點跟一般公式長一樣的話，
@@ -148,7 +202,7 @@ public interface IGraphDocument : IOrphanPool
     bool IsValidated { get; }
 
     /// <summary>內容變動，撤銷已驗證狀態。</summary>
-    void MarkDirty();
+    void InvalidateValidation();
 
     /// <summary>依 Core 規則驗證整張圖並更新 <see cref="IsValidated"/>。錯誤由實作記進 Console。</summary>
     // 契約刻意是無參數的：呼叫端（存檔）不需要知道實作額外收什麼選項。

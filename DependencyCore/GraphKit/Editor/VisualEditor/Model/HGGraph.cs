@@ -144,6 +144,15 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public HGItemSource Items;
         public bool Collapsed;           // 只對 List 形狀有意義：折疊時子列不畫、不可互動
 
+        /// <summary>代畫這段清單標題的 Slot 列（常數清單）。有值時清單自己不畫標題列、高度為 0，底帶與外框從這一列算起。</summary>
+        public HGRow HeaderRow;
+
+        /// <summary>清單自己的標題列不畫，標題由 <see cref="HeaderRow"/> 代畫。</summary>
+        public bool HeaderHidden => HeaderRow != null;
+
+        /// <summary>Slot 列下方的常數清單（見 AddDefaultListRow）。有值時這一列的標籤兼任該清單的折疊開關與項數。</summary>
+        public HGRow DefaultListRow;
+
         public List<HGRow> Children = new();
 
         /// <summary>欄位在節點內的唯一路徑（`/action/steps[2]/value`），折疊狀態靠它記憶。</summary>
@@ -427,7 +436,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 IsActionNode = isAction,
                 ResultType = resultType,
             };
-            node.Rows.Add(SlotRow(rootSlot, "來源", 0));
+            var sourceRow = SlotRow(rootSlot, "來源", 0);
+            node.Rows.Add(sourceRow);
+            AddDefaultListRow(node.Rows, sourceRow, null);
             model.RegisterCarrier(node.Id, headCarrier ?? rootSlot);
             return node;
         }
@@ -769,6 +780,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         row.Normalized = normalized;
                         ApplyDescriptorPresentation(row, field);
                         into.Add(row);
+                        AddDefaultListRow(into, row, diagnostics);
                         continue;
                     }
 
@@ -877,9 +889,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     row.Field = f;
                     row.Path = fieldPath;
                     row.LeftPad = leftPad;
-                    row.ForceEnumButtons = HGReflect.IsEnum(f);
+                    row.ForceEnumButtons |= HGReflect.IsEnum(f);
                     row.HideLabel = HGReflect.IsLabelHidden(f);
                     into.Add(row);
+                    AddDefaultListRow(into, row, diagnostics);
                     continue;
                 }
 
@@ -944,7 +957,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             row.HideLabel = field.HideLabel;
             row.LabelWidthUnits = field.LabelWidthUnits;
             row.LabelWidthRatio = field.LabelWidthRatio;
-            row.ForceEnumButtons = field.ForceEnumButtons;
+            // SlotRow 可能已依 Slot 類別的 [HGEnum] 開啟；欄位只能再開，不能關。
+            row.ForceEnumButtons |= field.ForceEnumButtons;
         }
 
         /// <summary>清單元素展開：Slot 元素直接成列，複合元素展開成子群組。</summary>
@@ -971,10 +985,18 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 {
                     // 序號已經有自己的欄位，標籤只留內容。
                     child = SlotRow((GraphSlotBase)item, SlotShortName((GraphSlotBase)item), depth);
+                    // 公式元素不畫標籤，常數框吃滿整列：接了什麼順著線看子節點 Header，每列寬度也不隨接線跳動。
+                    // 動作元素的標籤就是內容本身（見 DrawInputPortRow 的 labelIsContent），保留。
+                    child.HideLabel = !child.IsActionSlot;
                 }
                 else if (IsLeafValue(item.GetType()))
                 {
-                    child = new HGRow { Kind = HGRowKind.NoPort, Label = "", Depth = depth, Target = items.List, Field = null, HideLabel = true };
+                    // 元素沒有 FieldInfo，清單欄位上的 [HGEnum] 只能從父列帶下來。
+                    child = new HGRow
+                    {
+                        Kind = HGRowKind.NoPort, Label = "", Depth = depth, Target = items.List, Field = null, HideLabel = true,
+                        ForceEnumButtons = row.ForceEnumButtons,
+                    };
                 }
                 else
                 {
@@ -1002,6 +1024,46 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             foreach (var child in row.Children) MarkItemSubtree(child, source, ownerRow, index);
         }
 
+        /// <summary>
+        /// 常數本身是清單的 Slot（例如 *ListSlot）在它下方掛一段清單，沿用清單欄位的增刪、重排與元素繪製。
+        /// 語意與單值常數框相同：沒接來源時採用，接了來源是保底值。
+        /// </summary>
+        // 只收「編輯型別就是清單、元素畫得出輸入框」的 Slot。把 DefaultEditType 換成替代型別（enum）的族不走這裡，
+        // 元素本身是 Slot 的清單也不走——那種清單的元素要能接線，不是常數。
+        private static void AddDefaultListRow(List<HGRow> into, HGRow slotRow, List<GraphDiagnostic> diagnostics)
+        {
+            if (slotRow?.InputSlot is not FormulaSlotBase slot) return;
+            Type editType = HGReflect.DefaultEditType(slot, slotRow.ResultType);
+            if (!HGReflect.IsList(editType, out Type elementType) || !HGValueField.CanDraw(elementType)) return;
+
+            // 常數清單是 null 時就地補一份空清單，和清單欄位的 EnsureList 同一個做法。
+            if (slot.DefaultObject is not IList list)
+            {
+                object instance = editType.IsArray ? Array.CreateInstance(elementType, 0) : HGReflect.CreateInstance(editType);
+                if (instance is not IList created) return;
+                slot.DefaultObject = created;
+                list = created;
+            }
+
+            // Slot 列本身就是這段清單的標題；標籤隱藏的 Slot 列沒地方放開關，才保留清單自己的標題列。
+            bool headerHidden = !slotRow.HideLabel;
+            var row = new HGRow
+            {
+                Kind = HGRowKind.List,
+                HeaderRow = headerHidden ? slotRow : null,
+                // 與一般清單欄位同層：Slot 列兼任標題後，兩種清單長得一樣，排法也要一樣。
+                Depth = slotRow.Depth,
+                // HEAD 的來源列沒有路徑；折疊狀態只需要在同一顆節點內唯一。
+                Path = (slotRow.Path ?? "/head") + "/default",
+                LeftPad = slotRow.LeftPad,
+                Items = new HGListItemSource(list, elementType),
+                ForceEnumButtons = HGReflect.HasEnumButtons(slot.GetType()),
+            };
+            BuildListChildren(row, row.Depth + 1, null, null, diagnostics);
+            into.Add(row);
+            if (headerHidden) slotRow.DefaultListRow = row;
+        }
+
         private static HGRow SlotRow(GraphSlotBase slot, string label, int depth)
         {
             bool isAction = HGReflect.IsActionSlotType(slot.GetType());
@@ -1018,6 +1080,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 ResultType = isAction ? null
                     : propertySlot != null ? HGReflect.ResultType(propertySlot.FamilyType)
                     : HGReflect.ResultType(slot.GetType()),
+                // Token HEAD、資產參數、清單元素這幾種列沒有 FieldInfo，只有 Slot 類別能宣告按鈕列。
+                ForceEnumButtons = HGReflect.HasEnumButtons(slot.GetType()),
             };
         }
 
@@ -1142,8 +1206,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         y = MeasureRows(r.Children, y, nodeWidth);
                         break;
                     case HGRowKind.List:
-                        r.Height = RowHeight;
-                        y += RowHeight;
+                        r.Height = r.HeaderHidden ? 0f : RowHeight;
+                        y += r.Height;
                         if (r.Collapsed)
                         {
                             // 折疊的子列不佔高度，但接點要收斂到標題列中心：連線因此看起來是「插進這個清單」。

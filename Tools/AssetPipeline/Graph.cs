@@ -42,7 +42,7 @@ namespace HaruFamily.Tools.AssetPipeline
     // 找的是「型別實作 IGraphDocument 的欄位」，並對那個欄位 DeepCopy 出工作副本。
     // SO 本身是 UnityEngine.Object，深複製會原樣沿用，取消就救不回來了。
     [Serializable]
-    public class Graph : IGraphDocument, ITokenOwner, IPropertyOwner
+    public class Graph : IGraphDocument, ITokenOwner, IPropertyOwner, IGraphViewStateOwner
     {
         /// <summary>整張圖唯一的 root 識別值。編輯器只拿它做 Equals 比較與 ToString 顯示。</summary>
         public const string PipelineKey = "Pipeline";
@@ -62,6 +62,12 @@ namespace HaruFamily.Tools.AssetPipeline
 
         [SerializeField, HideInInspector]
         private bool _validated;
+
+        // 節點圖的收合版面。只給編輯器用，不影響執行與驗證。
+        [SerializeField, HideInInspector]
+        private GraphViewState _viewState = new GraphViewState();
+
+        GraphViewState IGraphViewStateOwner.ViewState => _viewState ??= new GraphViewState();
 
         /// <summary>強型別存取，給 AssetPipeline 自己的執行與驗證用。</summary>
         public List<ActionGroup> Groups
@@ -103,7 +109,7 @@ namespace HaruFamily.Tools.AssetPipeline
         public bool IsValidated => _validated;
 
         /// <summary>內容變動，撤銷已驗證狀態。改圖後一定要呼叫，否則 Run 會用過期的驗證結果。</summary>
-        public void MarkDirty() => _validated = false;
+        public void InvalidateValidation() => _validated = false;
 
         /// <summary>只可用於程式建立且已自行保證正確的圖。</summary>
         public void MarkValidated() => _validated = true;

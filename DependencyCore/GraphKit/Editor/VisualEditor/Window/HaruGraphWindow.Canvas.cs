@@ -179,12 +179,34 @@ public partial class HaruGraphWindow
                 bool shieldPointer = overHeaderActions && (e.isMouse || e.type == EventType.ScrollWheel);
                 // 底層包含直接讀 Event 的列控制項，不能只靠 GUI.enabled 防止穿透。
                 if (shieldPointer) e.type = EventType.Ignore;
+
+                // IMGUI 依繪製順序分發事件，先畫的（被蓋住的）節點會先吃掉按鍵。按下與拖放只交給
+                // 游標下最上層的節點，其餘節點在這一輪看到的是 Ignore。已有 hotControl 時不攔：
+                // 拖曳中的控制項要收得到後續事件，否則 hotControl 會卡住。
+                bool gatePointer = !shieldPointer && GUIUtility.hotControl == 0 && mouseInCanvas
+                    && (pointerEvent == EventType.MouseDown || pointerEvent == EventType.DragUpdated
+                        || pointerEvent == EventType.DragPerform);
+                HGNodeView pointerOwner = gatePointer ? NodeAt(graphMouse) : null;
+                // 點到被蓋住的節點露出來的部分＝把它提到最上層。IMGUI 的控制項 id 按繪製順序發，
+                // 順序變了就先放掉鍵盤焦點，否則正在輸入的框會對到另一個節點的欄位。
+                if (pointerEvent == EventType.MouseDown && RaiseNode(pointerOwner)) GUIUtility.keyboardControl = 0;
                 try
                 {
                     foreach (var node in graph.Nodes)
                     {
                         if (node.Hidden) continue;
-                        DrawNode(node, ReferenceEquals(node, linkTarget), snappedPort);
+                        bool blocked = gatePointer && !ReferenceEquals(node, pointerOwner);
+                        // 還原成遮罩前的型別而不是 pointerEvent：上層節點若已 Use()，要維持 Used，不能把按鍵復活。
+                        EventType beforeBlock = e.type;
+                        if (blocked) e.type = EventType.Ignore;
+                        try
+                        {
+                            DrawNode(node, ReferenceEquals(node, linkTarget), snappedPort);
+                        }
+                        finally
+                        {
+                            if (blocked) e.type = beforeBlock;
+                        }
                     }
                     DrawExtensionPorts(snappedPort);
                     DrawEmptyTimingHint();
@@ -210,6 +232,7 @@ public partial class HaruGraphWindow
             EndZoomedCanvas();
         }
 
+        DrawTracedLinks();
         DrawNodeInfoOverlay(r);
         DrawTimingOverlay(r);
         if (mouseInCanvas && !HandleAssetDrag(e, graphMouse)) HandleCanvasInput(e, graphMouse);
@@ -279,32 +302,159 @@ public partial class HaruGraphWindow
         Handles.EndGUI();
     }
 
-    /// <summary>連線在未縮放的視窗座標繪製，避免 GUI.matrix 旋轉造成起終點偏移。</summary>
+    /// <summary>
+    /// 一般連線畫在節點之下（節點之前呼叫）。連線在未縮放的視窗座標繪製，避免 GUI.matrix 旋轉造成起終點偏移。
+    /// 選取中節點的連線不在這裡畫，改由 <see cref="DrawTracedLinks"/> 畫在所有節點之上。
+    /// </summary>
     private void DrawLinks(Vector2 graphMouse)
     {
         Handles.BeginGUI();
-
-        // 兩趟：先畫一般線，高亮線最後畫才不會被別的線壓在底下。
-        // 一張畫布容納全部時機之後，共用來源的連入線可能來自很遠的另一個時機，這是唯一追得回去的線索。
-        for (int pass = 0; pass < 2; pass++)
+        RebuildFoldFan();
+        foreach (var link in graph.Links)
         {
-            bool tracedPass = pass == 1;
-            foreach (var link in graph.Links)
-            {
-                if (!IsLinkVisible(link)) continue;
-                if (IsTracedLink(link) != tracedPass) continue;
-                // 停用子樹的線一起壓暗，才看得出整段路徑都不會被求值。
-                DrawGraphLine(link.InputPort.Presentation.Position, link.OutputPort.Presentation.Position,
-                    link.OutputOwner.InDisabledSubtree || link.OutputOwner.InLockedSubtree, tracedPass,
-                    link.ParentRow.IsProducedValue);
-            }
+            if (IsTracedLink(link)) continue;
+            if (IsLinkVisible(link)) DrawLink(link, false);
+            else if (IsLinkGhost(link)) DrawLinkGhosts(link, false);
         }
         if (linking && linkPort != null)
         {
-            bool producedValue = IsPropertyWritePort(linkPort);
-            DrawGraphLine(linkPort.Presentation.Position, LinkPreviewEnd(graphMouse), false, false, producedValue);
+            // 預覽線的滑鼠端以相反方向水平進入，看起來就是「接上去之後的樣子」。
+            float fromDir = PortDirection(linkPort);
+            BuildLinkPath(linkPort.Presentation.Position, fromDir, LinkPreviewEnd(graphMouse), -fromDir, linkPath);
+            DrawGraphPath(linkPath, false, false, IsPropertyWritePort(linkPort));
         }
         Handles.EndGUI();
+    }
+
+    /// <summary>
+    /// 選取中節點的連線，在所有節點畫完之後才畫：線從節點底下經過時也能整條追到。
+    /// 一張畫布容納全部時機之後，共用來源的連入線可能來自很遠的另一個時機，這是唯一追得回去的線索。
+    /// </summary>
+    private void DrawTracedLinks()
+    {
+        if (graph == null || selectedIds.Count == 0) return;
+        Handles.BeginGUI();
+        RebuildFoldFan();
+        foreach (var link in graph.Links)
+        {
+            if (!IsTracedLink(link)) continue;
+            if (IsLinkVisible(link)) DrawLink(link, true);
+            else if (IsLinkGhost(link)) DrawLinkGhosts(link, true);
+        }
+        Handles.EndGUI();
+    }
+
+    /// <summary>
+    /// 欄位收起來了、但欄位所在節點看得到：整條線不畫，改畫殘影，看得出「這裡原本接到哪個方向」。
+    /// 殘影只是裝飾，不參與命中——點線剪斷仍只認 <see cref="IsLinkVisible"/>。
+    /// </summary>
+    private bool IsLinkGhost(HGLink link)
+    {
+        if (link?.InputPort == null || link.OutputPort == null || link.ParentRow == null) return false;
+        if (link.InputOwner == null || link.InputOwner.Hidden) return false;
+        return effectiveHidden.Contains(HGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow));
+    }
+
+    /// <summary>欄位端一定畫；目標節點因為別的線還顯示著時，目標端也往回畫一段，兩段在中間斷開。</summary>
+    private void DrawLinkGhosts(HGLink link, bool traced)
+    {
+        // 欄位端是 ParentRow 那一顆接點；寫入 Property 的線兩端角色相反，所以用列比對而不是固定取 InputPort。
+        bool inputIsSlot = ReferenceEquals(OwnerRowOfPort(link.InputPort), link.ParentRow);
+        HGPort slotPort = inputIsSlot ? link.InputPort : link.OutputPort;
+        HGPort targetPort = inputIsSlot ? link.OutputPort : link.InputPort;
+        if (!slotPort.Presentation.Visible) return;
+
+        Color color = LinkColor(link.OutputOwner.InDisabledSubtree || link.OutputOwner.InLockedSubtree, traced,
+            link.ParentRow.IsProducedValue);
+        float thickness = traced ? LinkThickness + 2f : LinkThickness;
+        Vector2 slotPos = slotPort.Presentation.Position;
+        Vector2 targetPos = targetPort.Presentation.Position;
+        float slotDir = PortDirection(slotPort);
+        float targetDir = PortDirection(targetPort);
+
+        DrawLinkGhost(slotPos, slotDir, targetPos, targetDir, color, thickness);
+        if (targetPort.Presentation.Visible && link.OutputOwner != null && !link.OutputOwner.Hidden)
+            DrawLinkGhost(targetPos, targetDir, slotPos, slotDir, color, thickness);
+    }
+
+    /// <summary>
+    /// 一端的殘影：水平短線與第一個圓角畫實線，進入斜線後切成虛線並線性淡出。
+    /// 淡出長度固定為 <see cref="LinkGhostLength"/>；兩端距離短到放不下時才改用斜線長度的 <see cref="LinkGhostShare"/>，
+    /// 所以兩端各畫一段也一定在中間斷開，不會接回一條看起來沒收合的線。
+    /// </summary>
+    private void DrawLinkGhost(Vector2 from, float fromDir, Vector2 to, float toDir, Color color, float thickness)
+    {
+        Vector2 fromBend = from + new Vector2(fromDir * LinkStub, 0f);
+        Vector2 toBend = to + new Vector2(toDir * LinkStub, 0f);
+
+        linkPath.Clear();
+        linkPath.Add(from + new Vector2(fromDir * HGGraph.PortRadius, 0f));
+        AddLinkCorner(linkPath, from, fromBend, toBend);
+        for (int i = 1; i < linkPath.Count; i++) DrawGraphSegment(linkPath[i - 1], linkPath[i], color, thickness);
+
+        Vector2 diagonalStart = linkPath[linkPath.Count - 1];
+        Vector2 direction = toBend - diagonalStart;
+        float available = direction.magnitude;
+        if (available < 0.01f) return;
+        direction /= available;
+
+        float fade = Mathf.Min(LinkGhostLength, Vector2.Distance(fromBend, toBend) * LinkGhostShare, available);
+        for (float s = 0f; s < fade; s += LinkGhostDash + LinkGhostGap)
+        {
+            float end = Mathf.Min(s + LinkGhostDash, fade);
+            Color dash = color;
+            dash.a *= 1f - s / fade;
+            DrawGraphSegment(diagonalStart + direction * s, diagonalStart + direction * end, dash, thickness);
+        }
+    }
+
+    /// <summary>單一線段（graph space），裁切到畫布後畫出。殘影的虛線逐段各自帶透明度，所以不走整條折線。</summary>
+    private void DrawGraphSegment(Vector2 graphFrom, Vector2 graphTo, Color color, float thickness)
+    {
+        Vector2 a = canvasRect.position + (graphFrom + pan) * zoom;
+        Vector2 b = canvasRect.position + (graphTo + pan) * zoom;
+        if (!ClipLine(canvasRect, ref a, ref b)) return;
+        Color oldColor = Handles.color;
+        Handles.color = color;
+        Handles.DrawAAPolyLine(thickness, new Vector3(a.x, a.y), new Vector3(b.x, b.y));
+        Handles.color = oldColor;
+    }
+
+    /// <summary>
+    /// 線的顏色表達「這條線接的是選取中的節點」，其次是「這條是輸出不是取值」；
+    /// 透明度仍歸停用管——三件事互不覆蓋，選取最優先。
+    /// </summary>
+    private static Color LinkColor(bool dim, bool traced, bool output)
+    {
+        Color color = traced ? HGStyles.NodeBorderSelected : output ? HGStyles.OutputPortColor : Color.white;
+        if (dim) color.a *= HGStyles.LinkDisabled.a;
+        return color;
+    }
+
+    private void DrawLink(HGLink link, bool traced)
+    {
+        BuildLinkPathOf(link, linkPath);
+        // 停用子樹的線一起壓暗，才看得出整段路徑都不會被求值。
+        DrawGraphPath(linkPath, link.OutputOwner.InDisabledSubtree || link.OutputOwner.InLockedSubtree, traced,
+            link.ParentRow.IsProducedValue);
+    }
+
+    /// <summary>
+    /// 一條連線的路徑。折疊清單的元素線從欄位端（代表接點）起算並套扇形角度；其餘照原本兩端。
+    /// 呼叫前要先 <see cref="RebuildFoldFan"/>。
+    /// </summary>
+    private void BuildLinkPathOf(HGLink link, List<Vector2> path)
+    {
+        if (foldFan.TryGetValue(link, out float angle))
+        {
+            HGPort target = FoldTargetPort(link);
+            HGPort slot = ReferenceEquals(target, link.OutputPort) ? link.InputPort : link.OutputPort;
+            BuildLinkPath(slot.Presentation.Position, PortDirection(slot),
+                target.Presentation.Position, PortDirection(target), path, angle);
+            return;
+        }
+        BuildLinkPath(link.InputPort.Presentation.Position, PortDirection(link.InputPort),
+            link.OutputPort.Presentation.Position, PortDirection(link.OutputPort), path);
     }
 
     /// <summary>
@@ -392,22 +542,77 @@ public partial class HaruGraphWindow
     private Rect GraphToWindowRect(Rect graphRect)
         => new Rect(canvasRect.position + (graphRect.position + pan) * zoom, graphRect.size * zoom);
 
-    private void DrawGraphLine(Vector2 graphFrom, Vector2 graphTo, bool dim = false, bool traced = false,
-        bool output = false)
+    /// <summary>
+    /// 連線路徑（graph space）：水平短線 → 圓角 → 斜直線 → 圓角 → 水平短線。
+    /// dir 是接點朝外的水平方向（+1 右、-1 左）。頭尾一定水平，所以線中間就算從別的節點底下經過，
+    /// 看接點旁那一小段也分得出「從這裡出來」還是「只是經過」。繪製與點線剪斷共用這一份路徑。
+    /// 唯一例外是 fromAngle：折疊清單的代表接點伸出多條線時，起點那一段依角度（度，正值朝下）扇形散開。
+    /// </summary>
+    private static void BuildLinkPath(Vector2 from, float fromDir, Vector2 to, float toDir, List<Vector2> path,
+        float fromAngle = 0f)
     {
-        Vector2 from = canvasRect.position + (graphFrom + pan) * zoom;
-        Vector2 to = canvasRect.position + (graphTo + pan) * zoom;
-        if (!ClipLine(canvasRect, ref from, ref to)) return;
+        path.Clear();
+        float radians = fromAngle * Mathf.Deg2Rad;
+        var fromOut = new Vector2(fromDir * Mathf.Cos(radians), Mathf.Sin(radians));
+        Vector2 fromBend = from + fromOut * LinkStub;
+        Vector2 toBend = to + new Vector2(toDir * LinkStub, 0f);
+        // 從接點外緣起算：浮到上層的選取線才不會蓋掉 ○／◎。
+        path.Add(from + fromOut * HGGraph.PortRadius);
+        AddLinkCorner(path, from, fromBend, toBend);
+        AddLinkCorner(path, fromBend, toBend, to);
+        path.Add(to + new Vector2(toDir * HGGraph.PortRadius, 0f));
+    }
 
-        // 顏色表達「這條線接的是選取中的節點」，其次是「這條是輸出不是取值」；
-        // 透明度仍歸停用管——三件事互不覆蓋，選取最優先。
-        Color color = traced ? HGStyles.NodeBorderSelected : output ? HGStyles.OutputPortColor : Color.white;
-        if (dim) color.a *= HGStyles.LinkDisabled.a;
+    /// <summary>在轉折點倒圓角（二次曲線取樣）。前後兩段各讓出最多一半長度，兩個圓角才不會互相重疊。</summary>
+    private static void AddLinkCorner(List<Vector2> path, Vector2 previous, Vector2 corner, Vector2 next)
+    {
+        float radius = Mathf.Min(LinkCornerRadius,
+            Vector2.Distance(previous, corner) * 0.5f, Vector2.Distance(corner, next) * 0.5f);
+        if (radius < 0.5f) { path.Add(corner); return; }
+
+        Vector2 start = corner + (previous - corner).normalized * radius;
+        Vector2 end = corner + (next - corner).normalized * radius;
+        for (int i = 0; i <= LinkCornerSegments; i++)
+        {
+            float t = i / (float)LinkCornerSegments;
+            float u = 1f - t;
+            path.Add(u * u * start + 2f * u * t * corner + t * t * end);
+        }
+    }
+
+    private void DrawGraphPath(List<Vector2> path, bool dim, bool traced, bool output)
+    {
+        if (path.Count < 2) return;
+
+        Color color = LinkColor(dim, traced, output);
+        float thickness = traced ? LinkThickness + 2f : LinkThickness;
+
+        if (linkScreenPoints.Length < path.Count) linkScreenPoints = new Vector3[path.Count];
+        bool inside = true;
+        for (int i = 0; i < path.Count; i++)
+        {
+            Vector2 p = canvasRect.position + (path[i] + pan) * zoom;
+            linkScreenPoints[i] = new Vector3(p.x, p.y);
+            if (!canvasRect.Contains(p)) inside = false;
+        }
 
         Color oldColor = Handles.color;
         Handles.color = color;
-        Handles.DrawAAPolyLine(traced ? LinkThickness + 2f : LinkThickness,
-            new Vector3(from.x, from.y), new Vector3(to.x, to.y));
+        if (inside)
+        {
+            Handles.DrawAAPolyLine(thickness, path.Count, linkScreenPoints);
+        }
+        else
+        {
+            // 有點落在畫布外：逐段裁切，線才不會畫到側欄上。
+            for (int i = 1; i < path.Count; i++)
+            {
+                Vector2 a = linkScreenPoints[i - 1];
+                Vector2 b = linkScreenPoints[i];
+                if (!ClipLine(canvasRect, ref a, ref b)) continue;
+                Handles.DrawAAPolyLine(thickness, new Vector3(a.x, a.y), new Vector3(b.x, b.y));
+            }
+        }
         Handles.color = oldColor;
     }
 
@@ -580,13 +785,13 @@ public partial class HaruGraphWindow
         if (node.NoteOpen)
         {
             ReleaseNoteFocus(node.Id);
-            noteCollapsed.Add(node.Id);
+            SetNoteCollapsed(node.Id, true);
             noteOpenId = null;
         }
         else
         {
             // 空註解框需保持節點選取，才不會被下一幀的自動收合移除。
-            noteCollapsed.Remove(node.Id);
+            SetNoteCollapsed(node.Id, false);
             noteOpenId = node.Id;
             selectedIds.Add(node.Id);
         }
@@ -888,7 +1093,7 @@ public partial class HaruGraphWindow
             ShowNotification(new GUIContent("變數庫尚無 ProtoProperty；先到左欄變數庫新增一顆"));
             return;
         }
-        HGTypeCatalog.ShowSourcePicker(anchor, options, "選擇 Property");
+        HGTypeIndex.ShowSourcePicker(anchor, options, "選擇 Property");
     }
 
     /// <summary>換這顆節點指到的 Property，保留載體與相容連線。</summary>
@@ -923,7 +1128,7 @@ public partial class HaruGraphWindow
             ShowNotification(new GUIContent("沒有相容的共用資產"));
             return;
         }
-        HGTypeCatalog.ShowSourcePicker(anchor, options, "選擇資產");
+        HGTypeIndex.ShowSourcePicker(anchor, options, "選擇資產");
     }
 
     /// <summary>外框完成後最後畫接點；圓點完整位於 Node 內側。</summary>
@@ -932,22 +1137,20 @@ public partial class HaruGraphWindow
         bool dim = node.InDisabledSubtree || node.InLockedSubtree || node.Carrier?.Disabled == true;
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
-            // 折疊的清單：子列的接點會全部疊在標題列上，所以只在標題列畫一顆代表「裡面有連線」，
-            // 沒有它的話連線會停在節點邊緣的空白處，看起來像斷掉。
-            if (row.Kind == HGRowKind.List && row.Collapsed)
+            // 清單標題列沒有欄位，不能走下面的一般接點路徑（會讀 row.InputSlot）。
+            if (row.Kind == HGRowKind.List)
             {
-                if (!HasConnectedElement(row)) continue;
-                var aggregateKey = new HGPortKey(row.OwnerNodeId, row.Path, HGPortRole.Aggregate);
-                if (!graph.PortsByKey.TryGetValue(aggregateKey, out var aggregate) || !aggregate.Presentation.Visible) continue;
-                DrawSemanticPort(aggregate, AggregatePortColor(row), dim, snappedPort);
+                DrawListHeaderPort(row, dim, snappedPort);
                 continue;
             }
             var inputPort = PortFor(row);
             if (inputPort?.Presentation.Visible != true) continue;
             if (inputPort.Presentation is IHGPortPresentationAnchor anchor && !ReferenceEquals(anchor.Node, node)) continue;
             var inputPortRect = PortRect(inputPort.Presentation.Position + pan);
-            DrawSemanticPort(inputPort, InputPortColor(row), dim || row.Locked || row.InputSlot.Node?.Disabled == true, snappedPort);
-            if (row.InputSlot is not PropertySlotBase) DrawInputPortGlyph(row, inputPortRect);
+            DrawSemanticPort(inputPort, InputPortColor(row), dim || row.Locked || row.InputSlot.Node?.Disabled == true, snappedPort,
+                row.InputSlot.Node != null);
+            // PropertySlot 同樣是「原地放開＝收合、拖出去＝拉線」（DrawInputPortRow 對每一列都攔這一下），符號也要一致。
+            DrawInputPortGlyph(row, inputPortRect);
 
         }
 
@@ -956,11 +1159,38 @@ public partial class HaruGraphWindow
         {
             var inputKey = new HGPortKey(node.Id, "/property/input", HGPortRole.Input);
             if (graph.PortsByKey.TryGetValue(inputKey, out var propertyInput) && propertyInput.Presentation.Visible)
-                DrawSemanticPort(propertyInput, HGStyles.OutputPortColor, dim, snappedPort);
+                DrawSemanticPort(propertyInput, HGStyles.OutputPortColor, dim, snappedPort, linkedPorts.Contains(propertyInput));
         }
         var headerPort = PortFor(node);
+        // 節點的輸出接點：有任何欄位從它取值才是 ◎；候選池裡沒人用的孤兒節點是 ○。
+        // PropertySlot 當父欄位不算：它是寫入 Property，線接在 Property 的寫入接點，不經過這顆輸出接點。
         if (headerPort?.Presentation.Visible == true)
-            DrawSemanticPort(headerPort, PortErrorColor(node.Obj ?? node.ParentSlot, HGStyles.OutputPortLive), dim, snappedPort);
+            DrawSemanticPort(headerPort, PortErrorColor(node.Obj ?? node.ParentSlot, HGStyles.OutputPortLive), dim, snappedPort,
+                linkedPorts.Contains(headerPort) || (node.ParentSlot != null && node.ParentSlot is not PropertySlotBase));
+    }
+
+    /// <summary>
+    /// 清單標題列的接點。有新增接點的清單一律畫它（○；折疊且裡面有已接元素時 ◎）；
+    /// 沒有新增接點的清單沿用 Aggregate：只在折疊且有連線時畫一顆代表接點，否則線會停在節點邊緣的空白處。
+    /// </summary>
+    private void DrawListHeaderPort(HGRow row, bool dim, HGPort snappedPort)
+    {
+        bool folded = row.Collapsed && HasConnectedElement(row);
+        if (ListAppendPortOf(row) is HGPort append)
+        {
+            if (!append.Presentation.Visible) return;
+            Color color = folded ? AggregatePortColor(row) : append.IsOutput ? HGStyles.OutputPortColor : HGStyles.InputPortLive;
+            DrawSemanticPort(append, color, dim || append.Presentation.Locked, snappedPort, folded);
+            // 收起／展開所有元素的子樹，符號與 Slot 接點相同；沒有元素接線就沒有子樹可收，不畫字。
+            if (HasConnectedElement(row))
+                DrawPortGlyph(HGGraph.CollapseKey(row.OwnerNodeId, row), PortRect(append.Presentation.Position + pan));
+            return;
+        }
+        if (!folded) return;
+        var aggregateKey = new HGPortKey(row.OwnerNodeId, row.Path, HGPortRole.Aggregate);
+        if (!graph.PortsByKey.TryGetValue(aggregateKey, out var aggregate) || !aggregate.Presentation.Visible) return;
+        // 只有裡面有連線時才畫，所以一定是 ◎。
+        DrawSemanticPort(aggregate, AggregatePortColor(row), dim, snappedPort, true);
     }
 
     /// <summary>Ports owned by Tool-specific adapters are drawn without adding a central concrete-type branch.</summary>
@@ -971,14 +1201,14 @@ public partial class HaruGraphWindow
             bool hasBuiltInAnchor = port.Presentation is IHGPortPresentationAnchor anchor
                 && (anchor.Node != null || anchor.Row != null);
             if (hasBuiltInAnchor || !port.Presentation.Visible) continue;
-            Color color = IsPropertyWritePort(port) ? HGStyles.OutputPortColor
-                : port.IsInput && port.InputSlot?.Node == null ? HGStyles.InputPortEmpty : HGStyles.OutputPortLive;
+            Color color = IsPropertyWritePort(port) ? HGStyles.OutputPortColor : HGStyles.OutputPortLive;
+            bool connected = linkedPorts.Contains(port) || (port.IsInput && port.InputSlot?.Node != null);
             object issueTarget = port.IsInput ? port.InputSlot
                 : port.Source?.OutputNode?.BodyObject;
             var owner = OwnerNodeOfPort(port);
             bool dim = port.Presentation.Locked || owner?.InDisabledSubtree == true
                 || owner?.InLockedSubtree == true || port.Source?.OutputNode?.Disabled == true;
-            DrawSemanticPort(port, PortErrorColor(issueTarget, color), dim, snappedPort);
+            DrawSemanticPort(port, PortErrorColor(issueTarget, color), dim, snappedPort, connected);
         }
     }
 
@@ -992,14 +1222,14 @@ public partial class HaruGraphWindow
     private Color PortErrorColor(object target, Color color)
         => target != null && Rep.HasIssue(target, out bool error) && error ? HGStyles.InputPortError : color;
 
-    private void DrawSemanticPort(HGPort port, Color color, bool dim, HGPort snappedPort)
+    private void DrawSemanticPort(HGPort port, Color color, bool dim, HGPort snappedPort, bool connected)
     {
         var rect = PortRect(port.Presentation.Position + pan);
         // 錯誤色保持可讀；停用只壓暗用途色，不換另一種色相。
         bool hasError = color == HGStyles.InputPortError;
         if (dim && !hasError) color.a *= 0.45f;
-        if (port.IsOutput) HGStyles.DrawOutputPort(rect, color);
-        else HGStyles.DrawInputPort(rect, color);
+        if (port.IsOutput) HGStyles.DrawOutputPort(rect, color, connected);
+        else HGStyles.DrawInputPort(rect, color, connected);
         if (!linking || !IsCompatible(port)) return;
 
         // 相容與吸附只改外圈，中心保留灰白／寫入青藍／錯誤紅。
@@ -1018,8 +1248,11 @@ public partial class HaruGraphWindow
     private void DrawInputPortGlyph(HGRow row, Rect inputPortRect)
     {
         if (row.InputSlot.Node == null) return;
+        DrawPortGlyph(HGGraph.CollapseKey(row.OwnerNodeId, row), inputPortRect);
+    }
 
-        string key = HGGraph.CollapseKey(row.OwnerNodeId, row);
+    private void DrawPortGlyph(string key, Rect inputPortRect)
+    {
         bool solo = soloSlotKey == key;
         bool hidden = effectiveHidden.Contains(key);
 
@@ -1041,11 +1274,9 @@ public partial class HaruGraphWindow
     {
         bool hasIssue = Rep.HasIssue(row.InputSlot, out bool isError);
         if (hasIssue && isError) return HGStyles.InputPortError;
-        // 輸出接點不分空／接：它的顏色是在講方向，接上與否看得到線。
+        // 顏色只講用途：寫入是輸出色、取值是灰白。接不接由 ○／◎ 表達，不再用明暗區分。
         if (row.IsProducedValue) return HGStyles.OutputPortColor;
-        return row.InputSlot.Node != null
-            ? HGStyles.InputPortLive
-            : HGStyles.InputPortEmpty;
+        return HGStyles.InputPortLive;
     }
 
     private Color AggregatePortColor(HGRow listRow)

@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -393,6 +394,74 @@ public sealed class HGOutputPortBinding : IHGOutputPortBinding
         => Source = source ?? throw new ArgumentNullException(nameof(source));
 }
 
+/// <summary>
+/// 清單標題的新增接點：帶一顆還沒放進清單的預備元素，接受規則因此與一般欄位同一套；
+/// 接線提交時才把它加進 <see cref="Items"/> 尾端。每次建圖換一顆，未提交的直接丟棄。
+/// </summary>
+internal interface IHGListAppendBinding : IHGPortBinding
+{
+    GraphSlotBase Element { get; }
+    HGListItemSource Items { get; }
+}
+
+internal static class HGListAppend
+{
+    /// <summary>把預備元素放進清單尾端。已經放過（重複提交）就不再加。</summary>
+    public static bool Commit(this IHGListAppendBinding binding)
+        => binding.Items.List.Contains(binding.Element) || binding.Items.Add(binding.Element);
+
+    /// <summary>
+    /// 一般欄位的接受規則，再加循環：預備元素還不在圖上，一般的循環檢查找不到它，
+    /// 改問「來源的子樹會不會回頭用到清單所在的節點」。owner 為 null（HEAD、時機群組）時不可能指回。
+    /// </summary>
+    public static IHGPortPolicy DefaultPolicy(GraphSlotBase element, GraphNode owner)
+        => new HGDelegatePortPolicy(() => true, checkAcceptance: source =>
+        {
+            if (source == null) return HGPortConnectionResult.MissingBinding;
+            HGPortConnectionResult result = HGPortConnection.CheckSourceAcceptance(source, element);
+            if (result != HGPortConnectionResult.Allowed) return result;
+            return WouldCreateCycle(owner, source.CycleRoot) ? HGPortConnectionResult.WouldCreateCycle : HGPortConnectionResult.Allowed;
+        });
+
+    public static bool WouldCreateCycle(GraphNode owner, object sourceRoot)
+    {
+        if (owner == null || sourceRoot == null) return false;
+        if (ReferenceEquals(sourceRoot, owner)) return true;
+        foreach (var childSlot in HGModel.WalkSlots(sourceRoot, new HashSet<object>(HGRefComparer.Instance)))
+            if (ReferenceEquals(childSlot.Node, owner)) return true;
+        return false;
+    }
+}
+
+/// <summary>元素取值的清單：新增接點是輸入端。</summary>
+internal sealed class HGListAppendPortBinding : IHGInputPortBinding, IHGListAppendBinding
+{
+    public GraphSlotBase InputSlot { get; }
+    public GraphSlotBase Element => InputSlot;
+    public HGListItemSource Items { get; }
+
+    public HGListAppendPortBinding(GraphSlotBase prototype, HGListItemSource items)
+    {
+        InputSlot = prototype ?? throw new ArgumentNullException(nameof(prototype));
+        Items = items ?? throw new ArgumentNullException(nameof(items));
+    }
+}
+
+/// <summary>元素是 PropertySlot 的清單：方向相反，新增接點是寫入端（輸出），接到 Property 節點的寫入輸入。</summary>
+internal sealed class HGListAppendWriteBinding : IHGOutputPortBinding, IHGListAppendBinding
+{
+    public IHGPortSource Source { get; }
+    public GraphSlotBase Element { get; }
+    public HGListItemSource Items { get; }
+
+    public HGListAppendWriteBinding(PropertySlotBase prototype, GraphNode owner, HGListItemSource items)
+    {
+        Element = prototype ?? throw new ArgumentNullException(nameof(prototype));
+        Source = new HGPropertyWriteSource(prototype, owner);
+        Items = items ?? throw new ArgumentNullException(nameof(items));
+    }
+}
+
 public sealed class HGAggregatePortBinding : IHGAggregatePortBinding
 {
     public static HGAggregatePortBinding Instance { get; } = new HGAggregatePortBinding();
@@ -587,6 +656,29 @@ public sealed class HGPortRegistry
             policy ?? new HGDelegatePortPolicy(() => false), presentation, Generation));
     }
 
+    /// <summary>
+    /// 在清單標題登記新增接點：連上時先在 <paramref name="list"/> 尾端新增一項，再把它接到來源，一步 Undo。
+    /// 只收元素是 Slot（PropertySlot 除外）且可增刪的清單；接受規則是元素型別的一般規則，
+    /// <paramref name="owner"/> 是清單所在節點的載體，給了才擋「來源回頭用到這顆節點」的循環（根上的清單傳 null）。
+    /// </summary>
+    public bool AddListAppend(HGPortKey key, IList list, Type elementType, GraphNode owner, IHGPortPresentation presentation)
+    {
+        if (list == null || presentation == null || elementType == null || !typeof(GraphSlotBase).IsAssignableFrom(elementType)
+            || typeof(PropertySlotBase).IsAssignableFrom(elementType))
+            return Reject(HGPortBuildResult.InvalidBinding);
+        var items = new HGListItemSource(list, elementType);
+        if (!items.CanEditStructure || !items.TryCreateElement(out object created) || created is not GraphSlotBase element)
+            return Reject(HGPortBuildResult.InvalidBinding);
+        return AddListAppend(key, new HGListAppendPortBinding(element, items), HGListAppend.DefaultPolicy(element, owner), presentation);
+    }
+
+    internal bool AddListAppend(HGPortKey key, IHGListAppendBinding binding, IHGPortPolicy policy, IHGPortPresentation presentation)
+    {
+        if (binding == null || policy == null || presentation == null) return Reject(HGPortBuildResult.InvalidBinding);
+        var role = binding is IHGOutputPortBinding ? HGPortRole.Output : HGPortRole.Input;
+        return Add(new HGPort(WithRole(key, role), binding, policy, presentation, Generation));
+    }
+
     public bool TryGet(HGPortKey key, out HGPort port) => byKey.TryGetValue(key, out port);
     public bool TryGetDescriptor(HGPortKey key, out HGPortDescriptor descriptor)
         => descriptorsByKey.TryGetValue(key, out descriptor);
@@ -758,6 +850,13 @@ public sealed class HGPortBuildContext
 
     public bool AddAggregate(HGPortKey key, IHGPortPresentation presentation, IHGPortPolicy policy = null)
         => Record(key, registry.AddAggregate(key, presentation, policy));
+
+    /// <summary>
+    /// 內建的清單新增接點。預備元素不在圖上，走 <see cref="AddInput"/> 會被當成外來 binding 擋掉，所以另開這條內部入口。
+    /// </summary>
+    internal bool AddListAppend(HGPortKey key, IHGListAppendBinding binding, IHGPortPolicy policy,
+        IHGPortPresentation presentation)
+        => Record(key, registry.AddListAppend(key, binding, policy, presentation));
 
     internal bool TryGet(HGPortKey key, out HGPort port) => registry.TryGet(key, out port);
 

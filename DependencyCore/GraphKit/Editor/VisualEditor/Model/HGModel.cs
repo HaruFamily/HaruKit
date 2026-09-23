@@ -95,6 +95,13 @@ public class HGModel
     // 快取在這一層而不是選單那一層：兩個選單入口共用同一份，不會有一邊漏過濾。
     public IReadOnlyList<object> AvailableRootKeys { get; private set; }
     public bool Dirty { get; private set; }
+
+    /// <summary>
+    /// 自上次存檔或載入後，是否改過會影響執行的內容。只改版面（座標）時為 false：
+    /// 內容與上次通過驗證的版本相同，存檔可以略過 Core 驗證，不被既有錯誤擋住。
+    /// </summary>
+    public bool ContentDirty { get; private set; }
+
     public bool TrackChanges { get; set; } = true;
     public GraphDiagnostic LastCommitDiagnostic { get; internal set; }
 
@@ -219,6 +226,7 @@ public class HGModel
             commitGuard = nextGuard;
             LastCommitDiagnostic = null;
             Dirty = cleaned;
+            ContentDirty = cleaned;
             undoStack.Clear();
             redoStack.Clear();
             baseline = nextBaseline;
@@ -267,6 +275,7 @@ public class HGModel
         var previousBaseline = baseline;
         double push = lastPushTime;
         bool dirty = Dirty;
+        bool contentDirty = ContentDirty;
         return () =>
         {
             Data = copy;
@@ -275,12 +284,13 @@ public class HGModel
             baseline = previousBaseline;
             lastPushTime = push;
             Dirty = dirty;
+            ContentDirty = contentDirty;
         };
     }
 
     // ===== Undo / Redo（整份工作副本快照）=====
     // 圖是 SerializeReference 多型樹，逐項記錄變更比整份快照還難維護；節點數是幾十個等級，快照最直接。
-    // 快照掛在 MarkDirty：每個修改點本來就要呼叫它，不會有「忘了記錄 Undo」的漏洞。
+    // 快照掛在 MarkContentChanged／MarkLayoutChanged：每個修改點本來就要呼叫其一，不會有「忘了記錄 Undo」的漏洞。
     //
     private const int UndoLimit = 40;
     private const double MergeWindow = 0.4;          // 連續輸入合併成一步
@@ -299,9 +309,17 @@ public class HGModel
     public bool CanUndo => undoStack.Count > 0;
     public bool CanRedo => redoStack.Count > 0;
 
-    public void MarkDirty()
+    /// <summary>會影響執行的修改（接線、換來源、參數值、停用、備註…）：記 Undo、標未存檔，存檔要重新驗證。</summary>
+    public void MarkContentChanged() => RecordChange(true);
+
+    /// <summary>只改版面（座標、收合）：記 Undo、標未存檔，但存檔沿用上次驗證結果。</summary>
+    public void MarkLayoutChanged() => RecordChange(false);
+
+    // 與 IGraphDocument.InvalidateValidation（撤銷文件的已驗證旗標）是兩件事：這裡只管未存狀態與 Undo。
+    private void RecordChange(bool content)
     {
         if (!TrackChanges) return;
+        if (content) ContentDirty = true;
         if (Data == null) return;
         double now = EditorApplication.timeSinceStartup;
 
@@ -363,6 +381,8 @@ public class HGModel
             baseline = DeepCopy(Data);
             lastPushTime = 0d;
             Dirty = true;
+            // 快照換掉整份資料，分不出退回的是內容還是座標：保守當成內容變了，下次存檔照常驗證。
+            ContentDirty = true;
             return HGStepKind.Graph;
         }
 
@@ -398,6 +418,7 @@ public class HGModel
         if (changed)
         {
             Dirty = true;
+            ContentDirty = true;
             undoStack.Clear();
             redoStack.Clear();
             baseline = DeepCopy(Data);
@@ -413,14 +434,19 @@ public class HGModel
         if (LastCommitDiagnostic != null) return false;
         var toStore = DeepCopy(Data);
         if (toStore == null) return false;
-        toStore.MarkDirty();
-        HGOwnerValidation.VerifyDocument(toStore, Owner);
-        if (!toStore.IsValidated)
+        // 只改版面、而且目前已儲存的就是通過驗證的版本：寫回的內容與它相同，沿用驗證結果，不重跑也不被既有錯誤擋住。
+        // 遺失型別清理與版本衝突檢查不屬於驗證，上面照樣跑過。
+        if (!IsLayoutOnlySave(toStore))
         {
-            LastCommitDiagnostic = new GraphDiagnostic("graphkit.commit.validation-failed", GraphDiagnosticSeverity.Error,
-                "Core 驗證未通過，Owner 未寫入；請修正 Console 中的錯誤。",
-                new GraphDiagnosticLocation(documentId: DocumentId));
-            return false;
+            toStore.InvalidateValidation();
+            HGOwnerValidation.VerifyDocument(toStore, Owner);
+            if (!toStore.IsValidated)
+            {
+                LastCommitDiagnostic = new GraphDiagnostic("graphkit.commit.validation-failed", GraphDiagnosticSeverity.Error,
+                    "Core 驗證未通過，Owner 未寫入；請修正 Console 中的錯誤。",
+                    new GraphDiagnosticLocation(documentId: DocumentId));
+                return false;
+            }
         }
 
         if (!commitGuard.TryWrite(toStore, out var failure))
@@ -433,8 +459,15 @@ public class HGModel
             EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
         AssetDatabase.SaveAssets();
         Dirty = false;
+        ContentDirty = false;
         return true;
     }
+
+    /// <summary>這次存檔可以沿用上次的驗證結果：內容沒變，而且要寫回的副本本身就帶著通過的旗標。</summary>
+    private bool IsLayoutOnlySave(IGraphDocument toStore) => !ContentDirty && toStore.IsValidated;
+
+    /// <summary>視窗用：目前的未存修改只有版面，存檔不會被驗證錯誤擋住。</summary>
+    public bool HasOnlyLayoutChanges => Dirty && !ContentDirty && IsStoredDocumentValidated;
 
     private bool TryCloneBoundDocument(IGraphDocument document, out IGraphDocument clone)
     {
@@ -721,7 +754,7 @@ public class HGModel
         var endpoint = new GraphToken(NextTokenName(scope, slot.FamilyType), slot);
         endpoint.EnsureId();
         scope.Add(endpoint);
-        MarkDirty();
+        MarkContentChanged();
         return endpoint;
     }
 
@@ -754,7 +787,7 @@ public class HGModel
         copy.Name = CopyName(scope, source.Name, copy.FamilyType);
 
         scope.Add(copy);
-        MarkDirty();
+        MarkContentChanged();
         return copy;
     }
 
@@ -792,7 +825,7 @@ public class HGModel
         }
 
         endpoint.Name = name;
-        MarkDirty();
+        MarkContentChanged();
         return true;
     }
 
@@ -821,7 +854,7 @@ public class HGModel
         scope?.Remove(endpoint);
         foreach (var node in carriers ?? AllCarriers())
             if (node != null && ReferenceEquals(node.Token, endpoint)) node.Clear();
-        MarkDirty();
+        MarkContentChanged();
     }
 
     /// <summary>這個Token在圖內被幾個欄位接著。0＝純對外端點，不是錯誤。</summary>
@@ -877,7 +910,7 @@ public class HGModel
         var property = new GraphProperty(proto ? NextPropertyName(scope, slot.FamilyType) : null, slot, proto);
         property.EnsureId();
         scope.Add(property);
-        MarkDirty();
+        MarkContentChanged();
         return property;
     }
 
@@ -925,7 +958,7 @@ public class HGModel
         }
 
         property.Name = name;
-        MarkDirty();
+        MarkContentChanged();
         return true;
     }
 
@@ -954,7 +987,7 @@ public class HGModel
         scope?.Remove(property);
         foreach (var node in carriers ?? AllCarriers())
             if (node != null && ReferenceEquals(node.Property, property)) node.Clear();
-        MarkDirty();
+        MarkContentChanged();
     }
 
     /// <summary>這顆 Property 在圖內被幾個欄位接著（讀取與寫入合計）。0 不是錯誤。</summary>
@@ -981,7 +1014,7 @@ public class HGModel
         node.EnsureId();
         var list = Orphans;
         if (list != null && !list.Contains(node)) list.Add(node);
-        MarkDirty();
+        MarkContentChanged();
     }
 
     public void RemoveOrphan(GraphNode node)
@@ -993,7 +1026,7 @@ public class HGModel
             foreach (var head in Heads())
                 if (HGReflect.Orphans(head)?.Remove(node) == true) break;
         }
-        MarkDirty();
+        MarkContentChanged();
     }
 
     // ===== 座標記憶 =====
@@ -1035,7 +1068,7 @@ public class HGModel
 
         if (carrier is GraphNode node) node.Pos = pos;
         else HGReflect.SetHeadPos(carrier, pos);
-        MarkDirty();
+        MarkLayoutChanged();
     }
 
     public bool TryGetNodeView(string nodeId, out string tips)
@@ -1050,18 +1083,18 @@ public class HGModel
     {
         if (Carrier(nodeId) is not GraphNode node || node.Note == tips) return;
         node.Note = tips;
-        MarkDirty();
+        MarkContentChanged();
     }
 
     /// <summary>
     /// 切換節點停用。停用的載體不求值，所有指著它的欄位一律取自己的保底值（Action 直接跳過）。
-    /// 這是資料變更不是視覺狀態，所以走 MarkDirty；HEAD 沒有載體，改不到。
+    /// 這是資料變更不是視覺狀態，所以走 MarkContentChanged；HEAD 沒有載體，改不到。
     /// </summary>
     public void SetNodeDisabled(string nodeId, bool disabled)
     {
         if (Carrier(nodeId) is not GraphNode node || node.Disabled == disabled) return;
         node.Disabled = disabled;
-        MarkDirty();
+        MarkContentChanged();
     }
 
     /// <summary>忘掉手動座標，讓自動排版重新接手（整理版面）。</summary>
@@ -1071,7 +1104,7 @@ public class HGModel
         if (carrier == null) return;
         if (carrier is GraphNode node) node.ClearPos();
         else HGReflect.ClearHeadPos(carrier);
-        MarkDirty();
+        MarkLayoutChanged();
     }
 
     // ===== 全圖走訪 =====

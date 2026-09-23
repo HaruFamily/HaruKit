@@ -33,7 +33,7 @@ AP 是 **Editor-only、同步執行**的資產處理管線框架。一個 `Asset
 | `AssetPipeline.Execution.cs` | `RunPipeline()`：驗證、Property 備份、依序執行、提交或回復 |
 | `AssetPipeline.PipelineTab.cs` | 驗證快照、執行確認、Inspector 用的執行入口 |
 | `AssetPipelineEditor.cs` | Inspector：執行按鈕、結果面板、Property 快照、遺失型別提示、回復重試 |
-| `Graph.cs` | `Graph`（實作 `IGraphDocument`、`ITokenOwner`、`IPropertyOwner`）與 `ActionGroup` |
+| `Graph.cs` | `Graph`（實作 `IGraphDocument`、`ITokenOwner`、`IPropertyOwner`、`IGraphViewStateOwner`；`_viewState` 是節點圖收合版面，只給編輯器用）與 `ActionGroup` |
 | `GraphDrawer.cs` | Inspector 上的圖卡片（開圖、驗證）、結果定位 |
 | `GraphVerifier.cs` | 結構與型別驗證，產生 `GraphDiagnostic` |
 | `GraphPropertyWalk.cs` | 收集整張圖用到的 Property 定義（ProtoProperty＋LocalProperty） |
@@ -48,7 +48,7 @@ AP 是 **Editor-only、同步執行**的資產處理管線框架。一個 `Asset
 ## 3. 資料流
 
 1. 使用者在 GraphKit 編輯器編輯 `graph` 的工作副本，存檔時驗證通過才寫回資產。
-2. Inspector 的圖卡片按「驗證」後，記下整份資產的序列化快照。**快照與目前內容不一致時執行按鈕鎖住**；改過圖或欄位都要重新驗證。按下執行後還有一次確認對話框。
+2. Inspector 的圖卡片按「驗證」後，記下整份資產的序列化快照。**快照與目前內容不一致時執行按鈕鎖住**；改過圖或欄位都要重新驗證（快照涵蓋整份資產，存過座標或收合版面後同樣需要重新驗證）。按下執行後還有一次確認對話框。
 3. `RunPipeline()` 使用 Owner 上**已儲存**的 `graph`，不讀編輯器尚未存檔的工作副本。執行前再驗證一次。
 4. 依 `graph.Actions` 順序同步執行每個啟用的 `ActionSlot`。一步失敗就停止後續步驟並回復整次執行。
 5. 動作之間傳遞資料只透過 Property：上游以 `PropertySlot.Write` 寫入，下游輸入 Slot 讀取目前值。

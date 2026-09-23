@@ -22,6 +22,24 @@ public partial class HaruGraphWindow : EditorWindow
     private const float NodeCornerRadius = 6f;
     private const float LinkSnapDistance = 24f;
     private const float LinkThickness = 4f;
+    // 連線頭尾的水平短線長度與兩個轉折的圓角半徑（graph space）。
+    private const float LinkStub = 20f;
+    private const float LinkCornerRadius = 10f;
+    private const int LinkCornerSegments = 6;
+    // 收合欄位的殘影：斜線段轉成漸淡虛線的固定長度；兩端太近放不下時改用斜線長度的比例（兩端各一段，要在中間斷開）。
+    private const float LinkGhostLength = 60f;
+    private const float LinkGhostShare = 0.4f;
+    private const float LinkGhostDash = 6f;
+    private const float LinkGhostGap = 4f;
+    // 折疊清單的元素連線從標題的代表接點扇形散開：相鄰兩條的角度差與整把扇的單側上限（度）。
+    private const float FoldFanStep = 15f;
+    private const float FoldFanMax = 45f;
+    // 連線路徑的暫存：每條線每幀都要算，重用同一份避免配置。只在主執行緒的 OnGUI 內使用。
+    private readonly List<Vector2> linkPath = new();
+    // 折疊清單元素連線的扇形角度（度），由 RebuildFoldFan 在繪製與點線剪斷前重算；不在表內的線照一般路徑。
+    private readonly Dictionary<HGLink, float> foldFan = new();
+    private readonly Dictionary<HGRow, List<HGLink>> foldFanGroups = new();
+    private Vector3[] linkScreenPoints = new Vector3[16];
     // 就地複製（Ctrl+D）的位移：看得出是新的一份，又還留在原件旁邊。不吸附格線——
     // 吸附會讓複本疊回原件的格子上，正好看不出來多了一顆。
     private const float DuplicateOffset = 28f;
@@ -163,6 +181,13 @@ public partial class HaruGraphWindow : EditorWindow
     private readonly Dictionary<string, string> drawerFailures = new();
     // 選取用 id 記，節點物件每次重建圖都會換一份。
     private readonly HashSet<string> selectedIds = new();
+
+    // 被點過而浮到最上層的節點，越後面越上層。純視圖狀態：不進文件、不進 Undo，每次重建圖後重新套用。
+    private readonly List<string> raisedNodeIds = new();
+    private const int RaisedNodeLimit = 64;
+
+    // 這一代接點裡有連線的那些，RebuildPorts 時重算；接點畫 ○ 還是 ◎ 看它。
+    private readonly HashSet<HGPort> linkedPorts = new();
     // 空註解框是暫態：只跟著這一顆被選取的節點活著，不寫進資料。
     private string noteOpenId;
     // 手動收起的註解：只影響顯示，內容仍留在載體上。
@@ -483,6 +508,7 @@ public partial class HaruGraphWindow : EditorWindow
 
         // 候選池掛在焦點的頭端上，不必再依 FocusId 過濾。
         model.OrphanHead = focus.Head;
+        LoadViewState();
 
         // 一顆 HEAD 都沒有也要建：時機畫布可能還沒有任何時機節點，但候選節點仍要畫出來。
         HGGraphView built = null;
@@ -505,6 +531,7 @@ public partial class HaruGraphWindow : EditorWindow
             graphDirty = false;
         }
         graph = built;
+        ApplyNodeOrder();
         foreach (var node in graph.Nodes)
             foreach (var row in HGGraph.AllRows(node.Rows))
                 if (drawerFailures.TryGetValue(node.Id + "#" + row.Path, out var error))
@@ -517,7 +544,7 @@ public partial class HaruGraphWindow : EditorWindow
         if (graph.Normalized)
         {
             if (focus.Kind == HGFocusKind.Asset) MarkAssetContentChanged();
-            else { model.MarkDirty(); reportStale = true; }
+            else { model.MarkContentChanged(); reportStale = true; }
             LiveVerify();
         }
 
@@ -553,12 +580,19 @@ public partial class HaruGraphWindow : EditorWindow
         }
 
         // 收合的是**欄位**不是節點：先把所有「該收起來」的欄位挑出來。
+        // 清單標題自己也有一筆記錄：收起來時底下每個元素都算收起來，但元素自己的記錄不動，
+        // 清單再展開時，原本個別收起來的元素仍然收著。
         foreach (var n in graph.Nodes)
         {
             foreach (var row in HGGraph.AllRows(n.Rows))
             {
+                if (row.Kind == HGRowKind.List)
+                {
+                    if (IsSlotHidden(n, row)) effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
+                    continue;
+                }
                 if (!row.HasSlot) continue;
-                if (IsSlotHidden(n, row)) effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
+                if (IsSlotHidden(n, row) || IsInHiddenList(n, row)) effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
             }
         }
 
@@ -590,6 +624,88 @@ public partial class HaruGraphWindow : EditorWindow
         noteOpenId = null;
         carrierUsers.Clear();
         selectedIds.Clear();
+        raisedNodeIds.Clear();
+    }
+
+    /// <summary>
+    /// 目前焦點的收合版面存在哪：資產焦點記在資產本體（與 HEAD 座標同處），其餘記在 Owner 文件的工作副本。
+    /// 回 null＝這份文件不保存版面，收合只活在視窗記憶體裡。
+    /// </summary>
+    private GraphViewState CurrentViewState()
+        => focus?.Kind == HGFocusKind.Asset
+            ? (focus.AssetObject as IGraphViewStateOwner)?.ViewState
+            : (model?.Doc as IGraphViewStateOwner)?.ViewState;
+
+    /// <summary>
+    /// 建圖前把文件上的收合版面讀進視窗的查詢表。文件是唯一正本，查詢表每次重建都重讀：
+    /// Undo／Redo、取消、換焦點之後自然跟著資料走，不必各自同步。
+    /// </summary>
+    private void LoadViewState()
+    {
+        var state = CurrentViewState();
+        if (state == null) return;
+        slotHidden.Clear();
+        foreach (var key in state.Hidden) slotHidden[key] = true;
+        listCollapse.Clear();
+        foreach (var key in state.Folded) listCollapse[key] = true;
+        foreach (var key in state.Unfolded) listCollapse[key] = false;
+        noteCollapsed.Clear();
+        foreach (var id in state.NotesCollapsed) noteCollapsed.Add(id);
+    }
+
+    // 三個切換入口：先改查詢表（沒有文件正本時就只活在這裡），有正本就同時寫回並記成版面修改。
+    private void SetSlotHidden(string key, bool hidden)
+    {
+        slotHidden[key] = hidden;
+        if (CurrentViewState()?.SetHidden(key, hidden) == true) MarkViewStateChanged();
+    }
+
+    private void SetListFolded(string key, bool folded)
+    {
+        listCollapse[key] = folded;
+        if (CurrentViewState()?.SetFolded(key, folded) == true) MarkViewStateChanged();
+    }
+
+    private void SetNoteCollapsed(string nodeId, bool collapsed)
+    {
+        if (collapsed) noteCollapsed.Add(nodeId);
+        else noteCollapsed.Remove(nodeId);
+        if (CurrentViewState()?.SetNoteCollapsed(nodeId, collapsed) == true) MarkViewStateChanged();
+    }
+
+    /// <summary>
+    /// 收合是版面修改：Owner 焦點記未存檔與 Undo，但不算內容（存檔沿用上次驗證）；
+    /// 資產焦點的版面記在資產本體上，比照 HEAD 座標標 SetDirty 與 assetDirty。
+    /// </summary>
+    private void MarkViewStateChanged()
+    {
+        if (focus.Kind == HGFocusKind.Asset)
+        {
+            if (focus.AssetObject != null) EditorUtility.SetDirty(focus.AssetObject);
+            MarkPositionsChanged();
+            return;
+        }
+        model.MarkLayoutChanged();
+        UpdateUnsavedState();
+    }
+
+    /// <summary>
+    /// 讓被收起來的節點重新看得到：沿父欄位一路往上，把收起它的欄位與所屬清單都打開。
+    /// 其他地方的收合保持原樣——整張圖清空會洗掉作者存下來的版面。
+    /// </summary>
+    private void RevealNode(HGNodeView target)
+    {
+        soloSlotKey = null;
+        soloRestore.Clear();
+        var seen = new HashSet<HGNodeView>();
+        for (var node = target; node?.ParentRow != null && seen.Add(node); node = NodeById(node.ParentRow.OwnerNodeId))
+        {
+            HGRow row = node.ParentRow;
+            SetSlotHidden(HGGraph.CollapseKey(row.OwnerNodeId, row), false);
+            for (HGRow list = row.ItemOwnerRow; list != null; list = list.ItemOwnerRow)
+                SetSlotHidden(HGGraph.CollapseKey(row.OwnerNodeId, list), false);
+        }
+        graphDirty = true;
     }
 
     /// <summary>
@@ -600,6 +716,14 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private bool IsSlotHidden(HGNodeView owner, HGRow row)
         => slotHidden.TryGetValue(HGGraph.CollapseKey(owner.Id, row), out bool stored) && stored;
+
+    /// <summary>這一列屬於某個被收起來的清單（巢狀清單任一層收起來都算）。</summary>
+    private bool IsInHiddenList(HGNodeView owner, HGRow row)
+    {
+        for (HGRow list = row.ItemOwnerRow; list != null; list = list.ItemOwnerRow)
+            if (IsSlotHidden(owner, list)) return true;
+        return false;
+    }
 
     /// <summary>
     /// 把「目標已經被藏起來」的欄位補進 effectiveHidden，收合鈕才會畫成 +。
@@ -625,6 +749,10 @@ public partial class HaruGraphWindow : EditorWindow
         var keep = new HashSet<HGNodeView>();
         var row = FindSlotRow(soloSlotKey);
         if (row?.InputSlot != null && graph.BySlot.TryGetValue(row.InputSlot, out var target)) MarkSubtree(target, keep);
+        // 清單標題的 solo：留下每個元素接出去的子樹。
+        if (row?.Kind == HGRowKind.List)
+            foreach (var element in HGGraph.AllRows(row.Children))
+                if (element.HasSlot && graph.BySlot.TryGetValue(element.InputSlot, out var child)) MarkSubtree(child, keep);
 
         // 持有這個欄位的節點、以及它一路往上的祖先都要留著。把來路藏掉的話，
         // 畫面上會剩一段浮在空中、看不出從哪裡接出來的子樹，連要退出 solo 的那顆開關都不見了。
@@ -673,9 +801,61 @@ public partial class HaruGraphWindow : EditorWindow
     private bool IsLinkVisible(HGLink link)
     {
         if (link?.InputPort == null || link.OutputPort == null) return false;
-        if (!link.InputPort.Presentation.Visible || !link.OutputPort.Presentation.Visible) return false;
-        return !effectiveHidden.Contains(HGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow));
+        if (effectiveHidden.Contains(HGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow))) return false;
+        return IsLinkEndVisible(link, link.InputPort) && IsLinkEndVisible(link, link.OutputPort);
     }
+
+    /// <summary>
+    /// 連線一端畫不畫。欄位端被折疊的清單蓋住時，接點本身不可見（不能起手、不能當放線目標），
+    /// 但線照畫：起點已由 CollapseRows 壓到清單標題列，也就是代表接點的位置。
+    /// </summary>
+    private bool IsLinkEndVisible(HGLink link, HGPort port)
+    {
+        if (port.Presentation.Visible) return true;
+        return FoldedListOf(link) != null && ReferenceEquals(OwnerRowOfPort(port), link.ParentRow);
+    }
+
+    /// <summary>欄位列被哪一個折疊中、自己看得到的清單標題蓋住；沒有就回 null。巢狀清單取最外層那個看得到的。</summary>
+    private static HGRow FoldedListOf(HGLink link)
+    {
+        HGRow row = link?.ParentRow;
+        if (row == null || !row.Hidden || link.InputOwner == null || link.InputOwner.Hidden) return null;
+        for (HGRow list = row.ItemOwnerRow; list != null; list = list.ItemOwnerRow)
+            if (list.Collapsed && !list.Hidden) return list;
+        return null;
+    }
+
+    /// <summary>
+    /// 同一個折疊清單伸出的線依目標高度排序、等角散開：上面的目標拿上面的角度，線在起點不交叉。
+    /// 一條就是 0 度（維持水平）；條數多時壓縮間距，整把扇不超過 ±<see cref="FoldFanMax"/>。
+    /// </summary>
+    private void RebuildFoldFan()
+    {
+        foldFan.Clear();
+        // 清單列每次建圖都換新物件，整表清掉，不留住上一代的列。
+        foldFanGroups.Clear();
+        if (graph == null) return;
+
+        foreach (var link in graph.Links)
+        {
+            HGRow list = FoldedListOf(link);
+            if (list == null || !IsLinkVisible(link)) continue;
+            if (!foldFanGroups.TryGetValue(list, out var group)) foldFanGroups[list] = group = new List<HGLink>();
+            group.Add(link);
+        }
+
+        foreach (var group in foldFanGroups.Values)
+        {
+            group.Sort((a, b) => FoldTargetPort(a).Presentation.Position.y.CompareTo(FoldTargetPort(b).Presentation.Position.y));
+            float step = group.Count > 1 ? Mathf.Min(FoldFanStep, FoldFanMax * 2f / (group.Count - 1)) : 0f;
+            for (int i = 0; i < group.Count; i++)
+                foldFan[group[i]] = (i - (group.Count - 1) * 0.5f) * step;
+        }
+    }
+
+    /// <summary>折疊清單元素連線的目標端：欄位列那一端以外的接點（寫入 Property 的線兩端角色相反，用列比對）。</summary>
+    private HGPort FoldTargetPort(HGLink link)
+        => ReferenceEquals(OwnerRowOfPort(link.InputPort), link.ParentRow) ? link.OutputPort : link.InputPort;
 
     /// <summary>
     /// 從這顆節點沿「沒有收起來」的欄位往下走，走得到的節點都要畫。沒有父列的節點（HEAD 與候選）
@@ -696,7 +876,7 @@ public partial class HaruGraphWindow : EditorWindow
     {
         foreach (var n in graph.Nodes)
             foreach (var row in HGGraph.AllRows(n.Rows))
-                if (row.HasSlot && HGGraph.CollapseKey(n.Id, row) == key) return row;
+                if ((row.HasSlot || row.Kind == HGRowKind.List) && HGGraph.CollapseKey(n.Id, row) == key) return row;
         return null;
     }
 
@@ -728,7 +908,7 @@ public partial class HaruGraphWindow : EditorWindow
                 soloRestore.Clear();
             }
             // 從 solo 退出的那一下只負責退出：使用者還沒看到還原後的樣子，不該同時再改動一項。
-            if (!solo && !wasSolo) slotHidden[key] = !effectiveHidden.Contains(key);
+            if (!solo && !wasSolo) SetSlotHidden(key, !effectiveHidden.Contains(key));
         }
 
         // 純視覺：只重建圖與重畫，不可以走 Invalidate，否則按個收合鈕就把資產標成未存檔。
@@ -766,7 +946,7 @@ public partial class HaruGraphWindow : EditorWindow
 
     /// <summary>
     /// 座標這種「寫進載體、但不動圖結構也不必重跑驗證」的修改。
-    /// Owner 焦點由 `HGModel.SetPosition` 內部的 `MarkDirty()` 記；**資產焦點的 `TrackChanges` 是關的**，
+    /// Owner 焦點由 `HGModel.SetPosition` 內部的 `MarkLayoutChanged()` 記；**資產焦點的 `TrackChanges` 是關的**，
     /// 那條路整個 early-return，所以要在這裡補記 `assetDirty`——否則搬完節點存檔鈕還是灰的，一離開位置就沒了。
     /// </summary>
     private void MarkPositionsChanged()
@@ -908,7 +1088,7 @@ public partial class HaruGraphWindow : EditorWindow
         }
         else
         {
-            model.MarkDirty();
+            model.MarkContentChanged();
             reportStale = true;
         }
         LiveVerify();
@@ -1111,6 +1291,8 @@ public partial class HaruGraphWindow : EditorWindow
         bool blocked = !Rep.CanSave;
         // 資產只搬過座標時不擋：內容沒變，存回去的東西跟磁碟上一樣，不該被它本來就有的錯誤鎖住位置。
         if (inAsset && !assetContentDirty) blocked = false;
+        bool layoutOnly = !inAsset && model.HasOnlyLayoutChanges;
+        if (layoutOnly) blocked = false;
         // 共用資產存檔會把引用它的 Owner 標成未驗證，但工作副本一個字都沒改（Dirty=false）。
         // 存檔是唯一會重跑 Core Verify 並寫回 Owner 的入口，這時候不開它就沒有任何路可以把圖救回已驗證。
         bool needsRevalidate = !inAsset && !model.IsStoredDocumentValidated;
@@ -1129,6 +1311,7 @@ public partial class HaruGraphWindow : EditorWindow
             SaveTooltip = blocked ? "驗證有錯誤，先在 Console 修正才能存檔"
                 : needsRevalidate ? "重新驗證目前圖，通過後儲存"
                 : !hasChanges ? "目前沒有未儲存的修改"
+                : layoutOnly ? "只改了版面：內容未變，沿用上次驗證結果直接寫回"
                 : !IsCurrentReportFresh ? "按下後先做完整驗證（含循環與型別遺失），通過才會存檔"
                 : "驗證通過後寫回資產",
             // 資產焦點的「返回」與存檔分開：存檔留在畫布上，返回才退出（有未存修改會先問要不要捨棄）。

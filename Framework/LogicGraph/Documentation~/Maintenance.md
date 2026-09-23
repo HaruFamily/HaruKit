@@ -47,6 +47,7 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 - `LogicGraph<TTiming, TPack>` 實作 GraphKit 的 `IGraphDocument`，能力是共用資產、Token、Property 三種全開。
 - 一個時機是一顆 `ActionTimingGroup<TTiming, TPack>` root，本體是有順序的 `ActionSlot<TPack>` 清單。所有時機共用一張畫布，候選池在 `LogicGraph.Orphans`。
 - `TriggerAction(timing, pack[, cancellationToken, executionName])` 每次建立新的 `TokenTable`，依清單順序 await 每個動作。
+- `LogicGraph<,>`、`FormulaAssetBase`、`ActionAssetBase` 實作 GraphKit 的 `IGraphViewStateOwner`，`_viewState` 存節點圖的收合版面（規則見 GraphKit 手冊硬規則 13）。它只給編輯器用，不參與執行、驗證與 `InvalidateValidation()`。
 
 ### 3.2 Action 與 Formula
 
@@ -75,7 +76,7 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 
 - Action 以 `PropertySlot<TResult, TSlot>` 宣告寫入端（例如 `PropertySlot<string, KeySlot>`），呼叫 `Write(value, tokens)` 替換目前值。欄位用一般內嵌序列化，**不要在封閉泛型欄位上加 `[SerializeReference]`**。泛型約束不會證明 TResult 與 TSlot 的結果型別一致，宣告時要自己配對。
 - 目前值存在非序列化的 `PropertyStore`：每個圖實例一個 root scope，資產呼叫依（資產 × 呼叫節點）建立子 scope。同一位置再次執行沿用舊值。
-- **只有 `InitializeProperties()` 會清空目前值。** `MarkDirty()` 只影響編輯與驗證狀態。`DeepCopy()` 不複製執行狀態，複本從未寫入開始。
+- **只有 `InitializeProperties()` 會清空目前值。** `InvalidateValidation()` 只影響編輯與驗證狀態。`DeepCopy()` 不複製執行狀態，複本從未寫入開始。
 - 讀取 Property 只取目前值，不執行寫入它的 Action；寫入端不是求值依賴。
 
 ## 4. 硬規則
@@ -84,7 +85,7 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 2. **`ActionSlot._disabled` 等反向旗標不可改名成 `_enabled`。**
 3. `FormulaSlotBase`／`ActionSlotBase` 在 GraphKit，泛型的 `FormulaSlot<,,,>`／`ActionSlot<>` 在本套件，兩者**分檔**，基底維持零欄位。
 4. **未驗證的圖不執行。** `TriggerAction` 與 `CreateTokenTable` 在 `_validated` 為 false 時記錄錯誤並跳過；runtime 不可自行補驗證。`MarkValidated()` 只能用在程式建立且已自行保證正確的圖。
-5. 程式修改圖之後呼叫 `MarkDirty()`，再用 Inspector 或 Editor-only 的 `LogicGraphEditor.Verify(owner)` 驗證。無參數的 `graph.Verify()` 只驗 Core 規則，拿不到 Owner 的 Usage。
+5. 程式修改圖之後呼叫 `InvalidateValidation()`，再用 Inspector 或 Editor-only 的 `LogicGraphEditor.Verify(owner)` 驗證。無參數的 `graph.Verify()` 只驗 Core 規則，拿不到 Owner 的 Usage。
 6. **驗證有兩趟**：第一趟不穿透停用節點（殘缺是錯誤），第二趟補走停用子樹（殘缺降為警告）。順序不可顛倒；只要還有一條啟用路徑指著同一個載體，殘缺仍是錯誤。GraphKit 的 `HGValidator` 要同步同一套判準。
 7. **不要把 Node 的序列化欄位當跨呼叫的快取**；每次執行的上下文放在 Pack。
 8. 缺來源或停用的公式回 Slot 保底值；**節點本體丟出的例外照常往外傳**，保底值不是通用例外處理。runtime 遇到型別不符或空節點時，每個 Slot 只警告一次並回保底值。
@@ -145,7 +146,7 @@ public sealed class LogAmountAction : ActionBase<MyPack>
 
 ## 7. 執行觀察
 
-`LogicGraph<,>` 實作 GraphKit 的 `IGraphExecutionDocument`。`DeepCopy()` 共用觀察 source 並保留當下的內容版本；`MarkDirty()` 只推進該文件的版本。每次有觀察者的 `TriggerAction` 建立一個 session；`ActionSlot.Execute`／`FormulaSlot.Evaluate` 在有效且未停用的載體入口建立 visit，**先 await Hold 再執行內容**，成功、例外、取消都回報。資產 scope 為 `asset:<instance id>`；binding 在呼叫端 scope 求值。獨立的 `CreateTokenTable` 查詢不算時機 session。
+`LogicGraph<,>` 實作 GraphKit 的 `IGraphExecutionDocument`。`DeepCopy()` 共用觀察 source 並保留當下的內容版本；`InvalidateValidation()` 只推進該文件的版本。每次有觀察者的 `TriggerAction` 建立一個 session；`ActionSlot.Execute`／`FormulaSlot.Evaluate` 在有效且未停用的載體入口建立 visit，**先 await Hold 再執行內容**，成功、例外、取消都回報。資產 scope 為 `asset:<instance id>`；binding 在呼叫端 scope 求值。獨立的 `CreateTokenTable` 查詢不算時機 session。
 
 ## 8. 描述編譯
 

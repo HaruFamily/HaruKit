@@ -119,8 +119,12 @@ public sealed class HGDescriptionAttribute : Attribute
     }
 }
 
-/// <summary>把 enum 欄位繪製成按鈕列；支援 [Flags] enum 多選。</summary>
-[AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
+/// <summary>
+/// 把 enum 欄位繪製成按鈕列；支援 [Flags] enum 多選。
+/// 標在 Slot 類別上＝這一族的常數框在所有位置（欄位、Token、資產參數、變數庫）都畫按鈕列。
+/// </summary>
+// 類別與欄位是 OR：欄位只能額外開啟，不能關掉 Slot 類別的宣告。Inherited 讓子類 Slot 沿用。
+[AttributeUsage(AttributeTargets.Field | AttributeTargets.Class, Inherited = true, AllowMultiple = false)]
 public sealed class HGEnumAttribute : Attribute { }
 
 }

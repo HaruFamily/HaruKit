@@ -14,7 +14,8 @@ using UnityEditor;
 
 
 [Serializable]
-public partial class LogicGraph<TTiming, TPack> : IGraphDocument, ITokenOwner, IPropertyOwner, IGraphExecutionDocument, IGraphDocumentValidation
+public partial class LogicGraph<TTiming, TPack> : IGraphDocument, ITokenOwner, IPropertyOwner, IGraphExecutionDocument, IGraphDocumentValidation,
+    IGraphViewStateOwner
 where TTiming : Enum
 {
     [SerializeReference]
@@ -111,6 +112,12 @@ where TTiming : Enum
         get { _properties ??= new List<GraphProperty>(); return _properties; }
     }
 
+    // 節點圖的收合版面。只給編輯器用，不影響執行與驗證。
+    [SerializeField, HideInInspector]
+    private GraphViewState _viewState = new();
+
+    GraphViewState IGraphViewStateOwner.ViewState => _viewState ??= new GraphViewState();
+
     [NonSerialized] private bool _hasLoggedValidationFailure;
     [NonSerialized] private GraphExecutionSource executionSource;
     [NonSerialized] private string executionRevision;
@@ -125,7 +132,7 @@ where TTiming : Enum
     public bool IsValidated => _validated;
 
     /// <summary>程式修改圖後呼叫，使驗證失效。編輯器中再由 Inspector 或 LogicGraphEditor.Verify(owner) 驗證含 Usage 的規則。</summary>
-    public void MarkDirty()
+    public void InvalidateValidation()
     {
         _validated = false;
         _hasLoggedValidationFailure = false;
@@ -159,7 +166,7 @@ where TTiming : Enum
     }
 
     /// <summary>明確捨棄此圖實例及其 Asset 呼叫 scope 的所有 Property 目前值。</summary>
-    // 只有這個入口重設。改圖的 MarkDirty() 不清目前值：那是編輯與驗證狀態，不是「作者要求初始化」。
+    // 只有這個入口重設。改圖的 InvalidateValidation() 不清目前值：那是編輯與驗證狀態，不是「作者要求初始化」。
     // 清的是 scope 裡的值而不是 store 本身，已經拿到 scope 的 TokenTable 才會一起回到未寫入狀態。
     public void InitializeProperties() => propertyStore?.Initialize();
 

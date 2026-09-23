@@ -1,6 +1,6 @@
 {
   "name": "com.harufamily.tools.assetpipeline",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "displayName": "AssetPipeline",
   "description": "Editor-only ordered asset pipeline framework built on the GraphKit node editor. Concrete steps and formulas live in the consuming project.",
   "unity": "2021.3",

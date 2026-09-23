@@ -1,6 +1,6 @@
 {
   "name": "com.harufamily.framework.logicgraph",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "displayName": "LogicGraph",
   "description": "Generic action, formula, token, validation, and description-compilation framework.",
   "unity": "2021.3",

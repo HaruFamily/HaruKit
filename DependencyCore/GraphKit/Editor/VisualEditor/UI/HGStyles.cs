@@ -56,7 +56,6 @@ public static class HGStyles
 
     // 取值接點用明度分層：空槽暗灰、接上與提供值的接點亮灰白；相容提示使用獨立外圈。
     public static readonly Color Link = new(0.80f, 0.80f, 0.82f);
-    public static readonly Color InputPortEmpty = new(0.42f, 0.42f, 0.43f);
     public static readonly Color InputPortLive = new(0.80f, 0.80f, 0.82f);
     public static readonly Color OutputPortLive = new(0.80f, 0.80f, 0.82f);
 
@@ -73,8 +72,10 @@ public static class HGStyles
     // 斑馬紋做成雙向（一亮一暗）而不是單向疊一層淡白：Slot 元素右半被 HGValueField 的欄位框蓋住，
     // 只剩左半在比對，單向 5% 的差異等於看不見。
     public static readonly Color ListStripeEven = new(1f, 1f, 1f, 0.07f);
-    public static readonly Color ListStripeOdd = new(0f, 0f, 0f, 0.12f);
-    public static readonly Color ListRule = new(1f, 1f, 1f, 0.13f);   // 新增列的外框
+    public static readonly Color ListStripeOdd = new(0f, 0f, 0f, 0.084f);
+    public static readonly Color ListRule = new(1f, 1f, 1f, 0.13f);   // 新增列與整段清單的外框
+    // 疊在底帶上的標題列：比斑馬紋暗一階，相鄰兩段清單靠「新的一段從這裡開始」分開。只用明度，不佔色相。
+    public static readonly Color ListHeader = new(0f, 0f, 0f, 0.176f);
     public static readonly Color ListRowHover = new(1f, 1f, 1f, 0.07f);
     public static readonly Color ListRowDragging = new(1f, 1f, 1f, 0.13f);
 
@@ -366,16 +367,28 @@ public static class HGStyles
         EditorGUI.DrawRect(new Rect(r.xMax - thickness, r.y, thickness, r.height), c);
     }
 
-    /// <summary>接點：以圓形區分資料流端點，外框保持在深色畫布上的辨識度。</summary>
-    public static void DrawInputPort(Rect r, Color c) => DrawPort(r, c);
+    /// <summary>
+    /// 接點：外環永遠在（一眼認得出是接點），中心實心點表示已接線——沒接 ○、有接 ◎。
+    /// 顏色只講用途（取值／寫入／錯誤），接不接交給中心點，兩件事不共用同一個通道。
+    /// </summary>
+    public static void DrawInputPort(Rect r, Color c, bool connected) => DrawPort(r, c, connected);
 
-    public static void DrawOutputPort(Rect r, Color c) => DrawPort(r, c);
+    public static void DrawOutputPort(Rect r, Color c, bool connected) => DrawPort(r, c, connected);
 
-    private static void DrawPort(Rect r, Color c)
+    /// <summary>中心點佔接點直徑的比例。要容得下收合用的 -／+，又要在 0.45 倍縮放下還看得到。</summary>
+    private const float PortCoreRatio = 0.6f;
+
+    private static void DrawPort(Rect r, Color c, bool connected)
     {
         float radius = Mathf.Min(r.width, r.height) * 0.5f;
-        RoundedFill(r, c, radius);
-        RoundedFrame(r, new Color(0f, 0f, 0f, 0.6f), radius);
+        // 環內壓暗：節點底色與畫布底色不同，空心處統一成深色，環才讀得出來。
+        RoundedFill(r, new Color(0f, 0f, 0f, 0.45f), radius);
+        RoundedFrame(r, c, radius, 2f);
+        if (!connected) return;
+
+        float core = radius * 2f * PortCoreRatio;
+        var coreRect = new Rect(r.center.x - core * 0.5f, r.center.y - core * 0.5f, core, core);
+        RoundedFill(coreRect, c, core * 0.5f);
     }
 }
 

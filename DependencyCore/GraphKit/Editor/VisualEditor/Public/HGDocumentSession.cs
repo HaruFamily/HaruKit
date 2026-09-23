@@ -102,7 +102,25 @@ public sealed class HGDocumentSession<TDocument>
     private HGSessionCommandResult ConnectCore(HGPortRegistry registry, HGPortKey first, HGPortKey second)
     {
         if (!TryGetConnection(registry, first, second, out HGPort input, out HGPort output, out var result)) return result;
+        if (input.Binding is IHGListAppendBinding append) return AppendAndConnect(append, output.Source);
         return ReplaceInputSource(input, output.Source);
+    }
+
+    /// <summary>
+    /// 清單新增接點（<see cref="HGPortRegistry.AddListAppend"/>）：在清單尾端新增預備元素並接上來源，一步 Undo。
+    /// 預備元素還不屬於文件，所以歸屬改驗清單本身；接受規則已由 TryGetConnection 以同一個 Check 驗過。
+    /// </summary>
+    private HGSessionCommandResult AppendAndConnect(IHGListAppendBinding append, IHGPortSource source)
+    {
+        if (!Owns(append.Items.List)) return HGSessionCommandResult.Rejected;
+        GraphNode next = source?.OutputNode;
+        if (!IsDocumentOwned(next)) return HGSessionCommandResult.Rejected;
+        return Apply(() =>
+        {
+            if (!append.Commit()) throw new InvalidOperationException("The list cannot add an item.");
+            append.Element.SetNode(next);
+            RemoveFromOrphanPools(next);
+        });
     }
 
     /// <summary>Replaces one registered input with a document-owned source through the normal session transaction.</summary>
@@ -193,7 +211,7 @@ public sealed class HGDocumentSession<TDocument>
                 LastDiagnostic = diagnostic;
                 return HGSessionCommandResult.ValidationFailed;
             }
-        toStore.MarkDirty();
+        toStore.InvalidateValidation();
         HGOwnerValidation.VerifyDocument(toStore, Owner);
         if (!toStore.IsValidated) return HGSessionCommandResult.ValidationFailed;
         if (!commitGuard.TryWrite(toStore, out var failure))
@@ -417,7 +435,7 @@ public sealed class HGDocumentSession<TDocument>
         try
         {
             mutation();
-            Document.MarkDirty();
+            Document.InvalidateValidation();
             undo.Add(snapshot);
             if (undo.Count > UndoLimit) undo.RemoveAt(0);
             redo.Clear();

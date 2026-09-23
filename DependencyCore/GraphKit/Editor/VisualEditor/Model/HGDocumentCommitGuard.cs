@@ -73,8 +73,8 @@ internal sealed class HGDocumentCommitGuard
                 throw new InvalidOperationException("清除後無法重新取得 Owner 文件。");
             cleanup.Apply(owner, current, working);
             baseline = current;
-            baseline?.MarkDirty();
-            working?.MarkDirty();
+            baseline?.InvalidateValidation();
+            working?.InvalidateValidation();
             revision = binding.ReadRevision(owner);
             EditorUtility.SetDirty(owner);
             changed = true;

@@ -484,9 +484,9 @@ public sealed class HGPublicConsumerTests
             Assert.That(model.IsStoredDocumentValidated, Is.False);
             Assert.That(model.Save(), Is.True);
             Assert.That(model.IsStoredDocumentValidated, Is.True);
-            owner.A.MarkDirty();
+            owner.A.InvalidateValidation();
             Assert.That(model.IsStoredDocumentValidated, Is.True);
-            owner.B.MarkDirty();
+            owner.B.InvalidateValidation();
             Assert.That(model.IsStoredDocumentValidated, Is.False);
         }
         finally { UnityEngine.Object.DestroyImmediate(owner); }
@@ -835,6 +835,44 @@ public sealed class HGPublicConsumerTests
         UnityEngine.Object.DestroyImmediate(owner);
     }
 
+    [Test]
+    public void SessionListAppendAddsOneLinkedItemAndUndoesInOneStep()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, Binding(), out var session), Is.True);
+            var appendKey = new HGPortKey("root", "/items", HGPortRole.Input);
+            var outputKey = new HGPortKey("consumer", "/source", HGPortRole.Output);
+            GraphNode source = session.Document.Orphans[0];
+            int before = session.Document.Root.Items.Count;
+
+            var registry = session.CreatePortRegistry();
+            Assert.That(registry.AddListAppend(appendKey, session.Document.Root.Items, typeof(ConsumerSlot), null,
+                ConsumerPresentation()), Is.True);
+            Assert.That(registry.AddOutput(outputKey, Source(source), new HGDelegatePortPolicy(() => true),
+                ConsumerPresentation()), Is.True);
+            Assert.That(session.Connect(registry, outputKey, appendKey), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(session.Document.Root.Items, Has.Count.EqualTo(before + 1));
+            Assert.That(session.Document.Root.Items[before].Node, Is.SameAs(source));
+            Assert.That(session.Document.Orphans.Contains(source), Is.False);
+
+            Assert.That(session.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(session.Document.Root.Items, Has.Count.EqualTo(before));
+
+            // 清單不屬於這個 session 的工作副本：拒絕，且不新增。
+            var foreign = session.CreatePortRegistry();
+            Assert.That(foreign.AddListAppend(appendKey, owner.B.Root.Items, typeof(ConsumerSlot), null,
+                ConsumerPresentation()), Is.True);
+            Assert.That(foreign.AddOutput(outputKey, Source(session.Document.Orphans[0]), new HGDelegatePortPolicy(() => true),
+                ConsumerPresentation()), Is.True);
+            Assert.That(session.Connect(foreign, outputKey, appendKey), Is.EqualTo(HGSessionCommandResult.Rejected));
+            Assert.That(owner.B.Root.Items, Has.Count.EqualTo(before));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
     private static HGDelegatePortPolicy AcceptsSource(ConsumerSlot input)
         => new HGDelegatePortPolicy(() => true, source => source.Accepts(input));
 
@@ -872,7 +910,7 @@ public sealed class HGPublicConsumerTests
             return document;
         }
 
-        public void MarkDirty() => IsValidated = false;
+        public void InvalidateValidation() => IsValidated = false;
         public void Verify() => IsValidated = true;
         public object DeepCopy() => Create();
         public IReadOnlyList<object> RootKeys(UnityEngine.Object owner) => Array.Empty<object>();
@@ -977,7 +1015,7 @@ public sealed class HGPublicConsumerTests
             return document;
         }
 
-        public void MarkDirty() => IsValidated = false;
+        public void InvalidateValidation() => IsValidated = false;
         public void Verify() => IsValidated = !rejectValidation;
         public object DeepCopy() => GraphDeepCopy.Copy(this);
         public IReadOnlyList<object> RootKeys(UnityEngine.Object owner) => new object[] { "root" };

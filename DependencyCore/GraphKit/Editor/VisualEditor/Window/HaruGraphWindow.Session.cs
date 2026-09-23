@@ -80,13 +80,7 @@ public partial class HaruGraphWindow
             ShowNotification(new GUIContent("目前畫布找不到這個結果節點，可能已刪除或換來源。"));
             return false;
         }
-        if (target.Hidden)
-        {
-            slotHidden.Clear();
-            soloRestore.Clear();
-            soloSlotKey = null;
-            graphDirty = true;
-        }
+        if (target.Hidden) RevealNode(target);
         selectedIds.Clear();
         selectedIds.Add(target.Id);
         pendingCenterTarget = target.Carrier ?? target.Obj;
@@ -131,6 +125,7 @@ public partial class HaruGraphWindow
         if (QueryDocument(expected) == null || generation != graphGeneration) return HGSessionCommandResult.StaleGeneration;
         if (!graph.PortsByKey.TryGetValue(key, out var port)
             || (!port.IsInput && port.Source is not HGPropertyWriteSource)
+            || port.Binding is IHGListAppendBinding
             || port.Presentation.Locked || !port.Presentation.Visible)
             return HGSessionCommandResult.Rejected;
         return CutLink((port.Source as HGPropertyWriteSource)?.Slot ?? port.InputSlot) switch
@@ -672,7 +667,8 @@ public partial class HaruGraphWindow
     {
         model.LastCommitDiagnostic = null;
         DoVerify(true);
-        if (!report.CanSave)
+        // 只改版面時不擋：寫回的內容與已驗證的版本相同，錯誤是它本來就有的，不該連位置都存不了（與資產焦點一致）。
+        if (!model.HasOnlyLayoutChanges && !report.CanSave)
         {
             console.RevealErrors();
             // Console 已經被展開切到錯誤頁，細節都在那裡；再彈一個要按「好」的框只是多一次跨螢幕來回。
@@ -974,7 +970,7 @@ public partial class HaruGraphWindow
             // 索引是這個 session 算的，中間可能有人刪掉資產；碰 name 前先擋掉已銷毀的引用。
             if (!HGOwnerValidation.CanVerify(so)) continue;
 
-            bool nowValidated = HGOwnerValidation.Verify(so, out bool changed, markDirty: true);
+            bool nowValidated = HGOwnerValidation.Verify(so, out bool changed, invalidate: true);
 
             if (!nowValidated) failed.Add(so.name);
             if (!changed) continue;

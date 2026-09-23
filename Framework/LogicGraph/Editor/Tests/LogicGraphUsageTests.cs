@@ -246,12 +246,12 @@ public sealed class LogicGraphUsageTests
             Assert.That(HGOwnerValidation.Verify(owner), Is.True);
             action.Input.SetNode(new GraphNode());
             LogAssert.Expect(LogType.Error, new Regex("logicgraph.node.empty"));
-            Assert.That(HGOwnerValidation.Verify(owner, out bool changed, markDirty: true), Is.False);
+            Assert.That(HGOwnerValidation.Verify(owner, out bool changed, invalidate: true), Is.False);
             Assert.That(changed, Is.True);
             Assert.That(owner.First.IsValidated, Is.False);
             Assert.That(owner.Second.IsValidated, Is.True);
             action.Input.SetNode(null);
-            Assert.That(HGOwnerValidation.Verify(owner, out changed, markDirty: true), Is.True);
+            Assert.That(HGOwnerValidation.Verify(owner, out changed, invalidate: true), Is.True);
             Assert.That(changed, Is.True);
         }
         finally

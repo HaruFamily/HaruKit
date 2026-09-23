@@ -236,7 +236,7 @@ namespace LogicGraphQuickStart
 
 ### 隨手要記得的規則
 
-- 用程式修改圖之後，呼叫 `MarkDirty()`，再透過 Inspector 或 Editor-only 的 `LogicGraphEditor.Verify(owner)` 驗證。不要用 `MarkValidated()` 跳過錯誤。
+- 用程式修改圖之後，呼叫 `InvalidateValidation()`，再透過 Inspector 或 Editor-only 的 `LogicGraphEditor.Verify(owner)` 驗證。不要用 `MarkValidated()` 跳過錯誤。
 - Token 是具名的計算，不是快取變數，每次查詢都重新求值（包含隨機公式）。查詢要帶具體的 Slot 型別：`await tokens.Resolve<int>(typeof(DemoIntSlot), "Amount", pack)` 需要圖裡另外有一個該族、名為 `Amount` 的 Token，不是指動作上同名的欄位。
 - 缺來源或停用的公式回保底值；節點本體丟出的例外照常往外傳，保底值不是通用的例外處理。
 - 每次執行的上下文放在 Pack，不要把節點的序列化欄位當跨呼叫的快取。
@@ -300,7 +300,7 @@ public sealed class RememberTarget : ActionBase<MyContext>
 - `MyKeySlot` 代表你專案中結果為 `string` 的 Slot 族。`Write` 回傳是否真的寫入；沒接 Property、節點停用或族不符時回 false。
 - 讀取端的一般 Slot 直接接 Property 節點，取得目前值；未寫入的一般 Property 回 `default(T)`，ProtoProperty 回它設定的初始內容。
 - 目前值不序列化。每個圖實例一個儲存範圍，資產呼叫依呼叫位置分開保存；同一位置再次執行會沿用舊值。
-- 只有 `InitializeProperties()` 會清空目前值；`MarkDirty()` 不會。`DeepCopy()` 的複本從未寫入開始。
+- 只有 `InitializeProperties()` 會清空目前值；`InvalidateValidation()` 不會。`DeepCopy()` 的複本從未寫入開始。
 
 ### 執行觀察
 

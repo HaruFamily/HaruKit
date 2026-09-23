@@ -37,6 +37,14 @@ public partial class HaruGraphWindow
                 }
                 if (e.button == 0 && OutputPortAt(graphMouse) is HGPort outputPort)
                 {
+                    // PropertySlot 清單的新增接點是輸出角色，但和取值清單同一個手勢：原地放開＝折疊，拖出去才拉線。
+                    if (outputPort.Binding is IHGListAppendBinding)
+                    {
+                        inputPortClickPort = outputPort;
+                        inputPortClickStart = graphMouse;
+                        e.Use();
+                        break;
+                    }
                     BeginLink(outputPort);
                     e.Use();
                     break;
@@ -63,8 +71,9 @@ public partial class HaruGraphWindow
                     // 雙擊Token節點＝下鑽進那個Token的畫布，跟雙擊資產節點同一個手勢。
                     if (e.clickCount == 2 && hit != null && hit.IsTokenNode && hit.Token != null) { EnterToken(hit.Token); e.Use(); break; }
 
+                    // 一般線畫在節點底下：點在節點上時看不到線，就不能把它剪掉；選取中的線浮在上層，才照樣可剪。
                     var link = LinkAt(graphMouse);
-                    if (link != null) { CutLink(link); e.Use(); break; }
+                    if (link != null && (hit == null || IsTracedLink(link))) { CutLink(link); e.Use(); break; }
 
                     if (hit == null)
                     {
@@ -148,6 +157,15 @@ public partial class HaruGraphWindow
                     var pressedPort = inputPortClickPort;
                     inputPortClickPort = null;
                     HGRow pressed = OwnerRowOfPort(pressedPort);
+                    // 清單標題的新增接點原地放開＝收起／展開所有元素的子樹（Alt＝solo），與 Slot 接點同一套；
+                    // 清單列的折疊只在標題文字上。沒有任何元素接線時沒有子樹可收，放開就當沒事。
+                    if (pressedPort.Binding is IHGListAppendBinding && pressed != null)
+                    {
+                        if (HasConnectedElement(pressed))
+                            ToggleSlotVisibility(HGGraph.CollapseKey(pressed.OwnerNodeId, pressed), e.alt);
+                        e.Use();
+                        break;
+                    }
                     if (pressed?.InputSlot?.Node != null)
                     {
                         ToggleSlotVisibility(HGGraph.CollapseKey(pressed.OwnerNodeId, pressed), e.alt);
@@ -451,12 +469,50 @@ public partial class HaruGraphWindow
         PlaceCopies(copies, roots, "已複製");
     }
 
+    /// <summary>游標下畫面最上層的節點。`graph.Nodes` 的順序就是繪製順序，越後面越上層。</summary>
     private HGNodeView NodeAt(Vector2 graphPoint)
     {
         if (graph == null) return null;
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
             if (!graph.Nodes[i].Hidden && graph.Nodes[i].Rect.Contains(graphPoint)) return graph.Nodes[i];
         return null;
+    }
+
+    /// <summary>把節點提到最上層並記住。已經在最上層時回 false，順序不動。</summary>
+    private bool RaiseNode(HGNodeView node)
+    {
+        if (graph == null || node == null || string.IsNullOrEmpty(node.Id)) return false;
+        int index = graph.Nodes.IndexOf(node);
+        if (index < 0 || index == graph.Nodes.Count - 1) return false;
+
+        graph.Nodes.RemoveAt(index);
+        graph.Nodes.Add(node);
+        raisedNodeIds.Remove(node.Id);
+        raisedNodeIds.Add(node.Id);
+        // 只需要記得最近碰過的幾顆；更早的順序讓給建圖順序，清單才不會隨使用時間一直長。
+        if (raisedNodeIds.Count > RaisedNodeLimit) raisedNodeIds.RemoveAt(0);
+        return true;
+    }
+
+    /// <summary>重建圖之後，把記住的上層順序套回新的節點清單。</summary>
+    private void ApplyNodeOrder()
+    {
+        if (graph == null || raisedNodeIds.Count == 0) return;
+        foreach (string id in raisedNodeIds)
+        {
+            int index = graph.Nodes.FindIndex(n => n.Id == id);
+            if (index < 0) continue;
+            var node = graph.Nodes[index];
+            graph.Nodes.RemoveAt(index);
+            graph.Nodes.Add(node);
+        }
+    }
+
+    /// <summary>接點命中只認游標下最上層的節點：被蓋住的節點，它的接點也算被蓋住。</summary>
+    private bool IsPortOnTop(HGPort port, Vector2 graphPoint)
+    {
+        var top = NodeAt(graphPoint);
+        return top == null || ReferenceEquals(OwnerNodeOfPort(port), top);
     }
 
     private void ResetLayout()
@@ -521,7 +577,7 @@ public partial class HaruGraphWindow
 
     /// <summary>頭端第一次被聚焦時補一個穩定識別碼；焦點與座標都靠它。</summary>
     // 補完不標髒：id 只是編輯期識別碼，沒落盤下次重生即可。真正需要它落盤的是記座標，
-    // 而 SetPosition 自己就會 MarkDirty，會把這個 id 一起帶走——純瀏覽因此不再要求存檔。
+    // 而 SetPosition 自己就會 MarkLayoutChanged，會把這個 id 一起帶走——純瀏覽因此不再要求存檔。
     private void EnsureHeadIds(HGFocus next)
     {
         object head = next.Head;

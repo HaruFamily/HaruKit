@@ -79,15 +79,26 @@ public sealed class HGListItemSource : HGItemSource
         return true;
     }
 
-    /// <summary>建一個可以放進這個清單的新元素；建不出來回 null。</summary>
+    /// <summary>元素是 Unity 資產引用：新增的一項是空引用，由使用者再指定。</summary>
+    public bool IsAssetElement => ElementType != null && typeof(UnityEngine.Object).IsAssignableFrom(ElementType);
+
+    /// <summary>建一個可以放進這個清單的新元素；建不出來回 null。資產元素一律回 null（空引用）。</summary>
     // 基本型別與 string 沒有「空實例」的問題，用 default 值；其餘走無參數建構。
     // string 的 default 是 null，會被當成建構失敗，所以它要單獨認一次。
+    // 資產元素不可 new：GameObject 的建構會直接在目前場景生出物件，ScriptableObject 則只會得到警告與無主實例。
     public object CreateElement()
     {
-        if (ElementType == null) return null;
+        if (ElementType == null || IsAssetElement) return null;
         if (ElementType == typeof(string)) return "";
         if (ElementType.IsValueType) return Activator.CreateInstance(ElementType);
         return HGReflect.CreateInstance(ElementType);
+    }
+
+    /// <summary>新增一項要放的內容。資產元素成功並給 null；其餘建不出來回 false。</summary>
+    public bool TryCreateElement(out object item)
+    {
+        item = CreateElement();
+        return item != null || IsAssetElement;
     }
 }
 

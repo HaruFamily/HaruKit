@@ -515,6 +515,10 @@ public static class HGReflect
     public static bool IsEnum(FieldInfo f)
         => f?.IsDefined(typeof(HGEnumAttribute), false) ?? false;
 
+    /// <summary>Slot 類別（含基底）標了 <c>[HGEnum]</c>：這一族的 enum 常數框一律畫按鈕列。</summary>
+    public static bool HasEnumButtons(Type slotType)
+        => slotType?.IsDefined(typeof(HGEnumAttribute), true) ?? false;
+
     /// <summary>節點在同分類內的排序權重。</summary>
     public static int TypePriority(Type t)
     {
