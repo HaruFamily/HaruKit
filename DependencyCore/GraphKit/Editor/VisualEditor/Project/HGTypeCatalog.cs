@@ -2,6 +2,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
@@ -62,6 +63,54 @@ public static class HGTypeCatalog
         foreach (var t in all)
             if (HGReflect.FormulaPackType(t) == packFilter) list.Add(t);
         return list;
+    }
+
+    /// <summary>依 Slot 的候選範圍與實際接收契約篩選公式，包含跨族黑名單。</summary>
+    public static List<Type> FormulasFor(FormulaSlotBase slot)
+    {
+        var list = new List<Type>();
+        if (slot == null) return list;
+        foreach (var type in Concrete(slot.CandidateBodyBaseType, slot.CandidatePackType))
+            if (HGReflect.CreateInstance(type) is GraphNodeContent body && slot.AcceptsBody(body))
+                list.Add(type);
+        return list;
+    }
+
+    /// <summary>三個族建立入口共用的分類、排序與同路徑重名消歧義。</summary>
+    public static List<(Type slotType, string path)> FormulaKindOptions(IEnumerable<(Type resultType, Type slotType)> kinds)
+    {
+        var entries = new List<(Type slotType, string group, int priority, string name, string path)>();
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (_, slotType) in kinds)
+        {
+            var attribute = slotType.GetCustomAttribute<HGKindAttribute>(false);
+            string group = attribute?.Group?.Trim().Trim('/') ?? "";
+            string name = HGReflect.SlotKindName(slotType);
+            string path = string.IsNullOrEmpty(group) ? name : group + "/" + name;
+            entries.Add((slotType, group, attribute?.Priority ?? 0, name, path));
+            counts.TryGetValue(path, out int count);
+            counts[path] = count + 1;
+        }
+        entries.Sort((a, b) =>
+        {
+            int c = string.Compare(a.group, b.group, StringComparison.Ordinal);
+            if (c != 0) return c;
+            c = a.priority.CompareTo(b.priority);
+            if (c != 0) return c;
+            c = string.Compare(a.name, b.name, StringComparison.Ordinal);
+            return c != 0 ? c : string.Compare(a.slotType.AssemblyQualifiedName,
+                b.slotType.AssemblyQualifiedName, StringComparison.Ordinal);
+        });
+
+        var options = new List<(Type slotType, string path)>();
+        foreach (var entry in entries)
+        {
+            string path = entry.path;
+            if (counts[path] > 1)
+                path += $" ({entry.slotType.FullName}, {entry.slotType.Assembly.GetName().Name})";
+            options.Add((entry.slotType, path));
+        }
+        return options;
     }
 
     private static bool Usable(Type t, Type baseType)

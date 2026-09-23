@@ -37,6 +37,7 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
     public override Type ResultType => typeof(TResult);
     public override Type PackType => typeof(TPack);
     public override Type BodyBaseType => typeof(TFormula);
+    public override Type CandidateBodyBaseType => AllowCompatibleResult ? typeof(IFormula<TPack>) : BodyBaseType;
     public override Type AssetBaseType => typeof(TAsset);
 
     public override object DefaultObject
@@ -50,7 +51,8 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
         }
     }
 
-    public override bool AcceptsBody(GraphNodeContent body) => body is TFormula;
+    public override bool AcceptsBody(GraphNodeContent body)
+        => body is TFormula || (body is IFormula<TPack> && AcceptsCompatibleBody(body));
 
     public override bool AcceptsAsset(ScriptableObject asset) => asset is TAsset;
 
@@ -90,9 +92,12 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
         {
             case NodeKind.Inline:
             {
-                var formula = _node.GetBody<TFormula>();
-                if (formula == null) return Mismatch("公式");
-                return await formula.Evaluate(pack, tokens);
+                var body = _node.BodyObject;
+                if (!AcceptsBody(body) || body is not IFormula<TPack> formula) return Mismatch("公式");
+                if (body is TFormula native) return await native.Evaluate(pack, tokens);
+                object value = await formula.EvaluateObject(pack, tokens);
+                if (value == null && default(TResult) is null) return default;
+                return value is TResult typed ? typed : Mismatch("公式");
             }
             case NodeKind.Asset:
             {

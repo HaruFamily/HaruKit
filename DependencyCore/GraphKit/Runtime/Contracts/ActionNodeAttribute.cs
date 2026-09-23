@@ -58,10 +58,16 @@ public sealed class HGShowIfAttribute : Attribute
 public sealed class HGKindAttribute : Attribute
 {
     public string Name { get; }
+    /// <summary>族建立選單的分類，以 / 分隔階層；未填列在根層，不影響 chip 名稱。</summary>
+    public string Group { get; }
+    /// <summary>同分類內的排序，數字越小越前面。</summary>
+    public int Priority { get; }
 
-    public HGKindAttribute(string name)
+    public HGKindAttribute(string name, string group = null, int priority = 0)
     {
         Name = name;
+        Group = group;
+        Priority = priority;
     }
 }
 

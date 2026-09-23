@@ -15,7 +15,7 @@ namespace HaruFamily.Tools.AssetPipeline
     // 只有替換語意：不追加、不合併、不去重、不複製。清單的 Add 這類操作由處理該集合的
     // Action／Formula 表達，不從這一格長出第二種寫入模式。
     [Serializable]
-    public abstract class SetPropertySlot<TResult, TSlot> : PropertySlotBase
+    public class PropertySlot<TResult, TSlot> : PropertySlotBase
         where TSlot : FormulaSlotBase
     {
         [SerializeReference]
@@ -54,12 +54,5 @@ namespace HaruFamily.Tools.AssetPipeline
             property.SetValue(value);
             return true;
         }
-    }
-
-    /// <summary>寫入 <see cref="ObjectListSlot"/> 族 Property 的產出端。</summary>
-    [HGKind("Property")]
-    [Serializable]
-    public class ObjectListPropertySlot : SetPropertySlot<List<Object>, ObjectListSlot>
-    {
     }
 }

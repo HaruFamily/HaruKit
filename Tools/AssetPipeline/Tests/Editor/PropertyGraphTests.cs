@@ -67,6 +67,26 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         }
 
         [Test]
+        public void GenericPropertySlot_DeepCopyPreservesConnectionAndIsolatesLocalProperty()
+        {
+            GraphNode node = PropertyNode(out GraphProperty property);
+            var writer = new WriteAction(node);
+            var copy = GraphDeepCopy.Copy(writer);
+
+            Assert.That(copy, Is.Not.Null);
+            Assert.That(copy.output, Is.TypeOf<PropertySlot<List<Object>, ObjectListSlot>>());
+            Assert.That(copy.output.Target, Is.Not.Null);
+            Assert.That(copy.output.Target, Is.Not.SameAs(property));
+            Assert.That(copy.output.FamilyType, Is.EqualTo(typeof(ObjectListSlot)));
+            var value = new List<Object>();
+            Assert.That(copy.output.Write(value), Is.True);
+            Assert.That(copy.output.Target.CurrentValue, Is.SameAs(value));
+            Assert.That(property.HasValue, Is.False);
+            AddAction(copy);
+            Assert.That(GraphVerifier.Collect(graph), Is.Empty);
+        }
+
+        [Test]
         public void ProtoProperty_WithoutWrite_ReadsInitialContent()
         {
             var initial = new List<Object>();
@@ -211,7 +231,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Serializable]
         private sealed class WriteAction : ActionBase
         {
-            public ObjectListPropertySlot output = new ObjectListPropertySlot();
+            public PropertySlot<List<Object>, ObjectListSlot> output = new();
 
             public WriteAction(GraphNode node) => output.SetNode(node);
 
@@ -257,7 +277,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         private sealed class ReadWriteAction : ActionBase
         {
             public ObjectListSlot objects = new ObjectListSlot();
-            public ObjectListPropertySlot output = new ObjectListPropertySlot();
+            public PropertySlot<List<Object>, ObjectListSlot> output = new();
 
             public ReadWriteAction(GraphNode node)
             {

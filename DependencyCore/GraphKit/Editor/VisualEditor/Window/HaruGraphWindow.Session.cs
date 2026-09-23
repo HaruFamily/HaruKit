@@ -560,9 +560,8 @@ public partial class HaruGraphWindow
         inlineName ??= new HGInlineRename(Repaint);
         console.LoadPrefs();
         leftWidth = EditorPrefs.GetFloat(PrefLeftWidth, DefaultLeftWidth);
-        tokenSectionHeight = EditorPrefs.GetFloat(PrefTokenSection, DefaultTokenSection);
-        propertySectionHeight = EditorPrefs.GetFloat(PrefPropertySection, DefaultPropertySection);
         refSectionHeight = EditorPrefs.GetFloat(PrefRefSection, DefaultRefSection);
+        LoadLibraryLayout();
         UpdateUnsavedState();
     }
 
@@ -576,9 +575,8 @@ public partial class HaruGraphWindow
         executionSource = null;
         selectedExecution = null;
         console.SavePrefs();
+        SaveLibraryLayout();
         EditorPrefs.SetFloat(PrefLeftWidth, leftWidth);
-        EditorPrefs.SetFloat(PrefTokenSection, tokenSectionHeight);
-        EditorPrefs.SetFloat(PrefPropertySection, propertySectionHeight);
         EditorPrefs.SetFloat(PrefRefSection, refSectionHeight);
     }
 

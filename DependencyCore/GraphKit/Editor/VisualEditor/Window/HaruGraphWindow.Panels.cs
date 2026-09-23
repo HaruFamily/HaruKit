@@ -7,106 +7,213 @@ using UnityEditor;
 using UnityEngine;
 
 /// <summary>
-/// 左欄Token庫／資產庫／引用清單三區，以及底部 Console。
+/// 庫區的左右停駐、排序、顯示偏好與內容命令，以及底部 Console。
 /// </summary>
 public partial class HaruGraphWindow
 {
-    // ===== 左欄：Token／Asset 庫 =====
+    // ===== 庫區版面 =====
 
-    /// <summary>
-    /// Token／資產／引用上下分區，中間可拖。刻意不用分頁：資產焦點下，Token列的是「這個資產對呼叫端的參數介面」，
-    /// 而資產列是「換去編哪一個」，兩件事交替發生，分頁會逼人每次來回切一趟。
-    /// 引用區只在資產焦點出現（`HasReferenceSection`），其餘焦點下另外兩區直接吃掉那段高度。
-    /// 每區都各自有 ScrollView，區塊被拖小了就滾動，不會把內容切掉。
-    /// </summary>
-    private void DrawLibraryPanel(Rect r)
+    private bool LibraryAvailable(LibraryKind kind) => model?.Owner != null && (kind switch
+    {
+        LibraryKind.Property => HasPropertySection,
+        LibraryKind.Token => HasTokenSection,
+        LibraryKind.Asset => HasAssetSection,
+        _ => false,
+    });
+
+    private static string LibraryTitle(LibraryKind kind) => kind switch
+    {
+        LibraryKind.Property => "變數庫",
+        LibraryKind.Token => "Token 庫",
+        _ => "資產庫",
+    };
+
+    private List<LibraryKind> LibrariesOnSide(bool right)
+    {
+        var result = new List<LibraryKind>();
+        for (int i = 0; i < libraryVisible.Length; i++)
+            if (libraryVisible[i] && libraryRight[i] == right && LibraryAvailable((LibraryKind)i))
+                result.Add((LibraryKind)i);
+        result.Sort((a, b) => libraryOrder[(int)a].CompareTo(libraryOrder[(int)b]));
+        return result;
+    }
+
+    private bool HasLibraryOnSide(bool right)
+    {
+        for (int i = 0; i < libraryVisible.Length; i++)
+            if (libraryVisible[i] && libraryRight[i] == right && LibraryAvailable((LibraryKind)i)) return true;
+        return false;
+    }
+
+    private GenericMenu LibraryMenu(LibraryKind? target = null)
+    {
+        var menu = new GenericMenu();
+        if (target.HasValue)
+        {
+            var kind = target.Value;
+            int index = (int)kind;
+            bool right = libraryRight[index];
+            foreach (bool side in new[] { false, true })
+            {
+                var label = new GUIContent("停駐位置/" + (side ? "右側" : "左側"));
+                if (side == right) menu.AddDisabledItem(label, true);
+                else menu.AddItem(label, false, () =>
+                {
+                    libraryRight[index] = side;
+                    int last = 0;
+                    for (int i = 0; i < libraryOrder.Length; i++) last = Mathf.Max(last, libraryOrder[i]);
+                    libraryOrder[index] = last + 1;
+                    SaveLibraryLayout();
+                });
+            }
+            menu.AddSeparator("");
+            var peers = LibrariesOnSide(right);
+            int position = peers.IndexOf(kind);
+            AddLibraryMove(menu, "上移", kind, peers, position - 1);
+            AddLibraryMove(menu, "下移", kind, peers, position + 1);
+            menu.AddSeparator("");
+        }
+        for (int i = 0; i < libraryVisible.Length; i++)
+        {
+            int index = i;
+            var kind = (LibraryKind)i;
+            if (!LibraryAvailable(kind)) continue;
+            menu.AddItem(new GUIContent((target.HasValue ? "顯示庫/" : "") + LibraryTitle(kind)),
+                libraryVisible[i], () =>
+                {
+                    libraryVisible[index] = !libraryVisible[index];
+                    SaveLibraryLayout();
+                });
+        }
+        return menu;
+    }
+
+    private void AddLibraryMove(GenericMenu menu, string title, LibraryKind kind, List<LibraryKind> peers, int destination)
+    {
+        if (destination < 0 || destination >= peers.Count)
+        {
+            menu.AddDisabledItem(new GUIContent(title));
+            return;
+        }
+        int index = (int)kind;
+        int other = (int)peers[destination];
+        menu.AddItem(new GUIContent(title), false, () =>
+        {
+            (libraryOrder[index], libraryOrder[other]) = (libraryOrder[other], libraryOrder[index]);
+            SaveLibraryLayout();
+        });
+    }
+
+    private void LoadLibraryLayout()
+    {
+        rightWidth = EditorPrefs.GetFloat("HaruGraph.RightWidth", DefaultLeftWidth);
+        for (int i = 0; i < libraryVisible.Length; i++)
+        {
+            string key = "HaruGraph.Library." + (LibraryKind)i;
+            libraryVisible[i] = EditorPrefs.GetBool(key + ".Visible", true);
+            libraryRight[i] = EditorPrefs.GetBool(key + ".Right", false);
+            libraryOrder[i] = EditorPrefs.GetInt(key + ".Order", i);
+            float defaultHeight = i == 0 ? EditorPrefs.GetFloat(PrefPropertySection, DefaultPropertySection)
+                : i == 1 ? EditorPrefs.GetFloat(PrefTokenSection, DefaultTokenSection) : 240f;
+            libraryHeights[i] = EditorPrefs.GetFloat(key + ".Height", defaultHeight);
+        }
+    }
+
+    private void SaveLibraryLayout()
+    {
+        // 視圖偏好與文件交易無關，不標 Dirty、不建立 Undo。
+        var order = new List<int> { 0, 1, 2 };
+        order.Sort((a, b) => libraryOrder[a] != libraryOrder[b]
+            ? libraryOrder[a].CompareTo(libraryOrder[b]) : a.CompareTo(b));
+        for (int i = 0; i < order.Count; i++) libraryOrder[order[i]] = i;
+        EditorPrefs.SetFloat("HaruGraph.RightWidth", rightWidth);
+        for (int i = 0; i < libraryVisible.Length; i++)
+        {
+            string key = "HaruGraph.Library." + (LibraryKind)i;
+            EditorPrefs.SetBool(key + ".Visible", libraryVisible[i]);
+            EditorPrefs.SetBool(key + ".Right", libraryRight[i]);
+            EditorPrefs.SetInt(key + ".Order", libraryOrder[i]);
+            EditorPrefs.SetFloat(key + ".Height", libraryHeights[i]);
+        }
+        resizingLibrary = -1;
+        Repaint();
+    }
+
+    private float LibraryMinimum(LibraryKind kind) => kind switch
+    {
+        LibraryKind.Property => 22f + MinPropertySection,
+        LibraryKind.Token => 22f + MinTokenSection,
+        _ => MinAssetSection + (HasReferenceSection ? MinRefSection + ResizeHandleWidth : 0f),
+    };
+
+    /// <summary>同側依偏好排序，最後一庫填滿剩餘高度。</summary>
+    private void DrawLibraryPanel(Rect r, bool right)
     {
         HGStyles.Fill(r, HGStyles.Panel);
         HGStyles.Frame(r, HGStyles.NodeBorder);
 
-        Rect rest = r;
-
-        if (HasPropertySection)
+        var libraries = LibrariesOnSide(right);
+        float remaining = Mathf.Max(0f, r.height - ResizeHandleWidth * (libraries.Count - 1));
+        float y = r.y;
+        for (int i = 0; i < libraries.Count; i++)
         {
-            bool alone = !HasTokenSection && !HasAssetSection;
-            float handleHeight = alone ? 0f : Mathf.Min(ResizeHandleWidth, rest.height);
-            float available = Mathf.Max(0f, rest.height - handleHeight);
-            float lowerMinimum = (HasTokenSection ? 22f + MinTokenSection : 0f)
-                + (HasAssetSection ? MinAssetSection : 0f)
-                + (HasTokenSection && HasAssetSection ? ResizeHandleWidth : 0f)
-                + (HasReferenceSection ? MinRefSection + ResizeHandleWidth : 0f);
-            float minimum = Mathf.Min(22f + MinPropertySection, available * .5f);
-            float maximum = Mathf.Max(minimum, available - Mathf.Min(lowerMinimum, available * .5f));
-            if (!alone) propertySectionHeight = Mathf.Clamp(propertySectionHeight, minimum, maximum);
-            float propertyBottom = alone ? rest.yMax : rest.y + propertySectionHeight;
-            var propertyRect = new Rect(rest.x, rest.y, rest.width, propertyBottom - rest.y);
-            var handle = new Rect(rest.x, propertyBottom, rest.width, handleHeight);
-            if (!alone) HandlePropertySplitResize(handle, minimum, maximum);
-
-            GUI.Label(new Rect(propertyRect.x + 4f, propertyRect.y + 2f, 160f, 18f),
-                new GUIContent("變數庫", "有初始內容的具名變數；不必先寫入就讀得到。LocalProperty 在畫布上建立"),
-                HGStyles.PanelHeader);
-            propertyLibrary.Draw(propertyRect, propertyRect.y + 22f, PropertyLibraryView(),
-                PropertyLibraryCommands(), inlineName, drag);
-
-            if (alone) return;
-            DrawResizeGrip(handle, false, resizingPropertySplit);
-            rest = new Rect(rest.x, handle.yMax, rest.width, Mathf.Max(0f, rest.yMax - handle.yMax));
+            var kind = libraries[i];
+            int index = (int)kind;
+            bool last = i == libraries.Count - 1;
+            float share = remaining / (libraries.Count - i);
+            float minimum = Mathf.Min(LibraryMinimum(kind), share);
+            float reserved = 0f;
+            for (int j = i + 1; j < libraries.Count; j++) reserved += Mathf.Min(LibraryMinimum(libraries[j]), share);
+            float maximum = Mathf.Max(minimum, remaining - reserved);
+            float height = last ? remaining : Mathf.Clamp(libraryHeights[index], minimum, maximum);
+            var rect = new Rect(r.x, y, r.width, height);
+            var handle = new Rect(r.x, rect.yMax, r.width, ResizeHandleWidth);
+            if (!last) HandleLibraryResize(handle, index, height, minimum, maximum);
+            DrawLibrarySection(rect, kind);
+            if (Event.current.type == EventType.ContextClick && rect.Contains(Event.current.mousePosition))
+            {
+                LibraryMenu(kind).ShowAsContext();
+                Event.current.Use();
+            }
+            if (!last) DrawResizeGrip(handle, false, resizingLibrary == index);
+            remaining -= height;
+            y = handle.yMax;
         }
-
-        DrawTokenAndAssetSections(rest);
     }
 
-    /// <summary>Token 區與資產區（含引用區）的上下分區。</summary>
-    private void DrawTokenAndAssetSections(Rect r)
+    private void DrawLibrarySection(Rect r, LibraryKind kind)
     {
-        bool showToken = HasTokenSection;
-
-        // 面板標題直接當 Token 區的標題：上面已經沒有第三種東西，再加一條區段標題只是重複佔 20px。
-        // 圖沒宣告 Token 能力時整條標題都不畫，下一區從面板頂端開始，不留一條空標題佔位。
-        if (showToken)
-            GUI.Label(new Rect(r.x + 4f, r.y + 2f, 160f, 18f),
-                new GUIContent("Token 庫", "對外端點；點一筆進入它自己的畫布，沒接來源時它就是具名常數"), HGStyles.PanelHeader);
-
-        float top = showToken ? r.y + 22f : r.y;
-
-        // 圖宣告不支援共用資產時，左欄就只有 Token 庫一區：沒有分隔把手、沒有資料夾鈕，
-        // 也不去掃專案資產。留一個永遠空的清單比收掉它更難解釋——使用者會一直找「東西為什麼沒出現」。
-        if (!HasAssetSection)
+        if (kind == LibraryKind.Asset)
         {
-            tokenLibrary.Draw(new Rect(r.x, top, r.width, r.yMax - top), top + 2f,
-                TokenLibraryView(), TokenLibraryCommands(), inlineName, drag);
+            DrawAssetSection(r);
             return;
         }
+        GUI.Label(new Rect(r.x + 4f, r.y + 2f, Mathf.Max(0f, r.width - 8f), 18f),
+            LibraryTitle(kind), HGStyles.PanelHeader);
+        if (kind == LibraryKind.Property)
+            propertyLibrary.Draw(r, r.y + 22f, PropertyLibraryView(), PropertyLibraryCommands(), inlineName, drag);
+        else
+            tokenLibrary.Draw(new Rect(r.x, r.y + 22f, r.width, Mathf.Max(0f, r.height - 22f)), r.y + 24f,
+                TokenLibraryView(), TokenLibraryCommands(), inlineName, drag);
+    }
 
+    /// <summary>引用清單隸屬資產庫，跟著資產庫停駐與顯示。</summary>
+    private void DrawAssetSection(Rect r)
+    {
         bool showRef = HasReferenceSection;
-        // 把手只長在兩區之間：Token↔資產一條、資產↔引用一條，區沒出現那條把手也不存在。
-        float handleCount = (showToken ? 1f : 0f) + (showRef ? 1f : 0f);
-        float avail = Mathf.Max(0f, r.yMax - top - ResizeHandleWidth * handleCount);
+        float handleCount = showRef ? 1f : 0f;
+        float avail = Mathf.Max(0f, r.height - ResizeHandleWidth * handleCount);
         // 視窗太矮時連各區的最小高度都放不下，這時平均分；寧可擠也不要出現負高度的 Rect。
         float share = avail / (1f + handleCount);
-        float minToken = showToken ? Mathf.Min(MinTokenSection, share) : 0f;
         float minAsset = Mathf.Min(MinAssetSection, share);
         float minRef = showRef ? Mathf.Min(MinRefSection, share) : 0f;
 
         // 夾限後寫回欄位：拖曳是累加 delta，記著的值若跟畫面上的高度不同步，下一次拖會整段跳。
-        // 先夾引用區（它是最下面那一段），剩下的才輪到 Token 區與資產區分。
-        float maxRef = Mathf.Max(minRef, avail - minToken - minAsset);
+        // 引用區在資產庫底部，其餘高度給資產清單。
+        float maxRef = Mathf.Max(minRef, avail - minAsset);
         if (showRef) refSectionHeight = Mathf.Clamp(refSectionHeight, minRef, maxRef);
         float refHeight = showRef ? refSectionHeight : 0f;
-        float maxToken = Mathf.Max(minToken, avail - minAsset - refHeight);
-        if (showToken) tokenSectionHeight = Mathf.Clamp(tokenSectionHeight, minToken, maxToken);
-
-        var tokenRect = new Rect(r.x, top, r.width, showToken ? tokenSectionHeight : 0f);
-        var handle = new Rect(r.x, tokenRect.yMax, r.width, showToken ? ResizeHandleWidth : 0f);
-        var assetRect = new Rect(r.x, handle.yMax, r.width, r.yMax - handle.yMax - refHeight
-            - (showRef ? ResizeHandleWidth : 0f));
-
-        if (showToken)
-        {
-            HandleLibrarySplitResize(handle, minToken, maxToken);
-            tokenLibrary.Draw(tokenRect, tokenRect.y + 2f, TokenLibraryView(), TokenLibraryCommands(), inlineName, drag);
-        }
+        var assetRect = new Rect(r.x, r.y, r.width, Mathf.Max(0f, avail - refHeight));
 
         // 資產區標題跟面板標題同一種寫法，三區看起來才是同級的清單，不是主從。
         GUI.Label(new Rect(assetRect.x + 4f, assetRect.y + 2f, 160f, 18f),
@@ -128,8 +235,6 @@ public partial class HaruGraphWindow
         GUI.color = prevColor;
 
         assetLibrary.Draw(assetRect, assetRect.y + 24f, AssetLibraryView(), inlineName, drag, AssetLibraryCommands());
-
-        if (showToken) DrawResizeGrip(handle, false, resizingLibrarySplit);
 
         if (!showRef) return;
 
@@ -260,21 +365,10 @@ public partial class HaruGraphWindow
         if (scope == null) return;
 
         var menu = new GenericMenu();
-        var kinds = model.FormulaKinds();
-        var names = new Dictionary<string, int>();
-        foreach (var kind in kinds)
-        {
-            string name = HGReflect.SlotKindName(kind.slotType);
-            names.TryGetValue(name, out int count);
-            names[name] = count + 1;
-        }
-        foreach (var (resultType, slotType) in kinds)
+        foreach (var (slotType, path) in HGTypeCatalog.FormulaKindOptions(model.FormulaKinds()))
         {
             var captured = slotType;
-            // 用族名而非結果型別名：同結果型別的多個族否則會列出兩個一模一樣的項目。
-            string name = HGReflect.SlotKindName(slotType);
-            if (names[name] > 1) name += $" ({slotType.FullName}, {slotType.Assembly.GetName().Name})";
-            menu.AddItem(new GUIContent(name), false,
+            menu.AddItem(new GUIContent(path), false,
                 () => CreateProperty(scope, captured, true));
         }
         menu.ShowAsContext();
@@ -406,50 +500,26 @@ public partial class HaruGraphWindow
     private (string reason, bool isError) TokenIssue(HGToken token)
         => HasTokenIssue(token, out string reason, out bool isError) ? (reason, isError) : (null, false);
 
-    private void HandleLibrarySplitResize(Rect handle, float min, float max)
+    private void HandleLibraryResize(Rect handle, int index, float height, float min, float max)
     {
         EditorGUIUtility.AddCursorRect(handle, MouseCursor.ResizeVertical);
         var e = Event.current;
         if (e.type == EventType.MouseDown && e.button == 0 && handle.Contains(e.mousePosition))
         {
-            resizingLibrarySplit = true;
+            resizingLibrary = index;
             e.Use();
             return;
         }
-        if (e.type == EventType.MouseDrag && resizingLibrarySplit)
+        if (e.type == EventType.MouseDrag && resizingLibrary == index)
         {
-            tokenSectionHeight = Mathf.Clamp(tokenSectionHeight + e.delta.y, min, max);
+            libraryHeights[index] = Mathf.Clamp(height + e.delta.y, min, max);
             e.Use();
             Repaint();
             return;
         }
-        if (e.type == EventType.MouseUp && resizingLibrarySplit)
+        if (e.type == EventType.MouseUp && resizingLibrary == index)
         {
-            resizingLibrarySplit = false;
-            e.Use();
-        }
-    }
-
-    private void HandlePropertySplitResize(Rect handle, float min, float max)
-    {
-        EditorGUIUtility.AddCursorRect(handle, MouseCursor.ResizeVertical);
-        var e = Event.current;
-        if (e.type == EventType.MouseDown && e.button == 0 && handle.Contains(e.mousePosition))
-        {
-            resizingPropertySplit = true;
-            e.Use();
-            return;
-        }
-        if (e.type == EventType.MouseDrag && resizingPropertySplit)
-        {
-            propertySectionHeight = Mathf.Clamp(propertySectionHeight + e.delta.y, min, max);
-            e.Use();
-            Repaint();
-            return;
-        }
-        if (e.type == EventType.MouseUp && resizingPropertySplit)
-        {
-            resizingPropertySplit = false;
+            SaveLibraryLayout();
             e.Use();
         }
     }
@@ -488,11 +558,10 @@ public partial class HaruGraphWindow
         if (scope == null) return;
 
         var menu = new GenericMenu();
-        foreach (var (resultType, slotType) in model.FormulaKinds())
+        foreach (var (slotType, path) in HGTypeCatalog.FormulaKindOptions(model.FormulaKinds()))
         {
             var captured = slotType;
-            // 用族名而非結果型別名：同結果型別的多個族（String / Key）否則會列出兩個一模一樣的項目。
-            menu.AddItem(new GUIContent(HGReflect.SlotKindName(slotType)), false, () =>
+            menu.AddItem(new GUIContent(path), false, () =>
             {
                 var endpoint = model.CreateToken(scope, captured, out string error);
                 if (endpoint == null)

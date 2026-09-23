@@ -15,6 +15,7 @@ public struct HGToolbarView
 
     /// <summary>鎖定中：在 Project／Hierarchy 點別的東西不會把這個視窗切走。</summary>
     public bool Locked;
+    public bool HasLibraries;
 
     public bool SaveEnabled;
 
@@ -46,6 +47,7 @@ public struct HGToolbarCommands
 
     /// <summary>切換鎖定。</summary>
     public Action ToggleLock;
+    public Action<Rect> ShowLibraries;
 }
 
 /// <summary>
@@ -78,7 +80,15 @@ public static class HGToolbarPanel
             cmd.ToggleLock();
         GUI.backgroundColor = lockColor;
 
-        GUI.Label(new Rect(lockRect.xMax + 4f, r.y + 2f, r.width - 502f, 18f),
+        float crumbX = lockRect.xMax + 4f;
+        if (view.HasLibraries)
+        {
+            var libraryRect = new Rect(crumbX, r.y + 1f, 48f, 19f);
+            if (GUI.Button(libraryRect, new GUIContent("庫 ▾", "顯示或隱藏庫區"), EditorStyles.toolbarDropDown))
+                cmd.ShowLibraries?.Invoke(libraryRect);
+            crumbX = libraryRect.xMax + 4f;
+        }
+        GUI.Label(new Rect(crumbX, r.y + 2f, Mathf.Max(0f, r.width - 502f - (crumbX - lockRect.xMax - 4f)), 18f),
             view.Crumb, EditorStyles.boldLabel);
 
         float x = r.xMax - 6f;

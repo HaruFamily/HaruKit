@@ -53,6 +53,8 @@ namespace HaruFamily.Tools.AssetPipeline
 
         public override Type BodyBaseType => typeof(TFormula);
 
+        public override Type CandidateBodyBaseType => AllowCompatibleResult ? typeof(IFormula) : BodyBaseType;
+
         /// <summary>AssetPipeline 沒有共用資產節點，這一格永遠接不到資產。</summary>
         public override Type AssetBaseType => null;
 
@@ -67,7 +69,8 @@ namespace HaruFamily.Tools.AssetPipeline
             }
         }
 
-        public override bool AcceptsBody(GraphNodeContent body) => body is TFormula;
+        public override bool AcceptsBody(GraphNodeContent body)
+            => body is TFormula || (body is IFormula && AcceptsCompatibleBody(body));
 
         public override bool AcceptsAsset(ScriptableObject asset) => false;
 
@@ -96,11 +99,14 @@ namespace HaruFamily.Tools.AssetPipeline
             {
                 case NodeKind.Inline:
                 {
-                    var formula = _node.GetBody<TFormula>();
-                    if (formula == null) return Mismatch("公式");
+                    var body = _node.BodyObject;
+                    if (!AcceptsBody(body) || body is not IFormula formula) return Mismatch("公式");
                     try
                     {
-                        return formula.Evaluate(default(NullPack));
+                        if (body is TFormula native) return native.Evaluate(default(NullPack));
+                        object value = formula.EvaluateObject(default(NullPack));
+                        if (value == null && default(TResult) is null) return default;
+                        return value is TResult typed ? typed : Mismatch("公式");
                     }
                     catch (Exception e)
                     {

@@ -7,7 +7,7 @@ using UnityEditor;
 using UnityEngine;
 
 /// <summary>
-/// LogicGraph 視覺化編輯器：左欄Token庫、中欄節點圖 + Console；所有時機畫在同一張畫布，右欄只在資產焦點出現。
+/// LogicGraph 視覺化編輯器：兩側可停駐庫區，中欄節點圖 + Console；所有時機畫在同一張畫布。
 /// 所有編輯都改工作副本，按「存檔」才寫回 Owner 資產。
 /// 狀態欄位與主繪製流程在本檔，其餘責任見 HaruGraphWindow.*.cs。
 /// </summary>
@@ -82,12 +82,15 @@ public partial class HaruGraphWindow : EditorWindow
     // 面板狀態
     private float leftWidth = DefaultLeftWidth;
     private bool resizingLeftPanel;
-    // 左欄Token／資產上下分區：存Token區的高度，資產區吃剩下的。編資產時兩份清單要同時看得到，不能再用分頁互斥。
-    private float tokenSectionHeight = DefaultTokenSection;
-    private bool resizingLibrarySplit;
-    private float propertySectionHeight = DefaultPropertySection;
-    private bool resizingPropertySplit;
-    // 左欄第三區（引用此資產）：只在資產焦點出現，存自己的高度，資產區吃剩下的。
+    private float rightWidth = DefaultLeftWidth;
+    private bool resizingRightPanel;
+    private enum LibraryKind { Property, Token, Asset }
+    private readonly bool[] libraryVisible = { true, true, true };
+    private readonly bool[] libraryRight = { false, false, false };
+    private readonly int[] libraryOrder = { 0, 1, 2 };
+    private readonly float[] libraryHeights = { DefaultPropertySection, DefaultTokenSection, 240f };
+    private int resizingLibrary = -1;
+    // 引用清單隸屬資產庫，只在資產焦點出現。
     private float refSectionHeight = DefaultRefSection;
     private bool resizingRefSplit;
 
@@ -217,10 +220,10 @@ public partial class HaruGraphWindow : EditorWindow
     private bool HasPropertySection => (focus.Kind == HGFocusKind.Asset ? focus.AssetObject is IPropertyOwner : model?.Doc is IPropertyOwner)
         && HGGraph.Has(activeContext, model.Doc, HGCapabilities.Properties);
 
-    /// <summary>左欄還有沒有東西可放。沒綁定時維持原版型，閒置畫面不因此改變。</summary>
+    /// <summary>已綁定編輯對象且有可用區段時才顯示左欄。</summary>
     // 一區都沒有就整框不畫：空框會讓人一直找「內容為什麼沒出現」，而那個框永遠不會有東西。
-    private bool HasLeftColumn => model?.Doc == null
-        || HasTokenSection || HasAssetSection || HasPropertySection;
+    private bool HasLeftColumn => HasLibraryOnSide(false);
+    private bool HasRightColumn => HasLibraryOnSide(true);
 
     private bool HasReferenceSection => HasAssetSection && focus.Kind == HGFocusKind.Asset;
     private bool IsCurrentReportFresh => focus.Kind == HGFocusKind.Asset
@@ -231,14 +234,19 @@ public partial class HaruGraphWindow : EditorWindow
 
     private void OnGUI()
     {
-        GetLayout(out var toolbar, out var left, out var center, out var leftHandle);
+        if (Event.current.type == EventType.MouseDown)
+        {
+            resizingLeftPanel = resizingRightPanel = resizingRefSplit = false;
+            resizingLibrary = -1;
+        }
+        GetLayout(out var toolbar, out var left, out var center, out var leftHandle, out var right, out var rightHandle);
         HandlePanelResize(leftHandle);
-        GetLayout(out toolbar, out left, out center, out leftHandle);
+        HandleRightPanelResize(rightHandle);
+        GetLayout(out toolbar, out left, out center, out leftHandle, out right, out rightHandle);
 
         if (model == null || model.Owner == null)
         {
-            DrawIdle(toolbar, left, center);
-            DrawResizeGrip(leftHandle, true, resizingLeftPanel);
+            DrawIdle(toolbar, center);
             UpdateUnsavedState();
             return;
         }
@@ -255,9 +263,11 @@ public partial class HaruGraphWindow : EditorWindow
 
         // 縮放畫布先畫；固定面板最後畫，吸收 IMGUI 縮放在邊界可能漏出的次像素。
         DrawCenter(center);
-        if (HasLeftColumn) DrawLibraryPanel(left);
+        if (HasLeftColumn) DrawLibraryPanel(left, false);
+        if (HasRightColumn) DrawLibraryPanel(right, true);
         HGToolbarPanel.Draw(toolbar, ToolbarView(), ToolbarCommands());
         if (HasLeftColumn) DrawResizeGrip(leftHandle, true, resizingLeftPanel);
+        if (HasRightColumn) DrawResizeGrip(rightHandle, true, resizingRightPanel);
 
         drag.DrawAssetGhost();
         // Header 滑入工具列與放置殘影都需要未按鍵時的滑鼠移動事件。
@@ -303,21 +313,33 @@ public partial class HaruGraphWindow : EditorWindow
         PopupWindow.Show(pendingConfirmAnchor, popup);
     }
 
-    private void GetLayout(out Rect toolbar, out Rect left, out Rect center, out Rect leftHandle)
+    private void GetLayout(out Rect toolbar, out Rect left, out Rect center, out Rect leftHandle,
+        out Rect right, out Rect rightHandle)
     {
         float maxLeft = Mathf.Max(MinLeftWidth, position.width - MinCenterWidth);
         leftWidth = Mathf.Clamp(leftWidth, MinLeftWidth, maxLeft);
 
-        // 左欄一區都沒有時寬度歸零，中欄從 0 開始吃滿。記著的 leftWidth 不清掉——
-        // 之後換到有左欄的圖，使用者拉過的寬度還在。
+        // 空側不保留寬度；記住的偏好仍留著，重新顯示庫時沿用。
         float width = HasLeftColumn ? leftWidth : 0f;
+        float rightSize = HasRightColumn ? Mathf.Clamp(rightWidth, MinLeftWidth, maxLeft) : 0f;
+        float available = Mathf.Max(0f, position.width - MinCenterWidth);
+        if (width + rightSize > available)
+        {
+            float scale = available / (width + rightSize);
+            width *= scale;
+            rightSize *= scale;
+        }
 
         toolbar = new Rect(0f, 0f, position.width, ToolbarHeight);
         left = new Rect(0f, ToolbarHeight, width, position.height - ToolbarHeight);
-        center = new Rect(left.xMax, ToolbarHeight, position.width - left.xMax, position.height - ToolbarHeight);
+        right = new Rect(position.width - rightSize, ToolbarHeight, rightSize, left.height);
+        center = new Rect(left.xMax, ToolbarHeight, Mathf.Max(0f, right.x - left.xMax), left.height);
         // 沒有左欄就沒有把手：留一條寬 6px 的縮放帶貼在視窗左緣，拖了也沒有東西會變寬。
         leftHandle = width > 0f
             ? new Rect(left.xMax - ResizeHandleWidth * 0.5f, ToolbarHeight, ResizeHandleWidth, left.height)
+            : Rect.zero;
+        rightHandle = rightSize > 0f
+            ? new Rect(right.x - ResizeHandleWidth * 0.5f, ToolbarHeight, ResizeHandleWidth, right.height)
             : Rect.zero;
     }
 
@@ -329,13 +351,15 @@ public partial class HaruGraphWindow : EditorWindow
 
         if (e.type == EventType.MouseDown && e.button == 0 && leftHandle.Contains(e.mousePosition))
         {
+            CaptureLibraryColumnWidths();
             resizingLeftPanel = true;
             e.Use();
             return;
         }
         if (e.type == EventType.MouseDrag && resizingLeftPanel)
         {
-            leftWidth = Mathf.Clamp(leftWidth + e.delta.x, MinLeftWidth, position.width - MinCenterWidth);
+            float max = Mathf.Max(MinLeftWidth, position.width - MinCenterWidth - (HasRightColumn ? rightWidth : 0f));
+            leftWidth = Mathf.Clamp(leftWidth + e.delta.x, MinLeftWidth, max);
             e.Use();
             Repaint();
             return;
@@ -343,8 +367,41 @@ public partial class HaruGraphWindow : EditorWindow
         if (e.type == EventType.MouseUp && resizingLeftPanel)
         {
             resizingLeftPanel = false;
+            EditorPrefs.SetFloat(PrefLeftWidth, leftWidth);
             e.Use();
         }
+    }
+
+    private void HandleRightPanelResize(Rect handle)
+    {
+        var e = Event.current;
+        EditorGUIUtility.AddCursorRect(handle, MouseCursor.ResizeHorizontal);
+        if (e.type == EventType.MouseDown && e.button == 0 && handle.Contains(e.mousePosition))
+        {
+            CaptureLibraryColumnWidths();
+            resizingRightPanel = true;
+            e.Use();
+        }
+        else if (e.type == EventType.MouseDrag && resizingRightPanel)
+        {
+            float max = Mathf.Max(MinLeftWidth, position.width - MinCenterWidth - (HasLeftColumn ? leftWidth : 0f));
+            rightWidth = Mathf.Clamp(rightWidth - e.delta.x, MinLeftWidth, max);
+            e.Use();
+            Repaint();
+        }
+        else if (e.type == EventType.MouseUp && resizingRightPanel)
+        {
+            resizingRightPanel = false;
+            EditorPrefs.SetFloat("HaruGraph.RightWidth", rightWidth);
+            e.Use();
+        }
+    }
+
+    private void CaptureLibraryColumnWidths()
+    {
+        GetLayout(out _, out var left, out _, out _, out var right, out _);
+        if (left.width > 0f) leftWidth = left.width;
+        if (right.width > 0f) rightWidth = right.width;
     }
 
     /// <summary>所有區塊縮放共用同一種細分隔線與刻度，不用粗色塊搶畫面。</summary>
@@ -370,9 +427,9 @@ public partial class HaruGraphWindow : EditorWindow
     }
 
     /// <summary>
-    /// 還沒選對象時的閒置版型：兩欄框架照畫，只有左上角的對象選擇器可用，其餘全部停用。
+    /// 還沒選對象時的閒置版型：畫布填滿寬度，只有左上角的對象選擇器可用。
     /// </summary>
-    private void DrawIdle(Rect toolbar, Rect left, Rect center)
+    private void DrawIdle(Rect toolbar, Rect center)
     {
         HGStyles.Fill(toolbar, HGStyles.Toolbar);
 
@@ -390,8 +447,6 @@ public partial class HaruGraphWindow : EditorWindow
         x -= 62f; GUI.Button(new Rect(x, toolbar.y + 1f, 60f, 19f), "取消");
         GUI.enabled = true;
 
-        DrawIdlePanel(left, "Token 庫");
-
         HGStyles.Fill(center, HGStyles.Canvas);
         var header = new Rect(center.x, center.y, center.width, HeaderHeight);
         HGStyles.Fill(header, HGStyles.PanelSection);
@@ -408,16 +463,6 @@ public partial class HaruGraphWindow : EditorWindow
         HGStyles.Fill(consoleBar, HGStyles.Console);
         HGStyles.Frame(consoleBar, HGStyles.NodeBorder);
         GUI.Label(new Rect(consoleBar.x + 6f, consoleBar.y + 3f, consoleBar.width - 12f, 16f), "尚未驗證", HGStyles.Tiny);
-    }
-
-    private static void DrawIdlePanel(Rect r, string title)
-    {
-        HGStyles.Fill(r, HGStyles.Panel);
-        HGStyles.Frame(r, HGStyles.NodeBorder);
-        GUI.Label(new Rect(r.x + 4f, r.y + 2f, r.width - 8f, 18f), title, HGStyles.PanelHeader);
-
-        var body = new Rect(r.x + 2f, r.y + 22f, r.width - 4f, r.height - 26f);
-        HGStyles.Fill(body, HGStyles.PanelList);
     }
 
 
@@ -1077,6 +1122,7 @@ public partial class HaruGraphWindow : EditorWindow
             Crumb = $"{model.Owner.name} ({model.Owner.GetType().Name})({ownerPath})",
             OwnerPickerEnabled = !inAsset,
             Locked = locked,
+            HasLibraries = HasPropertySection || HasTokenSection || HasAssetSection,
             SaveEnabled = canSave,
             SaveHighlight = canSave && hasChanges,
             SaveLabel = "存檔",
@@ -1103,6 +1149,7 @@ public partial class HaruGraphWindow : EditorWindow
         Redo = () => DoRedo(),
         SwitchTarget = SwitchToPendingTarget,
         ToggleLock = ToggleLock,
+        ShowLibraries = rect => LibraryMenu().DropDown(rect),
     };
 
     /// <summary>切換鎖定。解鎖當下不補切換——使用者要的是「從現在起跟著選取走」，不是追認剛才點過的東西。</summary>

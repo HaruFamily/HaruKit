@@ -1,6 +1,7 @@
 namespace HaruFamily.Framework.LogicGraph.Editor.Tests
 {
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Cysharp.Threading.Tasks;
@@ -11,6 +12,82 @@ public sealed class LogicGraphExecutionTests
 {
     private enum Timing { Run }
     private sealed class Pack { public int Count; }
+
+    private abstract class NativeObject : FormulaBase<object, Pack> { }
+    private sealed class ObjectAsset : FormulaAsset<object, Pack> { }
+    private sealed class CompatibleObjectSlot : FormulaSlot<object, ObjectAsset, NativeObject, Pack>
+    {
+        protected override bool AllowCompatibleResult => true;
+    }
+
+    private sealed class TextResult : FormulaBase<string, Pack>
+    {
+        public TokenTable<Pack> Seen;
+        public string Value = "text";
+        protected override async UniTask<string> OnEvaluate(Pack pack, TokenTable<Pack> tokens)
+        {
+            await Task.Yield();
+            Seen = tokens;
+            pack.Count++;
+            return Value;
+        }
+    }
+
+    private sealed class WrongPackText : FormulaBase<string, string>
+    {
+        protected override UniTask<string> OnEvaluate(string pack, TokenTable<string> tokens)
+            => UniTask.FromResult("wrong pack");
+    }
+
+    private abstract class NativeText : FormulaBase<string, Pack> { }
+    private sealed class TextAsset : FormulaAsset<string, Pack> { }
+    private class StrictTextSlot : FormulaSlot<string, TextAsset, NativeText, Pack> { }
+    private sealed class CompatibleTextSlot : StrictTextSlot
+    {
+        private static readonly HashSet<Type> excluded = new() { typeof(KeyFamily) };
+        protected override bool AllowCompatibleResult => true;
+        protected override IReadOnlyCollection<Type> ExcludedFormulaFamilies => excluded;
+    }
+    private abstract class KeyFamily : FormulaBase<string, Pack> { }
+    private sealed class KeyText : KeyFamily
+    {
+        protected override UniTask<string> OnEvaluate(Pack pack, TokenTable<Pack> tokens)
+            => UniTask.FromResult("key");
+    }
+
+    [Test]
+    public async Task CompatibleFormula_UpcastsWithOriginalContext_AndPreservesNullAndDisabledFallback()
+    {
+        var pack = new Pack();
+        var tokens = new TokenTable<Pack>();
+        var formula = new TextResult();
+        var node = new GraphNode(formula);
+        var slot = new CompatibleObjectSlot { Default = "fallback" };
+        slot.SetNode(node);
+        Assert.That(slot.AcceptsBody(formula), Is.True);
+        Assert.That(slot.AcceptsBody(new WrongPackText()), Is.False);
+        Assert.That(await slot.Evaluate(pack, tokens), Is.EqualTo("text"));
+        Assert.That(formula.Seen, Is.SameAs(tokens));
+        Assert.That(pack.Count, Is.EqualTo(1));
+        formula.Value = null;
+        Assert.That(await slot.Evaluate(pack, tokens), Is.Null);
+        node.Disabled = true;
+        Assert.That(await slot.Evaluate(pack, tokens), Is.EqualTo("fallback"));
+        Assert.That(pack.Count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task CompatibleFormula_SameResultRequiresOptIn_AndBlacklistRejectsKeyFamily()
+    {
+        var formula = new TextResult();
+        var slot = new CompatibleTextSlot();
+        Assert.That(new StrictTextSlot().AcceptsBody(formula), Is.False);
+        Assert.That(slot.AcceptsBody(formula), Is.True);
+        Assert.That(slot.AcceptsBody(new KeyText()), Is.False);
+        Assert.That(slot.AcceptsBody(new IntFormula()), Is.False);
+        slot.SetNode(new GraphNode(formula));
+        Assert.That(await slot.Evaluate(new Pack(), new TokenTable<Pack>()), Is.EqualTo("text"));
+    }
     [Serializable]
     private sealed class Increment : ActionBase<Pack>
     {
@@ -42,13 +119,10 @@ public sealed class LogicGraphExecutionTests
     }
 
     [Serializable]
-    private sealed class IntPropertySlot : SetPropertySlot<int, IntSlot> { }
-
-    [Serializable]
     private sealed class IncrementProperty : ActionBase<Pack>
     {
         public IntSlot Input = new();
-        public IntPropertySlot Target = new();
+        public PropertySlot<int, IntSlot> Target = new();
         protected override async UniTask OnExecute(Pack pack, TokenTable<Pack> tokens)
             => Target.Write(await Input.Evaluate(pack, tokens) + 1, tokens);
     }
@@ -65,7 +139,7 @@ public sealed class LogicGraphExecutionTests
     private sealed class IncrementAndReadProperty : ActionBase<Pack>
     {
         public IntSlot Input = new();
-        public IntPropertySlot Target = new();
+        public PropertySlot<int, IntSlot> Target = new();
         protected override async UniTask OnExecute(Pack pack, TokenTable<Pack> tokens)
         {
             int value = await Input.Evaluate(pack, tokens) + 1;
@@ -393,9 +467,9 @@ public sealed class LogicGraphExecutionTests
         return input;
     }
 
-    private static IntPropertySlot PropertyTarget(GraphProperty property)
+    private static PropertySlot<int, IntSlot> PropertyTarget(GraphProperty property)
     {
-        var target = new IntPropertySlot();
+        var target = new PropertySlot<int, IntSlot>();
         var node = new GraphNode();
         node.SetProperty(property);
         target.SetNode(node);

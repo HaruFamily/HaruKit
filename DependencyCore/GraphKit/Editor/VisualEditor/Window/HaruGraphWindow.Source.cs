@@ -215,7 +215,9 @@ public partial class HaruGraphWindow
         // 那個條件 BodyBaseType 表達不出來，由 Slot 另外宣告 CandidatePackType 收窄。
         Type packFilter = !isAction && slotType != null ? HGReflect.CandidatePackType(slotType) : null;
         var bodyTypes = new HashSet<Type>();
-        if (baseType != null)
+        if (!isAction && slotType != null && HGReflect.CreateInstance(slotType) is FormulaSlotBase formulaSlot)
+            foreach (var type in HGTypeCatalog.FormulasFor(formulaSlot)) bodyTypes.Add(type);
+        else if (baseType != null)
             foreach (var type in HGTypeCatalog.Concrete(baseType, packFilter)) bodyTypes.Add(type);
         else if (node.IsPropertyNode)
             foreach (var family in model.FormulaKinds())
@@ -882,10 +884,10 @@ public partial class HaruGraphWindow
         // 內容留到 Header 的 ▾ 再挑。族要先決定，否則空節點沒有型別關係，▾ 也列不出東西。
         // 沒有具體 inline 公式的族（例：Key 刻意不開放 inline 公式，鍵必須恆定）照列：
         // ▾ 仍然挑得到該族的資產與Token，那正是這種族唯一的來源。
-        foreach (var (_, slotType) in model.FormulaKinds())
+        foreach (var (slotType, path) in HGTypeCatalog.FormulaKindOptions(model.FormulaKinds()))
         {
             var captured = slotType;
-            var content = new GUIContent($"建立公式/{HGReflect.SlotKindName(slotType)}");
+            var content = new GUIContent($"建立公式/{path}");
             if (canEditFocus) menu.AddItem(content, false, () => CreateOrphan(graphMouse, captured));
             else menu.AddDisabledItem(content);
         }

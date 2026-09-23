@@ -676,7 +676,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         {
             private readonly GraphProperty property;
             private readonly List<Object> replacement;
-            public ObjectListPropertySlot output = new();
+            public PropertySlot<List<Object>, ObjectListSlot> output = new();
             public bool initializeBeforeMutation;
 
             public MutateAndWritePropertyAction(GraphProperty property, GraphNode node, List<Object> replacement)
@@ -696,7 +696,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Serializable] private sealed class WritePropertyAction : ActionBase
         {
             private readonly List<Object> value;
-            public ObjectListPropertySlot output = new();
+            public PropertySlot<List<Object>, ObjectListSlot> output = new();
 
             public WritePropertyAction(GraphNode node, List<Object> value)
             {

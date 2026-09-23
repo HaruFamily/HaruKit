@@ -19,6 +19,8 @@ namespace HaruFamily.Tools.AssetPipeline
     [UnityEngine.Scripting.APIUpdating.MovedFrom(true, "HaruFamily.Tools.AssetPipeline", "HaruFamily.Tools.AssetPipeline.Editor", "FormulaAsset_Object")]
     public class ObjectSlot : FormulaSlot<Object, Formula_Object<NullPack>>
     {
+        protected override bool AllowCompatibleResult => true;
+
         public ObjectSlot()
         {
         }
