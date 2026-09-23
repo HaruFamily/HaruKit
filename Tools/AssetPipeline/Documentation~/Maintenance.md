@@ -138,7 +138,7 @@ public class CollectAssets : ActionBase
 
 ### 新增公式族（本套件或使用端）
 
-在同一個檔案宣告 `Formula_X<TPack> : FormulaBase<X, TPack>` 與 `XSlot : FormulaSlot<X, Formula_X<NullPack>>`（需要時加 `[HGKind]`）。清單族在 Slot 建構子把 `_default` 設成空清單。確認沒有既有的族已經代表同一種結果。
+在同一個檔案宣告 `Formula_X<TPack> : FormulaBase<X, TPack>` 與 `XSlot : FormulaSlot<X, Formula_X<NullPack>>`。在 Slot 上用 `[HGKind(null, group: "分類")]` 設定族建立選單分類，名稱沿用結果型別預設顯示；基本值使用 `基本變數型別`，Unity 物件與資料夾使用 `Unity 資產型別`，清單族放在各分類的 `/清單` 子層。清單族在 Slot 建構子把 `_default` 設成空清單。確認沒有既有的族已經代表同一種結果。
 
 ### 改框架
 

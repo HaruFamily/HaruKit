@@ -17,6 +17,7 @@ namespace HaruFamily.Tools.AssetPipeline
     // 所以保留「資產優先、路徑備援」而不是二選一。
     [Serializable]
     [UnityEngine.Scripting.APIUpdating.MovedFrom(true, "HaruFamily.Tools.AssetPipeline", "HaruFamily.Tools.AssetPipeline.Editor", "FormulaAsset_Folder")]
+    [HGKind(null, group: "Unity 資產型別")]
     public class FolderSlot : FormulaSlot<DefaultAsset, Formula_Folder<NullPack>>
     {
         [HideInInspector]

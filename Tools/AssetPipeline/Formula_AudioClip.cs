@@ -12,6 +12,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
     [Serializable]
     [UnityEngine.Scripting.APIUpdating.MovedFrom(true, "HaruFamily.Tools.AssetPipeline", "HaruFamily.Tools.AssetPipeline.Editor", "FormulaAsset_AudioClip")]
+    [HGKind(null, group: "Unity 資產型別")]
     public class AudioClipSlot : FormulaSlot<AudioClip, Formula_AudioClip<NullPack>>
     {
         public AudioClipSlot()
@@ -30,6 +31,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
     [Serializable]
     [UnityEngine.Scripting.APIUpdating.MovedFrom(true, "HaruFamily.Tools.AssetPipeline", "HaruFamily.Tools.AssetPipeline.Editor", "FormulaAsset_AudioClipList")]
+    [HGKind(null, group: "Unity 資產型別/清單")]
     public class AudioClipListSlot : FormulaSlot<List<AudioClip>, Formula_AudioClipList<NullPack>>
     {
         public AudioClipListSlot()

@@ -10,6 +10,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
     [Serializable]
     [UnityEngine.Scripting.APIUpdating.MovedFrom(true, "HaruFamily.Tools.AssetPipeline", "HaruFamily.Tools.AssetPipeline.Editor", "FormulaAsset_Bool")]
+    [HGKind(null, group: "基本變數型別")]
     public class BoolSlot : FormulaSlot<bool, Formula_Bool<NullPack>>
     {
         public BoolSlot()
