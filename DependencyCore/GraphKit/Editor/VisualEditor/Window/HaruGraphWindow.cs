@@ -166,9 +166,9 @@ public partial class HaruGraphWindow : EditorWindow
     private Vector2 inputPortClickStart;
     private const float InputPortClickSlop = 4f;
 
-    // 待開的就地確認框（見 RequestConfirm）。錨點是視窗座標。
-    private HGConfirmPopup pendingConfirm;
-    private Rect pendingConfirmAnchor;
+    // 待開的就地 Popup（確認框、群組顏色面板，見 RequestPopup）。錨點是視窗座標。
+    private PopupWindowContent pendingPopup;
+    private Rect pendingPopupAnchor;
 
     // 拉線期間的相容性：起手時對全圖判定一次，之後高亮與吸附都讀這份，不必每幀重算。
     private readonly HashSet<HGPortKey> linkCompatiblePorts = new();
@@ -197,6 +197,47 @@ public partial class HaruGraphWindow : EditorWindow
     private bool boxSelecting;
     private Vector2 boxStart;
     private Vector2 boxEnd;
+    // 選取中的群組（用 Id 記，Undo 換掉物件後仍認得）。和節點選取互斥：選群組時 Delete 只刪群組。純視圖狀態，不進文件。
+    private string selectedNodeGroupId;
+    // 拖群組標題列＝整組移動。拖曳中只改 nodeGroupDragRect 與節點的顯示座標，放開才寫回文件。
+    private GraphNodeGroup dragNodeGroup;
+    private Rect nodeGroupDragOrigin;
+    private Rect nodeGroupDragRect;
+    private Vector2 nodeGroupDragStart;
+    private readonly Dictionary<string, Vector2> nodeGroupMemberStarts = new();
+    // 拖節點期間各群組的框凍結在拖曳前的樣子：框不跟著被拖的節點長，放手時才看滑鼠落在哪個框。
+    private readonly Dictionary<GraphNodeGroup, Rect> frozenNodeGroupRects = new();
+    // 節點 Id → 所屬群組的顏色。每次畫群組時重算，節點本體與左緣色條依它染色。
+    private readonly Dictionary<string, Color> nodeGroupColors = new();
+    // 節點 Id → 把它收起來的群組（群組收合，或成員不在作用中的分頁）。ApplyVisibility 重算；連線一端在這裡就改接到群組標題列的代理接點。
+    private readonly Dictionary<string, GraphNodeGroup> collapsedMembers = new();
+    // 只因為不在作用中的分頁而隱藏的成員。框要包住所有分頁的成員，所以它們仍算進外框；被 ⊖ 收起的不算。
+    private readonly HashSet<string> tabHiddenMembers = new();
+    // 節點 Id → 所屬群組（不論收合）。成員被群組外的欄位收起時，連線改畫虛線接到群組標題列。
+    private readonly Dictionary<string, GraphNodeGroup> nodeGroupMembers = new();
+    // 代理接點伸出的線：依另一端高度扇形散開的角度（與折疊清單同一套）。key 是群組 Id＋左右側。
+    private readonly Dictionary<HGLink, float> proxyFan = new();
+    // 跨出群組的殘影在標題列那一端的扇形角度；兩端各在不同群組時各有一筆，所以 key 帶端（0＝輸入、1＝輸出）。
+    private readonly Dictionary<(HGLink link, int end), float> boundaryGhostFan = new();
+    // 同一側代表接點伸出的線；end 為 -1 是實線代理，0／1 是殘影的那一端。
+    private readonly Dictionary<string, List<(HGLink link, int end)>> proxyFanGroups = new();
+    private const string DefaultNodeGroupTitle = "群組";
+    private const float NodeGroupHeaderHeight = 24f;
+    // 分頁列貼在標題列下方，沒收合時常駐（至少一頁）；標題列兩端的代表接點不受影響。
+    private const float NodeGroupTabHeight = 20f;
+    // 分頁列最後面的「＋」新增分頁。
+    private const float NodeGroupTabAddWidth = 20f;
+    private const string DefaultNodeGroupTabTitle = "分頁";
+    private const float NodeGroupTabInset = 8f;
+    private const float NodeGroupTabMinWidth = 48f;
+    private const float NodeGroupTabMaxWidth = 140f;
+    private const float NodeGroupPadding = 20f;
+    private static readonly Vector2 NodeGroupMinSize = new(160f, 80f);
+    private static readonly Vector2 EmptyNodeGroupSize = new(17f * HGGraph.GridSize, 5f * HGGraph.GridSize);
+    // 整理此群組的欄距與列距。
+    private const float ArrangeGap = 20f;
+    // 群組標題列兩端代表接點的命中半徑。
+    private const float NodeGroupPortHitRadius = HGGraph.PortRadius + 5f;
     private HGRow dragListRow;
     private int dragListIndex = -1;
     // 拖曳期間只算目標位置、畫插入線；MouseUp 才真的搬動。拖曳中改資料會讓整張圖重建、列在指標底下亂跳。
@@ -325,7 +366,7 @@ public partial class HaruGraphWindow : EditorWindow
         }
         if (Event.current.type == EventType.MouseDrag || Event.current.type == EventType.MouseMove || linking || drag.Active
             || placingSlot != null) Repaint();
-        ShowPendingConfirm();
+        ShowPendingPopup();
         UpdateUnsavedState();
     }
 
@@ -335,18 +376,22 @@ public partial class HaruGraphWindow : EditorWindow
     /// GUI 座標可用。錨點 rect 由呼叫端先換成視窗座標存進來。
     /// </summary>
     private void RequestConfirm(Rect windowAnchor, string message, string confirmLabel, Action onConfirm)
+        => RequestPopup(windowAnchor, new HGConfirmPopup(message, confirmLabel, onConfirm));
+
+    /// <summary>排一個就地 Popup，OnGUI 結尾的 Repaint 才開（理由同 RequestConfirm）。</summary>
+    private void RequestPopup(Rect windowAnchor, PopupWindowContent popup)
     {
-        pendingConfirmAnchor = windowAnchor;
-        pendingConfirm = new HGConfirmPopup(message, confirmLabel, onConfirm);
+        pendingPopupAnchor = windowAnchor;
+        pendingPopup = popup;
         Repaint();
     }
 
-    private void ShowPendingConfirm()
+    private void ShowPendingPopup()
     {
-        if (pendingConfirm == null || Event.current.type != EventType.Repaint) return;
-        var popup = pendingConfirm;
-        pendingConfirm = null;
-        PopupWindow.Show(pendingConfirmAnchor, popup);
+        if (pendingPopup == null || Event.current.type != EventType.Repaint) return;
+        var popup = pendingPopup;
+        pendingPopup = null;
+        PopupWindow.Show(pendingPopupAnchor, popup);
     }
 
     private void GetLayout(out Rect toolbar, out Rect left, out Rect center, out Rect leftHandle,
@@ -580,12 +625,14 @@ public partial class HaruGraphWindow : EditorWindow
     {
         foreach (var n in graph.Nodes) n.Hidden = false;
         effectiveHidden.Clear();
+        CollectCollapsedMembers();
         if (graph.Nodes.Count == 0) return;
 
         if (soloSlotKey != null)
         {
             ApplySolo();
             effectiveHidden.Add(soloSlotKey);
+            HideCollapsedMembers();
             MarkHiddenSlots();
             return;
         }
@@ -616,6 +663,8 @@ public partial class HaruGraphWindow : EditorWindow
 
         foreach (var n in graph.Nodes) n.Hidden = !visible.Contains(n);
 
+        // 群組收合在可達性之後才套：收起的成員不擋住走訪，接在它底下、群組外的節點照樣顯示。
+        HideCollapsedMembers();
         MarkHiddenSlots();
     }
 
@@ -636,6 +685,17 @@ public partial class HaruGraphWindow : EditorWindow
         carrierUsers.Clear();
         selectedIds.Clear();
         raisedNodeIds.Clear();
+        dragNodeGroup = null;
+        selectedNodeGroupId = null;
+        nodeGroupMemberStarts.Clear();
+        frozenNodeGroupRects.Clear();
+        nodeGroupColors.Clear();
+        collapsedMembers.Clear();
+        tabHiddenMembers.Clear();
+        nodeGroupMembers.Clear();
+        proxyFan.Clear();
+        boundaryGhostFan.Clear();
+        proxyFanGroups.Clear();
     }
 
     /// <summary>
@@ -708,10 +768,12 @@ public partial class HaruGraphWindow : EditorWindow
     {
         soloSlotKey = null;
         soloRestore.Clear();
+        ExpandNodeGroupOf(target?.Id);
         var seen = new HashSet<HGNodeView>();
         for (var node = target; node?.ParentRow != null && seen.Add(node); node = NodeById(node.ParentRow.OwnerNodeId))
         {
             HGRow row = node.ParentRow;
+            ExpandNodeGroupOf(row.OwnerNodeId);
             SetSlotHidden(HGGraph.CollapseKey(row.OwnerNodeId, row), false);
             for (HGRow list = row.ItemOwnerRow; list != null; list = list.ItemOwnerRow)
                 SetSlotHidden(HGGraph.CollapseKey(row.OwnerNodeId, list), false);
@@ -749,6 +811,8 @@ public partial class HaruGraphWindow : EditorWindow
             {
                 if (!row.HasSlot) continue;
                 if (!graph.BySlot.TryGetValue(row.InputSlot, out var target) || !target.Hidden) continue;
+                // 目標是被群組收起來的：線改接代理接點，欄位本身沒有收合，不能畫成 +。
+                if (collapsedMembers.ContainsKey(target.Id ?? "")) continue;
                 effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
             }
         }
@@ -813,6 +877,9 @@ public partial class HaruGraphWindow : EditorWindow
     {
         if (link?.InputPort == null || link.OutputPort == null) return false;
         if (effectiveHidden.Contains(HGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow))) return false;
+        // 兩端都收在同一個群組裡：群組內部的線，收合時不畫。
+        var inGroup = CollapsedGroupOf(link.InputPort);
+        if (inGroup != null && ReferenceEquals(inGroup, CollapsedGroupOf(link.OutputPort))) return false;
         return IsLinkEndVisible(link, link.InputPort) && IsLinkEndVisible(link, link.OutputPort);
     }
 
@@ -823,6 +890,8 @@ public partial class HaruGraphWindow : EditorWindow
     private bool IsLinkEndVisible(HGLink link, HGPort port)
     {
         if (port.Presentation.Visible) return true;
+        // 被群組收起來的一端改接代理接點：接點本身仍不可見（不能起手、不能當放線目標），線照畫。
+        if (CollapsedGroupOf(port) != null) return true;
         return FoldedListOf(link) != null && ReferenceEquals(OwnerRowOfPort(port), link.ParentRow);
     }
 
@@ -839,6 +908,7 @@ public partial class HaruGraphWindow : EditorWindow
     /// <summary>
     /// 同一個折疊清單伸出的線依目標高度排序、等角散開：上面的目標拿上面的角度，線在起點不交叉。
     /// 一條就是 0 度（維持水平）；條數多時壓縮間距，整把扇不超過 ±<see cref="FoldFanMax"/>。
+    /// 元素欄位被 ⊖ 收起的殘影也算進來：它們一樣從代表接點伸出，不散開就疊成一條。
     /// </summary>
     private void RebuildFoldFan()
     {
@@ -847,21 +917,33 @@ public partial class HaruGraphWindow : EditorWindow
         foldFanGroups.Clear();
         if (graph == null) return;
 
+        var targetY = new Dictionary<HGLink, float>();
         foreach (var link in graph.Links)
         {
             HGRow list = FoldedListOf(link);
-            if (list == null || !IsLinkVisible(link)) continue;
+            if (list == null) continue;
+            bool ghost = !IsLinkVisible(link);
+            if (ghost && !IsLinkGhost(link)) continue;
             if (!foldFanGroups.TryGetValue(list, out var group)) foldFanGroups[list] = group = new List<HGLink>();
             group.Add(link);
+            HGPort target = FoldTargetPort(link);
+            Vector2 targetPos = target.Presentation.Position;
+            if (ghost)
+            {
+                HGPort slot = ReferenceEquals(target, link.InputPort) ? link.OutputPort : link.InputPort;
+                ResolveGhostEnd(link, target, slot.Presentation.Position, out targetPos, out _);
+            }
+            targetY[link] = targetPos.y;
         }
 
         foreach (var group in foldFanGroups.Values)
         {
-            group.Sort((a, b) => FoldTargetPort(a).Presentation.Position.y.CompareTo(FoldTargetPort(b).Presentation.Position.y));
+            group.Sort((a, b) => targetY[a].CompareTo(targetY[b]));
             float step = group.Count > 1 ? Mathf.Min(FoldFanStep, FoldFanMax * 2f / (group.Count - 1)) : 0f;
             for (int i = 0; i < group.Count; i++)
                 foldFan[group[i]] = (i - (group.Count - 1) * 0.5f) * step;
         }
+        RebuildProxyFan();
     }
 
     /// <summary>折疊清單元素連線的目標端：欄位列那一端以外的接點（寫入 Property 的線兩端角色相反，用列比對）。</summary>

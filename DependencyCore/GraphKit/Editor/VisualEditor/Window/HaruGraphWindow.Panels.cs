@@ -807,15 +807,18 @@ public partial class HaruGraphWindow
         return errors;
     }
 
-    /// <summary>時機節點的新增入口。已經存在的時機一律停用——一個時機只能有一顆節點。</summary>
-    private void AddTimingMenuItems(GenericMenu menu, string prefix, Vector2 createPos)
+    /// <summary>
+    /// 時機節點的新增入口。已經存在的時機一律停用——一個時機只能有一顆節點。
+    /// joinGroup 不為 null＝在畫布群組內部右鍵，新節點同一步加入該群組。
+    /// </summary>
+    private void AddTimingMenuItems(GenericMenu menu, string prefix, Vector2 createPos, GraphNodeGroup joinGroup = null)
     {
         foreach (var timing in model.AvailableRootKeys)
         {
             var content = new GUIContent(prefix + timing);
             if (model.HasRoot(timing)) { menu.AddDisabledItem(content); continue; }
             var captured = timing;
-            menu.AddItem(content, false, () => AddTimingGroup(captured, createPos));
+            menu.AddItem(content, false, () => AddTimingGroup(captured, createPos, joinGroup));
         }
     }
 
@@ -827,7 +830,7 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>在指定位置建立一顆時機節點。空的時機節點是合法狀態，動作由它本體的清單「＋」新增。</summary>
-    private void AddTimingGroup(object timing, Vector2 pos)
+    private void AddTimingGroup(object timing, Vector2 pos, GraphNodeGroup joinGroup = null)
     {
         if (timing == null) return;
         if (model.HasRoot(timing))
@@ -848,8 +851,10 @@ public partial class HaruGraphWindow
         HGReflect.SetHeadPos(group.Root, SnapToGrid(pos));
         if (focus.Kind != HGFocusKind.Root) SetFocus(AllRootsFocus());
         selectedIds.Clear();
-        selectedIds.Add(HGGraph.GroupHeadId(model, group.Root));
+        string headId = HGGraph.GroupHeadId(model, group.Root);
+        selectedIds.Add(headId);
         Invalidate();
+        if (joinGroup != null) JoinNodeGroup(headId, joinGroup);
         Repaint();
     }
 

@@ -66,7 +66,20 @@ public sealed class GraphViewState
 
     public bool SetNoteCollapsed(string nodeId, bool collapsed) => Toggle(_notesCollapsed ??= new List<string>(), nodeId, collapsed);
 
-    private static bool Toggle(List<string> list, string key, bool present)
+    // 畫布上的節點群組。清單順序＝繪製順序，越後面越上層。欄位名是序列化鍵，型別改名不影響它。
+    [SerializeField] private List<GraphNodeGroup> _groups = new();
+
+    public IReadOnlyList<GraphNodeGroup> NodeGroups => _groups ??= new List<GraphNodeGroup>();
+
+    public void AddNodeGroup(GraphNodeGroup group)
+    {
+        if (group == null) return;
+        (_groups ??= new List<GraphNodeGroup>()).Add(group);
+    }
+
+    public bool RemoveNodeGroup(GraphNodeGroup group) => group != null && (_groups ??= new List<GraphNodeGroup>()).Remove(group);
+
+    internal static bool Toggle(List<string> list, string key, bool present)
     {
         if (string.IsNullOrEmpty(key)) return false;
         bool contains = list.Contains(key);
@@ -75,6 +88,211 @@ public sealed class GraphViewState
         else list.Remove(key);
         return true;
     }
+}
+
+/// <summary>
+/// 畫布上的一個群組：記住哪些節點屬於它。純版面，不影響執行、驗證或節點資料。
+/// scope 是編輯器的畫布識別（焦點 Id），同一份文件的不同畫布各自有自己的群組。
+/// 成員記節點 Id；找不到的 Id 由編輯器略過，這裡不解讀。
+/// </summary>
+/// <remarks>
+/// 畫面上的框由編輯器依成員目前的外框當場算出；rect 只是最後一次寫回的框，
+/// 沒有可見成員時拿來當位置。color 是編輯器主題調色盤的索引，跟著主題換；
+/// 勾了自訂色時改用 customColor，不跟主題走。
+/// </remarks>
+[Serializable]
+public sealed class GraphNodeGroup
+{
+    [SerializeField] private string _id;
+    [SerializeField] private string _scope;
+    [SerializeField] private string _title;
+    [SerializeField] private Rect _rect;
+    [SerializeField] private int _color;
+    // 自訂色：勾起時不跟主題調色盤走。
+    [SerializeField] private bool _useCustomColor;
+    [SerializeField] private Color _customColor = Color.white;
+    // 收合：成員節點不畫，外部連線接到群組框邊緣。只影響顯示。
+    [SerializeField] private bool _collapsed;
+    [SerializeField] private List<string> _members = new();
+    // 分頁：少於兩頁時所有成員都顯示（只有一頁時仍保留它的名字）。成員沒記在任何一頁時算第一頁。
+    [SerializeField] private List<GraphNodeGroupTab> _tabs = new();
+    [SerializeField] private int _activeTab;
+
+    private GraphNodeGroup() { }
+
+    public GraphNodeGroup(string scope, string title, Rect rect, int colorIndex)
+    {
+        _id = Guid.NewGuid().ToString("N");
+        _scope = scope;
+        _title = title;
+        _rect = rect;
+        _color = colorIndex;
+    }
+
+    public string Id => _id;
+    public string Scope => _scope;
+    public string Title => _title;
+    public Rect Rect => _rect;
+    public int ColorIndex => _color;
+    public IReadOnlyList<string> Members => _members ??= new List<string>();
+
+    /// <summary>回傳這次有沒有真的改到；沒改到時呼叫端不該標未存檔。</summary>
+    public bool SetTitle(string title)
+    {
+        if (_title == title) return false;
+        _title = title;
+        return true;
+    }
+
+    public bool SetRect(Rect rect)
+    {
+        if (_rect == rect) return false;
+        _rect = rect;
+        return true;
+    }
+
+    public bool Collapsed => _collapsed;
+
+    public bool SetCollapsed(bool collapsed)
+    {
+        if (_collapsed == collapsed) return false;
+        _collapsed = collapsed;
+        return true;
+    }
+
+    public bool UseCustomColor => _useCustomColor;
+    public Color CustomColor => _customColor;
+
+    /// <summary>改用主題調色盤的第 index 色，並取消自訂色。</summary>
+    public bool SetPaletteColor(int index)
+    {
+        if (_color == index && !_useCustomColor) return false;
+        _color = index;
+        _useCustomColor = false;
+        return true;
+    }
+
+    /// <summary>改用自訂色。透明度一律存成不透明，染色強度由編輯器決定。</summary>
+    public bool SetCustomColor(Color color)
+    {
+        color.a = 1f;
+        if (_useCustomColor && _customColor == color) return false;
+        _customColor = color;
+        _useCustomColor = true;
+        return true;
+    }
+
+    /// <summary>
+    /// 加入或移出群組。有分頁時，新加入的成員放進作用中的那一頁；移出時一併從各頁拿掉。
+    /// </summary>
+    public bool SetMember(string nodeId, bool member)
+    {
+        bool changed = GraphViewState.Toggle(_members ??= new List<string>(), nodeId, member);
+        if (!changed) return false;
+        if (member) PlaceOnTab(nodeId, ActiveTab);
+        else PlaceOnTab(nodeId, -1);
+        return true;
+    }
+
+    public IReadOnlyList<GraphNodeGroupTab> Tabs => _tabs ??= new List<GraphNodeGroupTab>();
+
+    /// <summary>有兩頁以上才算有分頁；少於兩頁時所有成員都在同一頁。</summary>
+    public bool HasTabs => Tabs.Count >= 2;
+
+    /// <summary>作用中的分頁索引；沒有分頁時是 0。</summary>
+    public int ActiveTab => HasTabs ? Mathf.Clamp(_activeTab, 0, _tabs.Count - 1) : 0;
+
+    /// <summary>成員在第幾頁。沒記在任何一頁（或沒有分頁）時算第一頁。</summary>
+    public int TabOf(string nodeId)
+    {
+        if (!HasTabs || string.IsNullOrEmpty(nodeId)) return 0;
+        for (int i = 0; i < _tabs.Count; i++)
+            if (_tabs[i] != null && _tabs[i].MemberList.Contains(nodeId)) return i;
+        return 0;
+    }
+
+    public bool IsOnActiveTab(string nodeId) => TabOf(nodeId) == ActiveTab;
+
+    /// <summary>在最後面加一頁，回傳它的索引。第一次加分頁時要連同第一頁一起加（成員原本都在第一頁）。</summary>
+    public int AddTab(string name)
+    {
+        (_tabs ??= new List<GraphNodeGroupTab>()).Add(new GraphNodeGroupTab(name));
+        return _tabs.Count - 1;
+    }
+
+    public bool SetTabName(int index, string name)
+    {
+        if (index < 0 || index >= Tabs.Count || _tabs[index] == null || _tabs[index].Name == name) return false;
+        _tabs[index].Name = name;
+        return true;
+    }
+
+    public bool SetActiveTab(int index)
+    {
+        if (!HasTabs || index < 0 || index >= _tabs.Count || ActiveTab == index) return false;
+        _activeTab = index;
+        return true;
+    }
+
+    /// <summary>
+    /// 刪掉一頁，裡面的成員回到第一頁（刪的就是第一頁時，回到刪完後的第一頁）。
+    /// 最後一頁不能刪；刪到只剩一頁時保留它（連同名字），群組就只有這一頁。
+    /// </summary>
+    public bool RemoveTab(int index)
+    {
+        if (!HasTabs || index < 0 || index >= _tabs.Count) return false;
+        int active = ActiveTab;
+        var moved = _tabs[index]?.MemberList;
+        _tabs.RemoveAt(index);
+        if (moved != null && _tabs[0] != null)
+            foreach (var id in moved)
+                if (!_tabs[0].MemberList.Contains(id)) _tabs[0].MemberList.Add(id);
+
+        _activeTab = active > index ? active - 1 : active == index ? 0 : active;
+        return true;
+    }
+
+    /// <summary>把成員放到指定的那一頁（同時從其他頁拿掉）；tab 為 -1＝從所有頁拿掉。</summary>
+    public bool SetMemberTab(string nodeId, int tab)
+    {
+        if (!HasTabs || tab < 0 || tab >= _tabs.Count || !(_members ??= new List<string>()).Contains(nodeId) || TabOf(nodeId) == tab) return false;
+        PlaceOnTab(nodeId, tab);
+        return true;
+    }
+
+    private void PlaceOnTab(string nodeId, int tab)
+    {
+        if (string.IsNullOrEmpty(nodeId) || _tabs == null) return;
+        for (int i = 0; i < _tabs.Count; i++)
+        {
+            var list = _tabs[i]?.MemberList;
+            if (list == null) continue;
+            if (i == tab && HasTabs) { if (!list.Contains(nodeId)) list.Add(nodeId); }
+            else list.Remove(nodeId);
+        }
+    }
+}
+
+/// <summary>群組裡的一頁：名稱與記在這一頁的成員節點 Id。只經由 <see cref="GraphNodeGroup"/> 修改。</summary>
+[Serializable]
+public sealed class GraphNodeGroupTab
+{
+    [SerializeField] private string _name;
+    [SerializeField] private List<string> _members = new();
+
+    private GraphNodeGroupTab() { }
+
+    internal GraphNodeGroupTab(string name) => _name = name;
+
+    public string Name
+    {
+        get => _name;
+        internal set => _name = value;
+    }
+
+    public IReadOnlyList<string> Members => MemberList;
+
+    internal List<string> MemberList => _members ??= new List<string>();
 }
 
 /// <summary>

@@ -811,7 +811,7 @@ public partial class HaruGraphWindow
         menu.ShowAsContext();
     }
 
-    /// <summary>每個右鍵選單最後一段都一樣：整張畫布的操作。</summary>
+    /// <summary>每個右鍵選單最後一段都一樣：整張畫布的操作。順序（聚焦 → 整理）與空白處右鍵、群組右鍵一致。</summary>
     private void AddCanvasMenuItems(GenericMenu menu, Action separator)
     {
         separator();
@@ -867,7 +867,8 @@ public partial class HaruGraphWindow
             foreach (var slot in HGModel.WalkSlots(orphan, visited)) yield return slot;
     }
 
-    private void ShowCanvasMenu(Vector2 graphMouse)
+    /// <summary>空白處右鍵。group 不為 null＝按在群組內部空白：新建的節點直接加入它，聚焦與整理只作用在它。</summary>
+    private void ShowCanvasMenu(Vector2 graphMouse, GraphNodeGroup group = null)
     {
         var menu = new GenericMenu();
         // 有頭端就有候選池可放，判準與拖曳放節點那條一致；Token與資產畫布也算。
@@ -876,7 +877,7 @@ public partial class HaruGraphWindow
         // root 節點由使用者自己建，位置就是按下右鍵的地方。
         if (focus.Kind == HGFocusKind.Root)
         {
-            AddTimingMenuItems(menu, $"新增{RootNoun}節點/", graphMouse);
+            AddTimingMenuItems(menu, $"新增{RootNoun}節點/", graphMouse, group);
             menu.AddSeparator("");
         }
 
@@ -888,7 +889,7 @@ public partial class HaruGraphWindow
         {
             var captured = slotType;
             var content = new GUIContent($"建立公式/{path}");
-            if (canEditFocus) menu.AddItem(content, false, () => CreateOrphan(graphMouse, captured));
+            if (canEditFocus) menu.AddItem(content, false, () => CreateOrphan(graphMouse, captured, group));
             else menu.AddDisabledItem(content);
         }
 
@@ -896,20 +897,32 @@ public partial class HaruGraphWindow
         if (actionSlotType != null)
         {
             var content = new GUIContent("建立動作");
-            if (canEditFocus) menu.AddItem(content, false, () => CreateOrphan(graphMouse, actionSlotType));
+            if (canEditFocus) menu.AddItem(content, false, () => CreateOrphan(graphMouse, actionSlotType, group));
             else menu.AddDisabledItem(content);
         }
 
         menu.AddSeparator("");
-        if (canEditFocus)
+        // 群組內部空白：多一段只作用在這個群組的聚焦與整理，全畫布那兩項照樣保留。
+        // 巢狀群組尚未定案，這裡不提供建立群組。
+        if (group != null)
         {
-            menu.AddItem(new GUIContent("整理版面"), false, ResetLayout);
-            menu.AddItem(new GUIContent("聚焦全部節點"), false, FrameAll);
+            AddNodeGroupScopeItems(menu, group);
+            menu.AddSeparator("");
         }
         else
         {
-            menu.AddDisabledItem(new GUIContent("整理版面"));
+            AddNodeGroupMenuItems(menu, graphMouse);
+        }
+        // 順序與節點右鍵的 AddCanvasMenuItems 一致：聚焦在前、整理在後。
+        if (canEditFocus)
+        {
+            menu.AddItem(new GUIContent("聚焦全部節點"), false, FrameAll);
+            menu.AddItem(new GUIContent("整理版面"), false, ResetLayout);
+        }
+        else
+        {
             menu.AddDisabledItem(new GUIContent("聚焦全部節點"));
+            menu.AddDisabledItem(new GUIContent("整理版面"));
         }
         menu.ShowAsContext();
     }
@@ -1280,8 +1293,8 @@ public partial class HaruGraphWindow
     }
 
     // 候選池掛在焦點頭端上（資產有自己的一份），所以資產焦點也能建候選，不會污染 Owner。
-    /// <summary>在畫布上放一顆空節點，並記住它屬於哪一族。</summary>
-    private void CreateOrphan(Vector2 graphMouse, Type slotType)
+    /// <summary>在畫布上放一顆空節點，並記住它屬於哪一族。group 不為 null 時同一步加入該群組。</summary>
+    private void CreateOrphan(Vector2 graphMouse, Type slotType, GraphNodeGroup group = null)
     {
         BreakUndoMerge();
         var carrier = new GraphNode();
@@ -1290,6 +1303,7 @@ public partial class HaruGraphWindow
         model.AddOrphan(carrier);
         RememberOrphanKind(carrier, slotType);
         Invalidate();
+        if (group != null) JoinNodeGroup(carrier.Id, group);
         Repaint();
     }
 

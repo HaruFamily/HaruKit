@@ -28,6 +28,12 @@ public sealed class HGInlineRename
     /// <summary>節點參數列的動作標籤。</summary>
     public const string SiteRow = "row";
 
+    /// <summary>畫布節點群組的標題。</summary>
+    public const string SiteNodeGroup = "nodeGroup";
+
+    /// <summary>畫布節點群組的分頁標籤。</summary>
+    public const string SiteNodeGroupTab = "nodeGroupTab";
+
     private const string ControlPrefix = "agInlineName";
 
     private readonly Action repaint;

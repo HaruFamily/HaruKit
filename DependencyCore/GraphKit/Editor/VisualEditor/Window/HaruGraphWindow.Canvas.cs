@@ -162,6 +162,7 @@ public partial class HaruGraphWindow
         bool overHeaderActions = headerActionsNode != null
             && HeaderActionsRect(headerActionsNode).Contains(graphMouse) && mouseInCanvas;
 
+        DrawNodeGroups(r, graphMouse);
         if (graph != null)
         {
             foreach (var node in graph.Nodes) UpdateRowGeometry(node, node.Rows);
@@ -202,6 +203,7 @@ public partial class HaruGraphWindow
                         try
                         {
                             DrawNode(node, ReferenceEquals(node, linkTarget), snappedPort);
+                            DrawNodeGroupStripe(node);
                         }
                         finally
                         {
@@ -314,7 +316,7 @@ public partial class HaruGraphWindow
         {
             if (IsTracedLink(link)) continue;
             if (IsLinkVisible(link)) DrawLink(link, false);
-            else if (IsLinkGhost(link)) DrawLinkGhosts(link, false);
+            else DrawInvisibleLink(link, false);
         }
         if (linking && linkPort != null)
         {
@@ -339,9 +341,20 @@ public partial class HaruGraphWindow
         {
             if (!IsTracedLink(link)) continue;
             if (IsLinkVisible(link)) DrawLink(link, true);
-            else if (IsLinkGhost(link)) DrawLinkGhosts(link, true);
+            else DrawInvisibleLink(link, true);
         }
         Handles.EndGUI();
+    }
+
+    /// <summary>
+    /// 看不到整條的線：欄位收起的畫一般殘影；成員被群組外的欄位收起、另一端看得到的，看得到那一端畫殘影。
+    /// 兩種只要跨出群組，群組標題列朝向另一端的代表接點再各畫一段殘影往外連（<see cref="DrawNodeGroupBoundaryGhosts"/>）。
+    /// </summary>
+    private void DrawInvisibleLink(HGLink link, bool traced)
+    {
+        if (IsLinkGhost(link)) DrawLinkGhosts(link, traced);
+        else if (!DrawHiddenMemberEnd(link, traced)) return;
+        DrawNodeGroupBoundaryGhosts(link, traced);
     }
 
     /// <summary>
@@ -355,24 +368,28 @@ public partial class HaruGraphWindow
         return effectiveHidden.Contains(HGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow));
     }
 
-    /// <summary>欄位端一定畫；目標節點因為別的線還顯示著時，目標端也往回畫一段，兩段在中間斷開。</summary>
+    /// <summary>
+    /// 欄位端一定畫；目標節點因為別的線還顯示著時，目標端也往回畫一段，兩段在中間斷開。
+    /// 目標被群組藏起來時，欄位端改朝群組標題列的代表接點，標題列那段由 <see cref="DrawNodeGroupBoundaryGhosts"/> 畫。
+    /// 欄位在折疊清單裡時，欄位端從清單的代表接點起畫（接點位置已被 CollapseRows 壓到標題列），依 foldFan 散開。
+    /// </summary>
     private void DrawLinkGhosts(HGLink link, bool traced)
     {
         // 欄位端是 ParentRow 那一顆接點；寫入 Property 的線兩端角色相反，所以用列比對而不是固定取 InputPort。
         bool inputIsSlot = ReferenceEquals(OwnerRowOfPort(link.InputPort), link.ParentRow);
         HGPort slotPort = inputIsSlot ? link.InputPort : link.OutputPort;
         HGPort targetPort = inputIsSlot ? link.OutputPort : link.InputPort;
-        if (!slotPort.Presentation.Visible) return;
+        if (!slotPort.Presentation.Visible && FoldedListOf(link) == null) return;
+        foldFan.TryGetValue(link, out float slotAngle);
 
         Color color = LinkColor(link.OutputOwner.InDisabledSubtree || link.OutputOwner.InLockedSubtree, traced,
             link.ParentRow.IsProducedValue);
         float thickness = traced ? LinkThickness + 2f : LinkThickness;
         Vector2 slotPos = slotPort.Presentation.Position;
-        Vector2 targetPos = targetPort.Presentation.Position;
         float slotDir = PortDirection(slotPort);
-        float targetDir = PortDirection(targetPort);
+        ResolveGhostEnd(link, targetPort, slotPos, out var targetPos, out float targetDir);
 
-        DrawLinkGhost(slotPos, slotDir, targetPos, targetDir, color, thickness);
+        DrawLinkGhost(slotPos, slotDir, targetPos, targetDir, color, thickness, slotAngle);
         if (targetPort.Presentation.Visible && link.OutputOwner != null && !link.OutputOwner.Hidden)
             DrawLinkGhost(targetPos, targetDir, slotPos, slotDir, color, thickness);
     }
@@ -381,14 +398,18 @@ public partial class HaruGraphWindow
     /// 一端的殘影：水平短線與第一個圓角畫實線，進入斜線後切成虛線並線性淡出。
     /// 淡出長度固定為 <see cref="LinkGhostLength"/>；兩端距離短到放不下時才改用斜線長度的 <see cref="LinkGhostShare"/>，
     /// 所以兩端各畫一段也一定在中間斷開，不會接回一條看起來沒收合的線。
+    /// fromAngle 同 <see cref="BuildLinkPath"/>：代表接點伸出多條時起點那段依角度扇形散開。
     /// </summary>
-    private void DrawLinkGhost(Vector2 from, float fromDir, Vector2 to, float toDir, Color color, float thickness)
+    private void DrawLinkGhost(Vector2 from, float fromDir, Vector2 to, float toDir, Color color, float thickness,
+        float fromAngle = 0f)
     {
-        Vector2 fromBend = from + new Vector2(fromDir * LinkStub, 0f);
+        float radians = fromAngle * Mathf.Deg2Rad;
+        var fromOut = new Vector2(fromDir * Mathf.Cos(radians), Mathf.Sin(radians));
+        Vector2 fromBend = from + fromOut * LinkStub;
         Vector2 toBend = to + new Vector2(toDir * LinkStub, 0f);
 
         linkPath.Clear();
-        linkPath.Add(from + new Vector2(fromDir * HGGraph.PortRadius, 0f));
+        linkPath.Add(from + fromOut * HGGraph.PortRadius);
         AddLinkCorner(linkPath, from, fromBend, toBend);
         for (int i = 1; i < linkPath.Count; i++) DrawGraphSegment(linkPath[i - 1], linkPath[i], color, thickness);
 
@@ -440,21 +461,27 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>
-    /// 一條連線的路徑。折疊清單的元素線從欄位端（代表接點）起算並套扇形角度；其餘照原本兩端。
+    /// 一條連線的路徑。兩端先解析：被群組收起來的一端改到群組框邊緣的代理接點。
+    /// 折疊清單的元素線從欄位端（代表接點）起算並套扇形角度；代理接點伸出的線從代理端起算並套它的扇形；其餘照原本兩端。
     /// 呼叫前要先 <see cref="RebuildFoldFan"/>。
     /// </summary>
     private void BuildLinkPathOf(HGLink link, List<Vector2> path)
     {
+        bool inProxy = ResolveLinkEnd(link.InputPort, link.OutputPort, out var inPos, out float inDir);
+        ResolveLinkEnd(link.OutputPort, link.InputPort, out var outPos, out float outDir);
         if (foldFan.TryGetValue(link, out float angle))
         {
-            HGPort target = FoldTargetPort(link);
-            HGPort slot = ReferenceEquals(target, link.OutputPort) ? link.InputPort : link.OutputPort;
-            BuildLinkPath(slot.Presentation.Position, PortDirection(slot),
-                target.Presentation.Position, PortDirection(target), path, angle);
+            if (ReferenceEquals(FoldTargetPort(link), link.OutputPort)) BuildLinkPath(inPos, inDir, outPos, outDir, path, angle);
+            else BuildLinkPath(outPos, outDir, inPos, inDir, path, angle);
             return;
         }
-        BuildLinkPath(link.InputPort.Presentation.Position, PortDirection(link.InputPort),
-            link.OutputPort.Presentation.Position, PortDirection(link.OutputPort), path);
+        if (proxyFan.TryGetValue(link, out angle))
+        {
+            if (inProxy) BuildLinkPath(inPos, inDir, outPos, outDir, path, angle);
+            else BuildLinkPath(outPos, outDir, inPos, inDir, path, angle);
+            return;
+        }
+        BuildLinkPath(inPos, inDir, outPos, outDir, path);
     }
 
     /// <summary>
@@ -845,7 +872,7 @@ public partial class HaruGraphWindow
     {
         var rect = new Rect(node.Pos + pan, new Vector2(node.Width, node.Height));
 
-        HGStyles.RoundedFill(rect, HGStyles.NodeBody, NodeCornerRadius);
+        HGStyles.RoundedFill(rect, NodeBodyColor(node), NodeCornerRadius);
         var header = new Rect(rect.x, rect.y, rect.width, HGGraph.HeaderHeight);
         HeaderColors(node, out Color headerFrom, out Color headerTo);
         HGStyles.HeaderFill(header, headerFrom, headerTo, NodeCornerRadius);

@@ -1311,6 +1311,71 @@ MonoBehaviour:
     }
 
     [Test]
+    public void NodeGroupsSurviveDocumentDeepCopyAsIndependentCopies()
+    {
+        var document = new ViewStateDocument();
+        var group = new GraphNodeGroup("tim:*", "群組", new Rect(20f, 40f, 400f, 240f), 2);
+        Assert.That(group.SetMember("node-a", true), Is.True);
+        Assert.That(group.SetMember("node-a", true), Is.False);
+        ((IGraphViewStateOwner)document).ViewState.AddNodeGroup(group);
+
+        var copy = GraphDeepCopy.Copy(document);
+        var copied = ((IGraphViewStateOwner)copy).ViewState.NodeGroups[0];
+        Assert.That(copied, Is.Not.SameAs(group));
+        Assert.That(copied.Id, Is.EqualTo(group.Id));
+        Assert.That(copied.Rect, Is.EqualTo(group.Rect));
+        Assert.That(copied.ColorIndex, Is.EqualTo(2));
+        Assert.That(copied.UseCustomColor, Is.False);
+        Assert.That(copied.Collapsed, Is.False);
+        Assert.That(copied.SetCollapsed(true), Is.True);
+        Assert.That(copied.SetCollapsed(true), Is.False);
+        Assert.That(group.Collapsed, Is.False);
+        Assert.That(copied.Members, Is.EquivalentTo(new[] { "node-a" }));
+
+        Assert.That(copied.SetCustomColor(new Color(0.2f, 0.4f, 0.6f, 0.5f)), Is.True);
+        Assert.That(copied.CustomColor.a, Is.EqualTo(1f));
+        Assert.That(group.UseCustomColor, Is.False);
+        copied.SetMember("node-b", true);
+        copied.SetRect(new Rect(0f, 0f, 200f, 100f));
+        Assert.That(group.Members, Has.Count.EqualTo(1));
+        Assert.That(group.Rect, Is.EqualTo(new Rect(20f, 40f, 400f, 240f)));
+    }
+
+    [Test]
+    public void NodeGroupTabsPlaceNewMembersOnActiveTabAndReturnThemToFirstTabOnRemove()
+    {
+        var group = new GraphNodeGroup("tim:*", "群組", new Rect(0f, 0f, 400f, 240f), 0);
+        group.SetMember("node-a", true);
+        Assert.That(group.HasTabs, Is.False);
+        Assert.That(group.IsOnActiveTab("node-a"), Is.True);
+
+        group.AddTab("分頁 1");
+        int second = group.AddTab("分頁 2");
+        Assert.That(group.HasTabs, Is.True);
+        Assert.That(group.SetActiveTab(second), Is.True);
+        Assert.That(group.SetMember("node-b", true), Is.True);
+        Assert.That(group.TabOf("node-a"), Is.EqualTo(0));
+        Assert.That(group.TabOf("node-b"), Is.EqualTo(second));
+        Assert.That(group.IsOnActiveTab("node-a"), Is.False);
+
+        var document = new ViewStateDocument();
+        ((IGraphViewStateOwner)document).ViewState.AddNodeGroup(group);
+        var copied = ((IGraphViewStateOwner)GraphDeepCopy.Copy(document)).ViewState.NodeGroups[0];
+        Assert.That(copied.ActiveTab, Is.EqualTo(second));
+        Assert.That(copied.TabOf("node-b"), Is.EqualTo(second));
+        Assert.That(copied.SetMemberTab("node-b", 0), Is.True);
+        Assert.That(group.TabOf("node-b"), Is.EqualTo(second));
+
+        Assert.That(group.RemoveTab(second), Is.True);
+        Assert.That(group.HasTabs, Is.False);
+        Assert.That(group.Tabs, Has.Count.EqualTo(1));
+        Assert.That(group.Tabs[0].Name, Is.EqualTo("分頁 1"));
+        Assert.That(group.RemoveTab(0), Is.False);
+        Assert.That(group.TabOf("node-b"), Is.EqualTo(0));
+        Assert.That(group.Members, Is.EquivalentTo(new[] { "node-a", "node-b" }));
+    }
+
+    [Test]
     public void ListAppendRegistersOnlyForEditableSlotLists()
     {
         var registry = new HGPortRegistry(1);

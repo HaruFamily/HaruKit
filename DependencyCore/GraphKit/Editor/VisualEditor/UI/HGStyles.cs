@@ -115,6 +115,23 @@ public static class HGStyles
 
     public static Color OverlayPanel => T.overlayPanel;
     public static Color BoxSelect => T.boxSelect;
+
+    /// <summary>畫布節點群組調色盤；主題把陣列清空時為空陣列。</summary>
+    public static Color[] NodeGroupPalette => T.nodeGroupPalette ?? new Color[0];
+
+    /// <summary>畫布節點群組調色盤的色數；主題把陣列清空時為 0。</summary>
+    public static int NodeGroupPaletteCount => T.nodeGroupPalette?.Length ?? 0;
+
+    /// <summary>群組色。索引超出範圍時循環取用；調色盤為空時退回節點外框色。</summary>
+    public static Color NodeGroupColor(int index)
+    {
+        var palette = T.nodeGroupPalette;
+        if (palette == null || palette.Length == 0) return NodeBorder;
+        return palette[(index % palette.Length + palette.Length) % palette.Length];
+    }
+
+    /// <summary>群組成員的節點本體：節點底色混入群組色，Header 不染。</summary>
+    public static Color NodeGroupBody(Color group) => Color.Lerp(NodeBody, group, 0.24f);
     public static Color ResizeGrip => T.resizeGrip;
     public static Color FocusBanner => T.focusBanner;
 

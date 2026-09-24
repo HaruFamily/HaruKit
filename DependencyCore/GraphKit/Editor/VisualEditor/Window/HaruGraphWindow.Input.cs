@@ -26,6 +26,7 @@ public partial class HaruGraphWindow
                 // 走到這裡代表這一下不是按在輸入接點上（按在輸入接點的那一下已經被 DrawInputPortRow 吃掉），
                 // 所以先清掉殘留：在畫布外放開滑鼠時 MouseUp 收不到，記錄會留到下一次操作。
                 inputPortClickPort = null;
+                CancelNodeGroupDrag();
                 // 這一下多半會被下面 e.Use() 掉，左欄與焦點標題列的改名欄就再也收不到它——先替它們收尾。
                 inlineName.Commit();
                 if (e.button == 0 && InputPortAt(graphMouse) is HGPort inputPort)
@@ -62,11 +63,14 @@ public partial class HaruGraphWindow
                 if (e.button == 1)
                 {
                     if (hit != null) ShowNodeMenu(hit);
-                    else ShowCanvasMenu(graphMouse);
+                    else if (NodeGroupHeaderAt(graphMouse) is GraphNodeGroup group) { SelectNodeGroup(group); ShowNodeGroupMenu(group); }
+                    else ShowCanvasMenu(graphMouse, NodeGroupContaining(graphMouse));
                     e.Use();
                 }
                 else if (e.button == 0)
                 {
+                    // 左鍵按在群組標題列以外的地方都放掉群組選取；按在標題列由 TryBeginNodeGroupDrag 重新選。
+                    selectedNodeGroupId = null;
                     if (e.clickCount == 2 && hit != null && hit.IsAssetNode && hit.Asset != null) { EnterAsset(hit); e.Use(); break; }
                     // 雙擊Token節點＝下鑽進那個Token的畫布，跟雙擊資產節點同一個手勢。
                     if (e.clickCount == 2 && hit != null && hit.IsTokenNode && hit.Token != null) { EnterToken(hit.Token); e.Use(); break; }
@@ -74,6 +78,9 @@ public partial class HaruGraphWindow
                     // 一般線畫在節點底下：點在節點上時看不到線，就不能把它剪掉；選取中的線浮在上層，才照樣可剪。
                     var link = LinkAt(graphMouse);
                     if (link != null && (hit == null || IsTracedLink(link))) { CutLink(link); e.Use(); break; }
+
+                    // 群組框在節點與連線底下：只有按在空白處時才輪到它的標題列，群組內部空白照常框選。
+                    if (hit == null && TryBeginNodeGroupDrag(graphMouse)) { e.Use(); break; }
 
                     if (hit == null)
                     {
@@ -105,6 +112,7 @@ public partial class HaruGraphWindow
                         dragStartPositions.Clear();
                         foreach (var n in graph.Nodes)
                             if (selectedIds.Contains(n.Id)) dragStartPositions[n.Id] = n.Pos;
+                        FreezeNodeGroupRects();
                     }
                     e.Use();
                 }
@@ -133,6 +141,11 @@ public partial class HaruGraphWindow
                         n.Pos = origin + delta;
                     }
                     dragNode.Pos = target;
+                    e.Use();
+                }
+                else if (dragNodeGroup != null)
+                {
+                    DragNodeGroup(graphMouse);
                     e.Use();
                 }
                 else if (boxSelecting)
@@ -182,6 +195,7 @@ public partial class HaruGraphWindow
                         dragNode = null;
                         dragMoved = false;
                         dragStartPositions.Clear();
+                        frozenNodeGroupRects.Clear();
                         // 選單在 clip 外開，錨點 rect 必須換回 window space。用整條名稱區當錨點，
                         // 選單才對齊 Header 而不是縮在那顆 18px 的 ▾ 底下。
                         ShowNodeSourceSelector(clicked, GraphToWindowRect(clicked.TitleRect));
@@ -196,14 +210,24 @@ public partial class HaruGraphWindow
                     if (dragMoved)
                     {
                         BreakUndoMerge();
+                        var moved = new List<HGNodeView>();
                         foreach (var n in graph.Nodes)
-                            if (dragStartPositions.ContainsKey(n.Id)) model.SetPosition(n.Id, n.Pos);
+                            if (dragStartPositions.ContainsKey(n.Id)) { model.SetPosition(n.Id, n.Pos); moved.Add(n); }
                         model.SetPosition(dragNode.Id, dragNode.Pos);
+                        if (!moved.Contains(dragNode)) moved.Add(dragNode);
                         MarkPositionsChanged();
+                        // 放手時滑鼠在哪個群組框裡＝進那個群組，在框外＝移出；與座標同一步 Undo。
+                        if (ApplyDropMembership(moved, graphMouse)) MarkViewStateChanged();
                     }
+                    frozenNodeGroupRects.Clear();
                     dragMoved = false;
                     dragStartPositions.Clear();
                     dragNode = null;
+                    e.Use();
+                }
+                if (dragNodeGroup != null)
+                {
+                    EndNodeGroupDrag();
                     e.Use();
                 }
                 if (boxSelecting)
@@ -241,13 +265,15 @@ public partial class HaruGraphWindow
                 break;
 
             case EventType.KeyDown:
-                if (e.keyCode == KeyCode.Delete) { DeleteSelection(); e.Use(); }
+                // 選著群組時 Delete 只刪群組、節點留著；沒選群組才刪選取的節點。
+                if (e.keyCode == KeyCode.Delete) { if (!DeleteSelectedNodeGroup()) DeleteSelection(); e.Use(); }
                 else if (e.keyCode == KeyCode.F && !e.control) { FrameAll(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.C) { CopySelection(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.V) { PasteClipboard(graphMouse); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.D) { DuplicateSelection(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.A)
                 {
+                    selectedNodeGroupId = null;
                     selectedIds.Clear();
                     foreach (var n in graph.Nodes)
                         if (!n.Hidden) selectedIds.Add(n.Id);
@@ -537,6 +563,12 @@ public partial class HaruGraphWindow
             bounds.xMax = Mathf.Max(bounds.xMax, n.Rect.xMax);
             bounds.yMax = Mathf.Max(bounds.yMax, n.Rect.yMax);
         }
+        FrameRect(bounds);
+    }
+
+    /// <summary>把視野對準一塊 graph space 範圍：縮放到裝得下（留邊），中心對齊。</summary>
+    private void FrameRect(Rect bounds)
+    {
         zoom = Mathf.Clamp(Mathf.Min(canvasRect.width / (bounds.width + 80f), canvasRect.height / (bounds.height + 80f)), 0.45f, 1.4f);
         pan = new Vector2(canvasRect.width * 0.5f / zoom - bounds.center.x, canvasRect.height * 0.5f / zoom - bounds.center.y);
         Repaint();

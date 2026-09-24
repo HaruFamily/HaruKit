@@ -505,9 +505,12 @@ public partial class HaruGraphWindow
             return;
         }
 
-        if (NodeAt(graphMouse) != null)
+        // 放在群組標題列的代表接點上＝在群組內建立，和拉到空白處同一條路徑，只是位置與歸屬不同。
+        GraphNodeGroup joinGroup = NodeGroupHeaderPortAt(graphMouse);
+        Vector2 createPos = joinGroup != null ? NodeGroupSpawnPosition(joinGroup) : graphMouse;
+        if (joinGroup == null && NodeAt(graphMouse) != null)
         {
-            ShowNotification(new GUIContent("請拖到相容的節點或畫布空白處"));
+            ShowNotification(new GUIContent("請拖到相容的節點、群組標題列或畫布空白處"));
             return;
         }
 
@@ -519,6 +522,7 @@ public partial class HaruGraphWindow
             return;
         }
         var append = linkPort.Binding as IHGListAppendBinding;
+        string createdId = null;
         if (!TryMutateContent(() =>
         {
             PreserveVisibleNodePositions();
@@ -534,13 +538,16 @@ public partial class HaruGraphWindow
                 carrier.SetLocalProperty(property);
             }
             else if ((slot as FormulaSlotBase)?.CreateDefaultBody() is GraphNodeContent body) carrier.SetBody(body);
-            carrier.Pos = SnapToGrid(graphMouse);
+            carrier.Pos = SnapToGrid(createPos);
+            carrier.EnsureId();
+            createdId = carrier.Id;
         }, out var error))
         {
             ShowNotification(new GUIContent(error));
             return;
         }
         Invalidate();
+        if (joinGroup != null && createdId != null) JoinNodeGroupAndReveal(createdId, joinGroup);
         Repaint();
     }
 

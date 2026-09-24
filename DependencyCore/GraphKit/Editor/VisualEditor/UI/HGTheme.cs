@@ -44,6 +44,23 @@ public class HGTheme
     public Color overlayPanel = new(0.10f, 0.11f, 0.13f, 0.88f);
     public Color overlayTitle = new(1f, 1f, 1f);
     public Color boxSelect = new(0.42f, 0.78f, 1f, 0.10f);
+    // 畫布節點群組色：群組只存索引，換主題時跟著換。深色畫布上要夠亮才看得出色相，
+    // 染到節點本體與框時再由繪製端壓透明度，不在這裡調暗。
+    public Color[] nodeGroupPalette =
+    {
+        new(0.35f, 0.75f, 0.78f),
+        new(0.40f, 0.68f, 0.95f),
+        new(0.55f, 0.60f, 0.95f),
+        new(0.70f, 0.55f, 0.95f),
+        new(0.88f, 0.55f, 0.90f),
+        new(0.95f, 0.55f, 0.70f),
+        new(0.95f, 0.60f, 0.50f),
+        new(0.90f, 0.78f, 0.50f),
+        new(0.72f, 0.85f, 0.45f),
+        new(0.45f, 0.85f, 0.62f),
+        new(0.62f, 0.70f, 0.80f),
+        new(0.75f, 0.72f, 0.68f),
+    };
 
     // ===== Header 身分色 =====
     public Color headerHead = new(0.447f, 0.227f, 0.408f);
