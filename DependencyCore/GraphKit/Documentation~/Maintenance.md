@@ -119,6 +119,8 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 
 資料流：Owner → 明確 binding 或 legacy 欄位探索 → DeepCopy 成 `HGModel.Data` → `HGFocus` 決定中間畫布在編輯哪些 root → `HGGraph.Build` 每次資料變動整份重建節點與列 → 視窗用 IMGUI 繪製 → 存檔時清理遺失型別、DeepCopy、驗證、通過才寫回。
 
+**節點搜尋（Ctrl+F）**：畫布上按 Ctrl+F，或按工具列的「搜尋」鈕，開 `HGNodeSearchDropdown`（`HGTypeIndex.cs`），列出目前焦點 `graph.Nodes` 的全部節點，包括被收起的，不跨焦點。選中後走 `FocusDocumentNode`：被收起的先 `RevealNode`（展開欄位、清單、群組與分頁，寫回 `GraphViewState`，記成版面修改），再選取並置中。AdvancedDropdown 的搜尋只比對項目名稱，而且結果會攤平成一層，顯示與搜尋文字分不開。名稱只寫節點名稱，Token／資產／Property 節點補引用對象（`NodeSearchName`）；路徑、chip、欄位標籤不寫，寫進去清單會讀不懂。要讓它們搜得到得改用自製搜尋視窗。瀏覽時依最上層節點分資料夾（root、時機節點、候選），只有一個資料夾時攤在根層。
+
 ### 5.1 IMGUI 陷阱
 
 - 變數庫各 Property 獨立展開，不限制同時展開數量；拖入資產只展開目標項。展開狀態由面板按 Id 保存，Reset 時清除，不進 Dirty／Undo。多個清單展開時，項目重排只收集正在拖曳之 Property 的目標位置。

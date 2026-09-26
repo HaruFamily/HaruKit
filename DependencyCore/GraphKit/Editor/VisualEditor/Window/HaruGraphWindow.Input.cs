@@ -268,6 +268,7 @@ public partial class HaruGraphWindow
                 // 選著群組時 Delete 只刪群組、節點留著；沒選群組才刪選取的節點。
                 if (e.keyCode == KeyCode.Delete) { if (!DeleteSelectedNodeGroup()) DeleteSelection(); e.Use(); }
                 else if (e.keyCode == KeyCode.F && !e.control) { FrameAll(); e.Use(); }
+                else if (e.control && e.keyCode == KeyCode.F) { ShowNodeSearch(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.C) { CopySelection(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.V) { PasteClipboard(graphMouse); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.D) { DuplicateSelection(); e.Use(); }
@@ -591,6 +592,60 @@ public partial class HaruGraphWindow
                               canvasRect.height * 0.5f / zoom - node.Rect.center.y);
             return;
         }
+    }
+
+    /// <summary>
+    /// Ctrl+F：列出目前畫布的所有節點（含被收起的），選中後走 <see cref="FocusDocumentNode"/> 展開收合、選取並置中。
+    /// 展開會寫回文件的收合版面，和 Console 跳轉一樣記成版面修改。
+    /// </summary>
+    private void ShowNodeSearch()
+    {
+        if (graph == null) return;
+        var entries = new List<HGNodeSearchEntry>();
+        var groups = new HashSet<string>();
+        foreach (var node in graph.Nodes)
+        {
+            if (string.IsNullOrEmpty(node.Id)) continue;
+            var top = NodeSearchTop(node);
+            string group = top.IsRoot || top.IsTimingGroup ? top.Title : "候選";
+            groups.Add(group);
+            entries.Add(new HGNodeSearchEntry { Id = node.Id, Name = NodeSearchName(node), Group = group });
+        }
+        if (entries.Count == 0)
+        {
+            ShowNotification(new GUIContent("這張畫布沒有節點可以搜尋。"));
+            return;
+        }
+        // Token／資產焦點只有一顆 HEAD，全部在同一個資料夾時直接攤在根層。
+        if (groups.Count < 2)
+            foreach (var entry in entries) entry.Group = null;
+
+        var anchor = new Rect(canvasRect.center.x - 210f, canvasRect.y + 8f, 420f, 0f);
+        HGNodeSearchDropdown.Show(anchor, entries, id => FocusDocumentNode(id));
+    }
+
+    /// <summary>沿 ParentRow 往上找到沒有父欄位的那顆：root HEAD、時機節點或候選。</summary>
+    private HGNodeView NodeSearchTop(HGNodeView node)
+    {
+        var seen = new HashSet<HGNodeView>();
+        var top = node;
+        while (top.ParentRow != null && seen.Add(top))
+        {
+            var parent = NodeById(top.ParentRow.OwnerNodeId);
+            if (parent == null) break;
+            top = parent;
+        }
+        return top;
+    }
+
+    /// <summary>
+    /// 搜尋清單的一行：只寫節點名稱。Token／資產／Property 節點的名稱只是種類，後面補上引用對象，才分得出是哪一個。
+    /// AdvancedDropdown 只比對這串文字，所以搜得到的也只有這些。
+    /// </summary>
+    private static string NodeSearchName(HGNodeView node)
+    {
+        string reference = node.Token?.Name ?? (node.Asset != null ? node.Asset.name : null) ?? node.Property?.Name;
+        return string.IsNullOrEmpty(reference) ? node.Title : $"{node.Title} {reference}";
     }
 
     private void SetFocus(HGFocus next)

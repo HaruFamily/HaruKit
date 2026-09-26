@@ -274,4 +274,68 @@ public class HGTypeDropdown : AdvancedDropdown
     }
 }
 
+/// <summary>畫布節點搜尋的一筆候選：<see cref="Name"/> 同時是顯示文字與搜尋比對的全文。</summary>
+public class HGNodeSearchEntry
+{
+    public string Id;
+    public string Name;
+    /// <summary>瀏覽（未輸入搜尋字）時的資料夾；null 放根層。</summary>
+    public string Group;
+}
+
+/// <summary>
+/// 畫布節點搜尋下拉（Ctrl+F）。AdvancedDropdown 的搜尋只比對項目名稱，搜尋結果攤平成一層；
+/// 名稱只寫節點名，瀏覽時靠 <see cref="HGNodeSearchEntry.Group"/> 分資料夾。
+/// </summary>
+public class HGNodeSearchDropdown : AdvancedDropdown
+{
+    private class NodeItem : AdvancedDropdownItem
+    {
+        public readonly string NodeId;
+        public NodeItem(HGNodeSearchEntry entry) : base(entry.Name) => NodeId = entry.Id;
+    }
+
+    private readonly List<HGNodeSearchEntry> entries;
+    private readonly Action<string> onPick;
+
+    public HGNodeSearchDropdown(AdvancedDropdownState state, List<HGNodeSearchEntry> entries, Action<string> onPick) : base(state)
+    {
+        this.entries = entries;
+        this.onPick = onPick;
+        minimumSize = new Vector2(420f, 360f);
+    }
+
+    public static void Show(Rect rect, List<HGNodeSearchEntry> entries, Action<string> onPick)
+    {
+        if (entries == null || entries.Count == 0) return;
+        new HGNodeSearchDropdown(new AdvancedDropdownState(), entries, onPick).Show(rect);
+    }
+
+    protected override AdvancedDropdownItem BuildRoot()
+    {
+        var root = new AdvancedDropdownItem("搜尋節點");
+        var folders = new Dictionary<string, AdvancedDropdownItem>();
+        foreach (var entry in entries)
+        {
+            var parent = root;
+            if (!string.IsNullOrEmpty(entry.Group))
+            {
+                if (!folders.TryGetValue(entry.Group, out parent))
+                {
+                    parent = new AdvancedDropdownItem(entry.Group);
+                    folders[entry.Group] = parent;
+                    root.AddChild(parent);
+                }
+            }
+            parent.AddChild(new NodeItem(entry));
+        }
+        return root;
+    }
+
+    protected override void ItemSelected(AdvancedDropdownItem item)
+    {
+        if (item is NodeItem node) onPick?.Invoke(node.NodeId);
+    }
+}
+
 }

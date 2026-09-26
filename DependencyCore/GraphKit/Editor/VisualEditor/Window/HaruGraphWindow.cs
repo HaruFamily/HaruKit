@@ -1394,7 +1394,8 @@ public partial class HaruGraphWindow : EditorWindow
 
         return new HGToolbarView
         {
-            Crumb = $"{model.Owner.name} ({model.Owner.GetType().Name})({ownerPath})",
+            Crumb = $"{model.Owner.name} ({model.Owner.GetType().Name})",
+            CrumbTooltip = ownerPath,
             OwnerPickerEnabled = !inAsset,
             Locked = locked,
             HasLibraries = HasPropertySection || HasTokenSection || HasAssetSection,
@@ -1426,6 +1427,7 @@ public partial class HaruGraphWindow : EditorWindow
         SwitchTarget = SwitchToPendingTarget,
         ToggleLock = ToggleLock,
         ShowLibraries = rect => LibraryMenu().DropDown(rect),
+        Search = ShowNodeSearch,
     };
 
     /// <summary>切換鎖定。解鎖當下不補切換——使用者要的是「從現在起跟著選取走」，不是追認剛才點過的東西。</summary>
