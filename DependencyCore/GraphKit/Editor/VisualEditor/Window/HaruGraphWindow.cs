@@ -97,6 +97,14 @@ public partial class HaruGraphWindow : EditorWindow
     private Matrix4x4 canvasGuiMatrix;
     private Rect rootGuiGroupRect;
 
+    // 節點搜尋（Ctrl+F）。命中清單依 graphGeneration 與搜尋字快取，圖一重建就重算。
+    private readonly HGNodeSearchBar nodeSearch = new();
+    private readonly List<string> searchMatches = new();
+    private readonly HashSet<string> searchMatchSet = new();
+    private string searchMatchQuery;
+    private int searchMatchGeneration = -1;
+    private string searchCurrentId;
+
     // 面板狀態
     private float leftWidth = DefaultLeftWidth;
     private bool resizingLeftPanel;
@@ -750,6 +758,8 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private void MarkViewStateChanged()
     {
+        // 群組標題、分頁名與成員也是搜尋比對的一部分，但改它們不重建圖，命中快取要自己作廢。
+        searchMatchGeneration = -1;
         if (focus.Kind == HGFocusKind.Asset)
         {
             if (focus.AssetObject != null) EditorUtility.SetDirty(focus.AssetObject);
@@ -1427,7 +1437,7 @@ public partial class HaruGraphWindow : EditorWindow
         SwitchTarget = SwitchToPendingTarget,
         ToggleLock = ToggleLock,
         ShowLibraries = rect => LibraryMenu().DropDown(rect),
-        Search = ShowNodeSearch,
+        Search = OpenNodeSearch,
     };
 
     /// <summary>切換鎖定。解鎖當下不補切換——使用者要的是「從現在起跟著選取走」，不是追認剛才點過的東西。</summary>

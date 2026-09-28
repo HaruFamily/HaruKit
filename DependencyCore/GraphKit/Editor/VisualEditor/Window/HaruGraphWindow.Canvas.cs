@@ -161,6 +161,9 @@ public partial class HaruGraphWindow
         var headerActionsNode = UpdateHeaderActions(graphMouse, mouseInCanvas);
         bool overHeaderActions = headerActionsNode != null
             && HeaderActionsRect(headerActionsNode).Contains(graphMouse) && mouseInCanvas;
+        // 搜尋列畫在節點之後，但節點先拿事件：壓在搜尋列底下的節點這一輪要看不到指標事件。
+        bool overSearchBar = PointerOnNodeSearch(e.mousePosition);
+        if (nodeSearch.IsOpen) RefreshSearchMatches();
 
         DrawNodeGroups(r, graphMouse);
         if (graph != null)
@@ -177,7 +180,7 @@ public partial class HaruGraphWindow
                 HGPort snappedPort = SnappedCompatiblePort(graphMouse);
                 HGNodeView linkTarget = OwnerNodeOfPort(snappedPort);
                 EventType pointerEvent = e.type;
-                bool shieldPointer = overHeaderActions && (e.isMouse || e.type == EventType.ScrollWheel);
+                bool shieldPointer = (overHeaderActions || overSearchBar) && (e.isMouse || e.type == EventType.ScrollWheel);
                 // 底層包含直接讀 Event 的列控制項，不能只靠 GUI.enabled 防止穿透。
                 if (shieldPointer) e.type = EventType.Ignore;
 
@@ -224,9 +227,16 @@ public partial class HaruGraphWindow
                     HGStyles.Fill(visual, HGStyles.BoxSelect);
                     HGStyles.Frame(visual, HGStyles.Link);
                 }
-                if (headerActionsNode != null) DrawHeaderActions(headerActionsNode);
+                if (headerActionsNode != null)
+                {
+                    bool shieldActions = overSearchBar && (e.isMouse || e.type == EventType.ScrollWheel);
+                    EventType beforeActions = e.type;
+                    if (shieldActions) e.type = EventType.Ignore;
+                    try { DrawHeaderActions(headerActionsNode); }
+                    finally { if (shieldActions) e.type = beforeActions; }
+                }
                 // 浮動工具列空白處也攔截指標事件，避免操作穿透到下方節點或畫布。
-                if (overHeaderActions && (e.isMouse || e.type == EventType.ScrollWheel)) e.Use();
+                if (overHeaderActions && !overSearchBar && (e.isMouse || e.type == EventType.ScrollWheel)) e.Use();
             }
         }
         finally
@@ -237,6 +247,7 @@ public partial class HaruGraphWindow
         DrawTracedLinks();
         DrawNodeInfoOverlay(r);
         DrawTimingOverlay(r);
+        DrawNodeSearchBar(r);
         if (mouseInCanvas && !HandleAssetDrag(e, graphMouse)) HandleCanvasInput(e, graphMouse);
     }
 
@@ -1006,14 +1017,23 @@ public partial class HaruGraphWindow
             GUI.Label(statusBar, new GUIContent("", statusTip));
         }
 
+        // 搜尋中：沒命中的節點壓成畫布色，命中的補一圈淡選取色；目前那一筆由跳轉選取，走一般選取外框。
+        bool searchMatch = false;
+        if (NodeSearchHighlighting)
+        {
+            searchMatch = searchMatchSet.Contains(node.Id);
+            if (!searchMatch) HGStyles.RoundedFill(rect, WithAlpha(HGStyles.Canvas, 0.6f), NodeCornerRadius);
+        }
+
         bool selected = selectedIds.Contains(node.Id);
         // 拉線期間：可以接的 Node 整個亮外框，滑鼠實際吸到的那個再加粗。
         bool linkCandidate = linking && IsCompatible(PortFor(node));
         Color borderColor = isLinkTarget ? HGStyles.Link
             : linkCandidate ? new Color(HGStyles.Link.r, HGStyles.Link.g, HGStyles.Link.b, 0.55f)
             : selected ? HGStyles.NodeBorderSelected
+            : searchMatch ? WithAlpha(HGStyles.NodeBorderSelected, 0.55f)
             : node.IsRoot ? HGStyles.HeadBorder : HGStyles.NodeBorder;
-        float thickness = isLinkTarget || selected ? 2f : linkCandidate ? 1.5f : node.IsRoot ? 2f : 1f;
+        float thickness = isLinkTarget || selected ? 2f : linkCandidate || searchMatch ? 1.5f : node.IsRoot ? 2f : 1f;
 
         // HEAD 是整張圖的起點，再套一圈外光暈把它和一般節點分開（顏色會被選取／拉線狀態蓋過，光暈不會）。
         if (node.IsRoot)

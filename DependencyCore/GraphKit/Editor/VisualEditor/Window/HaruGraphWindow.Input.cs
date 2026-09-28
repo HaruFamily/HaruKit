@@ -29,6 +29,7 @@ public partial class HaruGraphWindow
                 CancelNodeGroupDrag();
                 // 這一下多半會被下面 e.Use() 掉，左欄與焦點標題列的改名欄就再也收不到它——先替它們收尾。
                 inlineName.Commit();
+                nodeSearch.ReleaseFocus();
                 if (e.button == 0 && InputPortAt(graphMouse) is HGPort inputPort)
                 {
                     inputPortClickPort = inputPort;
@@ -268,7 +269,9 @@ public partial class HaruGraphWindow
                 // 選著群組時 Delete 只刪群組、節點留著；沒選群組才刪選取的節點。
                 if (e.keyCode == KeyCode.Delete) { if (!DeleteSelectedNodeGroup()) DeleteSelection(); e.Use(); }
                 else if (e.keyCode == KeyCode.F && !e.control) { FrameAll(); e.Use(); }
-                else if (e.control && e.keyCode == KeyCode.F) { ShowNodeSearch(); e.Use(); }
+                else if (e.control && e.keyCode == KeyCode.F) { OpenNodeSearch(); e.Use(); }
+                else if (e.keyCode == KeyCode.F3 && nodeSearch.IsOpen) { StepNodeSearch(e.shift ? -1 : 1); e.Use(); }
+                else if (e.keyCode == KeyCode.Escape && nodeSearch.IsOpen) { nodeSearch.Close(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.C) { CopySelection(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.V) { PasteClipboard(graphMouse); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.D) { DuplicateSelection(); e.Use(); }
@@ -594,53 +597,114 @@ public partial class HaruGraphWindow
         }
     }
 
-    /// <summary>
-    /// Ctrl+F：列出目前畫布的所有節點（含被收起的），選中後走 <see cref="FocusDocumentNode"/> 展開收合、選取並置中。
-    /// 展開會寫回文件的收合版面，和 Console 跳轉一樣記成版面修改。
-    /// </summary>
-    private void ShowNodeSearch()
+    // ===== 節點搜尋（Ctrl+F） =====
+
+    /// <summary>打開畫布內的搜尋列；已開著時只把鍵盤焦點搶回輸入框。</summary>
+    private void OpenNodeSearch()
     {
         if (graph == null) return;
-        var entries = new List<HGNodeSearchEntry>();
-        var groups = new HashSet<string>();
+        nodeSearch.Open();
+        Repaint();
+    }
+
+    /// <summary>搜尋列在畫布右上角、root 下拉的正下方；畫布太窄時縮到剩下的寬度。</summary>
+    private static Rect NodeSearchBarRect(Rect canvas)
+    {
+        float width = Mathf.Min(HGNodeSearchBar.Width, canvas.width - 16f);
+        return new Rect(canvas.xMax - width - 8f, canvas.y + 8f + 22f + 6f, width, HGNodeSearchBar.Height);
+    }
+
+    /// <summary>游標壓在搜尋列上：這一下屬於搜尋列，底下的節點、群組與畫布都不能拿。</summary>
+    private bool PointerOnNodeSearch(Vector2 windowMouse)
+        => nodeSearch.IsOpen && NodeSearchBarRect(canvasRect).Contains(windowMouse);
+
+    /// <summary>有搜尋字且至少命中一顆時，畫布才壓暗沒命中的節點；沒有命中不壓暗，免得整張圖看起來像壞了。</summary>
+    private bool NodeSearchHighlighting => nodeSearch.IsOpen && searchMatchSet.Count > 0;
+
+    private void DrawNodeSearchBar(Rect canvas)
+    {
+        if (!nodeSearch.IsOpen) return;
+        RefreshSearchMatches();
+        var view = new HGNodeSearchBarView
+        {
+            MatchCount = searchMatches.Count,
+            Current = searchCurrentId == null ? -1 : searchMatches.IndexOf(searchCurrentId),
+        };
+        string before = nodeSearch.Query;
+        nodeSearch.Draw(NodeSearchBarRect(canvas), view, () => StepNodeSearch(1), () => StepNodeSearch(-1));
+        if (nodeSearch.Query != before || !nodeSearch.IsOpen) Repaint();
+    }
+
+    /// <summary>
+    /// 依搜尋字重算命中：以空白分成多個詞，每個詞都要出現在同一顆節點的比對文字裡（不分大小寫）。
+    /// 比對文字＝節點名稱、引用對象、chip、註解，加上它所屬群組的標題與它所在分頁的名稱，
+    /// 所以群組名可以和節點名組合著篩（「傷害 if」＝傷害群組裡的 If）。
+    /// 順序沿用 graph.Nodes，也就是從 HEAD 往下的建圖順序。被收起的節點也算。
+    /// </summary>
+    private void RefreshSearchMatches()
+    {
+        string query = nodeSearch.Query;
+        if (query == searchMatchQuery && searchMatchGeneration == graphGeneration) return;
+        searchMatchQuery = query;
+        searchMatchGeneration = graphGeneration;
+        searchMatches.Clear();
+        searchMatchSet.Clear();
+        if (graph == null) return;
+
+        var terms = query.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+        if (terms.Length == 0) return;
+        var groupText = NodeGroupSearchText();
         foreach (var node in graph.Nodes)
         {
             if (string.IsNullOrEmpty(node.Id)) continue;
-            var top = NodeSearchTop(node);
-            string group = top.IsRoot || top.IsTimingGroup ? top.Title : "候選";
-            groups.Add(group);
-            entries.Add(new HGNodeSearchEntry { Id = node.Id, Name = NodeSearchName(node), Group = group });
+            groupText.TryGetValue(node.Id, out string group);
+            if (!NodeSearchMatches($"{NodeSearchName(node)} {node.Chip} {node.Tips} {group}", terms)) continue;
+            if (searchMatchSet.Add(node.Id)) searchMatches.Add(node.Id);
         }
-        if (entries.Count == 0)
-        {
-            ShowNotification(new GUIContent("這張畫布沒有節點可以搜尋。"));
-            return;
-        }
-        // Token／資產焦點只有一顆 HEAD，全部在同一個資料夾時直接攤在根層。
-        if (groups.Count < 2)
-            foreach (var entry in entries) entry.Group = null;
-
-        var anchor = new Rect(canvasRect.center.x - 210f, canvasRect.y + 8f, 420f, 0f);
-        HGNodeSearchDropdown.Show(anchor, entries, id => FocusDocumentNode(id));
     }
 
-    /// <summary>沿 ParentRow 往上找到沒有父欄位的那顆：root HEAD、時機節點或候選。</summary>
-    private HGNodeView NodeSearchTop(HGNodeView node)
+    /// <summary>節點 Id → 所屬群組標題與所在分頁名稱。只看目前畫布的群組。</summary>
+    private Dictionary<string, string> NodeGroupSearchText()
     {
-        var seen = new HashSet<HGNodeView>();
-        var top = node;
-        while (top.ParentRow != null && seen.Add(top))
+        var text = new Dictionary<string, string>();
+        foreach (var group in CurrentNodeGroups())
         {
-            var parent = NodeById(top.ParentRow.OwnerNodeId);
-            if (parent == null) break;
-            top = parent;
+            foreach (var id in group.Members)
+            {
+                if (string.IsNullOrEmpty(id)) continue;
+                // 只有一頁時 TabOf 回 0，那一頁的名字仍然算。
+                string tab = group.Tabs.Count > 0 ? group.Tabs[group.TabOf(id)]?.Name : null;
+                string entry = $"{group.Title} {tab}";
+                text[id] = text.TryGetValue(id, out string prior) ? $"{prior} {entry}" : entry;
+            }
         }
-        return top;
+        return text;
+    }
+
+    private static bool NodeSearchMatches(string text, string[] terms)
+    {
+        foreach (var term in terms)
+            if (text.IndexOf(term, StringComparison.OrdinalIgnoreCase) < 0) return false;
+        return true;
     }
 
     /// <summary>
-    /// 搜尋清單的一行：只寫節點名稱。Token／資產／Property 節點的名稱只是種類，後面補上引用對象，才分得出是哪一個。
-    /// AdvancedDropdown 只比對這串文字，所以搜得到的也只有這些。
+    /// 跳到下一筆（dir=1）或上一筆（dir=-1），頭尾循環。還沒跳過時，下一筆從第一筆開始、上一筆從最後一筆開始。
+    /// 跳轉走 <see cref="FocusDocumentNode"/>：被收起的節點會展開並記成版面修改，和 Console 跳轉一樣。
+    /// </summary>
+    private void StepNodeSearch(int dir)
+    {
+        RefreshSearchMatches();
+        int count = searchMatches.Count;
+        if (count == 0) return;
+        int index = searchCurrentId == null ? -1 : searchMatches.IndexOf(searchCurrentId);
+        index = index < 0 ? (dir > 0 ? 0 : count - 1) : (index + dir + count) % count;
+        searchCurrentId = searchMatches[index];
+        FocusDocumentNode(searchCurrentId);
+    }
+
+    /// <summary>
+    /// 搜尋比對用的節點名稱。Token／資產／Property 節點的名稱只是種類，後面補上引用對象，才分得出是哪一個。
     /// </summary>
     private static string NodeSearchName(HGNodeView node)
     {

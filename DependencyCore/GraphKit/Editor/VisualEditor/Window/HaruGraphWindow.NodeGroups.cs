@@ -166,7 +166,7 @@ public partial class HaruGraphWindow
 
         // 標題改名是先畫先拿事件的控制項：游標在節點上時，這一下屬於節點，不能被壓在底下的標題吃掉。
         var e = Event.current;
-        bool block = e.isMouse && NodeAt(graphMouse) != null;
+        bool block = e.isMouse && (NodeAt(graphMouse) != null || PointerOnNodeSearch(e.mousePosition));
         EventType before = e.type;
         if (block) e.type = EventType.Ignore;
         BeginZoomedCanvas(canvas);
