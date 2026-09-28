@@ -24,16 +24,20 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>
-    /// 可見成員的外框加內距，標題列（與分頁列）貼在上方。被 ⊖ 收起而隱藏的成員不算；
+    /// 可見成員的外框加內距，標題列與展開中的註解貼在上方。被 ⊖ 收起而隱藏的成員不算；
     /// 不在作用中分頁的成員照算，切分頁時框的大小與標題列位置才不會動。
-    /// 收合時只剩標題列，寬度用收合前寫回的框；成員都被群組外的欄位收起時用文件上存的框；
+    /// 收合時只剩標題列（和註解），寬度用收合前寫回的框；成員都被群組外的欄位收起時用文件上存的框；
     /// 完全沒有成員時回到「建立群組」的預設尺寸。
     /// </summary>
     private Rect NodeGroupHull(GraphNodeGroup group)
     {
         if (group.Collapsed)
-            return new Rect(group.Rect.x, group.Rect.y, Mathf.Max(group.Rect.width, NodeGroupMinSize.x), NodeGroupHeaderHeight);
-        var empty = new Rect(group.Rect.position, EmptyNodeGroupSize);
+        {
+            float collapsedWidth = Mathf.Max(group.Rect.width, NodeGroupMinSize.x);
+            return new Rect(group.Rect.x, group.Rect.y, collapsedWidth, NodeGroupTopInset(group, collapsedWidth));
+        }
+        var empty = new Rect(group.Rect.position, new Vector2(EmptyNodeGroupSize.x,
+            Mathf.Max(EmptyNodeGroupSize.y, NodeGroupTopInset(group, EmptyNodeGroupSize.x) + NodeGroupPadding * 2f)));
         if (graph == null) return empty;
         var members = new HashSet<string>(group.Members);
         bool any = false;
@@ -54,23 +58,55 @@ public partial class HaruGraphWindow
         }
         if (!any) return HasAnyMember(group) ? group.Rect : empty;
 
-        var hull = Rect.MinMaxRect(xMin - NodeGroupPadding, yMin - NodeGroupPadding - NodeGroupTopInset(group), xMax + NodeGroupPadding, yMax + NodeGroupPadding);
-        hull.width = Mathf.Max(hull.width, NodeGroupMinSize.x, NodeGroupTabStripWidth(group));
-        hull.height = Mathf.Max(hull.height, NodeGroupMinSize.y);
-        return hull;
+        // 註解框的高度看框寬，所以先定寬再算上方要讓出的高度。
+        float width = Mathf.Max(xMax - xMin + NodeGroupPadding * 2f, NodeGroupMinSize.x, NodeGroupTabStripWidth(group));
+        float inset = NodeGroupTopInset(group, width);
+        float height = Mathf.Max(yMax - yMin + NodeGroupPadding * 2f + inset, NodeGroupMinSize.y);
+        return new Rect(xMin - NodeGroupPadding, yMin - NodeGroupPadding - inset, width, height);
     }
 
-    /// <summary>成員區上方被標題列與分頁列佔掉的高度。分頁列常駐，只有收合時不畫。</summary>
-    private static float NodeGroupTopInset(GraphNodeGroup group)
-        => NodeGroupHeaderHeight + (group.Collapsed ? 0f : NodeGroupTabHeight);
+    /// <summary>成員區上方被標題列與展開中的註解佔掉的高度；收合時就是整個框的高度。</summary>
+    private float NodeGroupTopInset(GraphNodeGroup group, float frameWidth)
+        => NodeGroupHeaderHeight + (NodeGroupNoteOpen(group) ? NodeGroupNoteHeight(group, frameWidth) + 6f + NodeGroupNoteGap * 2f : 0f);
 
-    /// <summary>分頁列上的頁數：沒有分頁資料的群組也畫一頁「分頁 1」。</summary>
+    /// <summary>標題列正下方的註解框（含框線），跟著群組框算，畫面與 graph space 都能用；沒展開時高度為 0。</summary>
+    private Rect NodeGroupNoteRect(GraphNodeGroup group, Rect frame)
+    {
+        float y = frame.y + NodeGroupHeaderHeight + NodeGroupNoteGap;
+        if (!NodeGroupNoteOpen(group)) return new Rect(frame.x + 4f, y, frame.width - 8f, 0f);
+        return new Rect(frame.x + 4f, y, frame.width - 8f, NodeGroupNoteHeight(group, frame.width) + 6f);
+    }
+
+    /// <summary>
+    /// 群組註解：資料沿用 <see cref="GraphNodeGroup.Title"/>。還是預設名「群組」的舊標題不算註解，
+    /// 否則舊群組一打開全都多一格只寫「群組」的註解。
+    /// </summary>
+    private static string NodeGroupNote(GraphNodeGroup group)
+        => string.IsNullOrWhiteSpace(group.Title) || group.Title == DefaultNodeGroupTitle ? "" : group.Title;
+
+    /// <summary>
+    /// 註解框畫不畫，規則同節點：有內容預設展開、收起是使用者的選擇（記在 <see cref="GraphViewState"/>）；
+    /// 沒內容的只有剛按開的那一個才顯示。群組收合時照樣顯示（收合的框＝標題列＋註解）。
+    /// </summary>
+    private bool NodeGroupNoteOpen(GraphNodeGroup group)
+    {
+        return NodeGroupNote(group).Length == 0
+            ? group.Id == nodeGroupNoteOpenId
+            : !noteCollapsed.Contains(group.Id);
+    }
+
+    /// <summary>起手一行，換行或折行才長高，上限同節點註解。輸入框左右各內縮 8px，量測寬度同節點註解。</summary>
+    private static float NodeGroupNoteHeight(GraphNodeGroup group, float frameWidth)
+        => Mathf.Clamp(EditorStyles.textArea.CalcHeight(new GUIContent(NodeGroupNote(group)), frameWidth - 16f),
+            EditorGUIUtility.singleLineHeight, 160f);
+
+    /// <summary>分頁數：沒有分頁資料的群組也畫一頁「分頁 1」。</summary>
     private static int NodeGroupTabCount(GraphNodeGroup group) => Mathf.Max(1, group.Tabs.Count);
 
-    /// <summary>分頁列要的寬度：框至少這麼寬，每一頁的標籤與「＋」才放得下。</summary>
+    /// <summary>標題列要的寬度：框至少這麼寬，色塊、收合鈕、每一頁的標籤、「＋」與右端的成員數才放得下。</summary>
     private static float NodeGroupTabStripWidth(GraphNodeGroup group)
     {
-        float width = NodeGroupTabInset * 2f + NodeGroupTabAddWidth;
+        float width = NodeGroupTabStart + NodeGroupTabAddWidth + NodeGroupHeaderRightReserve;
         for (int i = 0; i < NodeGroupTabCount(group); i++) width += NodeGroupTabWidth(group, i);
         return width;
     }
@@ -102,13 +138,16 @@ public partial class HaruGraphWindow
         return -1;
     }
 
-    /// <summary>第 index 頁標籤的框（跟著傳進來的群組框算，畫面與 graph space 都能用）。</summary>
+    /// <summary>第 index 頁標籤在標題列內的框（跟著傳進來的群組框算，畫面與 graph space 都能用）。</summary>
     private static Rect NodeGroupTabRect(GraphNodeGroup group, Rect frame, int index)
     {
-        float x = frame.x + NodeGroupTabInset;
+        float x = frame.x + NodeGroupTabStart;
         for (int i = 0; i < index; i++) x += NodeGroupTabWidth(group, i);
-        return new Rect(x, frame.y + NodeGroupHeaderHeight, NodeGroupTabWidth(group, index), NodeGroupTabHeight);
+        return NodeGroupTabSlot(frame, x, NodeGroupTabWidth(group, index));
     }
+
+    private static Rect NodeGroupTabSlot(Rect frame, float x, float width)
+        => new(x, frame.y + 2f, width, NodeGroupHeaderHeight - 2f);
 
     /// <summary>畫面與命中用的框：整組拖曳中用暫存框，拖節點期間用凍結框，其餘當場包住成員。</summary>
     private Rect NodeGroupRectOf(GraphNodeGroup group)
@@ -164,15 +203,18 @@ public partial class HaruGraphWindow
         // 放手就會落進去的群組：外框加亮，拖曳當下就看得出結果。
         GraphNodeGroup dropTarget = dragNode != null && dragMoved ? NodeGroupContaining(graphMouse) : null;
 
-        // 標題改名是先畫先拿事件的控制項：游標在節點上時，這一下屬於節點，不能被壓在底下的標題吃掉。
+        // 分頁、註解與工具列是先畫先拿事件的控制項：游標在節點上時，這一下屬於節點，不能被壓在底下的群組吃掉。
         var e = Event.current;
-        bool block = e.isMouse && (NodeAt(graphMouse) != null || PointerOnNodeSearch(e.mousePosition));
+        bool pointerTaken = NodeAt(graphMouse) != null || PointerOnNodeSearch(e.mousePosition);
+        bool block = e.isMouse && pointerTaken;
+        // 工具列的滑入規則同節點 Header：拉線、拖曳、框選中不展開。
+        bool canHover = !pointerTaken && !linking && dragNode == null && dragNodeGroup == null && !boxSelecting;
         EventType before = e.type;
         if (block) e.type = EventType.Ignore;
         BeginZoomedCanvas(canvas);
         try
         {
-            foreach (var group in groups) DrawNodeGroup(group, ReferenceEquals(group, dropTarget));
+            foreach (var group in groups) DrawNodeGroup(group, ReferenceEquals(group, dropTarget), canHover);
         }
         finally
         {
@@ -181,7 +223,11 @@ public partial class HaruGraphWindow
         }
     }
 
-    private void DrawNodeGroup(GraphNodeGroup group, bool dropTarget)
+    /// <summary>
+    /// 標題列只有一列：色塊、收合鈕、分頁（第一頁的名字就是群組名）、「＋」、成員數與工具列提示 ▴。
+    /// 說明另寫在可收納的註解裡，入口是滑入標題列才展開的工具列，與節點 Header 同一套。
+    /// </summary>
+    private void DrawNodeGroup(GraphNodeGroup group, bool dropTarget, bool canHover)
     {
         Rect r = NodeGroupRectOf(group);
         var visual = new Rect(r.position + pan, r.size);
@@ -189,6 +235,7 @@ public partial class HaruGraphWindow
         CountNodeGroupMembers(group, out int present, out int visible);
         Rect header = NodeGroupHeaderRect(visual);
         bool selected = group.Id == selectedNodeGroupId;
+        bool actions = UpdateNodeGroupActions(group, visual, canHover);
         HGStyles.Fill(visual, WithAlpha(color, 0.13f));
         HGStyles.Fill(header, WithAlpha(color, 0.55f));
         HGStyles.Frame(visual, selected ? HGStyles.NodeBorderSelected : color, selected || dropTarget ? 2f : 1f);
@@ -206,69 +253,82 @@ public partial class HaruGraphWindow
             ToggleNodeGroupCollapsed(group);
         DrawNodeGroupProxies(group, visual, color);
 
-        // 有成員被群組外的欄位收起時寫「看得到/全部」；它們的連線以虛線接到標題列兩端的代表接點。
+        // 右端由右往左：工具列提示 ▴ → 成員數。有成員被群組外的欄位收起時寫「看得到/全部」；
+        // 它們的連線以虛線接到標題列兩端的代表接點。
+        var expand = new Rect(header.xMax - 18f, header.y + 5f, 14f, 14f);
+        if (actions) HGStyles.RoundedFill(expand, HGStyles.HeaderOverlay, 2f);
+        GUI.Label(expand, new GUIContent("▴", "滑入標題列展開工具列"), HGStyles.HeaderButton);
         string countText = !group.Collapsed && visible < present ? $"({visible}/{present})" : $"({present})";
         var countContent = new GUIContent(countText);
         float countWidth = HGStyles.Tiny.CalcSize(countContent).x;
-        var countRect = new Rect(header.xMax - countWidth - 8f, header.y + 4f, countWidth, 16f);
+        var countRect = new Rect(expand.x - countWidth - 4f, header.y + 4f, countWidth, 16f);
         GUI.Label(countRect, countContent, HGStyles.Tiny);
 
-        var titleRect = new Rect(fold.xMax + 4f, header.y + 3f, Mathf.Max(0f, countRect.x - fold.xMax - 10f), 18f);
-        var target = group;
-        inlineName.Draw(titleRect, group, HGInlineRename.SiteNodeGroup, group.Title, group.Title, HGStyles.NodeTitle,
-            "雙擊改名；拖曳標題列＝整組移動；右鍵＝群組選單", name => RenameNodeGroup(target, name));
-
-        if (!group.Collapsed) DrawNodeGroupTabs(group, visual, color);
+        DrawNodeGroupTabs(group, visual, color, countRect.x - 4f);
+        if (NodeGroupNoteOpen(group)) DrawNodeGroupNote(group, visual);
+        CloseEmptyNodeGroupNote(group);
+        if (actions) DrawNodeGroupActions(group, visual);
     }
 
     /// <summary>
-    /// 標題列下方常駐的分頁列：點一下切換、雙擊改名、右鍵開分頁選單，最後面的「＋」新增一頁。
-    /// 沒有分頁資料的群組畫一頁「分頁 1」。
-    /// 分頁列畫在群組的縮放畫布裡，比 HandleCanvasInput 先拿到事件，所以按在上面不會變成框選。
+    /// 標題列內的分頁：按下後放開沒拖動＝切換，拖動＝整組移動（分頁佔掉大半列，標題列仍要抓得住）；
+    /// 雙擊改名、右鍵開分頁選單，最後面的「＋」新增一頁。沒有分頁資料的群組畫一頁「分頁 1」。
+    /// 收合時只畫作用中的那一頁，其餘寫成「+N」。
+    /// 分頁畫在群組的縮放畫布裡，比 HandleCanvasInput 先拿到事件，所以按在上面不會變成框選。
     /// </summary>
-    private void DrawNodeGroupTabs(GraphNodeGroup group, Rect visualFrame, Color color)
+    private void DrawNodeGroupTabs(GraphNodeGroup group, Rect visualFrame, Color color, float right)
     {
         var e = Event.current;
         int active = group.ActiveTab;
         int count = NodeGroupTabCount(group);
-        var strip = new Rect(visualFrame.x, visualFrame.y + NodeGroupHeaderHeight, visualFrame.width, NodeGroupTabHeight);
-        HGStyles.Fill(strip, WithAlpha(color, 0.22f));
+        int first = group.Collapsed ? active : 0;
+        int end = group.Collapsed ? active + 1 : count;
 
-        // 「＋」接在最後一頁後面；框至少有分頁列那麼寬，所以放得下。
-        Rect last = NodeGroupTabRect(group, visualFrame, count - 1);
-        var add = new Rect(last.xMax, strip.y, NodeGroupTabAddWidth, NodeGroupTabHeight);
-        if (GUI.Button(add, new GUIContent("+", "新增分頁"), HGStyles.HeaderButton))
+        if (!group.Collapsed)
         {
-            inlineName.Commit();
-            AddNodeGroupTab(group);
+            // 「＋」接在最後一頁後面；框至少有標題列要的那麼寬，所以放得下。
+            Rect last = NodeGroupTabRect(group, visualFrame, count - 1);
+            var add = new Rect(last.xMax, last.y, NodeGroupTabAddWidth, last.height);
+            if (add.x < right && GUI.Button(add, new GUIContent("+", "新增分頁"), HGStyles.HeaderButton))
+            {
+                inlineName.Commit();
+                AddNodeGroupTab(group);
+            }
         }
 
-        for (int i = 0; i < count; i++)
+        for (int i = first; i < end; i++)
         {
-            Rect tab = NodeGroupTabRect(group, visualFrame, i);
-            if (tab.x >= strip.xMax) break;
-            tab.xMax = Mathf.Min(tab.xMax, strip.xMax);
+            Rect tab = group.Collapsed
+                ? NodeGroupTabSlot(visualFrame, visualFrame.x + NodeGroupTabStart, NodeGroupTabWidth(group, i))
+                : NodeGroupTabRect(group, visualFrame, i);
+            if (tab.x >= right) break;
+            tab.xMax = Mathf.Min(tab.xMax, right);
             bool isActive = i == active;
             if (isActive) HGStyles.Fill(tab, WithAlpha(color, 0.55f));
             else if (tab.Contains(e.mousePosition)) HGStyles.Fill(tab, WithAlpha(color, 0.35f));
             if (isActive) HGStyles.Fill(new Rect(tab.x, tab.yMax - 2f, tab.width, 2f), color);
 
-            var label = new Rect(tab.x + 6f, tab.y + 2f, Mathf.Max(0f, tab.width - 12f), tab.height - 4f);
+            var label = new Rect(tab.x + 6f, tab.y + 1f, Mathf.Max(0f, tab.width - 12f), tab.height - 4f);
             var owner = group;
             int index = i;
             string name = NodeGroupTabName(group, i);
-            // 改名狀態以分頁物件當身分；還沒有分頁資料的「分頁 1」借群組當身分（site 和群組標題不同，不會一起進編輯）。
+            // 改名狀態以分頁物件當身分；還沒有分頁資料的「分頁 1」借群組當身分。
             object renameTarget = i < group.Tabs.Count ? group.Tabs[i] : group;
             if (renameTarget == null) GUI.Label(label, HGStyles.Elide(name, HGStyles.Tiny, label.width, null), HGStyles.Tiny);
             else if (inlineName.Draw(label, renameTarget, HGInlineRename.SiteNodeGroupTab, name, name,
-                    HGStyles.Tiny, "點一下切換；雙擊改名；右鍵＝分頁選單", text => RenameNodeGroupTab(owner, index, text)))
+                    HGStyles.Tiny, "點一下切換；拖曳＝整組移動；雙擊改名；右鍵＝分頁選單", text => RenameNodeGroupTab(owner, index, text)))
                 continue;
+
+            if (group.Collapsed && count > 1 && tab.xMax + 4f < right)
+                GUI.Label(new Rect(tab.xMax + 4f, tab.y + 1f, right - tab.xMax - 4f, tab.height - 4f), $"+{count - 1}", HGStyles.Tiny);
 
             if (e.type != EventType.MouseDown || !tab.Contains(e.mousePosition)) continue;
             if (e.button == 0 && e.clickCount == 1)
             {
                 inlineName.Commit();
-                SetNodeGroupActiveTab(group, i);
+                // 先當成整組拖曳開始；MouseUp 沒拖動才切到這一頁（EndNodeGroupDrag）。
+                BeginNodeGroupDrag(group, e.mousePosition - pan);
+                nodeGroupTabClick = i;
                 e.Use();
             }
             else if (e.button == 1)
@@ -278,6 +338,85 @@ public partial class HaruGraphWindow
                 e.Use();
             }
         }
+    }
+
+    /// <summary>
+    /// 註解框畫在標題列正下方、成員之上，群組收合時照樣看得到；
+    /// 內容寫回 <see cref="GraphNodeGroup.Title"/>，記成版面修改。
+    /// </summary>
+    private void DrawNodeGroupNote(GraphNodeGroup group, Rect visualFrame)
+    {
+        Rect box = NodeGroupNoteRect(group, visualFrame);
+        var field = new Rect(box.x + 4f, box.y + 3f, box.width - 8f, box.height - 6f);
+        HGStyles.Fill(box, HGStyles.NodeNote);
+        HGStyles.Frame(box, HGStyles.NodeNoteBorder);
+        EditorGUI.BeginChangeCheck();
+        GUI.SetNextControlName(NoteControlName(group.Id));
+        string text = EditorGUI.TextArea(field, NodeGroupNote(group));
+        if (!EditorGUI.EndChangeCheck()) return;
+        if (group.SetTitle(text)) MarkViewStateChanged();
+        // 內容被清空（或剛好打成預設名）時保留空框：打字打到一半整個收掉，游標會跟著消失。
+        if (NodeGroupNote(group).Length == 0) nodeGroupNoteOpenId = group.Id;
+        Repaint();
+    }
+
+    /// <summary>取消選取群組就收掉還沒打字的空框；有內容的註解不受選取影響。</summary>
+    private void CloseEmptyNodeGroupNote(GraphNodeGroup group)
+    {
+        if (nodeGroupNoteOpenId != group.Id || NodeGroupNote(group).Length > 0 || selectedNodeGroupId == group.Id) return;
+        ReleaseNoteFocus(group.Id);
+        nodeGroupNoteOpenId = null;
+        Repaint();
+    }
+
+    /// <summary>工具列貼在標題列右上方，寬度同只有 ✎ 的節點工具列。</summary>
+    private static Rect NodeGroupActionsRect(Rect frame) => new(frame.xMax - 28f, frame.y - 22f, 28f, 22f);
+
+    /// <summary>
+    /// 滑入標題列就展開工具列，移進工具列保持展開，離開收起；同一時間只有一個群組展開。
+    /// 游標在節點或搜尋列上、拉線與拖曳中都不展開。
+    /// </summary>
+    private bool UpdateNodeGroupActions(GraphNodeGroup group, Rect visualFrame, bool canHover)
+    {
+        var mouse = Event.current.mousePosition;
+        bool wasOpen = nodeGroupActionsId == group.Id;
+        bool over = canHover && (NodeGroupHeaderRect(visualFrame).Contains(mouse)
+            || wasOpen && NodeGroupActionsRect(visualFrame).Contains(mouse));
+        if (over == wasOpen) return over;
+        if (over) nodeGroupActionsId = group.Id;
+        else nodeGroupActionsId = null;
+        Repaint();
+        return over;
+    }
+
+    private void DrawNodeGroupActions(GraphNodeGroup group, Rect visualFrame)
+    {
+        var area = NodeGroupActionsRect(visualFrame);
+        var background = HGStyles.NodeBody;
+        background.a = 0.85f;
+        HGStyles.RoundedFill(area, background, 4f);
+        var noteToggle = new Rect(area.xMax - 21f, area.y + 4f, 14f, 14f);
+        bool open = NodeGroupNoteOpen(group);
+        if (!DrawNoteToggle(noteToggle, open, NodeGroupNote(group).Length > 0, true)) return;
+        ToggleNodeGroupNote(group, open);
+    }
+
+    /// <summary>收起只記在 GraphViewState（內容保留）；打開空註解時選取群組，空框才不會下一幀就被收掉。</summary>
+    private void ToggleNodeGroupNote(GraphNodeGroup group, bool open)
+    {
+        if (open)
+        {
+            ReleaseNoteFocus(group.Id);
+            SetNoteCollapsed(group.Id, true);
+            nodeGroupNoteOpenId = null;
+        }
+        else
+        {
+            SetNoteCollapsed(group.Id, false);
+            nodeGroupNoteOpenId = group.Id;
+            SelectNodeGroup(group);
+        }
+        Repaint();
     }
 
     private static Color WithAlpha(Color color, float alpha)
@@ -334,7 +473,8 @@ public partial class HaruGraphWindow
         var groups = new List<GraphNodeGroup>(CurrentNodeGroups());
         int palette = Mathf.Max(1, HGStyles.NodeGroupPaletteCount);
         BreakUndoMerge();
-        var group = new GraphNodeGroup(focus.Id, DefaultNodeGroupTitle, new Rect(SnapToGrid(graphMouse), EmptyNodeGroupSize), groups.Count % palette);
+        // 名字是分頁名，Title 存註解：新群組沒有註解。
+        var group = new GraphNodeGroup(focus.Id, "", new Rect(SnapToGrid(graphMouse), EmptyNodeGroupSize), groups.Count % palette);
         state.AddNodeGroup(group);
         groups.Add(group);
         foreach (var node in SelectedNodes())
@@ -342,14 +482,6 @@ public partial class HaruGraphWindow
         group.SetRect(NodeGroupHull(group));
         MarkViewStateChanged();
         Repaint();
-    }
-
-    private bool RenameNodeGroup(GraphNodeGroup group, string name)
-    {
-        name = string.IsNullOrWhiteSpace(name) ? DefaultNodeGroupTitle : name.Trim();
-        if (group.SetTitle(name)) MarkViewStateChanged();
-        Repaint();
-        return true;
     }
 
     /// <summary>群組標題列右鍵：順序比照節點右鍵，刪除在最上面，接著是只作用在這個群組的畫布操作。</summary>
@@ -367,7 +499,7 @@ public partial class HaruGraphWindow
 
     /// <summary>
     /// 分頁右鍵：刪除這一頁在最上面（成員回到第一頁），其餘與標題列右鍵相同。
-    /// 新增是分頁列最後面的「＋」，改名是雙擊標籤，都不放右鍵。只剩一頁時不能刪。
+    /// 新增是最後一頁後面的「＋」，改名是雙擊標籤，都不放右鍵。只剩一頁時不能刪。
     /// </summary>
     private void ShowNodeGroupTabMenu(GraphNodeGroup group, int index)
     {
@@ -875,7 +1007,7 @@ public partial class HaruGraphWindow
     {
         Rect frame = group.Collapsed ? group.Rect : NodeGroupHull(group);
         bool anyVisible = false;
-        float bottom = frame.y + NodeGroupTopInset(group);
+        float bottom = frame.y + NodeGroupTopInset(group, frame.width);
         if (graph != null && !group.Collapsed)
         {
             var members = new HashSet<string>(group.Members);
@@ -1005,13 +1137,20 @@ public partial class HaruGraphWindow
 
     // ===== 整組移位 =====
 
-    /// <summary>按在群組標題列＝整組移動，包含被收起而隱藏的成員。</summary>
+    /// <summary>按在群組標題列（分頁以外的空白處）＝整組移動，包含被收起而隱藏的成員。</summary>
     private bool TryBeginNodeGroupDrag(Vector2 graphMouse)
     {
         if (graph == null) return false;
         var group = NodeGroupHeaderAt(graphMouse);
         if (group == null) return false;
+        BeginNodeGroupDrag(group, graphMouse);
+        return true;
+    }
 
+    /// <summary>標題列空白處與分頁共用：分頁按下也先當成拖曳開始，放開沒拖動才算切頁。</summary>
+    private void BeginNodeGroupDrag(GraphNodeGroup group, Vector2 graphMouse)
+    {
+        nodeGroupTabClick = -1;
         nodeGroupDragOrigin = NodeGroupHull(group);
         nodeGroupDragRect = nodeGroupDragOrigin;
         nodeGroupDragStart = graphMouse;
@@ -1022,7 +1161,6 @@ public partial class HaruGraphWindow
         foreach (var node in graph.Nodes)
             if (!string.IsNullOrEmpty(node.Id) && members.Contains(node.Id)) nodeGroupMemberStarts[node.Id] = node.Pos;
         GUI.FocusControl(null);
-        return true;
     }
 
     private void DragNodeGroup(Vector2 graphMouse)
@@ -1034,14 +1172,20 @@ public partial class HaruGraphWindow
             if (nodeGroupMemberStarts.TryGetValue(node.Id, out var origin)) node.Pos = origin + offset;
     }
 
-    /// <summary>放開才寫回：框與成員座標在同一步 Undo 裡。沒動過就不寫，避免點一下標題就要求存檔。</summary>
+    /// <summary>
+    /// 放開才寫回：框與成員座標在同一步 Undo 裡。沒動過就不寫，避免點一下標題就要求存檔；
+    /// 從分頁按下而沒動過＝點一下分頁，切到那一頁。
+    /// </summary>
     private void EndNodeGroupDrag()
     {
         var group = dragNodeGroup;
+        int tabClick = nodeGroupTabClick;
         dragNodeGroup = null;
+        nodeGroupTabClick = -1;
         if (group == null || nodeGroupDragRect == nodeGroupDragOrigin)
         {
             nodeGroupMemberStarts.Clear();
+            if (group != null && tabClick >= 0) SetNodeGroupActiveTab(group, tabClick);
             return;
         }
 
@@ -1059,6 +1203,7 @@ public partial class HaruGraphWindow
     private void CancelNodeGroupDrag()
     {
         frozenNodeGroupRects.Clear();
+        nodeGroupTabClick = -1;
         if (dragNodeGroup == null) return;
         dragNodeGroup = null;
         nodeGroupMemberStarts.Clear();

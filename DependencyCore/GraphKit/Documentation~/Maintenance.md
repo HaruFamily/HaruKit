@@ -78,6 +78,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - 可編輯的圖實作 `IGraphDocument`：roots、驗證旗標、`InvalidateValidation`／`Verify`／`DeepCopy`、`PackType`、`ItemSlotType`、root 識別值與用詞（`RootChip`、`RootNoun`、`WindowTitle`），以及 `HGCapabilities`。
 - `InvalidateValidation()`（legacy Owner 為 `IGraphOwner.InvalidateGraphValidation()`）只撤銷文件的已驗證旗標，與編輯器的未存狀態無關。未存與 Undo 由 `HGModel.MarkContentChanged()`／`MarkLayoutChanged()` 管理（`HGModel.Dirty`）；**不要用 Dirty 字眼替驗證狀態命名**。
 - `HGCapabilities`（`SharedAssets`、`Tokens`、`Properties`）由文件宣告。沒宣告的能力，編輯器整組收掉對應的庫、選單與右鍵。**不要讓編輯器從「清單有沒有資料」推測能力**。
+- 生效能力是 `HGEditorExtensionContext.CapabilitiesOf`：context 有 `HGEditorProfile` 時**整個取 Profile 的能力，文件宣告被忽略**，不做聯集。使用端替文件新增能力時，要同時更新它正式入口 Profile 的能力，否則庫與選單不會出現。
 - root 識別值型別是 `object`，編輯器只做 `Equals` 和 `ToString()`。**不要把它轉回 `Enum`**，那會把時機概念綁回 LogicGraph。
 - 可選 `IGraphExecutionDocument` 提供執行觀察 source 與內容版本。
 
@@ -115,11 +116,11 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 | `.Link.cs` | 拉線相容性快取、命中測試、接線與斷線 |
 | `.Source.cs` | 換來源、Token／資產／Property 節點建立與拖放、轉存、右鍵選單 |
 | `.Execution.cs` | 執行觀察、session 選擇、Hold |
-| `.NodeGroups.cs` | 畫布節點群組：建立、繪製、整組移位、改名、改色、選取、右鍵選單、拖放進出的成員判定 |
+| `.NodeGroups.cs` | 畫布節點群組：建立、繪製、整組移位、分頁、註解、改色、選取、右鍵選單、拖放進出的成員判定 |
 
 資料流：Owner → 明確 binding 或 legacy 欄位探索 → DeepCopy 成 `HGModel.Data` → `HGFocus` 決定中間畫布在編輯哪些 root → `HGGraph.Build` 每次資料變動整份重建節點與列 → 視窗用 IMGUI 繪製 → 存檔時清理遺失型別、DeepCopy、驗證、通過才寫回。
 
-**節點搜尋（Ctrl+F）**：畫布上按 Ctrl+F，或按工具列的「搜尋」鈕，開畫布內搜尋列 `HGNodeSearchBar`（`Panels/`，畫布右上角），搜目前焦點 `graph.Nodes` 的全部節點，包括被收起的，不跨焦點。比對節點名稱（Token／資產／Property 補引用對象，`NodeSearchName`）、chip、註解，以及所屬群組的標題與所在分頁名稱；空白分詞，每詞都要命中同一顆節點，不分大小寫，所以群組名可以和節點名組合著篩。群組的修改不重建圖，`MarkViewStateChanged` 會作廢命中快取。輸入時只高亮：命中的節點加淡選取色外框，沒命中的壓暗；沒有命中時不壓暗。Enter／↓／F3 跳下一筆，Shift+Enter／↑／Shift+F3 跳上一筆，頭尾循環；跳轉走 `FocusDocumentNode`：被收起的先 `RevealNode`（展開欄位、清單、群組與分頁，寫回 `GraphViewState`，記成版面修改），再選取並置中。因為會寫版面，輸入時不自動跳。Esc／✕ 關閉，視角停在目前這一筆。搜尋列在 TextField 之前自己判 Enter／Esc／方向鍵；點回畫布時放掉輸入框焦點，畫布快捷鍵才收得到。游標壓在搜尋列上時，底下的節點、Header 工具列與群組標題都要遮掉指標事件（IMGUI 讓先畫的先拿事件）。
+**節點搜尋（Ctrl+F）**：畫布上按 Ctrl+F，或按工具列的「搜尋」鈕，開畫布內搜尋列 `HGNodeSearchBar`（`Panels/`，畫布右上角），搜目前焦點 `graph.Nodes` 的全部節點，包括被收起的，不跨焦點。比對節點名稱（Token／資產／Property 補引用對象，`NodeSearchName`）、chip、註解，以及所屬群組的註解與所在分頁名稱；空白分詞，每詞都要命中同一顆節點，不分大小寫，所以群組名可以和節點名組合著篩。群組的修改不重建圖，`MarkViewStateChanged` 會作廢命中快取。輸入時只高亮：命中的節點加淡選取色外框，沒命中的壓暗；沒有命中時不壓暗。Enter／↓／F3 跳下一筆，Shift+Enter／↑／Shift+F3 跳上一筆，頭尾循環；跳轉走 `FocusDocumentNode`：被收起的先 `RevealNode`（展開欄位、清單、群組與分頁，寫回 `GraphViewState`，記成版面修改），再選取並置中。因為會寫版面，輸入時不自動跳。Esc／✕ 關閉，視角停在目前這一筆。搜尋列在 TextField 之前自己判 Enter／Esc／方向鍵；點回畫布時放掉輸入框焦點，畫布快捷鍵才收得到。游標壓在搜尋列上時，底下的節點、Header 工具列與群組標題都要遮掉指標事件（IMGUI 讓先畫的先拿事件）。
 
 ### 5.1 IMGUI 陷阱
 
@@ -156,9 +157,9 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 
 **資料與框**
 
-- 群組是版面，不是節點：`GraphViewState._groups` 裡的 `GraphNodeGroup` 記 `Scope`（焦點 Id，同一份文件的不同畫布各自有群組）、標題、`Rect`、顏色（主題調色盤索引 `ColorIndex`，或自訂色 `UseCustomColor`／`CustomColor`）、`Collapsed` 與成員節點 Id。不影響執行、驗證與節點資料；所有修改走 `MarkViewStateChanged()`。文件沒有 `GraphViewState` 時不能建立群組。
-- **框由可見成員目前的外框當場算出**（`NodeGroupHull`：外框加內距，標題列貼在上方，有最小尺寸），不存起來。節點高度每次重建圖都重新量過，所以 List 增減、折疊都不需要另外掛更新點。不要在建圖或繪製時寫回 `Rect`，否則展開 List 會讓文件變成未存檔；它只在編輯群組時寫回（建立、整組移動、成員進出、收合前）。
-- 沒有可見成員時：收合中只剩標題列，寬度用 `Rect`；成員都被 ⊖ 收起時用 `Rect`；畫布上完全沒有成員（`HasAnyMember`）才退回預設尺寸（`EmptyNodeGroupSize`，17×5 格＝340×100）。收合中的框不是成員外框，成員進出與整組移動都不能把它寫回成 `Rect` 的大小。
+- 群組是版面，不是節點：`GraphViewState._groups` 裡的 `GraphNodeGroup` 記 `Scope`（焦點 Id，同一份文件的不同畫布各自有群組）、註解（`Title`，見「標題列與註解」）、`Rect`、顏色（主題調色盤索引 `ColorIndex`，或自訂色 `UseCustomColor`／`CustomColor`）、`Collapsed` 與成員節點 Id。不影響執行、驗證與節點資料；所有修改走 `MarkViewStateChanged()`。文件沒有 `GraphViewState` 時不能建立群組。
+- **框由可見成員目前的外框當場算出**（`NodeGroupHull`：外框加內距，標題列與展開中的註解貼在上方，有最小尺寸），不存起來。節點高度每次重建圖都重新量過，所以 List 增減、折疊都不需要另外掛更新點。不要在建圖或繪製時寫回 `Rect`，否則展開 List 會讓文件變成未存檔；它只在編輯群組時寫回（建立、整組移動、成員進出、收合前）。
+- 沒有可見成員時：收合中只剩標題列（和展開中的註解），寬度用 `Rect`；成員都被 ⊖ 收起時用 `Rect`；畫布上完全沒有成員（`HasAnyMember`）才退回預設尺寸（`EmptyNodeGroupSize`，17×5 格＝340×100）。收合中的框不是成員外框，成員進出與整組移動都不能把它寫回成 `Rect` 的大小。
 
 **成員**
 
@@ -172,9 +173,16 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - 換色入口只有標題列左端的色塊：開 `HGNodeGroupColorPopup`（上排主題調色盤、下排色相／飽和／明度滑桿）。自訂色不用 `EditorGUI.ColorField`：它會另開 Unity 顏色選擇器，`PopupWindow` 失焦就關，選的顏色回不來。面板回呼用群組 Id 找物件（面板開著時 Undo 可能換掉物件）。Popup 一律走視窗的 `RequestPopup`，排到 OnGUI 結尾才開。
 - 有成員被收起時，成員數寫「看得到/全部」；群組框本身不因成員被收起而變樣。
 
+**標題列與註解**
+
+- 標題列只有一列，由左往右：色塊 → 收合 `▾/▸` → 分頁 → 「＋」→（右端）成員數 → 工具列提示 `▴`。群組沒有另外的標題文字，第一頁的名字就是群組名；寬度下限是 `NodeGroupTabStripWidth`。
+- 註解與節點同一套：滑入標題列在右上方展開工具列（`nodeGroupActionsId`，拉線、拖曳、框選、游標在節點上時不展開），`✎` 開關註解框。註解內容存在 `GraphNodeGroup.Title`（欄位名沿用舊資料），內容等於舊預設名「群組」或空白時視為沒有註解（`NodeGroupNote`）。有內容預設展開，收起記在 `GraphViewState` 的註解收合（key＝群組 Id，走 `SetNoteCollapsed`）；剛按開的空框（`nodeGroupNoteOpenId`）只跟著選取中的群組活著。編輯內容走 `MarkViewStateChanged()`。
+- 註解框畫在框內、標題列正下方（`NodeGroupNoteRect`），群組收合時照樣顯示：收合的框＝標題列＋註解。成員區上方的高度一律問 `NodeGroupTopInset`（標題列＋展開中的註解），不要直接用 `NodeGroupHeaderHeight`；收合時它就是整個框的高度。節點註解維持在節點本體最下面。
+- 群組沒有 Enable／停用：Slot 求值只讀 `GraphNode.Disabled`，看不到版面資料。
+
 **操作**
 
-- 拖標題列會以整格為單位移動全部成員（包括被收起而隱藏的成員）；拖曳中只改暫存框與節點的顯示座標，放開才寫回，Undo 算一步。
+- 拖標題列會以整格為單位移動全部成員（包括被收起而隱藏的成員）；拖曳中只改暫存框與節點的顯示座標，放開才寫回，Undo 算一步。在分頁上按下也是整組拖曳的起點（`BeginNodeGroupDrag`＋`nodeGroupTabClick`），放開時沒有位移才切到那一頁（`EndNodeGroupDrag`）。
 - 群組可以被選取（`selectedNodeGroupId`，用 Id 記，純視圖狀態）：左鍵或右鍵按在標題列會選取群組並清掉節點選取；左鍵按在其他地方、Ctrl+A 會放掉群組選取。Delete 時選著群組就只刪群組、成員節點保留，沒選群組才刪節點。
 - 右鍵選單的全畫布段一律是「聚焦全部節點 → 整理版面」，每個選單（節點、空白處、群組標題列、群組內部空白）都有，而且永遠指整張畫布。群組範圍另外寫成「聚焦此群組（`FrameNodeGroup`）→ 整理此群組（`ArrangeNodeGroup`）」，不借用同一個字；不要用停用的選單項目當標題（看起來像停用指令，名稱含 `/` 還會變成子選單）。群組標題列右鍵：刪除（只刪群組）→ 此群組兩項 → 全畫布兩項；換色不放右鍵。群組內部空白右鍵：建立項目 → 此群組兩項 → 全畫布兩項；建立公式／動作、新增 root 節點都會同一步加入該群組（`CreateOrphan(…, group)`、`AddTimingGroup(…, joinGroup)`），不提供建立群組。
 - `ArrangeNodeGroup` 只排這個群組的可見成員，留在成員原本的左上角：依成員之間的父子關係分欄（父在左），同一欄照目前上下順序排。不要改成呼叫全畫布的 `ResetLayout`／`AutoLayout`，那會把成員排到群組外。
@@ -195,9 +203,9 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 **分頁（Tab）**
 
 - 資料在 `GraphNodeGroup`：`Tabs`（`GraphNodeGroupTab`：名稱與記在這一頁的成員 Id）與 `ActiveTab`。少於兩頁時所有成員都顯示（`HasTabs` 為 false）；成員沒記在任何一頁時算第一頁（`TabOf`）。`SetMember` 加入的新成員進作用中的那一頁，所以拖放、拉線放進群組、群組內建立節點都不必另外指定頁。`RemoveTab` 讓成員回第一頁，最後一頁不能刪。第一次新增分頁時要連第一頁一起建（`AddNodeGroupTab`）；沒有分頁資料的「分頁 1」改名時才建出那一頁。
-- 分頁列在標題列下方（`NodeGroupTabHeight`），沒收合時常駐（`NodeGroupTabCount` 至少一頁），最後面的「＋」新增分頁，新增不放右鍵；標題列與兩端代表接點不動。成員區上方的高度一律問 `NodeGroupTopInset`，不要直接用 `NodeGroupHeaderHeight`。
+- 分頁排在標題列內（從 `NodeGroupTabStart` 起），常駐至少一頁（`NodeGroupTabCount`），最後面的「＋」新增分頁，新增不放右鍵；收合時只畫作用中的那一頁，其餘寫成「+N」。
 - 非作用中分頁的成員進 `collapsedMembers`，和收合同一條路：可達性算完才隱藏、連線走標題列實線代理、`MarkHiddenSlots` 略過。它們另外記在 `tabHiddenMembers`，**框與成員數仍把它們算成看得到**；被 ⊖ 收起的成員不記。框因此包住所有分頁的成員，切分頁時大小與標題列位置不變。
-- 分頁標籤的點擊、雙擊改名（site `nodeGroupTab`）、右鍵選單都在 `DrawNodeGroupTabs` 處理，比 `HandleCanvasInput` 先拿到事件。拖節點放在標籤上＝搬到那一頁並切過去（`NodeGroupTabAt`，在 `ApplyDropMembership` 裡）。`ExpandNodeGroupOf` 同時處理收合與切頁。
+- 分頁標籤的按下、雙擊改名（site `nodeGroupTab`）、右鍵選單都在 `DrawNodeGroupTabs` 處理，比 `HandleCanvasInput` 先拿到事件。拖節點放在標籤上＝搬到那一頁並切過去（`NodeGroupTabAt`，在 `ApplyDropMembership` 裡）。`ExpandNodeGroupOf` 同時處理收合與切頁。
 
 ## 6. 串接 GraphKit（給 Tool 作者）
 

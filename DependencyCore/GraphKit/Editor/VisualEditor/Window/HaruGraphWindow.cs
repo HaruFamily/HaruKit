@@ -229,14 +229,23 @@ public partial class HaruGraphWindow : EditorWindow
     private readonly Dictionary<(HGLink link, int end), float> boundaryGhostFan = new();
     // 同一側代表接點伸出的線；end 為 -1 是實線代理，0／1 是殘影的那一端。
     private readonly Dictionary<string, List<(HGLink link, int end)>> proxyFanGroups = new();
+    // 滑入標題列展開工具列（✎）的群組 Id，規則同節點 Header 的工具列。
+    private string nodeGroupActionsId;
+    // 剛按開、還沒打字的群組註解框：只跟著被選取的群組活著，不寫進資料。
+    private string nodeGroupNoteOpenId;
+    // 按在分頁上的那一頁：放開時沒拖動才切過去，拖動了就是整組移動。
+    private int nodeGroupTabClick = -1;
+    // 群組註解存在 GraphNodeGroup.Title；舊資料的標題若還是這個預設名，視為沒有註解。
     private const string DefaultNodeGroupTitle = "群組";
     private const float NodeGroupHeaderHeight = 24f;
-    // 分頁列貼在標題列下方，沒收合時常駐（至少一頁）；標題列兩端的代表接點不受影響。
-    private const float NodeGroupTabHeight = 20f;
-    // 分頁列最後面的「＋」新增分頁。
+    // 分頁排在標題列內，從色塊與收合鈕之後開始；最後面的「＋」新增分頁。
+    private const float NodeGroupTabStart = 44f;
     private const float NodeGroupTabAddWidth = 20f;
+    // 標題列右端留給成員數與工具列提示 ▴。
+    private const float NodeGroupHeaderRightReserve = 64f;
+    // 群組註解框畫在標題列正下方：與標題列、與成員之間的間距。
+    private const float NodeGroupNoteGap = 4f;
     private const string DefaultNodeGroupTabTitle = "分頁";
-    private const float NodeGroupTabInset = 8f;
     private const float NodeGroupTabMinWidth = 48f;
     private const float NodeGroupTabMaxWidth = 140f;
     private const float NodeGroupPadding = 20f;
@@ -695,6 +704,9 @@ public partial class HaruGraphWindow : EditorWindow
         raisedNodeIds.Clear();
         dragNodeGroup = null;
         selectedNodeGroupId = null;
+        nodeGroupActionsId = null;
+        nodeGroupNoteOpenId = null;
+        nodeGroupTabClick = -1;
         nodeGroupMemberStarts.Clear();
         frozenNodeGroupRects.Clear();
         nodeGroupColors.Clear();
@@ -758,7 +770,7 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private void MarkViewStateChanged()
     {
-        // 群組標題、分頁名與成員也是搜尋比對的一部分，但改它們不重建圖，命中快取要自己作廢。
+        // 群組註解、分頁名與成員也是搜尋比對的一部分，但改它們不重建圖，命中快取要自己作廢。
         searchMatchGeneration = -1;
         if (focus.Kind == HGFocusKind.Asset)
         {

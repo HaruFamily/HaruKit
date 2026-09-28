@@ -105,6 +105,7 @@ public sealed class GraphNodeGroup
 {
     [SerializeField] private string _id;
     [SerializeField] private string _scope;
+    // 編輯器當群組註解用（群組名是分頁名）；欄位名留著是為了讀得回既有資料。
     [SerializeField] private string _title;
     [SerializeField] private Rect _rect;
     [SerializeField] private int _color;

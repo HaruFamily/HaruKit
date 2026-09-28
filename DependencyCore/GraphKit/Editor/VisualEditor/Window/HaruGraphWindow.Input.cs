@@ -637,7 +637,7 @@ public partial class HaruGraphWindow
 
     /// <summary>
     /// 依搜尋字重算命中：以空白分成多個詞，每個詞都要出現在同一顆節點的比對文字裡（不分大小寫）。
-    /// 比對文字＝節點名稱、引用對象、chip、註解，加上它所屬群組的標題與它所在分頁的名稱，
+    /// 比對文字＝節點名稱、引用對象、chip、註解，加上它所屬群組的註解與它所在分頁的名稱，
     /// 所以群組名可以和節點名組合著篩（「傷害 if」＝傷害群組裡的 If）。
     /// 順序沿用 graph.Nodes，也就是從 HEAD 往下的建圖順序。被收起的節點也算。
     /// </summary>
@@ -663,7 +663,7 @@ public partial class HaruGraphWindow
         }
     }
 
-    /// <summary>節點 Id → 所屬群組標題與所在分頁名稱。只看目前畫布的群組。</summary>
+    /// <summary>節點 Id → 所屬群組的註解與所在分頁名稱（第一頁的名字就是群組名）。只看目前畫布的群組。</summary>
     private Dictionary<string, string> NodeGroupSearchText()
     {
         var text = new Dictionary<string, string>();
@@ -674,7 +674,7 @@ public partial class HaruGraphWindow
                 if (string.IsNullOrEmpty(id)) continue;
                 // 只有一頁時 TabOf 回 0，那一頁的名字仍然算。
                 string tab = group.Tabs.Count > 0 ? group.Tabs[group.TabOf(id)]?.Name : null;
-                string entry = $"{group.Title} {tab}";
+                string entry = $"{NodeGroupNote(group)} {tab}";
                 text[id] = text.TryGetValue(id, out string prior) ? $"{prior} {entry}" : entry;
             }
         }

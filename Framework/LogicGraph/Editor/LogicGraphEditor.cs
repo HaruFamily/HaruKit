@@ -12,7 +12,7 @@ public static class LogicGraphEditor
 {
     public static HGEditorExtensionContext Context { get; } = new HGEditorExtensionContext(
         new DocumentProvider(), profile: new HGEditorProfile(
-            HGCapabilities.SharedAssets | HGCapabilities.Tokens, HGModel.HGDocumentRootAdapter.Instance));
+            HGCapabilities.SharedAssets | HGCapabilities.Tokens | HGCapabilities.Properties, HGModel.HGDocumentRootAdapter.Instance));
 
     public static bool HasGraph(Type ownerType)
     {
