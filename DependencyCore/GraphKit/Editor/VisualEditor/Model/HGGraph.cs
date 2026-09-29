@@ -23,6 +23,11 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         Group,
         /// <summary>清單型參數的標題列。折疊時標題列會畫一顆代表接點，那是 List 這個形狀自己的特例。</summary>
         List,
+        /// <summary>
+        /// 摺疊群組（<c>[HGFoldout]</c>）：標題列＋成員。<see cref="HGRow.Height"/> 是整段（展開時含成員）；
+        /// 收起時成員壓到標題列、標成隱藏，已接線的欄位由標題列右緣伸出線。
+        /// </summary>
+        Foldout,
     }
 
     /// <summary>一次焦點的完整節點圖。每次資料變動就整份重建，不做增量。</summary>
@@ -142,7 +147,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// <summary>payload：這一列自己承載一整段項目（List 形狀）。</summary>
         // 「承載一段」與「屬於某一段的某一項」是兩件事，用兩組欄位表示，不從 ItemIndex 是不是 -1 推。
         public HGItemSource Items;
-        public bool Collapsed;           // 只對 List 形狀有意義：折疊時子列不畫、不可互動
+        public bool Collapsed;           // 只對 List／Foldout 形狀有意義：折疊時子列不畫、不可互動
 
         /// <summary>代畫這段清單標題的 Slot 列（常數清單）。有值時清單自己不畫標題列、高度為 0，底帶與外框從這一列算起。</summary>
         public HGRow HeaderRow;
@@ -185,9 +190,14 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// </summary>
         public float LeftPad;
 
+        /// <summary>這一列（含群組成員展開出來的子列）屬於哪一個摺疊群組；巢狀時記最近的那一個。</summary>
+        public HGRow FoldoutOwnerRow;
+
         // 視覺 metadata（欄位宣告帶來的畫法偏好，與 Kind 和 payload 都無關）
         /// <summary>欄位標了 <c>[HGEnum]</c>。最終畫不畫 enum 按鈕列仍要另算：替代預設值型別是 enum 時沒標也要畫。</summary>
         public bool ForceEnumButtons;
+        /// <summary>欄位或 Slot 類別標的 <c>[HGBool]</c>；null＝bool 畫勾選框。</summary>
+        public HGBoolAttribute BoolButtons;
         public bool HideLabel;
         public int LabelWidthUnits;
         public float LabelWidthRatio;
@@ -714,14 +724,15 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// <summary>清單折疊狀態的鍵：節點 Id + 欄位路徑，重建圖之後仍然指到同一個清單。</summary>
         public static string CollapseKey(string nodeId, HGRow row) => nodeId + "#" + row.Path;
 
-        /// <summary>沒有明確記錄過的清單，項數多就預設折疊。</summary>
+        /// <summary>沒有明確記錄過的清單，項數多就預設折疊；摺疊群組沒有項目，一律預設展開。</summary>
         private static bool DefaultCollapsed(HGRow row) => (row.Items?.Count ?? 0) > ListAutoCollapseCount;
 
+        /// <summary>清單與摺疊群組共用同一份折疊記錄（key 見 <see cref="CollapseKey"/>）。</summary>
         private static void ApplyListCollapse(HGNodeView node, IReadOnlyDictionary<string, bool> listCollapse)
         {
             foreach (var row in AllRows(node.Rows))
             {
-                if (row.Kind != HGRowKind.List) continue;
+                if (row.Kind != HGRowKind.List && row.Kind != HGRowKind.Foldout) continue;
                 row.Collapsed = listCollapse != null && listCollapse.TryGetValue(CollapseKey(node.Id, row), out bool stored)
                     ? stored
                     : DefaultCollapsed(row);
@@ -744,6 +755,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         {
             if (obj == null || depth > 5 || !visited.Add(obj)) return;
 
+            // 同一個物件裡同名的摺疊群組共用一列，第一個成員出現時才建。
+            List<HGRow> foldouts = null;
             if (metadata != null && metadata.TryGetNodeDescriptor(obj.GetType(), out var descriptor))
             {
                 foreach (var field in descriptor.Fields)
@@ -758,6 +771,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                             new GraphDiagnosticLocation(fieldPath: fieldPath)));
                     }
                     if (!visible) continue;
+                    var dest = FoldoutDestination(field.Foldout, into, ref foldouts, depth, path, leftPad, fieldPath, diagnostics);
 
                     if (field.Role == HGFieldRole.Slot)
                     {
@@ -779,8 +793,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         row.Descriptor = field;
                         row.Normalized = normalized;
                         ApplyDescriptorPresentation(row, field);
-                        into.Add(row);
-                        AddDefaultListRow(into, row, diagnostics);
+                        dest.Add(row);
+                        AddDefaultListRow(dest, row, diagnostics);
                         continue;
                     }
 
@@ -800,7 +814,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         };
                         ApplyDescriptorPresentation(group, field);
                         BuildRows(value, depth + 1, group.Children, visited, group.Path, leftPad, metadata, diagnostics);
-                        if (group.Children.Count > 0) into.Add(group);
+                        if (group.Children.Count > 0) dest.Add(group);
                         continue;
                     }
 
@@ -831,7 +845,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         };
                         ApplyDescriptorPresentation(row, field);
                         BuildListChildren(row, depth + 1, visited, metadata, diagnostics);
-                        into.Add(row);
+                        dest.Add(row);
                         continue;
                     }
 
@@ -848,7 +862,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         ValueDrawer = drawer,
                     };
                     ApplyDescriptorPresentation(valueRow, field);
-                    into.Add(valueRow);
+                    dest.Add(valueRow);
                     }
                     catch (Exception exception)
                     {
@@ -857,6 +871,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                             new GraphDiagnosticLocation(fieldPath: fieldPath)));
                     }
                 }
+                FinishFoldouts(foldouts, into);
                 return;
             }
 
@@ -875,6 +890,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     diagnostics?.Add(new GraphDiagnostic("graphkit.metadata.visibility-failed", GraphDiagnosticSeverity.Error,
                         $"{obj.GetType().FullName}.{f.Name} visibility condition failed: {visibilityError}",
                         new GraphDiagnosticLocation(fieldPath: fieldPath)));
+                var dest = FoldoutDestination(HGReflect.FoldoutOf(f), into, ref foldouts, depth, path, leftPad, fieldPath, diagnostics);
 
                 if (HGReflect.IsSlotType(t))
                 {
@@ -890,9 +906,11 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     row.Path = fieldPath;
                     row.LeftPad = leftPad;
                     row.ForceEnumButtons |= HGReflect.IsEnum(f);
+                    // Slot 類別的 [HGBool] 已由 SlotRow 帶上；欄位有標就改用欄位的文字，沒標不能關掉類別宣告。
+                    row.BoolButtons = HGReflect.BoolButtons(f) ?? row.BoolButtons;
                     row.HideLabel = HGReflect.IsLabelHidden(f);
-                    into.Add(row);
-                    AddDefaultListRow(into, row, diagnostics);
+                    dest.Add(row);
+                    AddDefaultListRow(dest, row, diagnostics);
                     continue;
                 }
 
@@ -910,16 +928,17 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         Target = obj,
                         Field = f,
                         ForceEnumButtons = HGReflect.IsEnum(f),
+                        BoolButtons = HGReflect.BoolButtons(f),
                         HideLabel = HGReflect.IsLabelHidden(f),
                     };
                     BuildListChildren(row, depth + 1, visited, metadata, diagnostics);
-                    into.Add(row);
+                    dest.Add(row);
                     continue;
                 }
 
                 if (IsLeafValue(t))
                 {
-                    into.Add(new HGRow
+                    dest.Add(new HGRow
                     {
                         Kind = HGRowKind.NoPort,
                         Label = label,
@@ -929,6 +948,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         Target = obj,
                         Field = f,
                         ForceEnumButtons = HGReflect.IsEnum(f),
+                        BoolButtons = HGReflect.BoolButtons(f),
                         HideLabel = HGReflect.IsLabelHidden(f),
                     });
                     continue;
@@ -948,8 +968,73 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     HideLabel = HGReflect.IsLabelHidden(f),
                 };
                 BuildRows(value, depth + 1, group.Children, visited, fieldPath, leftPad, metadata, diagnostics);
-                if (group.Children.Count > 0) into.Add(group);
+                if (group.Children.Count > 0) dest.Add(group);
             }
+            FinishFoldouts(foldouts, into);
+        }
+
+        /// <summary>
+        /// 這個欄位的列要放進哪裡：沒標群組就是 into；標了就放進這個物件裡同名的摺疊群組，
+        /// 群組在第一個成員出現的位置插進 into。跟在 Slot 列後面的常數清單列加在同一個 dest，自然留在同一組。
+        /// </summary>
+        private static List<HGRow> FoldoutDestination(string foldout, List<HGRow> into, ref List<HGRow> foldouts, int depth,
+            string path, float leftPad, string fieldPath, List<GraphDiagnostic> diagnostics)
+        {
+            if (string.IsNullOrEmpty(foldout)) return into;
+            // / 保留給日後的群組路徑；現在就當一般名稱收下，之後開放路徑時意思會悄悄變掉。
+            if (foldout.IndexOf('/') >= 0)
+            {
+                diagnostics?.Add(new GraphDiagnostic("graphkit.metadata.foldout-path-reserved", GraphDiagnosticSeverity.Warning,
+                    $"[HGFoldout(\"{foldout}\")] 群組名不可含 /（保留給群組路徑），這個欄位改畫在群組外。",
+                    new GraphDiagnosticLocation(fieldPath: fieldPath)));
+                return into;
+            }
+            foldouts ??= new List<HGRow>();
+            var row = foldouts.Find(existing => existing.Label == foldout);
+            if (row == null)
+            {
+                row = new HGRow
+                {
+                    Kind = HGRowKind.Foldout,
+                    Label = foldout,
+                    Depth = depth,
+                    // 群組名不含 /，欄位名不含 #，所以不會和欄位路徑撞在一起。
+                    Path = path + "/#" + foldout,
+                    LeftPad = leftPad,
+                };
+                foldouts.Add(row);
+                into.Add(row);
+            }
+            return row.Children;
+        }
+
+        /// <summary>
+        /// 摺疊群組收完欄位後定案：把每一列（含展開出來的子列）認到所屬群組，並整棵往右縮一層。
+        /// 成員都沒長出列（Slot 取不到、群組是空的、整組被 [HGShowIf] 藏掉）的群組拿掉。
+        /// </summary>
+        private static void FinishFoldouts(List<HGRow> foldouts, List<HGRow> into)
+        {
+            if (foldouts == null) return;
+            foreach (var foldout in foldouts)
+            {
+                if (foldout.Children.Count == 0)
+                {
+                    into.Remove(foldout);
+                    continue;
+                }
+                foreach (var child in foldout.Children) MarkFoldoutSubtree(child, foldout);
+                // 成員建列時還不知道會進群組，用的是群組列的深度；縮一層才讓組內的清單框落在導引線右邊。
+                // 巢狀群組的內層先定案、先縮過一次，外層再縮一次，剛好是兩層。
+                foreach (var row in AllRows(foldout.Children)) row.Depth++;
+            }
+        }
+
+        private static void MarkFoldoutSubtree(HGRow row, HGRow foldout)
+        {
+            // 巢狀群組的內層已經認領過，「屬於哪個群組」記最近的那個，外層靠內層群組列自己的 FoldoutOwnerRow 往上找。
+            if (row.FoldoutOwnerRow != null) return;
+            row.FoldoutOwnerRow = foldout;
+            foreach (var child in row.Children) MarkFoldoutSubtree(child, foldout);
         }
 
         private static void ApplyDescriptorPresentation(HGRow row, HGFieldDescriptor field)
@@ -959,6 +1044,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             row.LabelWidthRatio = field.LabelWidthRatio;
             // SlotRow 可能已依 Slot 類別的 [HGEnum] 開啟；欄位只能再開，不能關。
             row.ForceEnumButtons |= field.ForceEnumButtons;
+            row.BoolButtons = field.BoolButtons ?? row.BoolButtons;
         }
 
         /// <summary>清單元素展開：Slot 元素直接成列，複合元素展開成子群組。</summary>
@@ -991,11 +1077,12 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 }
                 else if (IsLeafValue(item.GetType()))
                 {
-                    // 元素沒有 FieldInfo，清單欄位上的 [HGEnum] 只能從父列帶下來。
+                    // 元素沒有 FieldInfo，清單欄位上的 [HGEnum]／[HGBool] 只能從父列帶下來。
                     child = new HGRow
                     {
                         Kind = HGRowKind.NoPort, Label = "", Depth = depth, Target = items.List, Field = null, HideLabel = true,
                         ForceEnumButtons = row.ForceEnumButtons,
+                        BoolButtons = row.BoolButtons,
                     };
                 }
                 else
@@ -1058,6 +1145,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 LeftPad = slotRow.LeftPad,
                 Items = new HGListItemSource(list, elementType),
                 ForceEnumButtons = HGReflect.HasEnumButtons(slot.GetType()),
+                BoolButtons = HGReflect.BoolButtonsOf(slot.GetType()),
             };
             BuildListChildren(row, row.Depth + 1, null, null, diagnostics);
             into.Add(row);
@@ -1082,6 +1170,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     : HGReflect.ResultType(slot.GetType()),
                 // Token HEAD、資產參數、清單元素這幾種列沒有 FieldInfo，只有 Slot 類別能宣告按鈕列。
                 ForceEnumButtons = HGReflect.HasEnumButtons(slot.GetType()),
+                BoolButtons = HGReflect.BoolButtonsOf(slot.GetType()),
             };
         }
 
@@ -1218,6 +1307,18 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         y = MeasureRows(r.Children, y, nodeWidth);
                         r.AddRowY = y;                // 新增項目列
                         y += RowHeight;
+                        break;
+                    case HGRowKind.Foldout:
+                        y += RowHeight;
+                        if (r.Collapsed)
+                        {
+                            // 同折疊清單：成員不佔高度，接點收斂到標題列中心，已接的線由標題列右緣伸出。
+                            CollapseRows(r.Children, r.LocalY, RowHeight);
+                            r.Height = RowHeight;
+                            break;
+                        }
+                        y = MeasureRows(r.Children, y, nodeWidth);
+                        r.Height = y - r.LocalY;
                         break;
                     default:
                         r.Height = DescriptorHeight(r, nodeWidth);

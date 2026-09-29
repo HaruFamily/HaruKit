@@ -16,7 +16,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             foreach (var row in rows)
             {
                 if (row.Hidden) continue;
-                var rowRect = new Rect(nodeRect.x, nodeRect.y + row.LocalY, nodeRect.width, row.Height);
+                var rowRect = ListRowRect(row, nodeRect);
                 if (rowRect.yMax > nodeRect.yMax) continue;
                 // 底要畫在所有內容之下，而且元素展開出來的子列也算同一段，所以在這裡統一畫，不放進元素控制項。
                 if (row.ItemOwnerRow != null) DrawListRowBackground(row, rowRect);
@@ -41,8 +41,55 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     case HGRowKind.List:
                         DrawListSection(node, row, rowRect, nodeRect);
                         break;
+                    case HGRowKind.Foldout:
+                        DrawFoldoutRow(node, row, rowRect, nodeRect);
+                        break;
                 }
             }
+        }
+
+        /// <summary>
+        /// 摺疊群組（<c>[HGFoldout]</c>）：標題列＋左側一條縱向導引線串起縮一層的成員。
+        /// 不畫底帶與外框：那是清單「凹進去的容器」的語彙，群組只是分組，兩者長得一樣時組內的清單分不出主次。
+        /// 標題列右緣留給收起時的代表接點（<see cref="DrawFoldoutAnchorPort"/>），文字不壓進去。
+        /// 群組名後的 ● 表示組內有錯誤。展開／收起是版面修改，鎖定中也能切。
+        /// </summary>
+        private void DrawFoldoutRow(HGNodeView node, HGRow row, Rect rowRect, Rect nodeRect)
+        {
+            var band = ListBandRect(row, rowRect);
+            HGStyles.RoundedFill(new Rect(band.x, band.y, band.width, HGGraph.RowHeight), HGStyles.ListHeader, 3f);
+            // 導引線落在成員讓出來的那一格縮排裡，對齊標題列的箭頭。
+            if (!row.Collapsed && band.height > HGGraph.RowHeight)
+                HGStyles.Fill(new Rect(band.x + 4f, band.y + HGGraph.RowHeight, 2f, band.height - HGGraph.RowHeight - 2f),
+                    HGStyles.ListRule);
+
+            var caption = Indent(new Rect(rowRect.x, rowRect.y, rowRect.width - InputPortReserve, HGGraph.RowHeight), row);
+            var arrow = new Rect(caption.x, caption.y, 12f, caption.height);
+            var text = new Rect(arrow.xMax, caption.y, Mathf.Max(8f, caption.width - 12f), caption.height);
+            GUI.Label(arrow, row.Collapsed ? "▸" : "▾", HGStyles.Tiny);
+            var content = HGStyles.Elide(row.Label + FoldoutMark(row), HGStyles.RowLabel, text.width, "點一下摺疊／展開");
+            GUI.Label(text, content, HGStyles.RowLabel);
+
+            if (!row.Collapsed) DrawRows(node, row.Children, nodeRect);
+
+            // 同清單標題：只有箭頭與文字本身是開關，剩下的空白留給拖曳節點。
+            var toggle = new Rect(arrow.x, caption.y,
+                Mathf.Min(caption.width, 12f + HGStyles.RowLabel.CalcSize(content).x), caption.height);
+            var e = Event.current;
+            if (e.type != EventType.MouseDown || e.button != 0 || !toggle.Contains(e.mousePosition)) return;
+            SetListFolded(HGGraph.CollapseKey(row.OwnerNodeId, row), !row.Collapsed);
+            graphDirty = true;
+            Repaint();
+            e.Use();
+        }
+
+        /// <summary>群組名後的標記：組內有錯誤就是 ●，否則沒有標記。</summary>
+        // 看整棵子樹：巢狀群組、清單元素裡的錯誤也算在外層這一組。
+        private string FoldoutMark(HGRow foldout)
+        {
+            foreach (var row in HGGraph.AllRows(foldout.Children))
+                if (row.HasSlot && Rep.HasIssue(row.InputSlot, out bool error) && error) return " ●";
+            return "";
         }
 
         /// <summary>巢狀資料的分組標題與它底下的子列。標題只是一行字，接點由子列各自處理。</summary>
@@ -87,7 +134,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             DrawListSectionFrame(band);
             if (ReferenceEquals(dragListRow, row)) DrawListInsertLine(row, nodeRect, band);
 
-            var addRect = new Rect(nodeRect.x, nodeRect.y + row.AddRowY, nodeRect.width, HGGraph.RowHeight);
+            var addRect = new Rect(rowRect.x, nodeRect.y + row.AddRowY, rowRect.width, HGGraph.RowHeight);
             if (addRect.yMax > nodeRect.yMax) return;
 
             // 整列寬的按鈕：60px 的小鈕在 0.45 倍縮放下只剩 27px，按不到也讀不到。
@@ -415,7 +462,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
             if (row.AssetBinding != null)
             {
-                var toggleRect = new Rect(labelRect.x + 2f, labelRect.y + 2f, 16f, labelRect.height - 4f);
+                var toggleRect = HGSkin.ToggleRect(new Rect(labelRect.x + 2f, labelRect.y, 16f, labelRect.height));
                 EditorGUI.BeginChangeCheck();
                 bool enabled = EditorGUI.Toggle(toggleRect, row.AssetBinding.OverrideEnabled);
                 if (EditorGUI.EndChangeCheck())
@@ -527,8 +574,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 };
                 EditorGUI.BeginChangeCheck();
                 var value = contentKind == null
-                    ? HGValueField.Draw(fieldRect, editType, HGReflect.GetDefault(slot), enumButtons)
-                    : HGValueField.DrawMuted(fieldRect, editType, HGReflect.GetDefault(slot), tooltip, enumButtons);
+                    ? HGValueField.Draw(fieldRect, editType, HGReflect.GetDefault(slot), enumButtons, row.BoolButtons)
+                    : HGValueField.DrawMuted(fieldRect, editType, HGReflect.GetDefault(slot), tooltip, enumButtons, row.BoolButtons);
                 if (EditorGUI.EndChangeCheck()) { HGReflect.SetDefault(slot, value); Invalidate(); }
             }
 
@@ -615,7 +662,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             if (row.Field != null && row.Target != null)
             {
                 EditorGUI.BeginChangeCheck();
-                var value = HGValueField.Draw(fieldRect, row.Field.FieldType, row.Field.GetValue(row.Target), row.ForceEnumButtons);
+                var value = HGValueField.Draw(fieldRect, row.Field.FieldType, row.Field.GetValue(row.Target), row.ForceEnumButtons, row.BoolButtons);
                 if (EditorGUI.EndChangeCheck()) { row.Field.SetValue(row.Target, value); AfterValueEdit(); }
                 return;
             }
@@ -625,7 +672,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             if (row.ItemIndex < 0 || row.ItemIndex >= items.Count) return;
 
             EditorGUI.BeginChangeCheck();
-            var element = HGValueField.Draw(fieldRect, items.ElementType, items.Get(row.ItemIndex), row.ForceEnumButtons);
+            var element = HGValueField.Draw(fieldRect, items.ElementType, items.Get(row.ItemIndex), row.ForceEnumButtons, row.BoolButtons);
             if (EditorGUI.EndChangeCheck()) { items.Set(row.ItemIndex, element); AfterValueEdit(); }
         }
 
@@ -634,7 +681,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         {
             var descriptor = row.Descriptor;
             object current = descriptor.Read(row.Target);
-            if (row.ValueDrawer == null) return HGValueField.Draw(rect, descriptor.ValueType, current, row.ForceEnumButtons);
+            if (row.ValueDrawer == null) return HGValueField.Draw(rect, descriptor.ValueType, current, row.ForceEnumButtons, row.BoolButtons);
 
             var context = new HGValueDrawerContext(descriptor, row.Target, row.Locked);
             var result = row.ValueDrawer.Draw(rect, context, current);

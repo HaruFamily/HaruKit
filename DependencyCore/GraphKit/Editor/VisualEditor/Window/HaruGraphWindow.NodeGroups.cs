@@ -197,9 +197,6 @@ public partial class HaruGraphWindow
                 if (nodeIds.Contains(id)) nodeGroupColors[id] = color;
         }
 
-        // 代理接點畫在哪一側，看這一代的連線；和 DrawLinks 用同一份扇形資料。
-        RebuildFoldFan();
-
         // 放手就會落進去的群組：外框加亮，拖曳當下就看得出結果。
         GraphNodeGroup dropTarget = dragNode != null && dragMoved ? NodeGroupContaining(graphMouse) : null;
 
@@ -241,21 +238,19 @@ public partial class HaruGraphWindow
         HGStyles.Frame(visual, selected ? HGStyles.NodeBorderSelected : color, selected || dropTarget ? 2f : 1f);
 
         // 標題列左端的色塊＝換色入口。按下由按鈕吃掉，所以不會被當成拖曳整組。
-        var swatch = new Rect(header.x + 8f, header.y + 6f, 12f, 12f);
+        var swatch = new Rect(header.x + NodeGroupHeaderPortInset, header.y + 6f, 12f, 12f);
         HGStyles.Fill(swatch, color);
         HGStyles.Frame(swatch, HGStyles.HeaderInk);
         if (GUI.Button(swatch, new GUIContent("", "換群組色"), GUIStyle.none))
-            OpenNodeGroupColorPopup(group, new Rect(r.x + 8f, r.y + 6f, 12f, 12f));
+            OpenNodeGroupColorPopup(group, new Rect(r.x + NodeGroupHeaderPortInset, r.y + 6f, 12f, 12f));
 
         // 收合鈕：只影響顯示，成員與連線都還在。
         var fold = new Rect(swatch.xMax + 4f, header.y + 3f, 16f, 18f);
         if (GUI.Button(fold, new GUIContent(group.Collapsed ? "▸" : "▾", group.Collapsed ? "展開群組" : "收合群組"), HGStyles.HeaderButton))
             ToggleNodeGroupCollapsed(group);
-        DrawNodeGroupProxies(group, visual, color);
 
-        // 右端由右往左：工具列提示 ▴ → 成員數。有成員被群組外的欄位收起時寫「看得到/全部」；
-        // 它們的連線以虛線接到標題列兩端的代表接點。
-        var expand = new Rect(header.xMax - 18f, header.y + 5f, 14f, 14f);
+        // 右端由右往左：工具列提示 ▴ → 成員數。有成員被群組外的欄位收起時寫「看得到/全部」。
+        var expand = new Rect(header.xMax - NodeGroupHeaderPortInset - 14f, header.y + 5f, 14f, 14f);
         if (actions) HGStyles.RoundedFill(expand, HGStyles.HeaderOverlay, 2f);
         GUI.Label(expand, new GUIContent("▴", "滑入標題列展開工具列"), HGStyles.HeaderButton);
         string countText = !group.Collapsed && visible < present ? $"({visible}/{present})" : $"({present})";
@@ -798,7 +793,7 @@ public partial class HaruGraphWindow
         }
     }
 
-    // ===== 收合與代理接點 =====
+    // ===== 收合與分頁（只影響顯示） =====
 
     /// <summary>收合前先把目前的框寫回，展開前後的位置與寬度才對得上。</summary>
     private void ToggleNodeGroupCollapsed(GraphNodeGroup group)
@@ -811,10 +806,12 @@ public partial class HaruGraphWindow
         Repaint();
     }
 
-    /// <summary>節點所在的群組若收合中就展開、不在作用中的分頁就切過去（Console 跳到被收起的成員時用）。</summary>
+    /// <summary>
+    /// 節點所在的群組若收合中就展開、不在作用中的分頁就切過去（Console、搜尋跳到被收起的成員時用）。
+    /// </summary>
     private void ExpandNodeGroupOf(string nodeId)
     {
-        if (string.IsNullOrEmpty(nodeId) || !collapsedMembers.TryGetValue(nodeId, out var group)) return;
+        if (string.IsNullOrEmpty(nodeId) || !groupOffMembers.Contains(nodeId) || !nodeGroupMembers.TryGetValue(nodeId, out var group)) return;
         bool changed = group.SetCollapsed(false);
         changed |= group.SetActiveTab(group.TabOf(nodeId));
         if (!changed) return;
@@ -823,12 +820,13 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>
-    /// 重算「節點 Id → 所屬群組」與「節點 Id → 收起它的群組」。ApplyVisibility 開頭呼叫。
-    /// 不在作用中分頁的成員等同局部收合：同樣隱藏、連線同樣走標題列的實線代理。
+    /// 重算「節點 Id → 所屬群組」與被群組關掉的成員（群組收合，或不在作用中分頁）。ApplyVisibility 開頭呼叫。
+    /// 兩種都只影響顯示，處理相同：節點不畫，連線只在父欄位端畫殘影（見 <see cref="DrawGroupOffGhost"/>）。
     /// </summary>
-    private void CollectCollapsedMembers()
+    private void CollectGroupOffMembers()
     {
-        collapsedMembers.Clear();
+        groupOffMembers.Clear();
+        groupOffHidden.Clear();
         tabHiddenMembers.Clear();
         nodeGroupMembers.Clear();
         foreach (var group in CurrentNodeGroups())
@@ -836,291 +834,64 @@ public partial class HaruGraphWindow
             {
                 if (string.IsNullOrEmpty(id)) continue;
                 nodeGroupMembers[id] = group;
-                if (group.Collapsed || !group.IsOnActiveTab(id)) collapsedMembers[id] = group;
+                if (group.Collapsed || !group.IsOnActiveTab(id)) groupOffMembers.Add(id);
             }
+        groupOffHidden.UnionWith(groupOffMembers);
+    }
+
+    /// <summary>有一端被群組關掉的線：整條不畫，只由 <see cref="DrawGroupOffGhost"/> 在父欄位端畫殘影。</summary>
+    private bool IsGroupOffLink(HGLink link)
+    {
+        if (groupOffHidden.Count == 0 || link == null) return false;
+        return GroupOffHiddenOwner(link.InputPort) != null || GroupOffHiddenOwner(link.OutputPort) != null;
     }
 
     /// <summary>
-    /// 在可達性算完之後才藏：收起的成員不擋住走訪。本來看得到、只因分頁而藏的成員另外記下，
-    /// 框要把它們算進去；本來就被 ⊖ 收起的不記。
+    /// 比照 ⊖ 收起：父欄位還看得到、目標被群組關掉時，只在欄位端畫殘影，朝向目標原本的接點位置；
+    /// 目標所在的群組收合時改朝標題列朝向欄位的那一側（原本的位置已不在框內）。
+    /// 目標端與標題列那段都不畫；父欄位也被關掉時整條不畫。
     /// </summary>
-    private void HideCollapsedMembers()
+    private void DrawGroupOffGhost(HGLink link, bool traced)
     {
-        if (collapsedMembers.Count == 0) return;
+        // 欄位端是 ParentRow 那一顆接點；寫入 Property 的線兩端角色相反，所以用列比對。
+        bool inputIsSlot = ReferenceEquals(OwnerRowOfPort(link.InputPort), link.ParentRow);
+        HGPort slotPort = inputIsSlot ? link.InputPort : link.OutputPort;
+        HGPort targetPort = inputIsSlot ? link.OutputPort : link.InputPort;
+        if (GroupOffHiddenOwner(slotPort) != null || GroupOffHiddenOwner(targetPort) == null) return;
+        if (!slotPort.Presentation.Visible && FoldedListOf(link) == null) return;
+        Vector2 slotPos = slotPort.Presentation.Position;
+        Vector2 targetPos = targetPort.Presentation.Position;
+        float targetDir = PortDirection(targetPort);
+        var targetOwner = OwnerNodeOfPort(targetPort);
+        if (targetOwner != null && !string.IsNullOrEmpty(targetOwner.Id)
+            && nodeGroupMembers.TryGetValue(targetOwner.Id, out var group) && group.Collapsed)
+            NodeGroupHeaderPortFacing(group, slotPos, out targetPos, out targetDir);
+        DrawLinkGhost(slotPos, PortDirection(slotPort), targetPos, targetDir, GhostColor(link, traced), GhostThickness(traced));
+    }
+
+    /// <summary>接點所屬節點被群組關掉（或只經由被關掉的成員才連得到）時回它的 Id，否則回 null。</summary>
+    private string GroupOffHiddenOwner(HGPort port)
+    {
+        var owner = port != null ? OwnerNodeOfPort(port) : null;
+        return owner != null && !string.IsNullOrEmpty(owner.Id) && groupOffHidden.Contains(owner.Id) ? owner.Id : null;
+    }
+
+    /// <summary>
+    /// 把被群組關掉的成員標成隱藏。一般模式下可達性走訪已經擋掉它們（<see cref="MarkVisibleFrom"/>），這裡主要補 solo 模式。
+    /// 本來看得到、只因分頁而藏的成員另外記下，框要把它們算進去。
+    /// </summary>
+    private void HideGroupOffMembers()
+    {
+        if (groupOffMembers.Count == 0) return;
         foreach (var node in graph.Nodes)
         {
-            if (string.IsNullOrEmpty(node.Id) || !collapsedMembers.TryGetValue(node.Id, out var group)) continue;
-            if (!group.Collapsed && !node.Hidden) tabHiddenMembers.Add(node.Id);
+            if (string.IsNullOrEmpty(node.Id) || !groupOffMembers.Contains(node.Id)) continue;
+            if (!node.Hidden) tabHiddenMembers.Add(node.Id);
             node.Hidden = true;
         }
     }
 
-    /// <summary>接點所屬節點被哪個收合中的群組收起來；沒有就回 null。</summary>
-    private GraphNodeGroup CollapsedGroupOf(HGPort port)
-    {
-        if (port == null || collapsedMembers.Count == 0) return null;
-        var owner = OwnerNodeOfPort(port);
-        return owner != null && !string.IsNullOrEmpty(owner.Id) && collapsedMembers.TryGetValue(owner.Id, out var group) ? group : null;
-    }
-
-    /// <summary>
-    /// 連線一端實際畫在哪：被群組收起來（收合或不在作用中分頁）的一端改到標題列的代理接點，朝向另一端所在的那一側
-    /// （另一端在框中心左邊就接左緣）。回傳這一端是不是代理。
-    /// </summary>
-    private bool ResolveLinkEnd(HGPort port, HGPort other, out Vector2 position, out float direction)
-    {
-        position = port.Presentation.Position;
-        direction = PortDirection(port);
-        var group = CollapsedGroupOf(port);
-        if (group == null) return false;
-
-        Rect frame = NodeGroupRectOf(group);
-        var otherGroup = CollapsedGroupOf(other);
-        Vector2 otherAnchor = otherGroup != null ? NodeGroupRectOf(otherGroup).center : other.Presentation.Position;
-        bool left = otherAnchor.x < frame.center.x;
-        // 一律接標題列：分頁隱藏時框是完整大小，接框的中段會落在其他成員身上。
-        position = new Vector2(left ? frame.xMin : frame.xMax, frame.y + NodeGroupHeaderHeight * 0.5f);
-        direction = left ? -1f : 1f;
-        return true;
-    }
-
-    /// <summary>
-    /// 代理接點伸出的線依另一端高度排序、等角散開，規則與折疊清單的扇形相同。
-    /// 已經屬於折疊清單扇形的線不重複處理；兩端都是代理的線以輸入端那側為準。
-    /// 跨出群組的殘影和實線代理同一側就排在同一把扇子裡，標題列那端的殘影才不會疊成一條。
-    /// </summary>
-    private void RebuildProxyFan()
-    {
-        proxyFan.Clear();
-        boundaryGhostFan.Clear();
-        proxyFanGroups.Clear();
-        if (graph == null || nodeGroupMembers.Count == 0) return;
-
-        var otherY = new Dictionary<(HGLink link, int end), float>();
-        foreach (var link in graph.Links)
-        {
-            // 殘影在 foldFan 裡只代表欄位端（清單代表接點）的角度，標題列那端仍要在這裡排扇形。
-            if (!IsLinkVisible(link))
-            {
-                if (!IsLinkGhost(link) && !TryHiddenMemberLink(link, out _, out _, out _)) continue;
-                for (int end = 0; end < 2; end++)
-                {
-                    if (!TryNodeGroupBoundaryEnd(link, end, out var boundaryGroup, out var boundaryOther)) continue;
-                    Vector2 otherPosition = BoundaryGhostTarget(link, end, boundaryOther, out _);
-                    string boundaryKey = boundaryGroup.Id + (otherPosition.x < NodeGroupRectOf(boundaryGroup).center.x ? "L" : "R");
-                    AddProxyFanEntry(boundaryKey, (link, end), otherPosition.y, otherY);
-                }
-                continue;
-            }
-            if (foldFan.ContainsKey(link)) continue;
-            HGPort proxyPort = CollapsedGroupOf(link.InputPort) != null ? link.InputPort
-                : CollapsedGroupOf(link.OutputPort) != null ? link.OutputPort : null;
-            if (proxyPort == null) continue;
-            HGPort other = ReferenceEquals(proxyPort, link.InputPort) ? link.OutputPort : link.InputPort;
-            ResolveLinkEnd(proxyPort, other, out _, out float side);
-            ResolveLinkEnd(other, proxyPort, out var otherPos, out _);
-            string key = CollapsedGroupOf(proxyPort).Id + (side < 0f ? "L" : "R");
-            AddProxyFanEntry(key, (link, -1), otherPos.y, otherY);
-        }
-
-        foreach (var list in proxyFanGroups.Values)
-        {
-            list.Sort((a, b) => otherY[a].CompareTo(otherY[b]));
-            float step = list.Count > 1 ? Mathf.Min(FoldFanStep, FoldFanMax * 2f / (list.Count - 1)) : 0f;
-            for (int i = 0; i < list.Count; i++)
-            {
-                float angle = (i - (list.Count - 1) * 0.5f) * step;
-                if (list[i].end < 0) proxyFan[list[i].link] = angle;
-                else boundaryGhostFan[list[i]] = angle;
-            }
-        }
-    }
-
-    private void AddProxyFanEntry(string key, (HGLink link, int end) entry, float y, Dictionary<(HGLink link, int end), float> otherY)
-    {
-        if (!proxyFanGroups.TryGetValue(key, out var list)) proxyFanGroups[key] = list = new List<(HGLink link, int end)>();
-        list.Add(entry);
-        otherY[entry] = y;
-    }
-
-    /// <summary>
-    /// 殘影從標題列往外連時朝向的點：另一端若也被別的群組藏起來，改朝那個群組的標題列，
-    /// 兩個群組之間的殘影才會互相對準，不會指向已經看不到的成員接點。
-    /// </summary>
-    private Vector2 BoundaryGhostTarget(HGLink link, int end, HGPort other, out float direction)
-    {
-        direction = PortDirection(other);
-        if (!TryNodeGroupBoundaryEnd(link, 1 - end, out var otherGroup, out var self)) return other.Presentation.Position;
-        NodeGroupHeaderPortFacing(otherGroup, self.Presentation.Position, out var position, out direction);
-        return position;
-    }
-
-    /// <summary>
-    /// 標題列兩端的代表接點：有代理線或虛線的一側畫 ◎；拉線中可以放進群組時兩端都畫 ○（游標靠近的那顆畫 ◎）。
-    /// 它不是 HGPort，不能起手。
-    /// </summary>
-    private void DrawNodeGroupProxies(GraphNodeGroup group, Rect visualFrame, Color color)
-    {
-        if (Event.current.type != EventType.Repaint) return;
-        float y = visualFrame.y + NodeGroupHeaderHeight * 0.5f;
-        bool droppable = CanDropLinkOnNodeGroup();
-        var mouse = Event.current.mousePosition;
-        for (int side = 0; side < 2; side++)
-        {
-            var center = new Vector2(side == 0 ? visualFrame.xMin : visualFrame.xMax, y);
-            bool used = proxyFanGroups.ContainsKey(group.Id + (side == 0 ? "L" : "R"));
-            if (!used && !droppable) continue;
-            bool hovered = droppable && (mouse - center).sqrMagnitude <= NodeGroupPortHitRadius * NodeGroupPortHitRadius;
-            HGStyles.DrawInputPort(PortRect(center), droppable ? HGStyles.NodeBorderSelected : color, used || hovered);
-        }
-    }
-
-    /// <summary>目前拉的線能不能放進群組建立節點：規則同「拉到空白處建立空節點」。</summary>
-    private bool CanDropLinkOnNodeGroup()
-    {
-        if (!linking || linkPort == null) return false;
-        if (linkPort.IsOutput && linkPort.Source is not HGPropertyWriteSource) return false;
-        var slot = (linkPort.Source as HGPropertyWriteSource)?.Slot ?? linkPort.InputSlot;
-        return slot != null && slot is not GraphPropertyInputSlot;
-    }
-
-    /// <summary>游標下（graph space）是哪個群組標題列的代表接點；取最上層，沒有回 null。</summary>
-    private GraphNodeGroup NodeGroupHeaderPortAt(Vector2 graphPoint)
-    {
-        GraphNodeGroup found = null;
-        foreach (var group in CurrentNodeGroups())
-        {
-            Rect frame = NodeGroupRectOf(group);
-            float y = frame.y + NodeGroupHeaderHeight * 0.5f;
-            float r2 = NodeGroupPortHitRadius * NodeGroupPortHitRadius;
-            if ((graphPoint - new Vector2(frame.xMin, y)).sqrMagnitude <= r2
-                || (graphPoint - new Vector2(frame.xMax, y)).sqrMagnitude <= r2) found = group;
-        }
-        return found;
-    }
-
-    /// <summary>
-    /// 拉線放進群組時新節點的位置：可見成員（作用中分頁）的左下方，框會跟著長；沒有可見成員時放在標題列下方。
-    /// 新節點進作用中的分頁（<see cref="GraphNodeGroup.SetMember"/>）。
-    /// </summary>
-    private Vector2 NodeGroupSpawnPosition(GraphNodeGroup group)
-    {
-        Rect frame = group.Collapsed ? group.Rect : NodeGroupHull(group);
-        bool anyVisible = false;
-        float bottom = frame.y + NodeGroupTopInset(group, frame.width);
-        if (graph != null && !group.Collapsed)
-        {
-            var members = new HashSet<string>(group.Members);
-            foreach (var node in graph.Nodes)
-            {
-                if (node.Hidden || string.IsNullOrEmpty(node.Id) || !members.Contains(node.Id)) continue;
-                bottom = anyVisible ? Mathf.Max(bottom, node.Rect.yMax) : node.Rect.yMax;
-                anyVisible = true;
-            }
-        }
-        return new Vector2(frame.x + NodeGroupPadding, bottom + NodeGroupPadding);
-    }
-
-    /// <summary>新建的節點加入群組；群組收合中就展開，才看得到剛建的節點。</summary>
-    private void JoinNodeGroupAndReveal(string nodeId, GraphNodeGroup group)
-    {
-        JoinNodeGroup(nodeId, group);
-        if (group.SetCollapsed(false)) MarkViewStateChanged();
-        graphDirty = true;
-    }
-
-    /// <summary>
-    /// 連線的一端是被群組外的欄位收起的成員（群組本身沒收合）、另一端看得到：這條線改畫成虛線接到那個群組的標題列。
-    /// 兩端都在同一個群組裡的不算；群組收合造成的隱藏走實線代理（<see cref="ResolveLinkEnd"/>）。
-    /// </summary>
-    private bool TryHiddenMemberLink(HGLink link, out GraphNodeGroup group, out HGPort visibleEnd, out HGPort memberEnd)
-    {
-        group = null;
-        visibleEnd = memberEnd = null;
-        if (link?.InputPort == null || link.OutputPort == null || nodeGroupMembers.Count == 0) return false;
-        for (int i = 0; i < 2; i++)
-        {
-            HGPort member = i == 0 ? link.InputPort : link.OutputPort;
-            HGPort other = i == 0 ? link.OutputPort : link.InputPort;
-            var owner = OwnerNodeOfPort(member);
-            if (owner == null || !owner.Hidden || string.IsNullOrEmpty(owner.Id)) continue;
-            if (collapsedMembers.ContainsKey(owner.Id) || !nodeGroupMembers.TryGetValue(owner.Id, out var memberGroup)) continue;
-            var otherOwner = OwnerNodeOfPort(other);
-            if (otherOwner == null || otherOwner.Hidden || !other.Presentation.Visible) continue;
-            if (!string.IsNullOrEmpty(otherOwner.Id) && nodeGroupMembers.TryGetValue(otherOwner.Id, out var otherGroup)
-                && ReferenceEquals(otherGroup, memberGroup)) continue;
-            group = memberGroup;
-            visibleEnd = other;
-            memberEnd = member;
-            return true;
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// 成員被群組外的欄位收起、另一端看得到但不是一般殘影（例如成員自己往外接的欄位）：
-    /// 看得到的那一端畫一段殘影，朝向成員所在群組的標題列。回傳有沒有畫。
-    /// </summary>
-    private bool DrawHiddenMemberEnd(HGLink link, bool traced)
-    {
-        if (!TryHiddenMemberLink(link, out var group, out var visibleEnd, out _)) return false;
-        Vector2 visiblePos = visibleEnd.Presentation.Position;
-        NodeGroupHeaderPortFacing(group, visiblePos, out var headerPos, out float headerDir);
-        DrawLinkGhost(visiblePos, PortDirection(visibleEnd), headerPos, headerDir, GhostColor(link, traced), GhostThickness(traced));
-        return true;
-    }
-
-    /// <summary>
-    /// 殘影線跨出群組時，群組標題列朝向另一端的代表接點畫一段殘影往外連；兩端各自在不同群組就兩邊都畫。
-    /// 樣子與欄位收起的殘影相同：實線短線與圓角，進斜線後轉虛線並淡出；同一側多條時依 <see cref="RebuildProxyFan"/> 扇形散開。不參與命中。
-    /// </summary>
-    private void DrawNodeGroupBoundaryGhosts(HGLink link, bool traced)
-    {
-        for (int end = 0; end < 2; end++)
-        {
-            if (!TryNodeGroupBoundaryEnd(link, end, out var group, out var other)) continue;
-            Vector2 target = BoundaryGhostTarget(link, end, other, out float targetDir);
-            NodeGroupHeaderPortFacing(group, target, out var headerPos, out float headerDir);
-            boundaryGhostFan.TryGetValue((link, end), out float angle);
-            DrawLinkGhost(headerPos, headerDir, target, targetDir, GhostColor(link, traced), GhostThickness(traced), angle);
-        }
-    }
-
-    /// <summary>
-    /// 殘影的某一端若是被群組藏起來的成員（群組收合、不在作用中分頁或被 ⊖ 收起），改朝那個群組標題列的代表接點；
-    /// 其餘照接點本身的位置。回傳有沒有改到標題列。
-    /// </summary>
-    private bool ResolveGhostEnd(HGLink link, HGPort port, Vector2 towards, out Vector2 position, out float direction)
-    {
-        position = port.Presentation.Position;
-        direction = PortDirection(port);
-        int end = ReferenceEquals(port, link.InputPort) ? 0 : 1;
-        if (!TryNodeGroupBoundaryEnd(link, end, out var group, out _)) return false;
-        NodeGroupHeaderPortFacing(group, towards, out position, out direction);
-        return true;
-    }
-
-    /// <summary>
-    /// 連線的第 end 端（0＝輸入、1＝輸出）屬於某個群組、那顆節點被隱藏，而另一端不在同一個群組：
-    /// 由群組標題列代替它連出去。節點還顯示著（例如被另一個沒收起的來源撐著）時，它自己那端的殘影就夠了，不算。
-    /// </summary>
-    private bool TryNodeGroupBoundaryEnd(HGLink link, int end, out GraphNodeGroup group, out HGPort other)
-    {
-        group = null;
-        other = null;
-        if (link?.InputPort == null || link.OutputPort == null || nodeGroupMembers.Count == 0) return false;
-        HGPort port = end == 0 ? link.InputPort : link.OutputPort;
-        other = end == 0 ? link.OutputPort : link.InputPort;
-        var owner = OwnerNodeOfPort(port);
-        if (owner == null || !owner.Hidden || string.IsNullOrEmpty(owner.Id) || !nodeGroupMembers.TryGetValue(owner.Id, out group)) return false;
-        var otherOwner = OwnerNodeOfPort(other);
-        if (otherOwner == null || string.IsNullOrEmpty(otherOwner.Id)
-            || !nodeGroupMembers.TryGetValue(otherOwner.Id, out var otherGroup) || !ReferenceEquals(otherGroup, group)) return true;
-        group = null;
-        return false;
-    }
-
-    /// <summary>群組標題列朝向 target 那一側的代表接點位置與朝外方向。</summary>
+    /// <summary>群組標題列朝向 target 那一側的連線端位置與朝外方向。</summary>
     private void NodeGroupHeaderPortFacing(GraphNodeGroup group, Vector2 target, out Vector2 position, out float direction)
     {
         Rect frame = NodeGroupRectOf(group);

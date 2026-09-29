@@ -791,15 +791,19 @@ public class HGModel
         return copy;
     }
 
-    /// <summary>複本的名字：「原名 複本」，撞名就往後加號碼。唯一性和別處一樣是「族＋名稱」。</summary>
+    /// <summary>Token 複本的名字。唯一性和別處一樣是「族＋名稱」。</summary>
     private static string CopyName(IEnumerable<GraphToken> scope, string sourceName, Type kind)
     {
         var used = new HashSet<string>();
         foreach (var other in scope ?? new List<GraphToken>())
             if (other != null && other.FamilyType == kind && !string.IsNullOrEmpty(other.Name))
                 used.Add(other.Name);
+        return NextCopyName(used, string.IsNullOrEmpty(sourceName) ? "Token" : sourceName);
+    }
 
-        string root = string.IsNullOrEmpty(sourceName) ? "Token" : sourceName;
+    /// <summary>複本的名字：「原名 複本」，撞名就往後加號碼。</summary>
+    private static string NextCopyName(HashSet<string> used, string root)
+    {
         string candidate = root + " 複本";
         for (int i = 2; used.Contains(candidate); i++) candidate = $"{root} 複本{i}";
         return candidate;
@@ -960,6 +964,32 @@ public class HGModel
         property.Name = name;
         MarkContentChanged();
         return true;
+    }
+
+    /// <summary>
+    /// 複製一顆 ProtoProperty：新識別碼、新名字，型別與初始內容深拷貝，加在清單尾端。
+    /// 沒有任何節點指向複本——它是第二個儲存位置，不是原件的引用。清單裡的資產只抄參考。
+    /// </summary>
+    public GraphProperty DuplicateProperty(GraphProperty source, List<GraphProperty> scope, out string error)
+    {
+        error = null;
+        if (source == null || !source.Proto) { error = "沒有可複製的 ProtoProperty。"; return null; }
+        if (scope == null) { error = "這張圖沒有 Property 清單。"; return null; }
+
+        var copy = GraphDeepCopy.Copy(source);
+        if (copy == null) { error = "複製這個 Property 失敗，詳見 Console。"; return null; }
+
+        copy.ResetId();
+        copy.EnsureId();
+        // ProtoProperty 名稱跨族唯一（見 NextPropertyName），所以不分族收集已用名字。
+        var used = new HashSet<string>();
+        foreach (var other in scope)
+            if (other?.Proto == true && !string.IsNullOrEmpty(other.Name)) used.Add(other.Name);
+        copy.Name = NextCopyName(used, string.IsNullOrEmpty(source.Name) ? "Property" : source.Name);
+
+        scope.Add(copy);
+        MarkContentChanged();
+        return copy;
     }
 
     /// <summary>取一個在 scope 內全域不重複的預設名（Property1、Property2…）。</summary>

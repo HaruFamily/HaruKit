@@ -58,6 +58,13 @@ public static class HGSkin
         return new ScopeHandle(true);
     }
 
+    /// <summary>
+    /// 勾選框要傳給 Toggle 的方塊：欄位左側、垂直置中、剛好一張勾選框貼圖大。
+    /// 主題的勾選框樣式只有邊框、沒有可拉伸的中段，rect 比貼圖大時多出來的部分會拉伸貼圖邊緣像素。
+    /// </summary>
+    public static Rect ToggleRect(Rect field)
+        => new(field.x, field.y + Mathf.Round((field.height - ToggleSize) * 0.5f), ToggleSize, ToggleSize);
+
     /// <summary>主題換掉時丟棄產生過的貼圖，下次繪製重做。</summary>
     public static void ResetCache()
     {
@@ -155,7 +162,8 @@ public static class HGSkin
                 break;
             case Look.Toggle:
                 SetBackground(style, 0, toggleOffTex, toggleOffTex, toggleOffTex, toggleOffTex, toggleOnTex, toggleOnTex, toggleOnTex, toggleOnTex);
-                // 左、上邊框吃滿整張 14px 貼圖、中間寬高為 0：勾選框固定畫在左上角，不隨欄位寬度拉長。
+                // 左、上邊框吃滿整張 14px 貼圖、中間寬高為 0。rect 比貼圖大時右、下會拉伸邊緣像素，
+                // 所以呼叫端一律用 ToggleRect 只給一個貼圖大小的方塊。
                 style.border = new RectOffset(ToggleSize, 0, ToggleSize, 0);
                 break;
         }

@@ -98,6 +98,23 @@ public sealed class HGInlineRename
     }
 
     /// <summary>
+    /// 不經雙擊直接進入改名（右鍵選單用）：下一次繪製這一格時就是輸入框。
+    /// 另一格正開著時先照它目前的字提交，不合法就放棄那一格的草稿。
+    /// </summary>
+    // 選單回呼跑在 OnGUI 之外，這裡只記狀態、不碰鍵盤焦點；焦點由 Draw 下一次繪製時搶。
+    // submit 也不在這裡給：Draw 每幀都會重存最新的委派。
+    public void Begin(object target, string site, string editSeed)
+    {
+        if (target == null) return;
+        if (this.target != null) submit?.Invoke(draft.Trim());
+        this.target = target;
+        this.site = site;
+        draft = editSeed ?? "";
+        submit = null;
+        repaint?.Invoke();
+    }
+
+    /// <summary>
     /// 提交目前開著的就地改名（沒有就什麼都不做）。名稱不合法時保持編輯狀態。
     /// **畫布也要呼叫它**：`HandleCanvasInput` 會把點擊 `e.Use()` 掉，畫在它後面的左欄與焦點資訊列
     /// 因此看不到那一下 MouseDown，自己收不了尾。

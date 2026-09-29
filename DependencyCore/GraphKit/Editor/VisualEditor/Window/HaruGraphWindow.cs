@@ -217,18 +217,14 @@ public partial class HaruGraphWindow : EditorWindow
     private readonly Dictionary<GraphNodeGroup, Rect> frozenNodeGroupRects = new();
     // 節點 Id → 所屬群組的顏色。每次畫群組時重算，節點本體與左緣色條依它染色。
     private readonly Dictionary<string, Color> nodeGroupColors = new();
-    // 節點 Id → 把它收起來的群組（群組收合，或成員不在作用中的分頁）。ApplyVisibility 重算；連線一端在這裡就改接到群組標題列的代理接點。
-    private readonly Dictionary<string, GraphNodeGroup> collapsedMembers = new();
-    // 只因為不在作用中的分頁而隱藏的成員。框要包住所有分頁的成員，所以它們仍算進外框；被 ⊖ 收起的不算。
+    // 被群組關掉的成員（群組收合，或不在作用中分頁）：本身不畫，連到它們的線只在父欄位端畫殘影。只影響顯示。ApplyVisibility 重算。
+    private readonly HashSet<string> groupOffMembers = new();
+    // groupOffMembers 加上只能經由它們才連得到、因此一起隱藏的節點；連線與殘影判斷用這一份。
+    private readonly HashSet<string> groupOffHidden = new();
+    // 只因為分頁而隱藏的群組成員（非作用中分頁，或只經由它們才連得到）。框要包住所有分頁的成員，所以它們仍算進外框；被 ⊖ 收起的不算。
     private readonly HashSet<string> tabHiddenMembers = new();
-    // 節點 Id → 所屬群組（不論收合）。成員被群組外的欄位收起時，連線改畫虛線接到群組標題列。
+    // 節點 Id → 所屬群組（不論收合）。
     private readonly Dictionary<string, GraphNodeGroup> nodeGroupMembers = new();
-    // 代理接點伸出的線：依另一端高度扇形散開的角度（與折疊清單同一套）。key 是群組 Id＋左右側。
-    private readonly Dictionary<HGLink, float> proxyFan = new();
-    // 跨出群組的殘影在標題列那一端的扇形角度；兩端各在不同群組時各有一筆，所以 key 帶端（0＝輸入、1＝輸出）。
-    private readonly Dictionary<(HGLink link, int end), float> boundaryGhostFan = new();
-    // 同一側代表接點伸出的線；end 為 -1 是實線代理，0／1 是殘影的那一端。
-    private readonly Dictionary<string, List<(HGLink link, int end)>> proxyFanGroups = new();
     // 滑入標題列展開工具列（✎）的群組 Id，規則同節點 Header 的工具列。
     private string nodeGroupActionsId;
     // 剛按開、還沒打字的群組註解框：只跟著被選取的群組活著，不寫進資料。
@@ -238,11 +234,13 @@ public partial class HaruGraphWindow : EditorWindow
     // 群組註解存在 GraphNodeGroup.Title；舊資料的標題若還是這個預設名，視為沒有註解。
     private const string DefaultNodeGroupTitle = "群組";
     private const float NodeGroupHeaderHeight = 24f;
+    // 收合群組的殘影指向標題列兩端的框邊；兩端內容一律內縮這麼多，線頭才不會壓到色塊與 ▴。
+    private const float NodeGroupHeaderPortInset = HGGraph.PortRadius + 3f;
     // 分頁排在標題列內，從色塊與收合鈕之後開始；最後面的「＋」新增分頁。
-    private const float NodeGroupTabStart = 44f;
+    private const float NodeGroupTabStart = 46f;
     private const float NodeGroupTabAddWidth = 20f;
-    // 標題列右端留給成員數與工具列提示 ▴。
-    private const float NodeGroupHeaderRightReserve = 64f;
+    // 標題列右端留給成員數、工具列提示 ▴ 與連線端。
+    private const float NodeGroupHeaderRightReserve = 70f;
     // 群組註解框畫在標題列正下方：與標題列、與成員之間的間距。
     private const float NodeGroupNoteGap = 4f;
     private const string DefaultNodeGroupTabTitle = "分頁";
@@ -253,13 +251,11 @@ public partial class HaruGraphWindow : EditorWindow
     private static readonly Vector2 EmptyNodeGroupSize = new(17f * HGGraph.GridSize, 5f * HGGraph.GridSize);
     // 整理此群組的欄距與列距。
     private const float ArrangeGap = 20f;
-    // 群組標題列兩端代表接點的命中半徑。
-    private const float NodeGroupPortHitRadius = HGGraph.PortRadius + 5f;
     private HGRow dragListRow;
     private int dragListIndex = -1;
     // 拖曳期間只算目標位置、畫插入線；MouseUp 才真的搬動。拖曳中改資料會讓整張圖重建、列在指標底下亂跳。
     private int dragListTarget = -1;
-    // 清單折疊只是視覺狀態，不進資料：key 見 HGGraph.CollapseKey。
+    // 清單與節點內摺疊群組的折疊只是視覺狀態，不進資料：key 見 HGGraph.CollapseKey。
     private readonly Dictionary<string, bool> listCollapse = new();
     // Slot 的分支收合狀態，key 同樣是 HGGraph.CollapseKey。只認手動切換過的記錄，沒記錄就是展開。
     // 純視覺，切換只能設 graphDirty，不可以走 Invalidate。
@@ -642,14 +638,14 @@ public partial class HaruGraphWindow : EditorWindow
     {
         foreach (var n in graph.Nodes) n.Hidden = false;
         effectiveHidden.Clear();
-        CollectCollapsedMembers();
+        CollectGroupOffMembers();
         if (graph.Nodes.Count == 0) return;
 
         if (soloSlotKey != null)
         {
             ApplySolo();
             effectiveHidden.Add(soloSlotKey);
-            HideCollapsedMembers();
+            HideGroupOffMembers();
             MarkHiddenSlots();
             return;
         }
@@ -674,14 +670,14 @@ public partial class HaruGraphWindow : EditorWindow
         // 節點畫不畫，看它還有沒有一條「從 HEAD／候選出發、中途不經過任何收合欄位」的路徑。
         // 共用節點因此在最後一個還要求顯示它的欄位被收起來時才跟著消失。用可達性算而不是引用計數：
         // 計數擋不住「引用者自己也被收掉了」這種間接情況。
+        // 被群組關掉的成員（收合或非作用中分頁）不顯示，走訪到它就停：只靠它才連得到的節點（包括群組外的）跟著隱藏。
         var visible = new HashSet<HGNodeView>();
         foreach (var n in graph.Nodes)
-            if (n.ParentRow == null) MarkVisibleFrom(n, visible);
+            if (n.ParentRow == null) MarkVisibleFrom(n, visible, true);
 
         foreach (var n in graph.Nodes) n.Hidden = !visible.Contains(n);
-
-        // 群組收合在可達性之後才套：收起的成員不擋住走訪，接在它底下、群組外的節點照樣顯示。
-        HideCollapsedMembers();
+        CollectGroupOffHidden(visible);
+        HideGroupOffMembers();
         MarkHiddenSlots();
     }
 
@@ -710,12 +706,10 @@ public partial class HaruGraphWindow : EditorWindow
         nodeGroupMemberStarts.Clear();
         frozenNodeGroupRects.Clear();
         nodeGroupColors.Clear();
-        collapsedMembers.Clear();
+        groupOffMembers.Clear();
+        groupOffHidden.Clear();
         tabHiddenMembers.Clear();
         nodeGroupMembers.Clear();
-        proxyFan.Clear();
-        boundaryGhostFan.Clear();
-        proxyFanGroups.Clear();
     }
 
     /// <summary>
@@ -799,6 +793,9 @@ public partial class HaruGraphWindow : EditorWindow
             SetSlotHidden(HGGraph.CollapseKey(row.OwnerNodeId, row), false);
             for (HGRow list = row.ItemOwnerRow; list != null; list = list.ItemOwnerRow)
                 SetSlotHidden(HGGraph.CollapseKey(row.OwnerNodeId, list), false);
+            // 欄位在收起的摺疊群組裡時展開，巢狀群組一路往外都展開。
+            for (HGRow foldout = row.FoldoutOwnerRow; foldout != null; foldout = foldout.FoldoutOwnerRow)
+                if (foldout.Collapsed) SetListFolded(HGGraph.CollapseKey(foldout.OwnerNodeId, foldout), false);
         }
         graphDirty = true;
     }
@@ -833,8 +830,8 @@ public partial class HaruGraphWindow : EditorWindow
             {
                 if (!row.HasSlot) continue;
                 if (!graph.BySlot.TryGetValue(row.InputSlot, out var target) || !target.Hidden) continue;
-                // 目標是被群組收起來的：線改接代理接點，欄位本身沒有收合，不能畫成 +。
-                if (collapsedMembers.ContainsKey(target.Id ?? "")) continue;
+                // 目標被群組關掉：父欄位端另畫殘影，欄位本身沒有收合，不能畫成 +。
+                if (groupOffHidden.Contains(target.Id ?? "")) continue;
                 effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
             }
         }
@@ -898,10 +895,8 @@ public partial class HaruGraphWindow : EditorWindow
     private bool IsLinkVisible(HGLink link)
     {
         if (link?.InputPort == null || link.OutputPort == null) return false;
+        if (IsGroupOffLink(link)) return false;
         if (effectiveHidden.Contains(HGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow))) return false;
-        // 兩端都收在同一個群組裡：群組內部的線，收合時不畫。
-        var inGroup = CollapsedGroupOf(link.InputPort);
-        if (inGroup != null && ReferenceEquals(inGroup, CollapsedGroupOf(link.OutputPort))) return false;
         return IsLinkEndVisible(link, link.InputPort) && IsLinkEndVisible(link, link.OutputPort);
     }
 
@@ -912,18 +907,22 @@ public partial class HaruGraphWindow : EditorWindow
     private bool IsLinkEndVisible(HGLink link, HGPort port)
     {
         if (port.Presentation.Visible) return true;
-        // 被群組收起來的一端改接代理接點：接點本身仍不可見（不能起手、不能當放線目標），線照畫。
-        if (CollapsedGroupOf(port) != null) return true;
         return FoldedListOf(link) != null && ReferenceEquals(OwnerRowOfPort(port), link.ParentRow);
     }
 
-    /// <summary>欄位列被哪一個折疊中、自己看得到的清單標題蓋住；沒有就回 null。巢狀清單取最外層那個看得到的。</summary>
+    /// <summary>
+    /// 欄位列被哪一個折疊中、自己看得到的清單標題蓋住；沒有就回 null。巢狀清單取最外層那個看得到的。
+    /// 收起的摺疊群組（<c>[HGFoldout]</c>）同理：線從群組標題列的右緣伸出，同一組的線共用一把扇。
+    /// </summary>
+    // 看得到又折疊的祖先最多只有一個：外層一收起，內層就跟著被標成 Hidden。所以清單與群組兩條鏈各找一次即可。
     private static HGRow FoldedListOf(HGLink link)
     {
         HGRow row = link?.ParentRow;
         if (row == null || !row.Hidden || link.InputOwner == null || link.InputOwner.Hidden) return null;
         for (HGRow list = row.ItemOwnerRow; list != null; list = list.ItemOwnerRow)
             if (list.Collapsed && !list.Hidden) return list;
+        for (HGRow foldout = row.FoldoutOwnerRow; foldout != null; foldout = foldout.FoldoutOwnerRow)
+            if (foldout.Collapsed && !foldout.Hidden) return foldout;
         return null;
     }
 
@@ -943,19 +942,12 @@ public partial class HaruGraphWindow : EditorWindow
         foreach (var link in graph.Links)
         {
             HGRow list = FoldedListOf(link);
-            if (list == null) continue;
+            if (list == null || IsGroupOffLink(link)) continue;
             bool ghost = !IsLinkVisible(link);
             if (ghost && !IsLinkGhost(link)) continue;
             if (!foldFanGroups.TryGetValue(list, out var group)) foldFanGroups[list] = group = new List<HGLink>();
             group.Add(link);
-            HGPort target = FoldTargetPort(link);
-            Vector2 targetPos = target.Presentation.Position;
-            if (ghost)
-            {
-                HGPort slot = ReferenceEquals(target, link.InputPort) ? link.OutputPort : link.InputPort;
-                ResolveGhostEnd(link, target, slot.Presentation.Position, out targetPos, out _);
-            }
-            targetY[link] = targetPos.y;
+            targetY[link] = FoldTargetPort(link).Presentation.Position.y;
         }
 
         foreach (var group in foldFanGroups.Values)
@@ -965,7 +957,6 @@ public partial class HaruGraphWindow : EditorWindow
             for (int i = 0; i < group.Count; i++)
                 foldFan[group[i]] = (i - (group.Count - 1) * 0.5f) * step;
         }
-        RebuildProxyFan();
     }
 
     /// <summary>折疊清單元素連線的目標端：欄位列那一端以外的接點（寫入 Property 的線兩端角色相反，用列比對）。</summary>
@@ -974,16 +965,37 @@ public partial class HaruGraphWindow : EditorWindow
 
     /// <summary>
     /// 從這顆節點沿「沒有收起來」的欄位往下走，走得到的節點都要畫。沒有父列的節點（HEAD 與候選）
-    /// 是起點，永遠畫。visible 兼作環的護欄。
+    /// 是起點，永遠畫。visible 兼作環的護欄。stopAtGroupOff 時被群組關掉的成員不算、也不往下走。
     /// </summary>
-    private void MarkVisibleFrom(HGNodeView node, HashSet<HGNodeView> visible)
+    private void MarkVisibleFrom(HGNodeView node, HashSet<HGNodeView> visible, bool stopAtGroupOff)
     {
-        if (node == null || !visible.Add(node)) return;
+        if (node == null) return;
+        if (stopAtGroupOff && !string.IsNullOrEmpty(node.Id) && groupOffMembers.Contains(node.Id)) return;
+        if (!visible.Add(node)) return;
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
             if (row.InputSlot == null) continue;
             if (effectiveHidden.Contains(HGGraph.CollapseKey(node.Id, row))) continue;
-            if (graph.BySlot.TryGetValue(row.InputSlot, out var child)) MarkVisibleFrom(child, visible);
+            if (graph.BySlot.TryGetValue(row.InputSlot, out var child)) MarkVisibleFrom(child, visible, stopAtGroupOff);
+        }
+    }
+
+    /// <summary>
+    /// 只因為群組關掉成員而看不到的節點：不擋群組時走得到、擋了就走不到。
+    /// 它們和被關掉的成員一樣處理：連到它們的線只在看得到的父欄位端畫殘影。
+    /// </summary>
+    private void CollectGroupOffHidden(HashSet<HGNodeView> visible)
+    {
+        if (groupOffMembers.Count == 0) return;
+        var reachable = new HashSet<HGNodeView>();
+        foreach (var n in graph.Nodes)
+            if (n.ParentRow == null) MarkVisibleFrom(n, reachable, false);
+        foreach (var n in reachable)
+        {
+            if (visible.Contains(n) || string.IsNullOrEmpty(n.Id)) continue;
+            groupOffHidden.Add(n.Id);
+            // 群組成員只因切頁而藏時仍算進框，切頁時框才不動。
+            if (nodeGroupMembers.ContainsKey(n.Id)) tabHiddenMembers.Add(n.Id);
         }
     }
 

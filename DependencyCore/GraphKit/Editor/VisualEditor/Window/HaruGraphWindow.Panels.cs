@@ -301,6 +301,7 @@ public partial class HaruGraphWindow
     private HGPropertyLibraryCommands PropertyLibraryCommands() => new()
     {
         Rename = RenamePropertyFromLibrary,
+        Duplicate = DuplicateProperty,
         Remove = RemoveProperty,
         Create = ShowCreatePropertyMenu,
         IssueOf = PropertyIssue,
@@ -340,6 +341,21 @@ public partial class HaruGraphWindow
         scope.Insert(to, property);
         MarkGraphChanged();
         BreakUndoMerge();
+    }
+
+    /// <summary>複製一顆 ProtoProperty：複本是新的儲存位置，圖上沒有節點指向它。</summary>
+    private void DuplicateProperty(GraphProperty source)
+    {
+        var scope = CurrentProperties();
+        if (scope == null) return;
+
+        BreakUndoMerge();                   // 複製自成一步
+        var copy = model.DuplicateProperty(source, scope, out string error);
+        if (copy == null) { ShowNotification(new GUIContent(error)); return; }
+
+        MarkGraphChanged();
+        BreakUndoMerge();
+        ShowNotification(new GUIContent($"已複製成 '{copy.Name}'"));
     }
 
     /// <summary>移除一顆 Property：指著它的讀取與寫入節點一起清空，變成空節點由驗證擋住。</summary>

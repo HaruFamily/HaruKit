@@ -26,10 +26,10 @@ public struct HGTokenLibraryCommands
     /// <summary>點一筆：進去編它，或再點目前這筆＝退出。進出判斷在視窗。</summary>
     public Action<GraphToken> Activate;
 
-    /// <summary>拖到「＋」上放開：複製這一個（內容一起複製）。</summary>
+    /// <summary>拖到「＋」上放開，或右鍵「複製」：複製這一個（內容一起複製）。</summary>
     public Action<GraphToken> Duplicate;
 
-    /// <summary>拖到「－」上放開，或直接按「－」刪掉目前編輯中的那一個。</summary>
+    /// <summary>拖到「－」上放開、右鍵「移除」，或直接按「－」刪掉目前編輯中的那一個。</summary>
     public Action<GraphToken> Remove;
 
     /// <summary>按「＋」：開型別選單。</summary>
@@ -127,7 +127,13 @@ public sealed class HGTokenLibraryPanel
             if (renaming) continue;               // 正在改名的這一格不吃點擊，否則同一下會又改名又切焦點
 
             var e = Event.current;
-            // 右鍵不做事：改名雙擊、刪除是上面那顆「－ 移除Token」，選單只是多一層要記的東西。
+            // 右鍵選單和雙擊改名、拖到「＋」／「－」是同一組操作；手勢看不出來，選單是看得到的入口。
+            if (e.type == EventType.MouseDown && e.button == 1 && row.Contains(e.mousePosition))
+            {
+                ShowRowMenu(endpoint, token.Key, inlineName, cmd);
+                e.Use();
+                continue;
+            }
             if (e.type == EventType.MouseDown && e.button == 0 && row.Contains(e.mousePosition))
             {
                 drag.BeginToken(endpoint);
@@ -155,6 +161,17 @@ public sealed class HGTokenLibraryPanel
             pendingMove = () => cmd.Move(source, target);
         }
         pendingMove?.Invoke();
+    }
+
+    private static void ShowRowMenu(GraphToken endpoint, string key, HGInlineRename inlineName, HGTokenLibraryCommands cmd)
+    {
+        var menu = new GenericMenu();
+        menu.AddItem(new GUIContent("改名"), false,
+            () => inlineName.Begin(endpoint, HGInlineRename.SiteTokenLib, key ?? ""));
+        menu.AddItem(new GUIContent("複製"), false, () => cmd.Duplicate(endpoint));
+        menu.AddSeparator("");
+        menu.AddItem(new GUIContent("移除"), false, () => cmd.Remove(endpoint));
+        menu.ShowAsContext();
     }
 
     /// <summary>

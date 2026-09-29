@@ -49,7 +49,8 @@ public static class HGValueField
     }
 
     /// <summary>回傳新值；沒有變更就回原值。畫不了的型別顯示唯讀說明。</summary>
-    public static object Draw(Rect rect, Type type, object value, bool enumButtons = false)
+    /// <param name="boolButtons">bool 的兩段按鈕文字（<c>[HGBool]</c>）；null＝畫勾選框。</param>
+    public static object Draw(Rect rect, Type type, object value, bool enumButtons = false, HGBoolAttribute boolButtons = null)
     {
         if (type == null) return value;
         if (!CanDraw(type)) { DrawUnsupported(rect, type); return value; }
@@ -74,7 +75,18 @@ public static class HGValueField
         }
 
         // ===== 基本 =====
-        if (type == typeof(bool)) return EditorGUI.Toggle(rect, value is bool bo && bo);
+        if (type == typeof(bool))
+        {
+            bool on = value is bool bo && bo;
+            if (boolButtons == null) return EditorGUI.Toggle(HGSkin.ToggleRect(rect), on);
+
+            // [HGBool] 比照 enum 單選：true 在左、false 在右，只認「關 → 開」。
+            // 兩顆每次都要畫，不可在第一顆就 return，否則同一輪後面的控制項 id 會錯位。
+            bool picked = on;
+            if (GUI.Toggle(EnumButtonRect(rect, 0, 2), on, boolButtons.TrueLabel, EnumButtonStyle(0, 2)) && !on) picked = true;
+            if (GUI.Toggle(EnumButtonRect(rect, 1, 2), !on, boolButtons.FalseLabel, EnumButtonStyle(1, 2)) && on) picked = false;
+            return picked;
+        }
         if (type == typeof(string)) return EditorGUI.TextField(rect, value as string ?? "");
 
         if (type.IsEnum)
@@ -186,11 +198,12 @@ public static class HGValueField
     }
 
     /// <summary>畫成不可編輯的樣子（值仍可改，只是視覺上表示它不是主要來源）。</summary>
-    public static object DrawMuted(Rect rect, Type type, object value, string tooltip, bool enumButtons = false)
+    public static object DrawMuted(Rect rect, Type type, object value, string tooltip, bool enumButtons = false,
+        HGBoolAttribute boolButtons = null)
     {
         var old = GUI.color;
         GUI.color = new Color(1f, 1f, 1f, 0.55f);
-        var result = Draw(rect, type, value, enumButtons);
+        var result = Draw(rect, type, value, enumButtons, boolButtons);
         GUI.color = old;
         if (!string.IsNullOrEmpty(tooltip)) GUI.Label(rect, new GUIContent("", tooltip));
         return result;

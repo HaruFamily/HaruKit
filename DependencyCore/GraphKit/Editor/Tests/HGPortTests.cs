@@ -108,6 +108,24 @@ public class HGPortTests
     }
 
     [Test]
+    public void DuplicatingAProtoPropertyCreatesANewStorageWithAFreshIdAndName()
+    {
+        var source = new GraphProperty("Shared", new TestFormulaSlot(), true);
+        source.EnsureId();
+        var scope = new List<GraphProperty> { source };
+
+        GraphProperty copy = new HGModel().DuplicateProperty(source, scope, out string error);
+
+        Assert.That(error, Is.Null);
+        Assert.That(copy, Is.Not.Null.And.Not.SameAs(source));
+        Assert.That(copy.Proto, Is.True);
+        Assert.That(copy.Id, Is.Not.Null.And.Not.EqualTo(source.Id));
+        Assert.That(copy.Slot, Is.Not.SameAs(source.Slot), "初始內容要是獨立的一份，改複本不能動到原件。");
+        Assert.That(copy.Name, Is.EqualTo("Shared 複本"));
+        Assert.That(scope, Is.EqualTo(new[] { source, copy }));
+    }
+
+    [Test]
     public void CopyingPropertyNodesClonesTheLocalDefinitionAndSharesTheProtoOne()
     {
         var local = new GraphProperty(null, new TestFormulaSlot());
@@ -1236,6 +1254,60 @@ MonoBehaviour:
     }
 
     [Test]
+    public void BoolAttributeCarriesLabelsAndEnumAttributeDoesNotTouchBool()
+    {
+        var view = HGGraph.Build(new HGModel(), new object[] { new BoolButtonOwner() }, null, "test", "Test");
+        var rows = view.Nodes[0].Rows;
+
+        Assert.That(rows[0].BoolButtons, Is.Not.Null);
+        Assert.That(rows[0].BoolButtons.TrueLabel, Is.EqualTo("區分"));
+        Assert.That(rows[0].BoolButtons.FalseLabel, Is.EqualTo("忽略"));
+        Assert.That(rows[1].BoolButtons, Is.Null);
+    }
+
+    [Test]
+    public void FoldoutsGroupMembersUnderTheirHeaderAndCollapsedFoldoutsFoldOntoIt()
+    {
+        var model = new HGModel();
+        var owner = new FoldoutOwner();
+        var view = HGGraph.Build(model, new object[] { owner }, null, "test", "Test");
+        var rows = view.Nodes[0].Rows;
+
+        // 每組各一列，插在第一個成員的位置；同名的後續成員收進同一組。
+        Assert.That(rows.ConvertAll(row => row.Kind),
+            Is.EqualTo(new[] { HGRowKind.NoPort, HGRowKind.Foldout, HGRowKind.Foldout, HGRowKind.NoPort }));
+        var a = rows[1];
+        var b = rows[2];
+        Assert.That(a.Label, Is.EqualTo("A"));
+        Assert.That(b.Label, Is.EqualTo("B"));
+        Assert.That(a.Children.Count, Is.EqualTo(2));
+        Assert.That(b.Children.Count, Is.EqualTo(1));
+        Assert.That(a.Children.TrueForAll(row => ReferenceEquals(row.FoldoutOwnerRow, a)), Is.True);
+        // 成員縮一層，組內的清單框才落在群組導引線右邊。
+        Assert.That(a.Children.TrueForAll(row => row.Depth == a.Depth + 1), Is.True);
+        // 預設展開：成員接在標題列下面，群組高度含成員。
+        Assert.That(a.Collapsed, Is.False);
+        Assert.That(a.Children[0].LocalY, Is.EqualTo(a.LocalY + HGGraph.RowHeight));
+        Assert.That(a.Height, Is.EqualTo(3 * HGGraph.RowHeight));
+        Assert.That(b.LocalY, Is.EqualTo(a.LocalY + a.Height));
+        Assert.That(view.Diagnostics.Exists(d => d.Code == "graphkit.metadata.foldout-path-reserved"), Is.True);
+
+        string key = HGGraph.CollapseKey(view.Nodes[0].Id, a);
+        view = HGGraph.Build(model, new object[] { owner }, null, "test", "Test",
+            new Dictionary<string, bool> { [key] = true });
+        a = view.Nodes[0].Rows[1];
+        b = view.Nodes[0].Rows[2];
+
+        // 收起的一組成員壓到標題列並隱藏；其他組照常展開，可同時展開多組。
+        Assert.That(a.Collapsed, Is.True);
+        Assert.That(a.Height, Is.EqualTo(HGGraph.RowHeight));
+        Assert.That(a.Children.TrueForAll(row => row.Hidden && row.LocalY == a.LocalY), Is.True);
+        Assert.That(b.Collapsed, Is.False);
+        Assert.That(b.LocalY, Is.EqualTo(a.LocalY + HGGraph.RowHeight));
+        Assert.That(b.Children[0].Hidden, Is.False);
+    }
+
+    [Test]
     public void ListDefaultSlotGetsAnEditableConstantListSection()
     {
         var owner = new ListDefaultSlotOwner();
@@ -1837,6 +1909,21 @@ MonoBehaviour:
     }
 
     private sealed class TestNoDocumentOwner : ScriptableObject { }
+
+    private sealed class BoolButtonOwner
+    {
+        [HGBool("區分", "忽略")] public bool CaseSensitive;
+        [HGEnum] public bool EnumMarked;
+    }
+
+    private sealed class FoldoutOwner
+    {
+        public int Plain;
+        [HGFoldout("A")] public int First;
+        [HGFoldout("B")] public int Second;
+        [HGFoldout("A")] public int Third;
+        [HGFoldout("x/y")] public int Reserved;
+    }
 
     private sealed class TestValueOwner
     {

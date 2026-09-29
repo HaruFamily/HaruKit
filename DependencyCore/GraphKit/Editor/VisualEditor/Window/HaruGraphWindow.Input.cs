@@ -266,11 +266,15 @@ public partial class HaruGraphWindow
                 break;
 
             case EventType.KeyDown:
+                // F3 不是輸入字元，搜尋框握著焦點時也要能跳下一筆，所以排在文字輸入判斷之前。
+                if (e.keyCode == KeyCode.F3 && nodeSearch.IsOpen) { StepNodeSearch(e.shift ? -1 : 1); e.Use(); break; }
+                // 左欄與焦點列的輸入框畫在畫布之後，按鍵先到這裡：正在打字時不能當快捷鍵吃掉，
+                // 否則 F 會被 FrameAll 搶走、Delete 會刪節點。改名框只看 IsEditing：它可能這一幀剛好沒握焦點。
+                if (inlineName.IsEditing || EditorGUIUtility.editingTextField) break;
                 // 選著群組時 Delete 只刪群組、節點留著；沒選群組才刪選取的節點。
                 if (e.keyCode == KeyCode.Delete) { if (!DeleteSelectedNodeGroup()) DeleteSelection(); e.Use(); }
                 else if (e.keyCode == KeyCode.F && !e.control) { FrameAll(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.F) { OpenNodeSearch(); e.Use(); }
-                else if (e.keyCode == KeyCode.F3 && nodeSearch.IsOpen) { StepNodeSearch(e.shift ? -1 : 1); e.Use(); }
                 else if (e.keyCode == KeyCode.Escape && nodeSearch.IsOpen) { nodeSearch.Close(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.C) { CopySelection(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.V) { PasteClipboard(graphMouse); e.Use(); }

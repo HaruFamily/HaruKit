@@ -519,6 +519,21 @@ public static class HGReflect
     public static bool HasEnumButtons(Type slotType)
         => slotType?.IsDefined(typeof(HGEnumAttribute), true) ?? false;
 
+    /// <summary>欄位標的 <c>[HGBool]</c>；沒標回 null。</summary>
+    public static HGBoolAttribute BoolButtons(FieldInfo f)
+        => f?.GetCustomAttribute<HGBoolAttribute>(false);
+
+    /// <summary>Slot 類別（含基底）標的 <c>[HGBool]</c>：這一族的 bool 常數框一律畫兩段按鈕。沒標回 null。</summary>
+    public static HGBoolAttribute BoolButtonsOf(Type slotType)
+        => slotType?.GetCustomAttribute<HGBoolAttribute>(true);
+
+    /// <summary>欄位標的 <c>[HGFoldout]</c> 群組名；沒標或名稱空白回 null。</summary>
+    public static string FoldoutOf(FieldInfo f)
+    {
+        string foldout = f?.GetCustomAttribute<HGFoldoutAttribute>(false)?.Foldout;
+        return string.IsNullOrEmpty(foldout) ? null : foldout;
+    }
+
     /// <summary>節點在同分類內的排序權重。</summary>
     public static int TypePriority(Type t)
     {

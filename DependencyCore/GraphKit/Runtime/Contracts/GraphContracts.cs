@@ -42,7 +42,8 @@ public sealed class GraphViewState
     // 欄位（Slot 或清單標題）收起子樹。只存 true，沒有記錄就是展開。
     [SerializeField] private List<string> _hidden = new();
 
-    // 清單折疊要存兩邊：沒有記錄時編輯器依項數自動折疊，手動展開也得記得住。
+    // 清單與節點內摺疊群組（[HGFoldout]）共用。清單折疊要存兩邊：沒有記錄時編輯器依項數自動折疊，手動展開也得記得住；
+    // 摺疊群組沒有記錄就是展開。
     [SerializeField] private List<string> _folded = new();
     [SerializeField] private List<string> _unfolded = new();
 
@@ -112,7 +113,7 @@ public sealed class GraphNodeGroup
     // 自訂色：勾起時不跟主題調色盤走。
     [SerializeField] private bool _useCustomColor;
     [SerializeField] private Color _customColor = Color.white;
-    // 收合：成員節點不畫，外部連線接到群組框邊緣。只影響顯示。
+    // 收合：成員與只經由它們才連得到的節點不畫，外部父欄位只畫指向標題列的殘影。只影響顯示。
     [SerializeField] private bool _collapsed;
     [SerializeField] private List<string> _members = new();
     // 分頁：少於兩頁時所有成員都顯示（只有一頁時仍保留它的名字）。成員沒記在任何一頁時算第一頁。

@@ -21,7 +21,10 @@ public struct HGPropertyLibraryCommands
     /// <summary>改名。回傳 false＝名稱不合法，就地改名會維持編輯狀態。</summary>
     public Func<GraphProperty, string, bool> Rename;
 
-    /// <summary>拖到「－」上放開＝移除被拖的那一個。</summary>
+    /// <summary>拖到「＋」上放開，或右鍵「複製」：複製定義與初始內容成一顆新的 ProtoProperty。</summary>
+    public Action<GraphProperty> Duplicate;
+
+    /// <summary>拖到「－」上放開，或右鍵「移除」。</summary>
     public Action<GraphProperty> Remove;
 
     /// <summary>按「＋」：開型別選單。</summary>
@@ -61,7 +64,7 @@ public struct HGPropertyLibraryCommands
 //
 // 與目錄庫刻意不同的兩點，都是因為 Property 沒有自己的畫布：
 // 一、沒有進入焦點這回事，列上只有展開鈕與改名。
-// 二、移除只有「拖到『－』上放開」一條路：沒有「目前編輯中的那一個」可以當表態。
+// 二、「－」不能單擊移除：沒有「目前編輯中的那一個」可以當表態，要拖過去或從那一列的右鍵選單點。
 public sealed class HGPropertyLibraryPanel
 {
     private const float RowHeight = 24f;
@@ -306,6 +309,13 @@ public sealed class HGPropertyLibraryPanel
 
         if (renaming) return null;             // 正在改名的這一格不吃點擊
 
+        if (e.type == EventType.MouseDown && e.button == 1 && row.Contains(e.mousePosition))
+        {
+            ShowRowMenu(property, item.Key, inlineName, cmd);
+            e.Use();
+            return null;
+        }
+
         // 拖到「－ 移除」上要能從這一列起拖。名字那一格不起拖，雙擊改名才不會被當成拖曳。
         if (e.type == EventType.MouseDown && e.button == 0 && row.Contains(e.mousePosition)
             && !nameRect.Contains(e.mousePosition) && !foldRect.Contains(e.mousePosition))
@@ -315,6 +325,19 @@ public sealed class HGPropertyLibraryPanel
         }
         if (e.type == EventType.MouseDrag && drag.IsSource(property)) drag.PromoteOnDrag();
         return null;
+    }
+
+    /// <summary>右鍵選單：雙擊改名、拖到「＋」／「－」這幾個手勢看不出來，選單是看得到的同一組入口。</summary>
+    private static void ShowRowMenu(GraphProperty property, string key, HGInlineRename inlineName,
+        HGPropertyLibraryCommands cmd)
+    {
+        var menu = new GenericMenu();
+        menu.AddItem(new GUIContent("改名"), false,
+            () => inlineName.Begin(property, HGInlineRename.SitePropertyLib, key ?? ""));
+        if (cmd.Duplicate != null) menu.AddItem(new GUIContent("複製"), false, () => cmd.Duplicate(property));
+        menu.AddSeparator("");
+        menu.AddItem(new GUIContent("移除"), false, () => cmd.Remove(property));
+        menu.ShowAsContext();
     }
 
     /// <summary>整列落點：只收這一顆收得下的資產，收不下就明確拒絕而不是靜默不動。</summary>
@@ -356,7 +379,8 @@ public sealed class HGPropertyLibraryPanel
             }
 
             object before = slot.DefaultObject;
-            object after = HGValueField.Draw(fieldRect, editType, before, HGReflect.HasEnumButtons(slot.GetType()));
+            object after = HGValueField.Draw(fieldRect, editType, before, HGReflect.HasEnumButtons(slot.GetType()),
+                HGReflect.BoolButtonsOf(slot.GetType()));
             if (Equals(before, after)) return null;
             return () => cmd.SetInitialValue?.Invoke(property, after);
         }
@@ -374,6 +398,7 @@ public sealed class HGPropertyLibraryPanel
         // 左側縱線把項目串回標題列：窄欄裡光靠縮排看不出層級。
         if (count > 0) HGStyles.Fill(new Rect(SpineX, itemTop - 1f, 1f, count * ItemHeight - 4f), HGStyles.HeaderProperty);
         bool enumButtons = HGReflect.HasEnumButtons(slot.GetType());
+        HGBoolAttribute boolButtons = HGReflect.BoolButtonsOf(slot.GetType());
 
         bool mine = itemOrderOwnerId == property.Id;
         // 尚未起拖時每塊各自收集；起拖後只有擁有者能提供目標位置，避免混入其他清單的索引。
@@ -404,7 +429,7 @@ public sealed class HGPropertyLibraryPanel
             if (editable)
             {
                 object before = items[k];
-                object after = HGValueField.Draw(nameRect, elementType, before, enumButtons);
+                object after = HGValueField.Draw(nameRect, elementType, before, enumButtons, boolButtons);
                 if (!Equals(before, after))
                 {
                     int index = k;
@@ -459,17 +484,30 @@ public sealed class HGPropertyLibraryPanel
         else expanded.Remove(id);
     }
 
-    /// <summary>「＋ 新增 ProtoProperty」：單擊開型別選單。刻意不接受拖放——沒有複製入口。</summary>
+    /// <summary>
+    /// 「＋ 新增 ProtoProperty」：單擊開型別選單；把格子**拖到這顆按鈕上放開＝複製那一顆**（初始內容一起複製）。
+    /// 拖到畫布是建立引用，拖到這裡是建立新的儲存位置——落點本身就是「新增」，兩者不會混淆。
+    /// </summary>
     private static void DrawCreateButton(Rect rect, HGPropertyLibraryCommands cmd, HGLibraryDrag drag)
     {
-        bool dropping = drag.DroppingProperty;
-        bool wasEnabled = GUI.enabled;
-        // 拖著格子時停用它：讓「這裡不是落點」在手上就看得出來，不必先放開才發現沒事發生。
-        GUI.enabled = wasEnabled && !dropping;
-        bool clicked = GUI.Button(rect, new GUIContent("＋ 新增 ProtoProperty",
-            "新增一顆有初始內容的具名變數；先選型別，再填初始值"));
-        GUI.enabled = wasEnabled;
+        var e = Event.current;
+        bool dropping = drag.DroppingProperty && cmd.Duplicate != null;
+        bool hover = rect.Contains(e.mousePosition);
 
+        if (dropping && hover) HGStyles.Fill(rect, HGStyles.DropCreate);
+
+        bool clicked = GUI.Button(rect, new GUIContent(
+            dropping ? "複製 ProtoProperty" : "＋ 新增 ProtoProperty",
+            "新增一顆有初始內容的具名變數；把左邊的格子拖到這裡＝複製它"));
+
+        // 拖曳放開不會讓 GUI.Button 回 true（它沒在自己身上收到 MouseDown），所以自己判。
+        if (dropping && hover && e.rawType == EventType.MouseUp)
+        {
+            cmd.Duplicate(drag.Property);
+            drag.Clear();
+            e.Use();
+            return;
+        }
         if (clicked && !dropping) cmd.Create();
     }
 

@@ -358,14 +358,17 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>
-    /// 看不到整條的線：欄位收起的畫一般殘影；成員被群組外的欄位收起、另一端看得到的，看得到那一端畫殘影。
-    /// 兩種只要跨出群組，群組標題列朝向另一端的代表接點再各畫一段殘影往外連（<see cref="DrawNodeGroupBoundaryGhosts"/>）。
+    /// 看不到整條的線：欄位收起的畫一般殘影，父欄位被藏起來的不畫。一端被群組關掉的走 <see cref="DrawGroupOffGhost"/>。
     /// </summary>
     private void DrawInvisibleLink(HGLink link, bool traced)
     {
+        // 一端被群組關掉（收合或非作用中分頁）：比照 ⊖ 收起，只在父欄位端畫殘影。
+        if (IsGroupOffLink(link))
+        {
+            DrawGroupOffGhost(link, traced);
+            return;
+        }
         if (IsLinkGhost(link)) DrawLinkGhosts(link, traced);
-        else if (!DrawHiddenMemberEnd(link, traced)) return;
-        DrawNodeGroupBoundaryGhosts(link, traced);
     }
 
     /// <summary>
@@ -381,7 +384,6 @@ public partial class HaruGraphWindow
 
     /// <summary>
     /// 欄位端一定畫；目標節點因為別的線還顯示著時，目標端也往回畫一段，兩段在中間斷開。
-    /// 目標被群組藏起來時，欄位端改朝群組標題列的代表接點，標題列那段由 <see cref="DrawNodeGroupBoundaryGhosts"/> 畫。
     /// 欄位在折疊清單裡時，欄位端從清單的代表接點起畫（接點位置已被 CollapseRows 壓到標題列），依 foldFan 散開。
     /// </summary>
     private void DrawLinkGhosts(HGLink link, bool traced)
@@ -398,7 +400,8 @@ public partial class HaruGraphWindow
         float thickness = traced ? LinkThickness + 2f : LinkThickness;
         Vector2 slotPos = slotPort.Presentation.Position;
         float slotDir = PortDirection(slotPort);
-        ResolveGhostEnd(link, targetPort, slotPos, out var targetPos, out float targetDir);
+        Vector2 targetPos = targetPort.Presentation.Position;
+        float targetDir = PortDirection(targetPort);
 
         DrawLinkGhost(slotPos, slotDir, targetPos, targetDir, color, thickness, slotAngle);
         if (targetPort.Presentation.Visible && link.OutputOwner != null && !link.OutputOwner.Hidden)
@@ -472,23 +475,18 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>
-    /// 一條連線的路徑。兩端先解析：被群組收起來的一端改到群組框邊緣的代理接點。
-    /// 折疊清單的元素線從欄位端（代表接點）起算並套扇形角度；代理接點伸出的線從代理端起算並套它的扇形；其餘照原本兩端。
+    /// 一條連線的路徑。折疊清單的元素線從欄位端（代表接點）起算並套扇形角度；其餘照原本兩端。
     /// 呼叫前要先 <see cref="RebuildFoldFan"/>。
     /// </summary>
     private void BuildLinkPathOf(HGLink link, List<Vector2> path)
     {
-        bool inProxy = ResolveLinkEnd(link.InputPort, link.OutputPort, out var inPos, out float inDir);
-        ResolveLinkEnd(link.OutputPort, link.InputPort, out var outPos, out float outDir);
+        Vector2 inPos = link.InputPort.Presentation.Position;
+        Vector2 outPos = link.OutputPort.Presentation.Position;
+        float inDir = PortDirection(link.InputPort);
+        float outDir = PortDirection(link.OutputPort);
         if (foldFan.TryGetValue(link, out float angle))
         {
             if (ReferenceEquals(FoldTargetPort(link), link.OutputPort)) BuildLinkPath(inPos, inDir, outPos, outDir, path, angle);
-            else BuildLinkPath(outPos, outDir, inPos, inDir, path, angle);
-            return;
-        }
-        if (proxyFan.TryGetValue(link, out angle))
-        {
-            if (inProxy) BuildLinkPath(inPos, inDir, outPos, outDir, path, angle);
             else BuildLinkPath(outPos, outDir, inPos, inDir, path, angle);
             return;
         }
@@ -1190,6 +1188,11 @@ public partial class HaruGraphWindow
                 DrawListHeaderPort(row, dim, snappedPort);
                 continue;
             }
+            if (row.Kind == HGRowKind.Foldout)
+            {
+                DrawFoldoutAnchorPort(node, row, dim);
+                continue;
+            }
             var inputPort = PortFor(row);
             if (inputPort?.Presentation.Visible != true) continue;
             if (inputPort.Presentation is IHGPortPresentationAnchor anchor && !ReferenceEquals(anchor.Node, node)) continue;
@@ -1238,6 +1241,33 @@ public partial class HaruGraphWindow
         if (!graph.PortsByKey.TryGetValue(aggregateKey, out var aggregate) || !aggregate.Presentation.Visible) return;
         // 只有裡面有連線時才畫，所以一定是 ◎。
         DrawSemanticPort(aggregate, AggregatePortColor(row), dim, snappedPort, true);
+    }
+
+    /// <summary>
+    /// 收起的摺疊群組的代表接點：組內有接線的欄位時，在標題列右緣畫 ◎，線由這裡伸出。
+    /// 不是 HGPort，不能起手或放線。展開時標題列沒有接點，成員的接點各在自己那一列。
+    /// </summary>
+    private void DrawFoldoutAnchorPort(HGNodeView node, HGRow foldout, bool dim)
+    {
+        if (!foldout.Collapsed || foldout.Hidden) return;
+        if (!FoldoutHasLinkedSlot(foldout, out bool hasError)) return;
+        Color color = hasError ? HGStyles.InputPortError : HGStyles.InputPortLive;
+        if (dim && !hasError) color.a *= 0.45f;
+        var pos = new Vector2(node.Pos.x + node.Width - HGGraph.PortRadius, node.Pos.y + foldout.LocalY + HGGraph.RowHeight * 0.5f);
+        HGStyles.DrawInputPort(PortRect(pos + pan), color, true);
+    }
+
+    private bool FoldoutHasLinkedSlot(HGRow foldout, out bool hasError)
+    {
+        hasError = false;
+        bool linked = false;
+        foreach (var row in HGGraph.AllRows(foldout.Children))
+        {
+            if (!row.HasSlot || row.InputSlot.Node == null) continue;
+            linked = true;
+            if (Rep.HasIssue(row.InputSlot, out bool error) && error) hasError = true;
+        }
+        return linked;
     }
 
     /// <summary>Ports owned by Tool-specific adapters are drawn without adding a central concrete-type branch.</summary>

@@ -127,4 +127,42 @@ public sealed class HGDescriptionAttribute : Attribute
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Class, Inherited = true, AllowMultiple = false)]
 public sealed class HGEnumAttribute : Attribute { }
 
+/// <summary>
+/// 把 bool 欄位繪製成兩段按鈕：左邊是 true、右邊是 false，順序同建構子參數。沒標的 bool 畫成勾選框。
+/// 標在 Slot 類別上＝這一族的常數框在所有位置都畫按鈕；欄位與類別都標時文字以欄位為準。
+/// </summary>
+// 不併進 [HGEnum]：bool 不是 enum，借用那個名字會讓人誤以為 bool 被當 enum 存。
+[AttributeUsage(AttributeTargets.Field | AttributeTargets.Class, Inherited = true, AllowMultiple = false)]
+public sealed class HGBoolAttribute : Attribute
+{
+    public const string DefaultTrueLabel = "是";
+    public const string DefaultFalseLabel = "否";
+
+    public string TrueLabel { get; }
+    public string FalseLabel { get; }
+
+    public HGBoolAttribute(string trueLabel = DefaultTrueLabel, string falseLabel = DefaultFalseLabel)
+    {
+        TrueLabel = string.IsNullOrEmpty(trueLabel) ? DefaultTrueLabel : trueLabel;
+        FalseLabel = string.IsNullOrEmpty(falseLabel) ? DefaultFalseLabel : falseLabel;
+    }
+}
+
+/// <summary>
+/// 把欄位收進節點內的摺疊群組：同名欄位共用一組，群組插在第一個成員的位置，成員接在群組標題列下面。
+/// 每組各自展開／收起、可同時展開多組，預設展開；沒標的欄位照原位置畫在群組外。
+/// 例：<c>[HGFoldout("暴擊")] private FloatSlot critRate;</c>
+/// </summary>
+// 名稱不可含 /：保留給日後的群組路徑（對齊 Odin FoldoutGroup 的路徑語法），含 / 的欄位回報診斷並當成沒標群組。
+[AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
+public sealed class HGFoldoutAttribute : Attribute
+{
+    public string Foldout { get; }
+
+    public HGFoldoutAttribute(string foldout)
+    {
+        Foldout = foldout;
+    }
+}
+
 }

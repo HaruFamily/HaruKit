@@ -98,7 +98,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 10. **Core 驗證與視覺驗證要同步改。** 文件 `Verify()` 決定能不能存檔；`HGValidator` 是同一套規則加上可跳轉位置。只改一邊會變成「存檔鈕按得下去、卻被擋下且看不到原因」。
 11. **診斷是純資料。** `GraphDiagnostic` 只存穩定 `Code` 和字串位置（document／focus／node／token／field path），不可持有 `HGRow`、`FieldInfo` 或視窗物件。Code 用穩定機器識別，不用本地化文字或方法名。
 12. **面板不認識 model 與焦點。** 面板只收一次性快照與命令委派，不可反過來呼叫視窗；版面由視窗管理，面板自己的視圖狀態（高度、捲動）自己存。
-13. **視窗偏好不進文件。** 庫的停駐、排序、顯示、欄寬等偏好存在 EditorPrefs（`HaruGraph.*` 鍵），不標 Dirty、不進 Undo。節點圖本身的收合版面（欄位 ⊖／⊕、清單折疊、註解框收合）與節點群組（§5.4）是例外：它和座標一樣是作者安排的版面，存在實作 `IGraphViewStateOwner` 的文件或資產上（`GraphViewState`），切換標未存檔、進 Undo，但以 `MarkLayoutChanged()` 記成版面修改，存檔沿用上次驗證。
+13. **視窗偏好不進文件。** 庫的停駐、排序、顯示、欄寬等偏好存在 EditorPrefs（`HaruGraph.*` 鍵），不標 Dirty、不進 Undo。節點圖本身的收合版面（欄位 ⊖／⊕、清單折疊、註解框收合、節點內摺疊群組）與節點群組（§5.4）是例外：它和座標一樣是作者安排的版面，存在實作 `IGraphViewStateOwner` 的文件或資產上（`GraphViewState`），切換標未存檔、進 Undo，但以 `MarkLayoutChanged()` 記成版面修改，存檔沿用上次驗證。
 14. **`[HG*]` 屬性的命名權留在 GraphKit**，所有使用端共用同一套，不可下放給使用端自訂。
 
 ## 5. 編輯器結構
@@ -125,12 +125,14 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 ### 5.1 IMGUI 陷阱
 
 - 變數庫各 Property 獨立展開，不限制同時展開數量；拖入資產只展開目標項。展開狀態由面板按 Id 保存，Reset 時清除，不進 Dirty／Undo。多個清單展開時，項目重排只收集正在拖曳之 Property 的目標位置。
+- Token 庫與變數庫的格子是同一組操作：雙擊改名、拖到「＋」上放開＝複製、拖到「－」上放開＝移除，右鍵選單（改名／複製／移除）是同一組的可見入口。複製 ProtoProperty（`HGModel.DuplicateProperty`）是建立新的儲存位置：定義與初始內容深拷貝（資產只抄參考）、換新 Id、名字「原名 複本」，圖上沒有節點指向它；拖到畫布才是引用。右鍵改名走 `HGInlineRename.Begin`：選單回呼在 OnGUI 之外執行，只記狀態不碰鍵盤焦點，焦點由下一次 `Draw` 搶。
 - 座標：graph → clip 是 `(graphPos + pan) × zoom`；自訂命中測試（節點、連線、框選）一律在 graph space 計算。
 - **先畫節點、再處理畫布互動**，控制項才會先吃掉事件。畫布平移前仍要確認 `GUIUtility.hotControl == 0`。
+- **畫布快捷鍵要讓給文字輸入**：左右庫與焦點列畫在畫布之後，游標停在畫布上時按鍵會先到 `HandleCanvasInput`。它的 `KeyDown` 分支在 `inlineName.IsEditing` 或 `EditorGUIUtility.editingTextField` 時一律不處理（F、Delete、Ctrl 系列都不攔），只有 F3（搜尋跳下一筆）排在這個判斷之前。新增畫布快捷鍵要放在判斷之後；改名框只看 `IsEditing`，因為它重新搶焦點的那一幀並未握著焦點。
 - **節點重疊時輸入跟著畫面走**：`graph.Nodes` 的順序就是繪製順序（越後越上層）。IMGUI 依繪製順序分發事件，所以 `DrawCanvas` 在 `hotControl == 0` 的 MouseDown／DragUpdated／DragPerform 先用 `NodeAt` 找出最上層節點，其餘節點畫的時候把事件設成 `Ignore`，畫完還原成遮罩前的型別（不可還原成原始型別，會把已 `Use()` 的按鍵復活）。接點命中（`InputPortAt`／`OutputPortAt`）同樣只認最上層節點。
 - 連線：一般線在節點之前畫（壓在節點下），選取中節點的線在 `EndZoomedCanvas` 之後畫（浮在最上層）。形狀固定為「水平短線 → 圓角 → 斜直線 → 圓角 → 水平短線」（`BuildLinkPath`），方向依接點位在節點左半或右半決定，不依輸入／輸出。點線剪斷（`LinkAt`）用同一份路徑，點在節點上時只剪得到浮在上層的線。清單折疊時，元素的線仍從標題列的代表接點畫出（接點本身不可起手或放線），多條時依目標高度扇形等角散開（`RebuildFoldFan`），這是頭端不水平的唯一例外；剪線一次只斷一個元素。
 - 元素是 Slot、可增刪的清單，標題列有一顆新增接點（內部 `IHGListAppendBinding`：取值清單是輸入角色 `HGListAppendPortBinding`，`InputSlot` 是尚未放進清單的預備元素；PropertySlot 清單是寫入輸出 `HGListAppendWriteBinding`，清單所在節點沒有載體時不掛）：拖出去或從對向接點拉進來＝在尾端新增一項並接上，一步 Undo；原地點一下＝收起／展開所有元素接出去的子樹（Alt＝solo，與 Slot 接點同一套；清單再展開時，個別收起的元素維持收起），清單列的折疊只在標題文字。提交一律「先 `Commit()` 加進清單、再走一般接線」，在同一個變更交易裡。它會出現在 `HGWindowSnapshot`，`HGWindowSession.Connect` 走同一個交易，`Disconnect` 拒絕它。Aggregate 接點的契約不變。
-- 收合欄位的線畫成殘影（實線短線＋圓角，進斜線後轉漸淡虛線；淡出長度固定，兩端太近才依斜線長度比例縮短）。欄位端一定畫，目標節點仍顯示時目標端也畫；殘影不參與命中。欄位在折疊清單裡時，欄位端從清單的代表接點起畫，和看得到的元素線同一把扇（`RebuildFoldFan` 也收殘影）；此時 `RebuildProxyFan` 只對看得到的線排除 foldFan，殘影的群組標題列端照樣排扇形。
+- 收合欄位的線畫成殘影（實線短線＋圓角，進斜線後轉漸淡虛線；淡出長度固定，兩端太近才依斜線長度比例縮短）。欄位端一定畫，目標節點仍顯示時目標端也畫；殘影不參與命中。欄位在折疊清單裡時，欄位端從清單的代表接點起畫，和看得到的元素線同一把扇（`RebuildFoldFan` 也收殘影）。
 - 接點：外環永遠畫，中心實心點表示有接線（○／◎）；顏色只表達用途與錯誤，不表達接不接。
 - MouseDown 落在某節點上就把它提到最上層（`RaiseNode`），順序記在視窗的 `raisedNodeIds`，每次重建圖後由 `ApplyNodeOrder` 套回；純視圖狀態，不進文件與 Undo。順序改變時要清 `GUIUtility.keyboardControl`：控制項 id 依繪製順序發，不清的話輸入中的框會對到別顆節點的欄位。
 - 平移只用中鍵；Alt 是 Slot 顯示開關的 solo 手勢。
@@ -142,7 +144,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 
 - 顏色的唯一來源是 `HGTheme` 的欄位（初始值＝預設主題）；`HGStyles` 以同名屬性轉讀。繪製碼不寫 `new Color(...)` 常數，只能從主題色衍生。套件只內建預設主題；新增顏色鍵時，初始值就是預設主題的值，使用者的主題檔缺這個鍵時會沿用它。錯誤紅與警告琥珀留在 `HGStyles`，不進主題。
 - 主題檔 `*.graphtheme.json` 放在專案或套件內任何位置，只寫要改的鍵，顏色可寫 `"#RRGGBB(AA)"`。選擇存 EditorPrefs `HaruGraph.Theme`（主題檔 GUID），入口是視窗分頁的 ⋮ 選單；讀不到時 Log 並退回預設。
-- 節點圖不跟 Unity Light／Dark 主題：視窗與確認框的 `OnGUI` 包在 `HGSkin.Scope()`，只在 Repaint 暫時改寫 EditorStyles／`GUI.skin` 的字色與底圖並在 finally 還原；`HGStyles` 的 GUIStyle 一律用 `Ink` 設滿所有狀態字色。新增繪製入口要同樣包 Scope。ObjectField 選取鈕、Color／Curve／Gradient 欄位與選單仍由 Unity 繪製。
+- 節點圖不跟 Unity Light／Dark 主題：視窗與確認框的 `OnGUI` 包在 `HGSkin.Scope()`，只在 Repaint 暫時改寫 EditorStyles／`GUI.skin` 的字色與底圖並在 finally 還原；`HGStyles` 的 GUIStyle 一律用 `Ink` 設滿所有狀態字色。新增繪製入口要同樣包 Scope。主題勾選框樣式沒有可拉伸的中段，Toggle 的 rect 一律走 `HGSkin.ToggleRect`（14px 見方），直接傳整條欄位會把貼圖邊緣拉成一條尾巴。ObjectField 選取鈕、Color／Curve／Gradient 欄位與選單仍由 Unity 繪製。
 - 新增會快取顏色的貼圖或樣式，要掛進 `HGStyles.ResetCache()` 或 `HGSkin.ResetCache()`，換主題時才會重建。
 
 ### 5.3 Undo
@@ -175,10 +177,10 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 
 **標題列與註解**
 
-- 標題列只有一列，由左往右：色塊 → 收合 `▾/▸` → 分頁 → 「＋」→（右端）成員數 → 工具列提示 `▴`。群組沒有另外的標題文字，第一頁的名字就是群組名；寬度下限是 `NodeGroupTabStripWidth`。
+- 標題列只有一列，由左往右：色塊 → 收合 `▾/▸` → 分頁 → 「＋」→（右端）成員數 → 工具列提示 `▴`。群組沒有另外的標題文字，第一頁的名字就是群組名；寬度下限是 `NodeGroupTabStripWidth`。兩端內容固定內縮 `NodeGroupHeaderPortInset`（接點半徑＋3）：收合群組的殘影指向標題列兩端的框邊，線頭不壓到色塊與 `▴`。
 - 註解與節點同一套：滑入標題列在右上方展開工具列（`nodeGroupActionsId`，拉線、拖曳、框選、游標在節點上時不展開），`✎` 開關註解框。註解內容存在 `GraphNodeGroup.Title`（欄位名沿用舊資料），內容等於舊預設名「群組」或空白時視為沒有註解（`NodeGroupNote`）。有內容預設展開，收起記在 `GraphViewState` 的註解收合（key＝群組 Id，走 `SetNoteCollapsed`）；剛按開的空框（`nodeGroupNoteOpenId`）只跟著選取中的群組活著。編輯內容走 `MarkViewStateChanged()`。
 - 註解框畫在框內、標題列正下方（`NodeGroupNoteRect`），群組收合時照樣顯示：收合的框＝標題列＋註解。成員區上方的高度一律問 `NodeGroupTopInset`（標題列＋展開中的註解），不要直接用 `NodeGroupHeaderHeight`；收合時它就是整個框的高度。節點註解維持在節點本體最下面。
-- 群組沒有 Enable／停用：Slot 求值只讀 `GraphNode.Disabled`，看不到版面資料。
+- 群組沒有 Enable／停用，分頁也不停用節點：Slot 求值只讀 `GraphNode.Disabled`，看不到版面資料。
 
 **操作**
 
@@ -187,24 +189,20 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - 右鍵選單的全畫布段一律是「聚焦全部節點 → 整理版面」，每個選單（節點、空白處、群組標題列、群組內部空白）都有，而且永遠指整張畫布。群組範圍另外寫成「聚焦此群組（`FrameNodeGroup`）→ 整理此群組（`ArrangeNodeGroup`）」，不借用同一個字；不要用停用的選單項目當標題（看起來像停用指令，名稱含 `/` 還會變成子選單）。群組標題列右鍵：刪除（只刪群組）→ 此群組兩項 → 全畫布兩項；換色不放右鍵。群組內部空白右鍵：建立項目 → 此群組兩項 → 全畫布兩項；建立公式／動作、新增 root 節點都會同一步加入該群組（`CreateOrphan(…, group)`、`AddTimingGroup(…, joinGroup)`），不提供建立群組。
 - `ArrangeNodeGroup` 只排這個群組的可見成員，留在成員原本的左上角：依成員之間的父子關係分欄（父在左），同一欄照目前上下順序排。不要改成呼叫全畫布的 `ResetLayout`／`AutoLayout`，那會把成員排到群組外。
 
-**收合**
+**收合與分頁：群組關掉成員（只影響顯示）**
 
-- `Collapsed`（標題列 `▾/▸`）只影響顯示：成員節點在 `ApplyVisibility` 算完可達性之後才標成 `Hidden`（`collapsedMembers`，也收非作用中分頁的成員），所以接在成員底下、群組外的節點照樣顯示。`MarkHiddenSlots` 必須略過「目標是被群組收起的節點」，否則指向成員的外部欄位會被當成 ⊖ 收起、畫成殘影。
-- `RevealNode`（Console 跳轉）會先展開節點所在的群組。
-
-**標題列代表接點**
-
-標題列左右兩端各有一個代表接點位置，不是 `HGPort`，不能起手。有線接到的那一側畫 ◎（`DrawNodeGroupProxies`，依 `RebuildProxyFan` 的分側）。
-
-- **收合時的實線代理**：一端是收合成員（或非作用中分頁的成員）的連線，那一端改畫在標題列朝向另一端的那一側（高度一律是標題列中線），由 `ResolveLinkEnd` 在 `BuildLinkPathOf` 解析，繪製與 `LinkAt` 共用同一份路徑，所以剪得到。同一側的多條線依另一端高度扇形散開（`RebuildProxyFan`，規則同折疊清單；已屬於折疊清單扇形的線不重複處理）。兩端都收在同一個群組裡的線不畫。
-- **跨出群組的殘影**：看不到整條的線一律走 `DrawInvisibleLink`：欄位收起的畫一般殘影（`DrawLinkGhosts`）；成員被群組外的欄位收起、另一端看得到但不是一般殘影的，看得到那一端畫殘影（`DrawHiddenMemberEnd`）。兩種只要有一端屬於群組且那顆節點被隱藏、另一端不在同一群組（`TryNodeGroupBoundaryEnd`，不看方向），那個群組的標題列朝向另一端再畫一段殘影往外連（`DrawNodeGroupBoundaryGhosts`，同樣是 `DrawLinkGhost`，不參與命中）；兩端在不同群組就兩邊都畫，且各自朝對方的標題列（`BoundaryGhostTarget`）。另一端的殘影同樣不指向被藏起來的成員接點：`DrawLinkGhosts` 的目標端走 `ResolveGhostEnd`，改朝群組標題列。標題列那端的殘影和實線代理同一側就排進同一把扇子（`RebuildProxyFan` 的 `boundaryGhostFan`，key 是連線＋端），否則多條會疊成一條。群組端的節點還顯示著（被另一個沒收起的來源撐著）時不畫，它自己那端的殘影已經看得到。
-- **拉線放進群組**：拉線中（規則同「拉到空白處建立空節點」）群組標題列兩端畫出可放的接點；放在上面＝在群組內可見成員的下方建立空節點並加入群組，群組收合中就展開（`ResolveLink` 共用空白處的建立路徑，`NodeGroupHeaderPortAt`、`NodeGroupSpawnPosition`、`JoinNodeGroupAndReveal`）。
+- 群組收合（標題列 `▾/▸`）與非作用中分頁是同一件事：成員被群組「關掉」，只影響顯示，照樣執行、照樣驗證。群組收合時全部成員都關掉；有分頁時非作用中分頁的成員關掉。`CollectGroupOffMembers` 在 `ApplyVisibility` 開頭把它們記進 `groupOffMembers`。
+- **可達性走訪到被關掉的成員就停**（`MarkVisibleFrom` 的 `stopAtGroupOff`）：只靠它們才連得到的節點（包括群組外的）一起隱藏。`CollectGroupOffHidden` 再走一次不擋群組的可達性，兩次的差集加上 `groupOffMembers` 記在 `groupOffHidden`。solo 模式不走可達性，由 `HideGroupOffMembers` 補藏成員。
+- **連線比照 ⊖ 收起**：一端在 `groupOffHidden` 的線（`IsGroupOffLink`）整條不畫，只在還看得到的父欄位 Port 畫殘影（`DrawGroupOffGhost`），朝向目標原本的接點；目標所在群組收合時改朝標題列朝向父欄位的那一側（原本的位置已不在框內）。目標端與標題列那段不畫，父欄位也被關掉時整條不畫，顏色同一般殘影。`MarkHiddenSlots` 略過 `groupOffHidden`，父欄位不會畫成 +。
+- 標題列兩端不是接點：不畫 ◎、不能起手，也不能把線放進群組。沒有連線會接到標題列上。
+- 群組展開時被群組外欄位 ⊖ 收起的成員照一般節點處理：殘影直接指向它的接點（`DrawLinkGhosts`），父欄位被藏起來的線不畫。
+- `RevealNode`（Console、搜尋跳轉）會先展開節點所在的群組並切到它的分頁（`ExpandNodeGroupOf`）。
 
 **分頁（Tab）**
 
-- 資料在 `GraphNodeGroup`：`Tabs`（`GraphNodeGroupTab`：名稱與記在這一頁的成員 Id）與 `ActiveTab`。少於兩頁時所有成員都顯示（`HasTabs` 為 false）；成員沒記在任何一頁時算第一頁（`TabOf`）。`SetMember` 加入的新成員進作用中的那一頁，所以拖放、拉線放進群組、群組內建立節點都不必另外指定頁。`RemoveTab` 讓成員回第一頁，最後一頁不能刪。第一次新增分頁時要連第一頁一起建（`AddNodeGroupTab`）；沒有分頁資料的「分頁 1」改名時才建出那一頁。
+- 資料在 `GraphNodeGroup`：`Tabs`（`GraphNodeGroupTab`：名稱與記在這一頁的成員 Id）與 `ActiveTab`。少於兩頁時所有成員都顯示（`HasTabs` 為 false）；成員沒記在任何一頁時算第一頁（`TabOf`）。`SetMember` 加入的新成員進作用中的那一頁，所以拖放、群組內建立節點都不必另外指定頁。`RemoveTab` 讓成員回第一頁，最後一頁不能刪。第一次新增分頁時要連第一頁一起建（`AddNodeGroupTab`）；沒有分頁資料的「分頁 1」改名時才建出那一頁。
 - 分頁排在標題列內（從 `NodeGroupTabStart` 起），常駐至少一頁（`NodeGroupTabCount`），最後面的「＋」新增分頁，新增不放右鍵；收合時只畫作用中的那一頁，其餘寫成「+N」。
-- 非作用中分頁的成員進 `collapsedMembers`，和收合同一條路：可達性算完才隱藏、連線走標題列實線代理、`MarkHiddenSlots` 略過。它們另外記在 `tabHiddenMembers`，**框與成員數仍把它們算成看得到**；被 ⊖ 收起的成員不記。框因此包住所有分頁的成員，切分頁時大小與標題列位置不變。
+- 切頁是版面修改；非作用中分頁的成員走上面「群組關掉成員」那套。因分頁而藏的群組成員另外記在 `tabHiddenMembers`，**框與成員數仍把它們算成看得到**；被 ⊖ 收起的成員不記。框因此包住所有分頁的成員，切分頁時大小與標題列位置不變。
 - 分頁標籤的按下、雙擊改名（site `nodeGroupTab`）、右鍵選單都在 `DrawNodeGroupTabs` 處理，比 `HandleCanvasInput` 先拿到事件。拖節點放在標籤上＝搬到那一頁並切過去（`NodeGroupTabAt`，在 `ApplyDropMembership` 裡）。`ExpandNodeGroupOf` 同時處理收合與切頁。
 
 ## 6. 串接 GraphKit（給 Tool 作者）
@@ -240,7 +238,15 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 ### 6.4 節點屬性
 
 - `[HGNode(name, description, group, priority)]`（可加 `Width`，單位是 20px 格數）：節點名稱、說明、分類與排序。`Inherited = false`，**每個具體型別都要自己標**，否則節點名退回類別名。
-- 欄位：`[HGLabel]`、`[HGDescription]`、`[HGHide]`（`[HideInInspector]` 視為相同）、`[HGShowIf]`（條件找不到時 fail-open 並記錄一次錯誤）、`[HGHideLabel]`、`[HGEnum]`。
+- 欄位：`[HGLabel]`、`[HGDescription]`、`[HGHide]`（`[HideInInspector]` 視為相同）、`[HGShowIf]`（條件找不到時 fail-open 並記錄一次錯誤）、`[HGHideLabel]`、`[HGEnum]`、`[HGBool]`、`[HGFoldout]`。
+- `[HGFoldout("群組名")]` 把欄位收進節點內的摺疊群組（`HGRowKind.Foldout`，對應 Odin `FoldoutGroup`）：同一個物件裡同名的欄位共用一組，群組列插在第一個成員的位置，成員接在標題列下面，與一般欄位同寬。每組各自展開／收起，可同時展開多組，預設展開；成員都沒長出列（含被 `[HGShowIf]` 整組藏掉）的群組不出現。descriptor 用各 factory 的 `foldout:` 參數。
+  - 群組列的 `Height` 是整段：展開時＝標題列 ＋ 成員，收起時＝標題列。成員的 `FoldoutOwnerRow` 指向最近的群組（巢狀時外層靠群組列自己的 `FoldoutOwnerRow` 往上找）。`FinishFoldouts` 把整棵成員子樹的 `Depth` 加 1（巢狀群組逐層累加）。
+  - 收起時成員壓到標題列（`CollapseRows`）並標成隱藏：接點不可見、不能起手或放線，但已接線的欄位照畫線，由標題列右緣伸出，同一組的線共用一把扇（`FoldedListOf` 先找清單鏈、再找群組鏈，回傳看得到的折疊祖先，和折疊清單走同一套 `RebuildFoldFan`）。代表接點由 `DrawFoldoutAnchorPort` 畫 ◎，不是 `HGPort`。群組名後的 ● 是組內有錯誤。
+  - 展開狀態是版面，和清單折疊共用 `listCollapse`／`GraphViewState._folded`、`_unfolded`（key＝群組列的 `CollapseKey`，路徑是 `<物件路徑>/#<群組名>`）；切換走 `SetListFolded` → `MarkViewStateChanged()`，鎖定中也能切。`DefaultCollapsed` 對群組一律是 false。`RevealNode` 會沿父欄位把收起的群組一路展開。
+  - 外觀：只畫標題列（`ListHeader`）與左側一條縱向導引線（`ListRule`，落在成員讓出的那格縮排裡），不畫底帶與外框。底帶＋外框是清單「凹進去的容器」的語彙；群組也用它的話，組內的清單和群組長得一樣、左緣重疊，分不出主次。只有箭頭與文字是開關，其餘空白留給拖曳節點。
+  - 群組名不可含 `/`：保留給日後的群組路徑（對齊 Odin `FoldoutGroup` 的路徑語法），含 `/` 的欄位回報 `graphkit.metadata.foldout-path-reserved`（Warning）並畫在群組外。
+- `[HGEnum]` 只作用在 enum：畫成按鈕列（`[Flags]` 多選），標在 bool 上沒有效果。
+- `[HGBool(trueLabel = "是", falseLabel = "否")]` 把 bool 畫成兩段按鈕，左 true、右 false；沒標的 bool 是 14px 勾選框。和 `[HGEnum]` 一樣可標在欄位或 Slot 類別上，走同一批入口（`HGRow.BoolButtons`，類別用 `HGReflect.BoolButtonsOf`、欄位用 `BoolButtons`，descriptor 用 `HGFieldDescriptor.Create(..., boolButtons:)`）；欄位與類別都標時文字以欄位為準，欄位沒標不能關掉類別宣告。
 - `[HGEnum]` 也可標在 Slot 類別上（子類沿用）：該族的 enum 常數框在一般欄位、descriptor 欄位、清單元素、Token／資產 HEAD、資產參數綁定與變數庫都畫按鈕列。入口是 `HGGraph.SlotRow` 與變數庫面板，兩者都問 `HGReflect.HasEnumButtons(slotType)`。欄位與類別是 OR：欄位只能再開啟，不能關掉類別的宣告；後續設定 `ForceEnumButtons` 一律用 `|=`，不可覆蓋。清單欄位標 `[HGEnum]` 時，`BuildListChildren` 把旗標帶給純值元素列，元素繪製讀 `row.ForceEnumButtons`。
 - 常數是清單的 FormulaSlot（`DefaultEditType` 本身是 `List<T>`／`T[]`，且元素 `HGValueField.CanDraw`）會在 Slot 列下方多一段常數清單，資料來源就是 `DefaultObject`，沿用清單欄位的增刪、重排與元素繪製；null 時就地補空清單。這段清單不畫自己的標題列（`HGRow.HeaderRow` 指向代畫標題的 Slot 列，底帶與外框從那一列算起），由 Slot 列的標籤畫成「`▾` 名稱 (N)」兼任折疊開關（`HGRow.DefaultListRow`）；Slot 列標籤隱藏時才保留清單自己的標題列。一般欄位、descriptor 欄位與 HEAD 來源列都會掛，資產參數綁定列與「元素本身是 Slot 的清單」不掛。變數庫裡元素畫得出輸入框的清單（純值與資產皆是）逐項用 `HGValueField` 編輯，走 `AddInitialValue`／`SetInitialItem` 命令，一律就地改容器；資產清單另外保留從 Project 拖到標題列的加入方式。
 - 新增清單元素一律走 `HGListItemSource.TryCreateElement`：資產元素是空引用，**不可用 `Activator` 建立 `UnityEngine.Object`**（`GameObject` 會直接生進目前場景）。
