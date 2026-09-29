@@ -52,6 +52,8 @@ https://github.com/HaruFamily/HaruKit.git?path=/Tools/AssetPipeline
 5. 按「執行管線」並確認。執行使用已儲存的圖，執行前會再驗證一次，依動作清單順序同步執行。
 6. 結果面板逐步列出狀態、耗時、訊息與資產；「定位」跳回對應節點，最後列出每顆 Property 的值快照。
 
+Slot 的 `AllowCompatibleResult` 與 `ExcludedFormulaFamilies` 同時控制 Formula／Token／Property 的讀取相容性。例如 `ObjectSlot` 可以讀取 GameObject 公式、GameObject Token 或 GameObject Property；寫入端仍須與目標 Property 同族。
+
 ### 結果與回復
 
 - 每步的狀態是成功、跳過、部分完成、失敗或未執行。失敗或部分完成時停止後續步驟，並回復這次執行的所有資產修改與 Property 值。

@@ -61,7 +61,9 @@ AP 是 **Editor-only、同步執行**的資產處理管線框架。一個 `Asset
 - 輸入欄位 `IntSlot`、`ObjectListSlot`、`FolderSlot` 等綁定對應族的 NullPack 版本；`slot.Evaluate()` 不需要參數。
 - 輸入欄位的來源是常數、內嵌公式、具名 Token 或 Property 之一。AP 不支援共用資產節點（`AssetBaseType` 為 null）。
 - 空槽、停用、型別不符、公式例外一律回保底值並寫公式警告，**不中斷執行**。Token 遞迴在執行期回保底值。
-- 每顆公式只有一種結果型別；`List<AudioClip>` 不會自動當成 `List<Object>`。`ObjectSlot` 開啟了跨族相容，可接受結果是任何 Unity Object 子類的公式；清單欄位沒有這個例外。
+- 每顆公式只有一種結果型別；`List<AudioClip>` 不會自動當成 `List<Object>`。Slot 的 `AllowCompatibleResult`／`ExcludedFormulaFamilies` 統一控制 Formula、Token、Property 三種讀取來源，透過 GraphKit 的共用相容政策判定。`ObjectSlot` 可接受宣告結果是 Unity Object 子類的三種來源；清單欄位維持同族限制。
+- Token 接收先確認來源實作 AP internal `IFormulaSlot`，再問共用相容政策；求值先問 `AcceptsToken`，同封閉泛型直接呼叫 `Evaluate()`，其餘透過顯式 `IFormulaSlot.EvaluateBoxed()` 呼叫來源 Slot。保留合法 null、來源 Slot 保底與 `TokenGuard` 的 finally 清理，不公開 object 求值入口，也不在 GraphKit 加求值方法。
+- Property 接收與求值都走 `AcceptsProperty`，以 `property.Slot` 的宣告型別判相容，再直接讀 `CurrentValue`；不求值 Property Slot。寫入仍由 `PropertySlotBase` 嚴格要求同族。
 
 ### 4.2 Action
 
@@ -162,7 +164,7 @@ public class CollectAssets : ActionBase
 
 - `PipelineExecutionTests`：建立、覆寫、重複修改的提交與回復；GUID、檔案內容、記憶體狀態保留；子動作共用交易；部分失敗；LogError；缺備份；未儲存資料；多檔產出；Property 值與共用清單回復；Property 快照；循序子動作讀取；跨次保留；LocalProperty 回復；遺失型別清理。
 - `PropertyGraphTests`：Property 讀寫、未寫入預設值、ProtoProperty 初始內容、DeepCopy、讀後寫回不算循環、族相容與命名驗證。
-- `GraphVerifierTests`：`ObjectSlot` 跨族上轉、跨族黑名單與隔離、空動作、停用、節點循環。
+- `GraphVerifierTests`：Formula／Token／Property 共用跨族政策、`ObjectSlot` 上轉與合法 null、Slot／引用停用保底、跨 Pack／結果拒絕、衍生族黑名單、寫入端同族限制、跨族 Token 遞迴與 Guard 清理、空動作、節點循環。
 - `GraphKitCrossToolSessionTests`：共用驗證器、結果定位不改動文件與 Dirty 狀態、視窗命令、跨工具 session 隔離。
 - `LibraryOrderTests`：Token 視圖保序、資產重掃與改名保序。
 

@@ -409,6 +409,63 @@ public class HGPortTests
         => new("Property.Document", target => ((PropertyDocumentOwner)target).Document,
             (target, document) => ((PropertyDocumentOwner)target).Document = document);
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void TokenCandidatesUseSourceSlotPolicyRegardlessOfSharedReaderOrder(bool strictReaderFirst)
+    {
+        var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            var document = new PropertyDocument();
+            var original = new GraphToken("Original", new CompatibleTestFormulaSlot());
+            var foreign = new GraphToken("Foreign", new TestFormulaSlotB());
+            document.Tokens.Add(original);
+            document.Tokens.Add(foreign);
+            var source = new GraphNode();
+            source.SetToken(original);
+            string sourceId = source.EnsureId();
+            var open = new CompatibleTokenReaderBody();
+            var strict = new CompatibleTokenReaderBody();
+            strict.Input.CompatibleResults = false;
+            open.Input.SetNode(source);
+            strict.Input.SetNode(source);
+            var openNode = new GraphNode(open);
+            var strictNode = new GraphNode(strict);
+            string openId = openNode.EnsureId();
+            string strictId = strictNode.EnsureId();
+            document.Orphans.Add(strictReaderFirst ? strictNode : openNode);
+            document.Orphans.Add(strictReaderFirst ? openNode : strictNode);
+            owner.Document = document;
+            var context = new HGEditorExtensionContext(new PropertyDocumentProvider(),
+                profile: new HGEditorProfile(HGCapabilities.Properties | HGCapabilities.Tokens));
+            Assert.That(window.BindDocument(owner, PropertyBinding(), context), Is.True);
+            var commands = window.GetDocumentCommands();
+            commands.Query();
+
+            var options = window.NodeSourceOptions(window.NodeOfId(sourceId));
+            Assert.That(options.Exists(option => option.Group == "Token" && option.Name == "Foreign"), Is.True);
+            options.Find(option => option.Group == "Token" && option.Name == "Foreign").Apply();
+            commands.Query();
+            var changed = window.NodeOfId(sourceId).Carrier;
+            Assert.That(changed.Token.Name, Is.EqualTo("Foreign"));
+            Assert.That(((CompatibleTokenReaderBody)window.NodeOfId(openId).Obj).Input.Node, Is.SameAs(changed));
+            Assert.That(((CompatibleTokenReaderBody)window.NodeOfId(strictId).Obj).Input.Node, Is.Null);
+
+            Assert.That(commands.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            commands.Query();
+            Assert.That(window.NodeOfId(sourceId).Carrier.Token.Name, Is.EqualTo("Original"));
+            Assert.That(((CompatibleTokenReaderBody)window.NodeOfId(strictId).Obj).Input.Node,
+                Is.SameAs(window.NodeOfId(sourceId).Carrier));
+        }
+        finally
+        {
+            window.GetDocumentCommands()?.Cancel();
+            UnityEngine.Object.DestroyImmediate(window);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+    }
+
     [TestCase(true)]
     [TestCase(false)]
     public void ReplacingPropertyWithBodyPreservesReadersAndUndoRestoresWriters(bool connectedWriter)
@@ -2173,13 +2230,13 @@ MonoBehaviour:
         GraphViewState IGraphViewStateOwner.ViewState => viewState;
     }
 
-    private sealed class TestFormulaSlot : FormulaSlotBase
+    private class TestFormulaSlot : FormulaSlotBase
     {
         private GraphNode node;
         private object defaultValue;
 
-        // 與正式的求值欄位同語意：收同族的 Property，族的身分是 Slot 型別本身。
-        public override bool AcceptsProperty(GraphProperty property) => property?.FamilyType == FamilyType;
+        public override bool AcceptsProperty(GraphProperty property) => AcceptsCompatibleSlot(property?.Slot);
+        public override bool AcceptsToken(GraphToken token) => AcceptsCompatibleSlot(token?.Slot);
         public override bool AcceptsBody(GraphNodeContent body) => body is PropertyReaderBody;
 
         public override GraphNode Node => node;
@@ -2189,6 +2246,17 @@ MonoBehaviour:
         public override Type BodyBaseType => null;
         public override Type AssetBaseType => null;
         public override void SetNode(GraphNode value) => node = value;
+    }
+
+    private sealed class CompatibleTestFormulaSlot : TestFormulaSlot
+    {
+        public bool CompatibleResults = true;
+        protected override bool AllowCompatibleResult => CompatibleResults;
+    }
+
+    private sealed class CompatibleTokenReaderBody : GraphNodeContent
+    {
+        public CompatibleTestFormulaSlot Input = new();
     }
 
     private sealed class TestDocumentOwner : ScriptableObject
@@ -2376,16 +2444,18 @@ MonoBehaviour:
     }
 
     /// <summary>有 Property 能力的最小文件。欄位刻意不用唯讀自動屬性：GraphDeepCopy 會跳過 readonly 欄位。</summary>
-    private sealed class PropertyDocument : IGraphDocument, IPropertyOwner, IGraphViewStateOwner
+    private sealed class PropertyDocument : IGraphDocument, IPropertyOwner, ITokenOwner, IGraphViewStateOwner
     {
         [SerializeField] private GraphViewState viewState = new();
         public GraphViewState ViewState => viewState;
         private List<GraphNode> orphans = new List<GraphNode>();
         private List<GraphProperty> properties = new List<GraphProperty>();
+        private List<GraphToken> tokens = new List<GraphToken>();
         private ArrayList roots = new ArrayList();
 
         public List<GraphNode> Orphans => orphans;
         public List<GraphProperty> Properties => properties;
+        public List<GraphToken> Tokens => tokens;
         public IList Roots => roots;
         public bool IsValidated { get; private set; }
         public Type PackType => null;

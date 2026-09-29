@@ -215,7 +215,8 @@ public partial class HaruGraphWindow
         // 那個條件 BodyBaseType 表達不出來，由 Slot 另外宣告 CandidatePackType 收窄。
         Type packFilter = !isAction && slotType != null ? HGReflect.CandidatePackType(slotType) : null;
         var bodyTypes = new HashSet<Type>();
-        if (!isAction && slotType != null && HGReflect.CreateInstance(slotType) is FormulaSlotBase formulaSlot)
+        FormulaSlotBase formulaSlot = isAction ? null : ReplacementFormulaSlot(node, slotType);
+        if (formulaSlot != null)
             foreach (var type in HGTypeIndex.FormulasFor(formulaSlot)) bodyTypes.Add(type);
         else if (baseType != null)
             foreach (var type in HGTypeIndex.Concrete(baseType, packFilter)) bodyTypes.Add(type);
@@ -239,8 +240,7 @@ public partial class HaruGraphWindow
             }
         }
 
-        // 族＝Slot 型別。同一個結果型別可以有多個族（例：string 同時有 String 與 Key），
-        // 拿結果型別當判準會把別族的Token一起列進來。
+        // 族＝Slot 型別；有實例時以它的接收政策篩選，不能只比結果型別。
         Type slotKind = isAction ? null : slotType;
 
         // 完全推不出族的候選節點（沒有父欄位、沒有連入線、不是資產、也沒有建立當下的族提示）只剩結果型別
@@ -272,8 +272,8 @@ public partial class HaruGraphWindow
         {
             foreach (var token in HGModel.ReadTokens(CurrentTokens()))
             {
-                if (slotKind != null ? token.FamilyType != slotKind : resultType != null && token.ResultType != resultType) continue;
                 var endpoint = token.Token;
+                if (!CanReplaceTokenNode(node, endpoint, slotType, formulaSlot)) continue;
                 options.Add(new HGSourceOption
                 {
                     Group = "Token",
@@ -398,6 +398,16 @@ public partial class HaruGraphWindow
                     && probe.ResultType == node.ResultType && probe.AcceptsBody(body))
                     return family.slotType;
         return RepresentativeSlotType(node);
+    }
+
+    // 先取來源自己的族；父欄位只有同族時才能代表它，避免共用來源受第一條連入邊影響。
+    private FormulaSlotBase ReplacementFormulaSlot(HGNodeView node, Type slotType)
+    {
+        if (slotType == null) return null;
+        if (node?.Property?.Slot is FormulaSlotBase propertySlot && propertySlot.FamilyType == slotType) return propertySlot;
+        if (node?.Token?.Slot is FormulaSlotBase tokenSlot && tokenSlot.FamilyType == slotType) return tokenSlot;
+        if (node?.ParentSlot is FormulaSlotBase parentSlot && parentSlot.FamilyType == slotType) return parentSlot;
+        return HGReflect.CreateInstance(slotType) as FormulaSlotBase;
     }
 
     /// <summary>換節點內容，保留身分與相容的連線。</summary>
@@ -726,8 +736,14 @@ public partial class HaruGraphWindow
     /// <summary>這個節點能不能換成這個Token。判定路徑與 <see cref="CanReplaceAssetNode"/> 一致。</summary>
     private bool CanReplaceTokenNode(HGNodeView node, GraphToken endpoint)
     {
-        if (endpoint?.Slot == null) return false;
         Type slotType = ReplacementSlotType(node);
+        return CanReplaceTokenNode(node, endpoint, slotType, ReplacementFormulaSlot(node, slotType));
+    }
+
+    private static bool CanReplaceTokenNode(HGNodeView node, GraphToken endpoint, Type slotType, FormulaSlotBase slot)
+    {
+        if (endpoint?.Slot == null) return false;
+        if (slot != null) return slot.AcceptsToken(endpoint);
         if (slotType != null) return slotType == endpoint.FamilyType;
         return node?.ResultType == null || node.ResultType == endpoint.ResultType;
     }

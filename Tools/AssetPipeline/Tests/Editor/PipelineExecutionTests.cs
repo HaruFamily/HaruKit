@@ -60,6 +60,9 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(implementation.IsAbstract, Is.True);
             Assert.That(type.GetMethod("EvaluateObject"), Is.Null);
             Assert.That(typeof(IFormula).IsVisible, Is.False);
+            Assert.That(typeof(IFormulaSlot).IsVisible, Is.False);
+            Assert.That(typeof(ObjectSlot).GetMethod("EvaluateBoxed"), Is.Null);
+            Assert.That(typeof(FormulaSlotBase).GetMethod("EvaluateBoxed", methods), Is.Null);
         }
     }
 

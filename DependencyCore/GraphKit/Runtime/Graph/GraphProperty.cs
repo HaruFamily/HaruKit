@@ -68,7 +68,7 @@ public class GraphProperty
     /// <summary>值型別。Slot 未指定時為 null。</summary>
     public Type ResultType => _slot?.ResultType;
 
-    /// <summary>族身分（＝Slot 型別）。讀寫相容看族，不看結果型別。</summary>
+    /// <summary>族身分（＝Slot 型別）。寫入須同族；讀取依接收 Slot 的相容政策。</summary>
     public Type FamilyType => _slot?.FamilyType;
 
     /// <summary>穩定識別碼，改名不影響。</summary>

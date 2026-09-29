@@ -10,7 +10,7 @@ namespace HaruFamily.Tools.AssetPipeline
     /// 動作的產出端：指著一顆 Property 節點，執行時替換它的目前值。
     /// </summary>
     // 形狀對應 FormulaSlot<TResult, TFormula>：TResult 是寫進去的值，TSlot 是族身分。
-    // 族用讀取端的 Slot 型別而不是 TResult，讀寫兩邊才會落在同一個相容判定上。
+    // 寫入依 Slot 族身分嚴格配對，不沿用讀取端可開放的跨族上轉。
     //
     // 只有替換語意：不追加、不合併、不去重、不複製。清單的 Add 這類操作由處理該集合的
     // Action／Formula 表達，不從這一格長出第二種寫入模式。

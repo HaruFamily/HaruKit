@@ -16,7 +16,7 @@ public abstract class FormulaSlotBase : GraphSlotBase
 
     /// <summary>
     /// 族身份：具體 Slot 型別本身。同一個結果型別可以有多個族（例：string 同時有 String 與 Key），
-    /// Token／Property 的相容與具名登記看這個；Inline 公式可由接收端另行開放跨族結果相容。
+    /// 具名登記與 Property 寫入看這個；讀取端可共用相容政策另行開放跨族結果相容。
     /// </summary>
     // 用 GetType() 而不是另外宣告一個 enum／字串：族本來就是「哪一種 Slot」，多一層宣告就多一處會對不上。
     public Type FamilyType => GetType();
@@ -41,7 +41,7 @@ public abstract class FormulaSlotBase : GraphSlotBase
     /// <summary>這個欄位原本的內嵌公式族基底（TFormula），不因跨族接收而改變。</summary>
     public abstract Type BodyBaseType { get; }
 
-    /// <summary>允許跨公式族接收相同或可安全指派的結果型別；不影響 Token、Property 或資產。</summary>
+    /// <summary>允許跨族接收相同或可安全指派的結果型別；公式與 Slot 讀取共用，寫入仍須同族，資產另依其契約。</summary>
     protected virtual bool AllowCompatibleResult => false;
 
     /// <summary>跨族接收的黑名單，填入封閉公式基底型別；連同其子類排除。同族不受影響。</summary>
@@ -50,17 +50,30 @@ public abstract class FormulaSlotBase : GraphSlotBase
     /// <summary>公式候選搜尋範圍；最終仍須以 AcceptsBody 檢查實例。</summary>
     public virtual Type CandidateBodyBaseType => BodyBaseType;
 
-    /// <summary>跨族型別規則。使用端須先確認來源具有自己的求值契約。</summary>
+    /// <summary>公式來源的接收政策。使用端須先確認來源具有自己的求值契約。</summary>
     protected bool AcceptsCompatibleBody(GraphNodeContent body)
     {
-        if (!AllowCompatibleResult || body is not ITypedFormulaNode formula) return false;
-        if (formula.PackType != PackType || formula.ResultType == null
-            || !ResultType.IsAssignableFrom(formula.ResultType)) return false;
+        if (body == null) return false;
+        bool sameFamily = BodyBaseType?.IsInstanceOfType(body) == true;
+        var formula = body as ITypedFormulaNode;
+        return AcceptsSource(sameFamily, formula?.PackType, formula?.ResultType, body.GetType());
+    }
+
+    /// <summary>Token／Property 宣告 Slot 的接收政策；不求值，也不追入來源子樹。</summary>
+    protected bool AcceptsCompatibleSlot(FormulaSlotBase other)
+        => other != null && AcceptsSource(other.FamilyType == FamilyType,
+            other.PackType, other.ResultType, other.BodyBaseType);
+
+    private bool AcceptsSource(bool sameFamily, Type packType, Type resultType, Type formulaType)
+    {
+        if (sameFamily) return true;
+        if (!AllowCompatibleResult || packType != PackType || resultType == null
+            || ResultType == null || !ResultType.IsAssignableFrom(resultType)) return false;
 
         var excluded = ExcludedFormulaFamilies;
         if (excluded != null)
             foreach (var family in excluded)
-                if (family != null && family.IsAssignableFrom(body.GetType())) return false;
+                if (family != null && family.IsAssignableFrom(formulaType)) return false;
         return true;
     }
 

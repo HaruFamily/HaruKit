@@ -5,6 +5,12 @@ using HaruFamily.DependencyCore.GraphKit;
 
 namespace HaruFamily.Tools.AssetPipeline
 {
+    /// <summary>AP Slot 的內部同步求值入口；保留來源 Slot 的停用、保底與遞迴處理。</summary>
+    internal interface IFormulaSlot
+    {
+        object EvaluateBoxed();
+    }
+
     /// <summary>
     /// 具名Token求值的遞迴防線。
     /// </summary>
@@ -20,12 +26,12 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     /// <summary>
-    /// 管線的公式欄位：常數、內嵌公式或具名Token三選一，由載體節點決定。
+    /// 管線的公式欄位：常數、內嵌公式、具名 Token 或 Property，由載體節點決定。
     /// </summary>
     // 對應舊的 FormulaAssetBase：@default → _default，data / assetData 三態 → GraphNode.Kind，
         // formula 欄位 → 載體節點。
     [Serializable]
-    public abstract class FormulaSlot<TResult, TFormula> : FormulaSlotBase
+    public abstract class FormulaSlot<TResult, TFormula> : FormulaSlotBase, IFormulaSlot
         where TFormula : FormulaBase<TResult, NullPack>
     {
         [SerializeField]
@@ -70,14 +76,17 @@ namespace HaruFamily.Tools.AssetPipeline
         }
 
         public override bool AcceptsBody(GraphNodeContent body)
-            => body is TFormula || (body is IFormula && AcceptsCompatibleBody(body));
+            => body is IFormula && AcceptsCompatibleBody(body);
 
         public override bool AcceptsAsset(ScriptableObject asset) => false;
 
-        public override bool AcceptsToken(GraphToken endpoint) => endpoint?.Slot?.FamilyType == FamilyType;
+        public override bool AcceptsToken(GraphToken endpoint)
+            => endpoint?.Slot is IFormulaSlot && AcceptsCompatibleSlot(endpoint.Slot);
 
-        /// <summary>收同族的 Property。讀 Property 只取目前值，不執行寫入它的動作。</summary>
-        public override bool AcceptsProperty(GraphProperty property) => property?.FamilyType == FamilyType;
+        /// <summary>依共用相容政策讀 Property 的目前值，不執行寫入它的動作。</summary>
+        public override bool AcceptsProperty(GraphProperty property) => AcceptsCompatibleSlot(property?.Slot);
+
+        object IFormulaSlot.EvaluateBoxed() => Evaluate();
 
         /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
         public TResult Default { get => _default; set => _default = value; }
@@ -117,7 +126,7 @@ namespace HaruFamily.Tools.AssetPipeline
                 case NodeKind.Property:
                 {
                     GraphProperty property = _node.Property;
-                    if (property == null || property.FamilyType != FamilyType) return Mismatch("Property");
+                    if (!AcceptsProperty(property)) return Mismatch("Property");
 
                     // 未寫入不是錯誤：一般 Property 回值型別預設值（清單是 null），Proto 回它設定的初始內容。
                     // 參考型別取得同一份引用，不做複製隔離。
@@ -128,7 +137,7 @@ namespace HaruFamily.Tools.AssetPipeline
                 case NodeKind.Token:
                 {
                     var endpoint = _node.Token;
-                    if (endpoint?.Slot is not FormulaSlot<TResult, TFormula> slot) return Fallback();
+                    if (!AcceptsToken(endpoint)) return Mismatch("Token");
 
                     // 編輯期 Verify 會擋掉環，這條是執行期最後一道防線：遞迴當場回保底值而不是炸堆疊。
                     if (!TokenGuard.TryEnter(endpoint))
@@ -139,7 +148,10 @@ namespace HaruFamily.Tools.AssetPipeline
 
                     try
                     {
-                        return slot.Evaluate();
+                        if (endpoint.Slot is FormulaSlot<TResult, TFormula> slot) return slot.Evaluate();
+                        object value = ((IFormulaSlot)endpoint.Slot).EvaluateBoxed();
+                        if (value == null && default(TResult) is null) return default;
+                        return value is TResult typed ? typed : Mismatch("Token");
                     }
                     finally
                     {

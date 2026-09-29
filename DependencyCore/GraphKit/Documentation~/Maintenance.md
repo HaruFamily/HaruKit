@@ -65,6 +65,8 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - `FormulaSlotBase`（求一個值）、`ActionSlotBase`（副作用，同時是畫布頭端）、`PropertySlotBase`（寫入目標，不求值）。**這些基底刻意是零序列化欄位**，使用端才能加泛型子類而不改變序列化格式。
 - 族（family）的身分是**具體 Slot 型別**（`FamilyType`），不是結果型別。同為 `string` 的兩個 Slot 型別是兩個族。
 - 公式接收：同族 `BodyBaseType` 優先。Slot 覆寫 `AllowCompatibleResult` 可額外接受結果型別可指派、Pack 相同的其他族，並以 `ExcludedFormulaFamilies` 排除；`CandidateBodyBaseType` 只描述候選搜尋範圍，最後一律以 `AcceptsBody` 判定。拉線、驗證、求值用同一套接受條件。
+- `AcceptsCompatibleBody` 與 `AcceptsCompatibleSlot` 將來源資訊交給同一個 `AcceptsSource`：同族優先，跨族才檢查開關、Pack、Result 與排除名單。Body 以實際公式型別判族／排除；Token／Property 以宣告 Slot 的 `FamilyType`／`BodyBaseType` 判定，不追入 Token 子樹、不依目前值猜型別。使用端先確認自己的求值能力，再委派相容政策；AP 的三種讀取來源共用此政策，LogicGraph 的 Token／Property 仍採同族契約。寫入端與資產接收另依原契約。
+- Formula／Token 換來源候選共用 `ReplacementFormulaSlot`，依來源自身族取 Property／Token 的宣告 Slot，或同族父欄位實例，再回退型別建立。Token 選單與 picker 都問 `AcceptsToken`；拿不到實例才沿用族／結果型別的近似判斷。多個接收端不改變已定型來源的候選，替換後逐條用 `Accepts*` 保留或斷開連線。
 
 ### 3.3 Token 與 Property
 
