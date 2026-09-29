@@ -39,6 +39,12 @@ public partial class HaruGraphWindow : EditorWindow
     // 折疊清單元素連線的扇形角度（度），由 RebuildFoldFan 在繪製與點線剪斷前重算；不在表內的線照一般路徑。
     private readonly Dictionary<HGLink, float> foldFan = new();
     private readonly Dictionary<HGRow, List<HGLink>> foldFanGroups = new();
+    private readonly Dictionary<(HGRow Row, HGPortKey Target), HGLink> foldedRelations = new();
+    private readonly HashSet<HGLink> foldedDuplicateLinks = new();
+    private readonly HashSet<HGLink> foldedMergedLinks = new();
+    // 跨 Tab 的同父節點／同來源接點只留一段殘影；每次繪線重算，實線優先。
+    private readonly HashSet<(string ParentId, HGPortKey Source)> tabGhostRelations = new();
+    private readonly HashSet<HGLink> tabGhostLinks = new();
     private Vector3[] linkScreenPoints = new Vector3[16];
     // 就地複製（Ctrl+D）的位移：看得出是新的一份，又還留在原件旁邊。不吸附格線——
     // 吸附會讓複本疊回原件的格子上，正好看不出來多了一顆。
@@ -217,11 +223,9 @@ public partial class HaruGraphWindow : EditorWindow
     private readonly Dictionary<GraphNodeGroup, Rect> frozenNodeGroupRects = new();
     // 節點 Id → 所屬群組的顏色。每次畫群組時重算，節點本體與左緣色條依它染色。
     private readonly Dictionary<string, Color> nodeGroupColors = new();
-    // 被群組關掉的成員（群組收合，或不在作用中分頁）：本身不畫，連到它們的線只在父欄位端畫殘影。只影響顯示。ApplyVisibility 重算。
+    // 被群組關掉的直接成員（群組收合，或不在作用中分頁）：本身不畫，連線在可見端畫殘影。ApplyVisibility 重算。
     private readonly HashSet<string> groupOffMembers = new();
-    // groupOffMembers 加上只能經由它們才連得到、因此一起隱藏的節點；連線與殘影判斷用這一份。
-    private readonly HashSet<string> groupOffHidden = new();
-    // 只因為分頁而隱藏的群組成員（非作用中分頁，或只經由它們才連得到）。框要包住所有分頁的成員，所以它們仍算進外框；被 ⊖ 收起的不算。
+    // 只因容器顯示而隱藏的直接成員。框要包住所有分頁的成員，所以它們仍算進外框；被 ⊖ 收起的不算。
     private readonly HashSet<string> tabHiddenMembers = new();
     // 節點 Id → 所屬群組（不論收合）。
     private readonly Dictionary<string, GraphNodeGroup> nodeGroupMembers = new();
@@ -257,6 +261,7 @@ public partial class HaruGraphWindow : EditorWindow
     private int dragListTarget = -1;
     // 清單與節點內摺疊群組的折疊只是視覺狀態，不進資料：key 見 HGGraph.CollapseKey。
     private readonly Dictionary<string, bool> listCollapse = new();
+    private readonly Dictionary<string, string> fieldTabs = new();
     // Slot 的分支收合狀態，key 同樣是 HGGraph.CollapseKey。只認手動切換過的記錄，沒記錄就是展開。
     // 純視覺，切換只能設 graphDirty，不可以走 Invalidate。
     private readonly Dictionary<string, bool> slotHidden = new();
@@ -266,6 +271,11 @@ public partial class HaruGraphWindow : EditorWindow
     private string soloSlotKey;
     private readonly Dictionary<string, bool> soloRestore = new();
     private object pendingCenterTarget;
+    // 診斷欄位的短暫提示只記穩定位置，重建後重新比對，不持有 Row。
+    private string highlightedFieldFocus;
+    private string highlightedFieldNode;
+    private string highlightedFieldPath;
+    private double fieldHighlightUntil;
     // 剪貼簿存的是**載體**複本，不是內容本體：資產、Token、Property 節點的內容是引用不是 body，
     // 只抄 GraphNodeContent 就等於這三種永遠複製不了。座標存相對值，貼上時整團平移到滑鼠。
     private static readonly List<GraphNode> clipboard = new();
@@ -628,7 +638,7 @@ public partial class HaruGraphWindow : EditorWindow
     private HGGraphView BuildCurrentGraph()
         => focus.Kind == HGFocusKind.None ? new HGGraphView()
             : HGGraph.Build(model, focus.Roots, OrphansOfCurrentFocus(), focus.Id, focus.HeadTitle,
-                listCollapse, noteOpenId, noteCollapsed, focus.HeadCarrier, orphanKindHints, activeContext.Metadata);
+                listCollapse, noteOpenId, noteCollapsed, focus.HeadCarrier, orphanKindHints, activeContext.Metadata, fieldTabs);
 
     /// <summary>
     /// 套用 Slot 的分支收合。圖一律建到底再標記，因為「有沒有別的欄位在用」要走完整張圖才算得準；
@@ -651,32 +661,25 @@ public partial class HaruGraphWindow : EditorWindow
         }
 
         // 收合的是**欄位**不是節點：先把所有「該收起來」的欄位挑出來。
-        // 清單標題自己也有一筆記錄：收起來時底下每個元素都算收起來，但元素自己的記錄不動，
-        // 清單再展開時，原本個別收起來的元素仍然收著。
+        // 只套用實際 Slot 的記錄；清單層級的隱藏 key 不控制元素子樹。
         foreach (var n in graph.Nodes)
         {
             foreach (var row in HGGraph.AllRows(n.Rows))
             {
-                if (row.Kind == HGRowKind.List)
-                {
-                    if (IsSlotHidden(n, row)) effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
-                    continue;
-                }
                 if (!row.HasSlot) continue;
-                if (IsSlotHidden(n, row) || IsInHiddenList(n, row)) effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
+                if (IsSlotHidden(n, row)) effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
             }
         }
 
         // 節點畫不畫，看它還有沒有一條「從 HEAD／候選出發、中途不經過任何收合欄位」的路徑。
         // 共用節點因此在最後一個還要求顯示它的欄位被收起來時才跟著消失。用可達性算而不是引用計數：
         // 計數擋不住「引用者自己也被收掉了」這種間接情況。
-        // 被群組關掉的成員（收合或非作用中分頁）不顯示，走訪到它就停：只靠它才連得到的節點（包括群組外的）跟著隱藏。
+        // Group 與 HGTab 只隱藏直接管理的內容，不切斷引用走訪；群組成員在走訪後另外隱藏。
         var visible = new HashSet<HGNodeView>();
         foreach (var n in graph.Nodes)
-            if (n.ParentRow == null) MarkVisibleFrom(n, visible, true);
+            if (n.ParentRow == null) MarkVisibleFrom(n, visible);
 
         foreach (var n in graph.Nodes) n.Hidden = !visible.Contains(n);
-        CollectGroupOffHidden(visible);
         HideGroupOffMembers();
         MarkHiddenSlots();
     }
@@ -688,11 +691,15 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private void ClearViewState()
     {
+        ClearFieldHighlight();
+        tabGhostRelations.Clear();
+        tabGhostLinks.Clear();
         slotHidden.Clear();
         effectiveHidden.Clear();
         soloRestore.Clear();
         soloSlotKey = null;
         listCollapse.Clear();
+        fieldTabs.Clear();
         noteCollapsed.Clear();
         noteOpenId = null;
         carrierUsers.Clear();
@@ -707,7 +714,6 @@ public partial class HaruGraphWindow : EditorWindow
         frozenNodeGroupRects.Clear();
         nodeGroupColors.Clear();
         groupOffMembers.Clear();
-        groupOffHidden.Clear();
         tabHiddenMembers.Clear();
         nodeGroupMembers.Clear();
     }
@@ -734,6 +740,9 @@ public partial class HaruGraphWindow : EditorWindow
         listCollapse.Clear();
         foreach (var key in state.Folded) listCollapse[key] = true;
         foreach (var key in state.Unfolded) listCollapse[key] = false;
+        fieldTabs.Clear();
+        foreach (var entry in state.FieldTabs)
+            if (entry != null && !string.IsNullOrEmpty(entry.Key)) fieldTabs[entry.Key] = entry.Tab;
         noteCollapsed.Clear();
         foreach (var id in state.NotesCollapsed) noteCollapsed.Add(id);
     }
@@ -749,6 +758,27 @@ public partial class HaruGraphWindow : EditorWindow
     {
         listCollapse[key] = folded;
         if (CurrentViewState()?.SetFolded(key, folded) == true) MarkViewStateChanged();
+    }
+
+    private void SetFieldTab(HGRow tabs, string tab)
+    {
+        string key = HGGraph.CollapseKey(tabs.OwnerNodeId, tabs);
+        fieldTabs[key] = tab;
+        if (CurrentViewState()?.SetFieldTab(key, tab) == true) MarkViewStateChanged();
+    }
+
+    private void SelectFieldTab(HGRow tabs, string tab)
+    {
+        if (tabs.ActiveTab == tab) return;
+        BreakUndoMerge();
+        ClearPortInteractionState();
+        GUIUtility.keyboardControl = 0;
+        EditorGUIUtility.editingTextField = false;
+        soloSlotKey = null;
+        soloRestore.Clear();
+        SetFieldTab(tabs, tab);
+        graphDirty = true;
+        Repaint();
     }
 
     private void SetNoteCollapsed(string nodeId, bool collapsed)
@@ -789,15 +819,25 @@ public partial class HaruGraphWindow : EditorWindow
         for (var node = target; node?.ParentRow != null && seen.Add(node); node = NodeById(node.ParentRow.OwnerNodeId))
         {
             HGRow row = node.ParentRow;
+            RevealRowContainers(row);
             ExpandNodeGroupOf(row.OwnerNodeId);
             SetSlotHidden(HGGraph.CollapseKey(row.OwnerNodeId, row), false);
-            for (HGRow list = row.ItemOwnerRow; list != null; list = list.ItemOwnerRow)
-                SetSlotHidden(HGGraph.CollapseKey(row.OwnerNodeId, list), false);
-            // 欄位在收起的摺疊群組裡時展開，巢狀群組一路往外都展開。
-            for (HGRow foldout = row.FoldoutOwnerRow; foldout != null; foldout = foldout.FoldoutOwnerRow)
-                if (foldout.Collapsed) SetListFolded(HGGraph.CollapseKey(foldout.OwnerNodeId, foldout), false);
         }
         graphDirty = true;
+    }
+
+    /// <summary>展開這一列的容器，不修改 ShowIf 條件或其他無關欄位的顯示狀態。</summary>
+    private void RevealRowContainers(HGRow row)
+    {
+        for (var page = row.TabPageOwnerRow; page != null; page = page.TabPageOwnerRow)
+            if (page.TabStripRow.ActiveTab != page.Label) SetFieldTab(page.TabStripRow, page.Label);
+        for (var list = row.ItemOwnerRow; list != null; list = list.ItemOwnerRow)
+        {
+            string key = HGGraph.CollapseKey(list.OwnerNodeId, list);
+            if (list.Collapsed) SetListFolded(key, false);
+        }
+        for (var foldout = row.FoldoutOwnerRow; foldout != null; foldout = foldout.FoldoutOwnerRow)
+            if (foldout.Collapsed) SetListFolded(HGGraph.CollapseKey(foldout.OwnerNodeId, foldout), false);
     }
 
     /// <summary>
@@ -808,14 +848,6 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private bool IsSlotHidden(HGNodeView owner, HGRow row)
         => slotHidden.TryGetValue(HGGraph.CollapseKey(owner.Id, row), out bool stored) && stored;
-
-    /// <summary>這一列屬於某個被收起來的清單（巢狀清單任一層收起來都算）。</summary>
-    private bool IsInHiddenList(HGNodeView owner, HGRow row)
-    {
-        for (HGRow list = row.ItemOwnerRow; list != null; list = list.ItemOwnerRow)
-            if (IsSlotHidden(owner, list)) return true;
-        return false;
-    }
 
     /// <summary>
     /// 把「目標已經被藏起來」的欄位補進 effectiveHidden，收合鈕才會畫成 +。
@@ -831,7 +863,7 @@ public partial class HaruGraphWindow : EditorWindow
                 if (!row.HasSlot) continue;
                 if (!graph.BySlot.TryGetValue(row.InputSlot, out var target) || !target.Hidden) continue;
                 // 目標被群組關掉：父欄位端另畫殘影，欄位本身沒有收合，不能畫成 +。
-                if (groupOffHidden.Contains(target.Id ?? "")) continue;
+                if (groupOffMembers.Contains(target.Id ?? "")) continue;
                 effectiveHidden.Add(HGGraph.CollapseKey(n.Id, row));
             }
         }
@@ -843,10 +875,6 @@ public partial class HaruGraphWindow : EditorWindow
         var keep = new HashSet<HGNodeView>();
         var row = FindSlotRow(soloSlotKey);
         if (row?.InputSlot != null && graph.BySlot.TryGetValue(row.InputSlot, out var target)) MarkSubtree(target, keep);
-        // 清單標題的 solo：留下每個元素接出去的子樹。
-        if (row?.Kind == HGRowKind.List)
-            foreach (var element in HGGraph.AllRows(row.Children))
-                if (element.HasSlot && graph.BySlot.TryGetValue(element.InputSlot, out var child)) MarkSubtree(child, keep);
 
         // 持有這個欄位的節點、以及它一路往上的祖先都要留著。把來路藏掉的話，
         // 畫面上會剩一段浮在空中、看不出從哪裡接出來的子樹，連要退出 solo 的那顆開關都不見了。
@@ -895,6 +923,7 @@ public partial class HaruGraphWindow : EditorWindow
     private bool IsLinkVisible(HGLink link)
     {
         if (link?.InputPort == null || link.OutputPort == null) return false;
+        if (link.ParentRow?.IsTabHidden == true) return false;
         if (IsGroupOffLink(link)) return false;
         if (effectiveHidden.Contains(HGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow))) return false;
         return IsLinkEndVisible(link, link.InputPort) && IsLinkEndVisible(link, link.OutputPort);
@@ -918,7 +947,7 @@ public partial class HaruGraphWindow : EditorWindow
     private static HGRow FoldedListOf(HGLink link)
     {
         HGRow row = link?.ParentRow;
-        if (row == null || !row.Hidden || link.InputOwner == null || link.InputOwner.Hidden) return null;
+        if (row == null || row.IsTabHidden || !row.Hidden || link.InputOwner == null || link.InputOwner.Hidden) return null;
         for (HGRow list = row.ItemOwnerRow; list != null; list = list.ItemOwnerRow)
             if (list.Collapsed && !list.Hidden) return list;
         for (HGRow foldout = row.FoldoutOwnerRow; foldout != null; foldout = foldout.FoldoutOwnerRow)
@@ -927,24 +956,51 @@ public partial class HaruGraphWindow : EditorWindow
     }
 
     /// <summary>
-    /// 同一個折疊清單伸出的線依目標高度排序、等角散開：上面的目標拿上面的角度，線在起點不交叉。
+    /// 同一個折疊清單／群組到同一目標 Port 只留一條，實線優先；不同目標依高度排序、等角散開。
     /// 一條就是 0 度（維持水平）；條數多時壓縮間距，整把扇不超過 ±<see cref="FoldFanMax"/>。
-    /// 元素欄位被 ⊖ 收起的殘影也算進來：它們一樣從代表接點伸出，不散開就疊成一條。
+    /// 元素欄位被 ⊖ 收起的殘影也參與合併與扇形；多筆引用的代表線須展開後才能逐筆剪斷。
     /// </summary>
     private void RebuildFoldFan()
     {
         foldFan.Clear();
         // 清單列每次建圖都換新物件，整表清掉，不留住上一代的列。
         foldFanGroups.Clear();
+        foldedRelations.Clear();
+        foldedDuplicateLinks.Clear();
+        foldedMergedLinks.Clear();
         if (graph == null) return;
 
         var targetY = new Dictionary<HGLink, float>();
         foreach (var link in graph.Links)
         {
             HGRow list = FoldedListOf(link);
-            if (list == null || IsGroupOffLink(link)) continue;
+            if (list == null || link.InputPort == null || link.OutputPort == null) continue;
             bool ghost = !IsLinkVisible(link);
-            if (ghost && !IsLinkGhost(link)) continue;
+            if (ghost && !IsLinkGhost(link) && !IsGroupOffLink(link)) continue;
+            var key = (list, FoldTargetPort(link).Key);
+            if (foldedRelations.TryGetValue(key, out var representative))
+            {
+                if (!ghost && !IsLinkVisible(representative))
+                {
+                    foldedDuplicateLinks.Add(representative);
+                    foldedRelations[key] = link;
+                    foldedMergedLinks.Add(link);
+                }
+                else
+                {
+                    foldedDuplicateLinks.Add(link);
+                    foldedMergedLinks.Add(representative);
+                }
+                continue;
+            }
+            foldedRelations.Add(key, link);
+        }
+
+        foreach (var relation in foldedRelations)
+        {
+            HGRow list = relation.Key.Row;
+            HGLink link = relation.Value;
+            if (IsGroupOffLink(link)) continue;
             if (!foldFanGroups.TryGetValue(list, out var group)) foldFanGroups[list] = group = new List<HGLink>();
             group.Add(link);
             targetY[link] = FoldTargetPort(link).Presentation.Position.y;
@@ -959,43 +1015,22 @@ public partial class HaruGraphWindow : EditorWindow
         }
     }
 
-    /// <summary>折疊清單元素連線的目標端：欄位列那一端以外的接點（寫入 Property 的線兩端角色相反，用列比對）。</summary>
+    /// <summary>欄位列以外的接點，供折疊扇形與 Tab 殘影分組使用（寫入 Property 的線兩端角色相反，用列比對）。</summary>
     private HGPort FoldTargetPort(HGLink link)
         => ReferenceEquals(OwnerRowOfPort(link.InputPort), link.ParentRow) ? link.OutputPort : link.InputPort;
 
     /// <summary>
     /// 從這顆節點沿「沒有收起來」的欄位往下走，走得到的節點都要畫。沒有父列的節點（HEAD 與候選）
-    /// 是起點，永遠畫。visible 兼作環的護欄。stopAtGroupOff 時被群組關掉的成員不算、也不往下走。
+    /// 是起點，永遠畫。visible 兼作環的護欄。Group／HGTab 的容器隱藏不影響引用可達性。
     /// </summary>
-    private void MarkVisibleFrom(HGNodeView node, HashSet<HGNodeView> visible, bool stopAtGroupOff)
+    private void MarkVisibleFrom(HGNodeView node, HashSet<HGNodeView> visible)
     {
-        if (node == null) return;
-        if (stopAtGroupOff && !string.IsNullOrEmpty(node.Id) && groupOffMembers.Contains(node.Id)) return;
-        if (!visible.Add(node)) return;
+        if (node == null || !visible.Add(node)) return;
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
             if (row.InputSlot == null) continue;
             if (effectiveHidden.Contains(HGGraph.CollapseKey(node.Id, row))) continue;
-            if (graph.BySlot.TryGetValue(row.InputSlot, out var child)) MarkVisibleFrom(child, visible, stopAtGroupOff);
-        }
-    }
-
-    /// <summary>
-    /// 只因為群組關掉成員而看不到的節點：不擋群組時走得到、擋了就走不到。
-    /// 它們和被關掉的成員一樣處理：連到它們的線只在看得到的父欄位端畫殘影。
-    /// </summary>
-    private void CollectGroupOffHidden(HashSet<HGNodeView> visible)
-    {
-        if (groupOffMembers.Count == 0) return;
-        var reachable = new HashSet<HGNodeView>();
-        foreach (var n in graph.Nodes)
-            if (n.ParentRow == null) MarkVisibleFrom(n, reachable, false);
-        foreach (var n in reachable)
-        {
-            if (visible.Contains(n) || string.IsNullOrEmpty(n.Id)) continue;
-            groupOffHidden.Add(n.Id);
-            // 群組成員只因切頁而藏時仍算進框，切頁時框才不動。
-            if (nodeGroupMembers.ContainsKey(n.Id)) tabHiddenMembers.Add(n.Id);
+            if (graph.BySlot.TryGetValue(row.InputSlot, out var child)) MarkVisibleFrom(child, visible);
         }
     }
 
@@ -1003,7 +1038,7 @@ public partial class HaruGraphWindow : EditorWindow
     {
         foreach (var n in graph.Nodes)
             foreach (var row in HGGraph.AllRows(n.Rows))
-                if ((row.HasSlot || row.Kind == HGRowKind.List) && HGGraph.CollapseKey(n.Id, row) == key) return row;
+                if (row.HasSlot && HGGraph.CollapseKey(n.Id, row) == key) return row;
         return null;
     }
 
@@ -1270,25 +1305,28 @@ public partial class HaruGraphWindow : EditorWindow
         foreach (var issue in target.Issues)
         {
             GraphDiagnosticLocation location = issue.Location;
+            if (!string.IsNullOrEmpty(location.FieldPath))
+            {
+                issue.Slot = null;
+                if (string.IsNullOrEmpty(location.NodeId) && string.IsNullOrEmpty(location.TokenId)) issue.Node = null;
+            }
             if (!string.IsNullOrEmpty(location.FocusId)) issue.Focus = FindFocus(location.FocusId);
             if (!string.IsNullOrEmpty(location.NodeId))
-                issue.Node = FindCarrier(location.NodeId);
+                issue.Node = NodeOfId(location.NodeId)?.Carrier ?? FindCarrier(location.NodeId);
             else if (!string.IsNullOrEmpty(location.TokenId))
                 issue.Node = FindToken(location.TokenId);
             else if (TryFindRoot(location.FieldPath, out object root))
                 issue.Node = root;
 
-            if (issue.Node != null || string.IsNullOrEmpty(location.FieldPath)) continue;
-            foreach (var node in graph.Nodes)
+            // 其他焦點的同名欄位不可綁到目前畫布；切過去後再依位置重新解析。
+            if (!string.IsNullOrEmpty(location.FocusId) && issue.Focus == null && location.FocusId != focus.Id) continue;
+            if (issue.Focus != null && !issue.Focus.SameAs(focus)
+                && !(issue.Focus.Kind == HGFocusKind.Action && focus.Kind == HGFocusKind.Root)) continue;
+            if (TryFindIssueTarget(issue, out var node, out var row))
             {
-                foreach (var row in HGGraph.AllRows(node.Rows))
-                {
-                    if (!string.Equals(row.Path, location.FieldPath, StringComparison.Ordinal)) continue;
-                    issue.Slot = row.InputSlot;
-                    issue.Node = node.Obj ?? node.ParentSlot;
-                    break;
-                }
-                if (issue.Node != null || issue.Slot != null) break;
+                if (row != null) issue.Slot = row.InputSlot;
+                else if (!string.IsNullOrEmpty(location.FieldPath)) issue.Slot = null;
+                issue.Node = (object)node.Carrier ?? node.Obj ?? issue.Node;
             }
         }
     }
@@ -1304,6 +1342,7 @@ public partial class HaruGraphWindow : EditorWindow
     {
         if (string.IsNullOrEmpty(id)) return null;
         if (focus != null && focus.Id == id) return focus;
+        if (id == "tim:*") return AllRootsFocus();
 
         if (id.StartsWith("act:", StringComparison.Ordinal))
         {

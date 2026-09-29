@@ -106,6 +106,126 @@ public sealed class HGPublicConsumerTests
     }
 
     [Test]
+    public void FieldTabsKeepAllSourcesAvailableForCrossPageConnections()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            var shared = new GraphNode(new ConsumerBody());
+            var exclusive = new GraphNode(new ConsumerBody { Input = new ConsumerSlot() });
+            ((ConsumerBody)exclusive.BodyObject).Input.SetNode(shared);
+            var branch = new GraphNode(new ConsumerBody { Input = new ConsumerSlot() });
+            ((ConsumerBody)branch.BodyObject).Input.SetNode(exclusive);
+            var parent = new GraphNode(new ConsumerBody { Input = new ConsumerSlot() });
+            ((ConsumerBody)parent.BodyObject).Input.SetNode(branch);
+            foreach (var node in new[] { parent, branch, exclusive, shared }) node.EnsureId();
+            owner.B = new ConsumerDocument();
+            var main = new ConsumerSlot();
+            main.SetNode(parent);
+            var sharedUse = new ConsumerSlot();
+            sharedUse.SetNode(shared);
+            owner.B.Root.Items.Add(main);
+            owner.B.Root.Items.Add(sharedUse);
+            var provider = new FieldTabConsumerProvider();
+            Assert.That(window.BindDocument(owner, Binding(), new HGEditorExtensionContext(provider, provider)), Is.True);
+            var commands = window.GetDocumentCommands();
+            var before = commands.Query();
+            Assert.That(System.Linq.Enumerable.Single(before.Nodes, node => node.Id == parent.Id).IsHidden, Is.False);
+            Assert.That(System.Linq.Enumerable.Single(before.Nodes, node => node.Id == branch.Id).IsHidden, Is.False);
+            Assert.That(System.Linq.Enumerable.Single(before.Nodes, node => node.Id == exclusive.Id).IsHidden, Is.False);
+            Assert.That(System.Linq.Enumerable.Single(before.Nodes, node => node.Id == shared.Id).IsHidden, Is.False);
+            Assert.That(System.Linq.Enumerable.Single(before.Ports, port => port.Key.OwnerId == parent.Id
+                && port.Key.Path == "/Input").IsVisible, Is.False);
+
+            var input = new HGPortKey(parent.Id, "/Input", HGPortRole.Input);
+            var output = System.Linq.Enumerable.Single(before.Ports, port => port.Key.OwnerId == branch.Id && port.IsPrimaryOutput);
+            Assert.That(output.CanStart, Is.True);
+            Assert.That(commands.Disconnect(before.Generation, input), Is.EqualTo(HGSessionCommandResult.Rejected));
+            Assert.That(window.FocusDocumentNode(exclusive.Id), Is.True);
+            Assert.That(commands.Query().IsDirty, Is.False, "Focusing a visible source must not switch its parent's tab.");
+
+            // 以已儲存的 B 頁重開；來源始終是同一顆，不必為這一頁複製。
+            owner.B.ViewState.SetFieldTab(parent.Id + "#/#tabs/", "B");
+            Assert.That(window.BindDocument(owner, Binding(), new HGEditorExtensionContext(provider, provider)), Is.True);
+            commands = window.GetDocumentCommands();
+            var active = commands.Query();
+            Assert.That(System.Linq.Enumerable.Single(active.Ports, port => port.Key.Equals(input)).IsVisible, Is.True);
+            Assert.That(active.Links.Count, Is.EqualTo(before.Links.Count));
+            Assert.That(commands.Disconnect(active.Generation, input), Is.EqualTo(HGSessionCommandResult.Changed));
+            var disconnected = commands.Query();
+            Assert.That(commands.Connect(disconnected.Generation, input, output.Key), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Cancel(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(System.Linq.Enumerable.Single(commands.Query().Nodes, node => node.Id == branch.Id).IsHidden, Is.False);
+        }
+        finally
+        {
+            window.GetDocumentCommands()?.Cancel();
+            UnityEngine.Object.DestroyImmediate(window);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void NodeGroupsHideOnlyDirectMembersAndKeepExternalDescendants(bool collapsed)
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            var leaf = new GraphNode(new ConsumerBody());
+            var childBody = new ConsumerBody { Input = new ConsumerSlot() };
+            childBody.Input.SetNode(leaf);
+            var child = new GraphNode(childBody);
+            var parentBody = new ConsumerBody { Input = new ConsumerSlot() };
+            parentBody.Input.SetNode(child);
+            var parent = new GraphNode(parentBody);
+            foreach (var node in new[] { parent, child, leaf }) node.EnsureId();
+            owner.B = new ConsumerDocument();
+            var root = new ConsumerSlot();
+            root.SetNode(parent);
+            owner.B.Root.Items.Add(root);
+            var group = new GraphNodeGroup("tim:*", "Group", new Rect(0, 0, 400, 300), 0);
+            group.AddTab("A");
+            group.AddTab("B");
+            group.SetMember(parent.Id, true);
+            group.SetActiveTab(1);
+            group.SetCollapsed(collapsed);
+            owner.B.ViewState.AddNodeGroup(group);
+            var provider = new FieldTabConsumerProvider();
+            var context = new HGEditorExtensionContext(provider, provider);
+            Assert.That(window.BindDocument(owner, Binding(), context), Is.True);
+            var before = window.GetDocumentCommands().Query();
+            Assert.That(System.Linq.Enumerable.Single(before.Nodes, node => node.Id == parent.Id).IsHidden, Is.True);
+            Assert.That(System.Linq.Enumerable.Single(before.Nodes, node => node.Id == child.Id).IsHidden, Is.False);
+            Assert.That(System.Linq.Enumerable.Single(before.Nodes, node => node.Id == leaf.Id).IsHidden, Is.False);
+
+            // 要一起隱藏就明確納入同一頁；更外面的孫節點仍可使用。
+            group.SetMember(child.Id, true);
+            group.SetMemberTab(child.Id, 0);
+            Assert.That(window.BindDocument(owner, Binding(), context), Is.True);
+            var commands = window.GetDocumentCommands();
+            var grouped = commands.Query();
+            Assert.That(System.Linq.Enumerable.Single(grouped.Nodes, node => node.Id == child.Id).IsHidden, Is.True);
+            Assert.That(System.Linq.Enumerable.Single(grouped.Nodes, node => node.Id == leaf.Id).IsHidden, Is.False);
+            Assert.That(grouped.Links.Count, Is.EqualTo(before.Links.Count));
+            Assert.That(window.FocusDocumentNode(child.Id), Is.True);
+            Assert.That(System.Linq.Enumerable.Single(commands.Query().Nodes, node => node.Id == child.Id).IsHidden, Is.False);
+            Assert.That(group.ActiveTab, Is.EqualTo(1), "Reveal must only edit the working copy.");
+            Assert.That(commands.Cancel(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(System.Linq.Enumerable.Single(commands.Query().Nodes, node => node.Id == child.Id).IsHidden, Is.True);
+            Assert.That(System.Linq.Enumerable.Single(commands.Query().Nodes, node => node.Id == leaf.Id).IsHidden, Is.False);
+        }
+        finally
+        {
+            window.GetDocumentCommands()?.Cancel();
+            UnityEngine.Object.DestroyImmediate(window);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+    }
+
+    [Test]
     public void PublicSessionRefusesToTreatThePropertyNodeInputAsTheWriteLink()
     {
         var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
@@ -981,9 +1101,28 @@ public sealed class HGPublicConsumerTests
         }
     }
 
-    [Serializable]
-    private sealed class ConsumerDocument : IGraphDocument, ITokenOwner
+    private sealed class FieldTabConsumerProvider : IHGEditorExtensionProvider, IHGEditorMetadataProvider
     {
+        public bool Supports(UnityEngine.Object owner, IGraphDocument document) => document is ConsumerDocument;
+        public void AddPorts(HGPortBuildContext context) { }
+        public bool TryGetNodeDescriptor(Type nodeType, out HGNodeDescriptor descriptor)
+        {
+            descriptor = nodeType == typeof(ConsumerBody)
+                ? new HGNodeDescriptor(nodeType, new[]
+                {
+                    HGFieldDescriptor.Create<ConsumerBody, float>("Percent", body => body.Percent.Value, tab: "A"),
+                    HGFieldDescriptor.CreateSlot<ConsumerBody, ConsumerSlot>("Input", body => body.Input, tab: "B"),
+                }) : null;
+            return descriptor != null;
+        }
+        public bool TryGetValueDrawer(Type valueType, out IHGValueDrawer drawer) { drawer = null; return false; }
+    }
+
+    [Serializable]
+    private sealed class ConsumerDocument : IGraphDocument, ITokenOwner, IGraphViewStateOwner
+    {
+        [SerializeField] private GraphViewState viewState = new();
+        public GraphViewState ViewState => viewState;
         public ConsumerRoot Root = new ConsumerRoot();
         private List<GraphNode> orphans = new List<GraphNode>();
         private List<GraphToken> tokens = new List<GraphToken>();

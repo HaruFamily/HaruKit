@@ -821,12 +821,11 @@ public partial class HaruGraphWindow
 
     /// <summary>
     /// 重算「節點 Id → 所屬群組」與被群組關掉的成員（群組收合，或不在作用中分頁）。ApplyVisibility 開頭呼叫。
-    /// 兩種都只影響顯示，處理相同：節點不畫，連線只在父欄位端畫殘影（見 <see cref="DrawGroupOffGhost"/>）。
+    /// 兩種都只影響直接成員，外部來源保留，連線在可見端畫殘影（見 <see cref="DrawContainerHiddenGhost"/>）。
     /// </summary>
     private void CollectGroupOffMembers()
     {
         groupOffMembers.Clear();
-        groupOffHidden.Clear();
         tabHiddenMembers.Clear();
         nodeGroupMembers.Clear();
         foreach (var group in CurrentNodeGroups())
@@ -836,48 +835,24 @@ public partial class HaruGraphWindow
                 nodeGroupMembers[id] = group;
                 if (group.Collapsed || !group.IsOnActiveTab(id)) groupOffMembers.Add(id);
             }
-        groupOffHidden.UnionWith(groupOffMembers);
     }
 
-    /// <summary>有一端被群組關掉的線：整條不畫，只由 <see cref="DrawGroupOffGhost"/> 在父欄位端畫殘影。</summary>
+    /// <summary>有一端被群組關掉的線：整條不畫，只在可見端畫殘影。</summary>
     private bool IsGroupOffLink(HGLink link)
     {
-        if (groupOffHidden.Count == 0 || link == null) return false;
-        return GroupOffHiddenOwner(link.InputPort) != null || GroupOffHiddenOwner(link.OutputPort) != null;
+        if (groupOffMembers.Count == 0 || link == null) return false;
+        return GroupOffOwner(link.InputPort) != null || GroupOffOwner(link.OutputPort) != null;
     }
 
-    /// <summary>
-    /// 比照 ⊖ 收起：父欄位還看得到、目標被群組關掉時，只在欄位端畫殘影，朝向目標原本的接點位置；
-    /// 目標所在的群組收合時改朝標題列朝向欄位的那一側（原本的位置已不在框內）。
-    /// 目標端與標題列那段都不畫；父欄位也被關掉時整條不畫。
-    /// </summary>
-    private void DrawGroupOffGhost(HGLink link, bool traced)
-    {
-        // 欄位端是 ParentRow 那一顆接點；寫入 Property 的線兩端角色相反，所以用列比對。
-        bool inputIsSlot = ReferenceEquals(OwnerRowOfPort(link.InputPort), link.ParentRow);
-        HGPort slotPort = inputIsSlot ? link.InputPort : link.OutputPort;
-        HGPort targetPort = inputIsSlot ? link.OutputPort : link.InputPort;
-        if (GroupOffHiddenOwner(slotPort) != null || GroupOffHiddenOwner(targetPort) == null) return;
-        if (!slotPort.Presentation.Visible && FoldedListOf(link) == null) return;
-        Vector2 slotPos = slotPort.Presentation.Position;
-        Vector2 targetPos = targetPort.Presentation.Position;
-        float targetDir = PortDirection(targetPort);
-        var targetOwner = OwnerNodeOfPort(targetPort);
-        if (targetOwner != null && !string.IsNullOrEmpty(targetOwner.Id)
-            && nodeGroupMembers.TryGetValue(targetOwner.Id, out var group) && group.Collapsed)
-            NodeGroupHeaderPortFacing(group, slotPos, out targetPos, out targetDir);
-        DrawLinkGhost(slotPos, PortDirection(slotPort), targetPos, targetDir, GhostColor(link, traced), GhostThickness(traced));
-    }
-
-    /// <summary>接點所屬節點被群組關掉（或只經由被關掉的成員才連得到）時回它的 Id，否則回 null。</summary>
-    private string GroupOffHiddenOwner(HGPort port)
+    /// <summary>接點所屬節點是被群組關掉的直接成員時回它的 Id，否則回 null。</summary>
+    private string GroupOffOwner(HGPort port)
     {
         var owner = port != null ? OwnerNodeOfPort(port) : null;
-        return owner != null && !string.IsNullOrEmpty(owner.Id) && groupOffHidden.Contains(owner.Id) ? owner.Id : null;
+        return owner != null && !string.IsNullOrEmpty(owner.Id) && groupOffMembers.Contains(owner.Id) ? owner.Id : null;
     }
 
     /// <summary>
-    /// 把被群組關掉的成員標成隱藏。一般模式下可達性走訪已經擋掉它們（<see cref="MarkVisibleFrom"/>），這裡主要補 solo 模式。
+    /// 可達性／solo 先決定節點顯示，再只把被群組關掉的直接成員隱藏，不連帶隱藏外部來源。
     /// 本來看得到、只因分頁而藏的成員另外記下，框要把它們算進去。
     /// </summary>
     private void HideGroupOffMembers()

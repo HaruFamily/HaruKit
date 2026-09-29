@@ -88,6 +88,12 @@ public static class HGStyles
     public static Color ListRule => T.listRule;   // 新增列與整段清單的外框
     // 疊在底帶上的標題列：比斑馬紋暗一階，相鄰兩段清單靠「新的一段從這裡開始」分開。只用明度，不佔色相。
     public static Color ListHeader => T.listHeader;
+    // 作用中頁籤與內容共用不透明底色，靠相連輪廓表達歸屬，不靠色相或疊色深淺。
+    public static Color TabSelected => TabBody;
+    public static Color TabInactive => Color.Lerp(T.nodeBody, T.fieldBackground, 0.6f);
+    public static Color TabAccent => Color.Lerp(T.nodeBody, T.text, 0.22f);
+    public static Color TabBody => T.nodeBody;
+    public static Color FoldoutHeader => Color.Lerp(T.nodeBody, T.fieldBackground, 0.35f);
     public static Color ListRowHover => T.listRowHover;
     public static Color ListRowDragging => T.listRowDragging;
 
@@ -153,6 +159,7 @@ public static class HGStyles
         foreach (var tex in gradientCache.Values) if (tex != null) UnityEngine.Object.DestroyImmediate(tex);
         gradientCache.Clear();
         elideCache.Clear();
+        tabLabels.Clear();
     }
 
     /// <summary>
@@ -195,6 +202,24 @@ public static class HGStyles
     }, Text);
 
     public static GUIStyle RowLabelError => rowLabelError ??= Ink(new GUIStyle(RowLabel), Error);
+
+    private static readonly Dictionary<(TextAnchor alignment, bool selected), GUIStyle> tabLabels = new();
+
+    /// <summary>分頁標題使用獨立樣式；文字框已留等寬邊距，不能再沿用 RowLabel 不對稱的 padding。</summary>
+    public static GUIStyle TabLabel(TextAnchor alignment, bool selected = false)
+    {
+        var key = (alignment, selected);
+        if (!tabLabels.TryGetValue(key, out var style))
+        {
+            style = Ink(new GUIStyle(RowLabel)
+            {
+                alignment = alignment, padding = new RectOffset(0, 0, 0, 0),
+                fontStyle = FontStyle.Normal,
+            }, selected ? T.buttonOnText : T.muted);
+            tabLabels.Add(key, style);
+        }
+        return style;
+    }
 
     public static GUIStyle Chip => chip ??= Ink(new GUIStyle(EditorStyles.miniLabel)
     {

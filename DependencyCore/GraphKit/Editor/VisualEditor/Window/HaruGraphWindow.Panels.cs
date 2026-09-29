@@ -993,8 +993,20 @@ public partial class HaruGraphWindow
         };
     }
 
-    private void JumpTo(HGIssue issue)
+    internal void JumpTo(HGIssue issue)
     {
+        if (issue == null || model?.Owner == null) return;
+        var location = issue.Location;
+        if (!string.IsNullOrEmpty(location.DocumentId) && location.DocumentId != model.DocumentId) return;
+        if (!string.IsNullOrEmpty(location.FocusId))
+        {
+            issue.Focus = FindFocus(location.FocusId) ?? issue.Focus;
+            if (issue.Focus == null && location.FocusId != focus.Id)
+            {
+                ShowNotification(new GUIContent("目前無法開啟這個診斷的焦點，請重新驗證。"));
+                return;
+            }
+        }
         // 動作的問題全部落在同一張時機畫布上，所以只要確定人在那張畫布，不必也不該切成單一動作焦點。
         if (issue.Focus == null) { }
         else if (issue.Focus.Kind == HGFocusKind.Action)
@@ -1002,9 +1014,15 @@ public partial class HaruGraphWindow
             if (focus.Kind != HGFocusKind.Root) SetFocus(AllRootsFocus());
         }
         else if (!issue.Focus.SameAs(focus)) SetFocus(issue.Focus);
-        pendingCenterTarget = issue.Slot ?? issue.Node;
-        graphDirty = true;
-        Repaint();
+        EnsureGraph();
+        if (!TryFindIssueTarget(issue, out var node, out var row))
+        {
+            ShowNotification(new GUIContent("目前畫布無法唯一定位這個診斷，請重新驗證或確認節點與欄位位置。"));
+            return;
+        }
+        FocusIssueTarget(node, row);
+        if (row == null && !string.IsNullOrEmpty(location.FieldPath))
+            ShowNotification(new GUIContent("已定位節點；指定欄位目前未顯示或已不存在。"));
     }
 }
 

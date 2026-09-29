@@ -28,6 +28,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// 收起時成員壓到標題列、標成隱藏，已接線的欄位由標題列右緣伸出線。
         /// </summary>
         Foldout,
+        /// <summary>節點內分頁列，Children 是各頁；整段高度包含最大的頁面。</summary>
+        Tabs,
+        /// <summary>分頁的內容容器，不另畫標題。</summary>
+        TabPage,
     }
 
     /// <summary>一次焦點的完整節點圖。每次資料變動就整份重建，不做增量。</summary>
@@ -193,6 +197,29 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// <summary>這一列（含群組成員展開出來的子列）屬於哪一個摺疊群組；巢狀時記最近的那一個。</summary>
         public HGRow FoldoutOwnerRow;
 
+        /// <summary>最近的分頁；頁面本身透過 TabStripRow 指回分頁列。</summary>
+        public HGRow TabPageOwnerRow;
+        public HGRow TabStripRow;
+        public string ActiveTab;
+        public TextAnchor TabAlignment = TextAnchor.MiddleCenter;
+        public int TabWidthUnits;
+        /// <summary>目前 Tab 列可用空間下算出的標題寬度；繪製與命中共用。</summary>
+        public float TabLayoutWidth;
+        public Vector2 TabHeaderOffset;
+        public float TabHeaderHeight;
+
+        /// <summary>非作用中頁面完全隱藏，不借用 Foldout 的代表接點。</summary>
+        public bool IsTabHidden
+        {
+            get
+            {
+                for (var page = Kind == HGRowKind.TabPage ? this : TabPageOwnerRow;
+                     page != null; page = page.TabPageOwnerRow)
+                    if (page.TabStripRow != null && page.TabStripRow.ActiveTab != page.Label) return true;
+                return false;
+            }
+        }
+
         // 視覺 metadata（欄位宣告帶來的畫法偏好，與 Kind 和 payload 都無關）
         /// <summary>欄位標了 <c>[HGEnum]</c>。最終畫不畫 enum 按鈕列仍要另算：替代預設值型別是 enum 時沒標也要畫。</summary>
         public bool ForceEnumButtons;
@@ -319,7 +346,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public static HGGraphView Build(HGModel model, IReadOnlyList<object> roots, IList orphans, string focusId,
             string headTitle, IReadOnlyDictionary<string, bool> listCollapse = null,
             string noteOpenId = null, ICollection<string> noteCollapsed = null, object headCarrier = null,
-            IReadOnlyDictionary<string, Type> orphanHints = null, IHGEditorMetadataProvider metadata = null)
+            IReadOnlyDictionary<string, Type> orphanHints = null, IHGEditorMetadataProvider metadata = null,
+            IReadOnlyDictionary<string, string> fieldTabs = null)
         {
             var view = new HGGraphView();
             try
@@ -355,6 +383,11 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 }
             }
 
+            foreach (var node in view.Nodes)
+                foreach (var row in AllRows(node.Rows))
+                    if (row.Kind == HGRowKind.Tabs && fieldTabs != null
+                        && fieldTabs.TryGetValue(CollapseKey(node.Id, row), out var selected)
+                        && row.Children.Exists(page => page.Label == selected)) row.ActiveTab = selected;
             ApplyViewState(model, view, noteOpenId, noteCollapsed);
             foreach (var node in view.Nodes)
                 foreach (var row in AllRows(node.Rows))
@@ -386,8 +419,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         private static HGNodeView MakeGroupNode(HGModel model, object group, IHGEditorMetadataProvider metadata,
             List<GraphDiagnostic> diagnostics)
         {
-            var node = MakeNodeForObject(group, null, null, null, metadata, diagnostics);
-            node.Id = GroupHeadId(model, group);
+            var node = MakeNodeForObject(group, null, null, null, metadata, diagnostics, GroupHeadId(model, group));
             node.IsRoot = true;
             node.IsTimingGroup = true;
             // ActionTimingGroup 不是 ActionBase，但它的本體是 ActionSlot 清單，Header 應導向 Action 流程色。
@@ -469,7 +501,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             switch (carrier.Kind)
             {
                 case NodeKind.Inline when carrier.BodyObject != null:
-                    node = MakeNodeForObject(carrier.BodyObject, parentSlot, parentRow, slotResultType, metadata, diagnostics);
+                    node = MakeNodeForObject(carrier.BodyObject, parentSlot, parentRow, slotResultType, metadata, diagnostics, id);
                     break;
 
                 case NodeKind.Asset:
@@ -574,7 +606,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         }
 
         private static HGNodeView MakeNodeForObject(object obj, GraphSlotBase parentSlot, HGRow parentRow, Type slotResultType,
-            IHGEditorMetadataProvider metadata, List<GraphDiagnostic> diagnostics)
+            IHGEditorMetadataProvider metadata, List<GraphDiagnostic> diagnostics, string nodeId)
         {
             bool isAction = HGReflect.IsActionNodeType(obj.GetType());
             Type resultType = !isAction && slotResultType != null
@@ -584,6 +616,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 : HGReflect.FormulaResultType(obj.GetType());
             var node = new HGNodeView
             {
+                Id = nodeId,
                 Obj = obj,
                 ParentSlot = parentSlot,
                 ParentRow = parentRow,
@@ -593,7 +626,19 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 IsActionNode = isAction,
                 ResultType = resultType,
             };
+            int firstDiagnostic = diagnostics?.Count ?? 0;
             BuildRows(obj, 0, node.Rows, new HashSet<object>(HGRefComparer.Instance), "", 0f, metadata, diagnostics);
+            // BuildRows 只知道欄位路徑；在所屬節點邊界補身分，避免同型別節點的同名欄位互相誤定位。
+            if (diagnostics != null)
+                for (int i = firstDiagnostic; i < diagnostics.Count; i++)
+                {
+                    var diagnostic = diagnostics[i];
+                    var location = diagnostic.Location;
+                    if (!string.IsNullOrEmpty(location.NodeId)) continue;
+                    diagnostics[i] = new GraphDiagnostic(diagnostic.Code, diagnostic.Severity, diagnostic.Message,
+                        new GraphDiagnosticLocation(location.DocumentId, location.FocusId, nodeId, location.TokenId, location.FieldPath),
+                        diagnostic.Fix);
+                }
             return node;
         }
 
@@ -755,10 +800,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         {
             if (obj == null || depth > 5 || !visited.Add(obj)) return;
 
-            // 同一個物件裡同名的摺疊群組共用一列，第一個成員出現時才建。
-            List<HGRow> foldouts = null;
+            var groups = new FieldGroups(into, depth, path, leftPad, diagnostics);
             if (metadata != null && metadata.TryGetNodeDescriptor(obj.GetType(), out var descriptor))
             {
+                foreach (var field in descriptor.Fields) groups.Declare(field.Tab, field.Foldout);
                 foreach (var field in descriptor.Fields)
                 {
                     string fieldPath = path + "/" + field.Id;
@@ -771,7 +816,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                             new GraphDiagnosticLocation(fieldPath: fieldPath)));
                     }
                     if (!visible) continue;
-                    var dest = FoldoutDestination(field.Foldout, into, ref foldouts, depth, path, leftPad, fieldPath, diagnostics);
+                    var dest = groups.Destination(field.Tab, field.Foldout, fieldPath, field.TabAlignment, field.TabWidthUnits);
 
                     if (field.Role == HGFieldRole.Slot)
                     {
@@ -871,10 +916,14 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                             new GraphDiagnosticLocation(fieldPath: fieldPath)));
                     }
                 }
-                FinishFoldouts(foldouts, into);
+                groups.Finish();
                 return;
             }
 
+            // 先收宣告再建列：父群組可宣告在後面的欄位，ShowIf 不改變群組型別。
+            foreach (var f in HGReflect.Fields(obj.GetType()))
+                if (!SkipFields.Contains(f.Name) && !HGReflect.IsHidden(f) && !f.IsNotSerialized && !f.IsStatic)
+                    groups.Declare(HGReflect.TabOf(f), HGReflect.FoldoutOf(f));
             foreach (var f in HGReflect.Fields(obj.GetType()))
             {
                 if (SkipFields.Contains(f.Name)) continue;
@@ -890,7 +939,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     diagnostics?.Add(new GraphDiagnostic("graphkit.metadata.visibility-failed", GraphDiagnosticSeverity.Error,
                         $"{obj.GetType().FullName}.{f.Name} visibility condition failed: {visibilityError}",
                         new GraphDiagnosticLocation(fieldPath: fieldPath)));
-                var dest = FoldoutDestination(HGReflect.FoldoutOf(f), into, ref foldouts, depth, path, leftPad, fieldPath, diagnostics);
+                var dest = groups.Destination(HGReflect.TabOf(f), HGReflect.FoldoutOf(f), fieldPath, HGReflect.TabAlignmentOf(f),
+                    HGReflect.TabWidthOf(f));
 
                 if (HGReflect.IsSlotType(t))
                 {
@@ -970,42 +1020,162 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 BuildRows(value, depth + 1, group.Children, visited, fieldPath, leftPad, metadata, diagnostics);
                 if (group.Children.Count > 0) dest.Add(group);
             }
-            FinishFoldouts(foldouts, into);
+            groups.Finish();
         }
 
-        /// <summary>
-        /// 這個欄位的列要放進哪裡：沒標群組就是 into；標了就放進這個物件裡同名的摺疊群組，
-        /// 群組在第一個成員出現的位置插進 into。跟在 Slot 列後面的常數清單列加在同一個 dest，自然留在同一組。
-        /// </summary>
-        private static List<HGRow> FoldoutDestination(string foldout, List<HGRow> into, ref List<HGRow> foldouts, int depth,
-            string path, float leftPad, string fieldPath, List<GraphDiagnostic> diagnostics)
+        /// <summary>一個資料物件的欄位群組路徑；宣告與顯示分開，列仍使用既有 Foldout／Tabs 模型。</summary>
+        private sealed class FieldGroups
         {
-            if (string.IsNullOrEmpty(foldout)) return into;
-            // / 保留給日後的群組路徑；現在就當一般名稱收下，之後開放路徑時意思會悄悄變掉。
-            if (foldout.IndexOf('/') >= 0)
+            private readonly List<HGRow> root;
+            private readonly int depth;
+            private readonly string path;
+            private readonly float leftPad;
+            private readonly List<GraphDiagnostic> diagnostics;
+            private readonly Dictionary<string, HGRowKind> kinds = new(StringComparer.Ordinal);
+            private readonly HashSet<string> conflicts = new(StringComparer.Ordinal);
+            private readonly Dictionary<string, HGRow> groups = new(StringComparer.Ordinal);
+            private readonly Dictionary<string, HGRow> strips = new(StringComparer.Ordinal);
+            private readonly List<(HGRow row, List<HGRow> parent)> created = new();
+
+            public FieldGroups(List<HGRow> root, int depth, string path, float leftPad, List<GraphDiagnostic> diagnostics)
             {
-                diagnostics?.Add(new GraphDiagnostic("graphkit.metadata.foldout-path-reserved", GraphDiagnosticSeverity.Warning,
-                    $"[HGFoldout(\"{foldout}\")] 群組名不可含 /（保留給群組路徑），這個欄位改畫在群組外。",
-                    new GraphDiagnosticLocation(fieldPath: fieldPath)));
+                this.root = root;
+                this.depth = depth;
+                this.path = path;
+                this.leftPad = leftPad;
+                this.diagnostics = diagnostics;
+            }
+
+            public void Declare(string tab, string foldout)
+            {
+                if (!TryDestination(tab, foldout, out _)) return;
+                DeclareKind(tab, HGRowKind.TabPage);
+                DeclareKind(foldout, HGRowKind.Foldout);
+            }
+
+            private void DeclareKind(string key, HGRowKind kind)
+            {
+                if (string.IsNullOrEmpty(key)) return;
+                if (kinds.TryGetValue(key, out var existing) && existing != kind) conflicts.Add(key);
+                else kinds[key] = kind;
+            }
+
+            private static bool ValidPath(string value)
+            {
+                if (string.IsNullOrEmpty(value)) return true;
+                foreach (string segment in value.Split('/'))
+                    if (string.IsNullOrWhiteSpace(segment)) return false;
+                return true;
+            }
+
+            private static bool TryDestination(string tab, string foldout, out string destination)
+            {
+                destination = null;
+                if (!ValidPath(tab) || !ValidPath(foldout)) return false;
+                if (string.IsNullOrEmpty(tab)) { destination = foldout; return true; }
+                if (string.IsNullOrEmpty(foldout)) { destination = tab; return true; }
+                if (tab.StartsWith(foldout + "/", StringComparison.Ordinal)) { destination = tab; return true; }
+                if (foldout.StartsWith(tab + "/", StringComparison.Ordinal)) { destination = foldout; return true; }
+                return false;
+            }
+
+            public List<HGRow> Destination(string tab, string foldout, string fieldPath, TextAnchor alignment, int tabWidthUnits)
+            {
+                if (!TryDestination(tab, foldout, out string destination))
+                    return Invalid(fieldPath, "群組路徑不可有空白段；同欄位的 HGTab 與 HGFoldout 必須是祖先與子群組。");
+                if (string.IsNullOrEmpty(destination)) return root;
+                string prefix = "";
+                string[] segments = destination.Split('/');
+                foreach (string segment in segments)
+                {
+                    prefix = prefix.Length == 0 ? segment : prefix + "/" + segment;
+                    if (conflicts.Contains(prefix))
+                        return Invalid(fieldPath, $"群組路徑 {prefix} 同時宣告為 Tab 與 Foldout。");
+                }
+                if (tabWidthUnits < 0)
+                {
+                    diagnostics?.Add(new GraphDiagnostic("graphkit.metadata.tab-width-invalid", GraphDiagnosticSeverity.Warning,
+                        "HGTab 的 Width 必須為非負格數；此頁改為自動分配寬度。",
+                        new GraphDiagnosticLocation(fieldPath: fieldPath)));
+                    tabWidthUnits = 0;
+                }
+
+                var into = root;
+                string parentKey = "";
+                string parentPath = path;
+                foreach (string segment in segments)
+                {
+                    string key = parentKey.Length == 0 ? segment : parentKey + "/" + segment;
+                    if (!groups.TryGetValue(key, out var row))
+                    {
+                        var kind = kinds.TryGetValue(key, out var declared) ? declared : HGRowKind.Foldout;
+                        HGRow strip = null;
+                        if (kind == HGRowKind.TabPage)
+                        {
+                            if (!strips.TryGetValue(parentKey, out strip))
+                            {
+                                strip = new HGRow { Kind = HGRowKind.Tabs, Path = parentPath + "/#tabs/", Depth = depth, LeftPad = leftPad };
+                                into.Add(strip);
+                                strips.Add(parentKey, strip);
+                                created.Add((strip, into));
+                            }
+                            into = strip.Children;
+                        }
+                        row = new HGRow
+                        {
+                            Kind = kind, Label = segment, Depth = depth, LeftPad = leftPad,
+                            Path = strip != null ? strip.Path + segment : parentPath + "/#" + segment,
+                            TabStripRow = strip, TabAlignment = alignment, TabWidthUnits = tabWidthUnits,
+                        };
+                        into.Add(row);
+                        groups.Add(key, row);
+                        created.Add((row, into));
+                    }
+                    into = row.Children;
+                    parentKey = key;
+                    parentPath = row.Path;
+                }
                 return into;
             }
-            foldouts ??= new List<HGRow>();
-            var row = foldouts.Find(existing => existing.Label == foldout);
-            if (row == null)
+
+            private List<HGRow> Invalid(string fieldPath, string message)
             {
-                row = new HGRow
-                {
-                    Kind = HGRowKind.Foldout,
-                    Label = foldout,
-                    Depth = depth,
-                    // 群組名不含 /，欄位名不含 #，所以不會和欄位路徑撞在一起。
-                    Path = path + "/#" + foldout,
-                    LeftPad = leftPad,
-                };
-                foldouts.Add(row);
-                into.Add(row);
+                diagnostics?.Add(new GraphDiagnostic("graphkit.metadata.tab-invalid", GraphDiagnosticSeverity.Warning,
+                    message + " 這個欄位改畫在群組外。", new GraphDiagnosticLocation(fieldPath: fieldPath)));
+                return root;
             }
-            return row.Children;
+
+            public void Finish()
+            {
+                // 子群組先定案；只處理本物件建立的列，不重複縮排巢狀資料物件已完成的群組。
+                for (int i = created.Count - 1; i >= 0; i--)
+                {
+                    var (row, parent) = created[i];
+                    if (row.Kind == HGRowKind.Tabs) FinishTabs(row, parent);
+                    else if (row.Kind == HGRowKind.Foldout) FinishFoldouts(new List<HGRow> { row }, parent);
+                }
+            }
+        }
+
+        private static void FinishTabs(HGRow tabs, List<HGRow> into)
+        {
+            if (tabs == null) return;
+            tabs.Children.RemoveAll(page => page.Children.Count == 0);
+            if (tabs.Children.Count == 0) { into.Remove(tabs); return; }
+            tabs.ActiveTab = tabs.Children[0].Label;
+            foreach (var page in tabs.Children)
+            {
+                foreach (var child in page.Children) MarkTabSubtree(child, page);
+                // 頁面內容縮一層；分頁標題留在父層，左側留給內容範圍導引線。
+                foreach (var row in AllRows(page.Children)) row.Depth++;
+            }
+        }
+
+        private static void MarkTabSubtree(HGRow row, HGRow page)
+        {
+            if (row.TabPageOwnerRow != null) return;
+            row.TabPageOwnerRow = page;
+            foreach (var child in row.Children) MarkTabSubtree(child, page);
         }
 
         /// <summary>
@@ -1227,6 +1397,94 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         // ===== 尺寸與排版 =====
 
         /// <summary>
+        /// 標題列的節點局部座標：起終點對齊格線，文字邊距留在各頁內。
+        /// 根層貼齊節點，巢狀只保留父容器縮排；Tab 沒有接點，不預留欄位接點空間。
+        /// </summary>
+        internal static Rect TabStripRect(HGRow tabs, float nodeWidth)
+        {
+            float right = Mathf.Floor(Mathf.Max(0f, nodeWidth) / GridSize) * GridSize;
+            float left = Mathf.Min(SnapUpToGrid(tabs.LeftPad + tabs.Depth * IndentWidth), Mathf.Max(0f, right - GridSize));
+            return new Rect(left, 0f, Mathf.Max(0f, right - left), RowHeight);
+        }
+
+        /// <summary>以完整格子分配標題寬度；超額保留每頁一格，連一格都放不下時換行，不切碎格子。</summary>
+        internal static void MeasureTabWidths(HGRow tabs, float availableWidth)
+        {
+            int count = tabs.Children.Count;
+            tabs.TabHeaderHeight = 0f;
+            int cells = Mathf.Max(0, Mathf.FloorToInt(availableWidth / GridSize));
+            foreach (var page in tabs.Children)
+            {
+                page.TabLayoutWidth = 0f;
+                page.TabHeaderOffset = Vector2.zero;
+            }
+            if (count == 0 || cells == 0) return;
+            if (cells < count)
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    tabs.Children[i].TabLayoutWidth = GridSize;
+                    tabs.Children[i].TabHeaderOffset = new Vector2((i % cells) * GridSize, (i / cells) * RowHeight);
+                }
+                tabs.TabHeaderHeight = ((count - 1) / cells + 1) * RowHeight;
+                return;
+            }
+
+            int automatic = 0;
+            long requested = 0;
+            foreach (var page in tabs.Children)
+            {
+                if (page.TabWidthUnits > 0) requested += page.TabWidthUnits;
+                else automatic++;
+            }
+            if (requested + automatic <= cells)
+            {
+                int remaining = cells - (int)requested;
+                int share = automatic == 0 ? 0 : remaining / automatic;
+                int remainder = automatic == 0 ? 0 : remaining % automatic;
+                foreach (var page in tabs.Children)
+                {
+                    int units = page.TabWidthUnits;
+                    if (units <= 0)
+                    {
+                        units = share;
+                        if (remainder > 0) { units++; remainder--; }
+                    }
+                    page.TabLayoutWidth = units * GridSize;
+                }
+            }
+            else
+            {
+                int budget = cells - count;
+                long weightTotal = requested - (count - automatic);
+                int remainder = budget;
+                foreach (var page in tabs.Children)
+                {
+                    long weight = Math.Max(0L, (long)page.TabWidthUnits - 1);
+                    int extra = (int)(weight * budget / weightTotal);
+                    page.TabLayoutWidth = (1 + extra) * GridSize;
+                    remainder -= extra;
+                }
+                // 小數配額留下的完整格子依頁面順序補回，只補給確實有餘數的指定頁。
+                foreach (var page in tabs.Children)
+                {
+                    if (remainder == 0) break;
+                    long weight = Math.Max(0L, (long)page.TabWidthUnits - 1);
+                    if (weight * budget % weightTotal == 0) continue;
+                    page.TabLayoutWidth += GridSize;
+                    remainder--;
+                }
+            }
+            float x = 0f;
+            foreach (var page in tabs.Children)
+            {
+                page.TabHeaderOffset = new Vector2(x, 0f);
+                x += page.TabLayoutWidth;
+            }
+            tabs.TabHeaderHeight = RowHeight;
+        }
+
+        /// <summary>
         /// 節點寬度：型別標了 `[HGNodeView(Width = n)]` 就用 n 格，否則預設 15 格。
         /// 只有內嵌節點（`node.Obj` 是具體 Action／Formula）能覆寫；資產、Token、時機、空節點都沒有型別可問，一律預設寬。
         /// </summary>
@@ -1289,6 +1547,22 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 r.Hidden = false;
                 switch (r.Kind)
                 {
+                    case HGRowKind.Tabs:
+                        MeasureTabWidths(r, TabStripRect(r, nodeWidth).width);
+                        float pageY = y + r.TabHeaderHeight;
+                        y = pageY;
+                        foreach (var page in r.Children)
+                        {
+                            page.LocalY = pageY;
+                            float end = MeasureRows(page.Children, pageY, nodeWidth);
+                            page.Height = end - pageY;
+                            page.Hidden = page.IsTabHidden;
+                            if (page.Hidden)
+                                foreach (var child in AllRows(page.Children)) child.Hidden = true;
+                            y = Mathf.Max(y, end);
+                        }
+                        r.Height = y - r.LocalY;
+                        break;
                     case HGRowKind.Group:
                         r.Height = RowHeight;
                         y += RowHeight;

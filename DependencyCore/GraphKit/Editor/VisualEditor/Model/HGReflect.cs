@@ -534,6 +534,18 @@ public static class HGReflect
         return string.IsNullOrEmpty(foldout) ? null : foldout;
     }
 
+    /// <summary>欄位的節點內分頁名；空白表示不分頁。</summary>
+    public static string TabOf(FieldInfo f)
+    {
+        string tab = f?.GetCustomAttribute<HGTabAttribute>(false)?.Tab;
+        return string.IsNullOrWhiteSpace(tab) ? null : tab;
+    }
+
+    public static UnityEngine.TextAnchor TabAlignmentOf(FieldInfo f)
+        => f?.GetCustomAttribute<HGTabAttribute>(false)?.Alignment ?? UnityEngine.TextAnchor.MiddleCenter;
+
+    public static int TabWidthOf(FieldInfo f) => f?.GetCustomAttribute<HGTabAttribute>(false)?.Width ?? 0;
+
     /// <summary>節點在同分類內的排序權重。</summary>
     public static int TypePriority(Type t)
     {

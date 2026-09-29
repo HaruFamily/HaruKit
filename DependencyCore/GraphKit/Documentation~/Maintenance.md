@@ -124,14 +124,17 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 
 ### 5.1 IMGUI 陷阱
 
+- 節點內容控制項（Tab、Foldout、enum／bool 按鈕、數值與文字輸入等）吃掉左鍵 MouseDown 後，由 `DrawCanvas` 統一同步節點選取：不在選取集合的節點改為單選，已選節點保留多選，清掉畫布群組選取；不移動視角、不碰鍵盤／hotControl、不另加 Dirty。控制項上的 Ctrl／Shift 不切換節點選取。未被控制項消耗的點擊仍交 `HandleCanvasInput`；標題、Port、拉線／放置模式、被浮層遮蔽及既有 hotControl 的事件不走此同步。
 - 變數庫各 Property 獨立展開，不限制同時展開數量；拖入資產只展開目標項。展開狀態由面板按 Id 保存，Reset 時清除，不進 Dirty／Undo。多個清單展開時，項目重排只收集正在拖曳之 Property 的目標位置。
 - Token 庫與變數庫的格子是同一組操作：雙擊改名、拖到「＋」上放開＝複製、拖到「－」上放開＝移除，右鍵選單（改名／複製／移除）是同一組的可見入口。複製 ProtoProperty（`HGModel.DuplicateProperty`）是建立新的儲存位置：定義與初始內容深拷貝（資產只抄參考）、換新 Id、名字「原名 複本」，圖上沒有節點指向它；拖到畫布才是引用。右鍵改名走 `HGInlineRename.Begin`：選單回呼在 OnGUI 之外執行，只記狀態不碰鍵盤焦點，焦點由下一次 `Draw` 搶。
 - 座標：graph → clip 是 `(graphPos + pan) × zoom`；自訂命中測試（節點、連線、框選）一律在 graph space 計算。
 - **先畫節點、再處理畫布互動**，控制項才會先吃掉事件。畫布平移前仍要確認 `GUIUtility.hotControl == 0`。
 - **畫布快捷鍵要讓給文字輸入**：左右庫與焦點列畫在畫布之後，游標停在畫布上時按鍵會先到 `HandleCanvasInput`。它的 `KeyDown` 分支在 `inlineName.IsEditing` 或 `EditorGUIUtility.editingTextField` 時一律不處理（F、Delete、Ctrl 系列都不攔），只有 F3（搜尋跳下一筆）排在這個判斷之前。新增畫布快捷鍵要放在判斷之後；改名框只看 `IsEditing`，因為它重新搶焦點的那一幀並未握著焦點。
 - **節點重疊時輸入跟著畫面走**：`graph.Nodes` 的順序就是繪製順序（越後越上層）。IMGUI 依繪製順序分發事件，所以 `DrawCanvas` 在 `hotControl == 0` 的 MouseDown／DragUpdated／DragPerform 先用 `NodeAt` 找出最上層節點，其餘節點畫的時候把事件設成 `Ignore`，畫完還原成遮罩前的型別（不可還原成原始型別，會把已 `Use()` 的按鍵復活）。接點命中（`InputPortAt`／`OutputPortAt`）同樣只認最上層節點。
-- 連線：一般線在節點之前畫（壓在節點下），選取中節點的線在 `EndZoomedCanvas` 之後畫（浮在最上層）。形狀固定為「水平短線 → 圓角 → 斜直線 → 圓角 → 水平短線」（`BuildLinkPath`），方向依接點位在節點左半或右半決定，不依輸入／輸出。點線剪斷（`LinkAt`）用同一份路徑，點在節點上時只剪得到浮在上層的線。清單折疊時，元素的線仍從標題列的代表接點畫出（接點本身不可起手或放線），多條時依目標高度扇形等角散開（`RebuildFoldFan`），這是頭端不水平的唯一例外；剪線一次只斷一個元素。
-- 元素是 Slot、可增刪的清單，標題列有一顆新增接點（內部 `IHGListAppendBinding`：取值清單是輸入角色 `HGListAppendPortBinding`，`InputSlot` 是尚未放進清單的預備元素；PropertySlot 清單是寫入輸出 `HGListAppendWriteBinding`，清單所在節點沒有載體時不掛）：拖出去或從對向接點拉進來＝在尾端新增一項並接上，一步 Undo；原地點一下＝收起／展開所有元素接出去的子樹（Alt＝solo，與 Slot 接點同一套；清單再展開時，個別收起的元素維持收起），清單列的折疊只在標題文字。提交一律「先 `Commit()` 加進清單、再走一般接線」，在同一個變更交易裡。它會出現在 `HGWindowSnapshot`，`HGWindowSession.Connect` 走同一個交易，`Disconnect` 拒絕它。Aggregate 接點的契約不變。
+- 連線：一般線在節點之前畫（壓在節點下），選取中節點的線在 `EndZoomedCanvas` 之後畫（浮在最上層）。形狀固定為「水平短線 → 圓角 → 斜直線 → 圓角 → 水平短線」（`BuildLinkPath`），方向依接點位在節點左半或右半決定，不依輸入／輸出。點線剪斷（`LinkAt`）用同一份路徑，點在節點上時只剪得到浮在上層的線。清單／Foldout 折疊時，元素的線仍從標題列的代表接點畫出（接點本身不可起手或放線）；不同目標依高度扇形等角散開（`RebuildFoldFan`），這是頭端不水平的唯一例外。
+- 收合線以「可見的折疊祖先列＋另一端的實際 `HGPortKey`」合併，同一關係只畫一條，實線優先於殘影；不同容器、不同 Port 不合併。`RebuildFoldFan` 先掃完整圖挑代表線，再依去重後的目標數分配角度；一般層、選取層與 `LinkAt` 都跳過 `foldedDuplicateLinks`。Group 隱藏端的重複殘影也合併，維持原有朝向、不加入扇形。只有一個目標時角度為 0。合併不改 `HGLink`／Slot 資料；點擊 `foldedMergedLinks` 的多引用代表線只提示先展開，單引用線與展開後的各欄位照常剪斷。
+- 清單標題只註冊純顯示的 Aggregate（`HitRect = Rect.zero`），不註冊新增元素的 Input／Output。新增用「＋ 新增」，再從元素的普通 Port 接線；標題箭頭只折疊清單內容。清單沒有整批子樹切換、solo 或對應右鍵選單；`ApplyVisibility` 只套用實際 Slot 的隱藏記錄，清單層級的隱藏 key 保留在資料但不影響顯示。
+- List／Foldout 收合且有線時，右邊界顯示高 10px、寬 `LinkThickness` 的短豎線（`DrawAggregatePort`）；向外短線由實線／殘影本身構成，不重疊補畫。彙整出口沒有圓圈、中心點、＋／－、hover／相容高亮或吸附；展開、空清單或隱藏的容器不畫。`AggregatePortPosition` 把欄位圓心移至右邊界；實線與殘影的 `fromAggregate` 從豎線中央起畫，不再裁掉接點半徑。`LinkAt` 排除彙整出口本身，離開出口後的連線仍沿既有規則剪線。一般 Port 保留原外觀與個別 Slot 子樹操作。
 - 收合欄位的線畫成殘影（實線短線＋圓角，進斜線後轉漸淡虛線；淡出長度固定，兩端太近才依斜線長度比例縮短）。欄位端一定畫，目標節點仍顯示時目標端也畫；殘影不參與命中。欄位在折疊清單裡時，欄位端從清單的代表接點起畫，和看得到的元素線同一把扇（`RebuildFoldFan` 也收殘影）。
 - 接點：外環永遠畫，中心實心點表示有接線（○／◎）；顏色只表達用途與錯誤，不表達接不接。
 - MouseDown 落在某節點上就把它提到最上層（`RaiseNode`），順序記在視窗的 `raisedNodeIds`，每次重建圖後由 `ApplyNodeOrder` 套回；純視圖狀態，不進文件與 Undo。順序改變時要清 `GUIUtility.keyboardControl`：控制項 id 依繪製順序發，不清的話輸入中的框會對到別顆節點的欄位。
@@ -192,8 +195,8 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 **收合與分頁：群組關掉成員（只影響顯示）**
 
 - 群組收合（標題列 `▾/▸`）與非作用中分頁是同一件事：成員被群組「關掉」，只影響顯示，照樣執行、照樣驗證。群組收合時全部成員都關掉；有分頁時非作用中分頁的成員關掉。`CollectGroupOffMembers` 在 `ApplyVisibility` 開頭把它們記進 `groupOffMembers`。
-- **可達性走訪到被關掉的成員就停**（`MarkVisibleFrom` 的 `stopAtGroupOff`）：只靠它們才連得到的節點（包括群組外的）一起隱藏。`CollectGroupOffHidden` 再走一次不擋群組的可達性，兩次的差集加上 `groupOffMembers` 記在 `groupOffHidden`。solo 模式不走可達性，由 `HideGroupOffMembers` 補藏成員。
-- **連線比照 ⊖ 收起**：一端在 `groupOffHidden` 的線（`IsGroupOffLink`）整條不畫，只在還看得到的父欄位 Port 畫殘影（`DrawGroupOffGhost`），朝向目標原本的接點；目標所在群組收合時改朝標題列朝向父欄位的那一側（原本的位置已不在框內）。目標端與標題列那段不畫，父欄位也被關掉時整條不畫，顏色同一般殘影。`MarkHiddenSlots` 略過 `groupOffHidden`，父欄位不會畫成 +。
+- **隱藏跟著歸屬走，不沿引用傳播**：`MarkVisibleFrom` 穿越所有 Group 成員與 HGTab 欄位，只由明確的 Slot ⊖ 收起阻斷引用路徑。一般可達性或 solo 算完後，`HideGroupOffMembers` 只把 `groupOffMembers` 的直接成員隱藏。外部來源及其子樹保留；要讓來源跟著 Group 隱藏，必須把它加入 Group 的對應頁。
+- **連線只在可見端畫淡出虛線**：一端是被關掉的直接成員時（`IsGroupOffLink`），整條實線不畫，由 `DrawContainerHiddenGhost` 逐端檢查，只在可見端畫殘影。可見端可以是外部欄位，也可以是外部來源／Property 接收端，不依輸入輸出角色猜。方向朝隱藏端原本的接點；隱藏端所在群組收合時改朝標題列框邊。隱藏端不畫殘影，兩端皆隱藏則都不畫；殘影不參與剪線命中。`MarkHiddenSlots` 略過 `groupOffMembers`，容器隱藏不讓父欄位畫成 +。
 - 標題列兩端不是接點：不畫 ◎、不能起手，也不能把線放進群組。沒有連線會接到標題列上。
 - 群組展開時被群組外欄位 ⊖ 收起的成員照一般節點處理：殘影直接指向它的接點（`DrawLinkGhosts`），父欄位被藏起來的線不畫。
 - `RevealNode`（Console、搜尋跳轉）會先展開節點所在的群組並切到它的分頁（`ExpandNodeGroupOf`）。
@@ -204,6 +207,14 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - 分頁排在標題列內（從 `NodeGroupTabStart` 起），常駐至少一頁（`NodeGroupTabCount`），最後面的「＋」新增分頁，新增不放右鍵；收合時只畫作用中的那一頁，其餘寫成「+N」。
 - 切頁是版面修改；非作用中分頁的成員走上面「群組關掉成員」那套。因分頁而藏的群組成員另外記在 `tabHiddenMembers`，**框與成員數仍把它們算成看得到**；被 ⊖ 收起的成員不記。框因此包住所有分頁的成員，切分頁時大小與標題列位置不變。
 - 分頁標籤的按下、雙擊改名（site `nodeGroupTab`）、右鍵選單都在 `DrawNodeGroupTabs` 處理，比 `HandleCanvasInput` 先拿到事件。拖節點放在標籤上＝搬到那一頁並切過去（`NodeGroupTabAt`，在 `ApplyDropMembership` 裡）。`ExpandNodeGroupOf` 同時處理收合與切頁。
+
+### 5.5 診斷欄位定位
+
+- Console 的 `JumpTo` 是欄位定位：先依診斷切到正確焦點（Action 診斷回全部 root），再用 `TryFindIssueTarget` 找目前這一代的列。`NodeId + FieldPath` 必須同時使用；無 FieldPath 的 Core 診斷優先用它原本的 Slot 找持有者，不能只跳到被引用的來源 Node。只有 FieldPath 的外部診斷必須在目前焦點唯一，否則通知無法唯一定位。
+- `ResolveDiagnosticLocations` 在每次重建重新解析欄位，即使已找到 Node 也會解析 FieldPath；不保留舊列或把其他焦點的同名欄位誤配到目前畫布。`HGGraph.MakeNodeForObject` 替該節點建列時產生的 metadata 診斷補上 NodeId，兩顆同型別節點的相同欄位路徑因此可區分。
+- `FocusIssueTarget` 展開被隱藏節點的 Group／祖先路徑，再用 `RevealRowContainers` 切到欄位所屬 HGTab、展開祖先 Foldout／List；重建後以穩定 NodeId／欄位路徑重新取列，再置中欄位。純值欄位沒有 Slot 也能定位。實際展開走原有版面修改；ShowIf 條件不會為定位而改寫，欄位缺失時退回節點並通知。
+- 欄位框以 `NodeBorderSelected` 短暫高亮 1.5 秒。視窗只保存焦點 Id、NodeId、欄位路徑與到期時間，無 Dirty／Undo；換焦點或清空文件時清除。
+- `FocusDocumentNode` 仍是節點定位：已可見的來源只選取置中，不為了它切父層 HGTab。`RevealNode` 與診斷定位共用 `RevealRowContainers`，展開清單元素時同時處理清單折疊。
 
 ## 6. 串接 GraphKit（給 Tool 作者）
 
@@ -237,14 +248,32 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 
 ### 6.4 節點屬性
 
+- Foldout 展開時左側導引線末端向右延伸 6px，形成淡色「└」收尾（2px 線寬，沿用 `ListRule`）。收尾與直線不重疊，保留距底部 2px 的原有位置，完全位於既有縮排區內；收合時不畫，不增加高度或改動 Grid。
+- Tab 標題的實際繪製／點擊框限制在與 Foldout 共用的 `ListBandRect`（左右 2px 內距，左側加父容器縮排），使用同樣 3px 圓角。格數量測仍使用完整邏輯區域，外緣只裁去內距，不因 4px 裝飾邊距少分配一整格。
+- Tab 內容在 `FinishTabs` 逐頁將整棵內容子樹縮排一層，標題列保持父層縮排；巢狀 Tab／Foldout 逐層累加。`DrawTabRow` 採相連頁籤：作用中頁籤與內容共用 `TabBody` 中性底，頁籤畫上／左右輪廓，內容以 1px 細框圈住（含短頁留白）；相鄰作用中頁籤下方的內容上框留開口，兩者連成一塊。換行時只對緊鄰內容的作用中頁籤開口，非末列的作用中頁籤用完整輪廓，不跨其他頁籤挖空。所有線都在既有 Rect 內，不加間距、不改 Grid 量測，亦不參與命中。
+- `TabBody`／`TabSelected` 使用 `nodeBody`，未選頁 `TabInactive` 使用 `nodeBody` 向 `fieldBackground` 混合 60%，輪廓 `TabAccent` 使用 `nodeBody` 向 `text` 混合 22%。`TabLabel` 維持一般字重，作用中用 `buttonOnText`、未選用 `muted`，依對齊與選取狀態快取，換主題清除。Foldout 標題使用 `nodeBody` 向 `fieldBackground` 混合 35% 的中性底與一般字重亮字，保留導引線、不包內容框。配色全部由現有主題鍵衍生。
 - `[HGNode(name, description, group, priority)]`（可加 `Width`，單位是 20px 格數）：節點名稱、說明、分類與排序。`Inherited = false`，**每個具體型別都要自己標**，否則節點名退回類別名。
-- 欄位：`[HGLabel]`、`[HGDescription]`、`[HGHide]`（`[HideInInspector]` 視為相同）、`[HGShowIf]`（條件找不到時 fail-open 並記錄一次錯誤）、`[HGHideLabel]`、`[HGEnum]`、`[HGBool]`、`[HGFoldout]`。
+- 欄位：`[HGLabel]`、`[HGDescription]`、`[HGHide]`（`[HideInInspector]` 視為相同）、`[HGShowIf]`（條件找不到時 fail-open 並記錄一次錯誤）、`[HGHideLabel]`、`[HGEnum]`、`[HGBool]`、`[HGFoldout]`、`[HGTab]`。
+- `[HGTab("頁名")]` 把同一物件、同一父群組下的頁面收進同一條分頁列（`HGRowKind.Tabs`，子列是 `TabPage`）：同路徑欄位同頁，依首次出現排序，分頁列插在第一個成員的位置；未標記的欄位常駐。預設第一頁，空頁不出現，作用中頁被 `HGShowIf` 整頁隱藏時暫回第一頁，不覆寫保存的選擇。descriptor 的各 factory 同樣接受 `tab:`。
+  - 標題文字對齊由 `[HGTab("頁名", Alignment = TextAnchor.MiddleLeft)]` 指定，預設 `MiddleCenter`；常用 `MiddleLeft`／`MiddleCenter`／`MiddleRight`。descriptor 各 factory 的 `tabAlignment:` 同樣預設置中。同頁的對齊與寬度採第一個可見成員建立頁面時的設定，各成員宜一致。`HGStyles.TabLabel` 依對齊快取獨立樣式、使用對稱邊距，換主題由 `ResetCache` 清除。
+  - Tab 標題寬度統一用 `Width`（非負整數，20px 格數），0 表示自動；負值回報 `graphkit.metadata.tab-width-invalid` Warning 並退回自動。descriptor 各 factory 對應 `tabWidthUnits:`。同頁採第一個可見成員建立頁面時的設定。
+  - `HGGraph.TabStripRect` 以節點左緣為基準：根層從 0 開始，右端使用節點完整寬度，不預留一般欄位內距與接點空間。巢狀起點只使用父容器的 `LeftPad + Depth × IndentWidth` 向上對齊格線，右端向下對齊格線；文字邊距留在各 Tab 內。極窄節點可退讓縮排以提供一格。節點本身在格線上時，Tab 左右邊界也在格線上。
+  - `MeasureRows` 呼叫 `MeasureTabWidths` 以完整格數計算 `TabLayoutWidth`、`TabHeaderOffset` 與 `TabHeaderHeight`；`DrawTabRow` 直接使用量測結果，繪製與點擊共用 Rect。自動頁平分剩餘完整格子，餘格依頁面順序補給前面的自動頁，例如 10 格分三頁為 4／3／3。指定寬度超額時先保留每頁一格，剩餘按各指定頁超過一格的需求比例取整，再依頁面順序補回有小數配額的餘格。全部指定但未用滿、或尾端不足一格的空間留白。
+  - 若一列連每頁一格都放不下，標題以每頁一格換行；標題高度與內容位置一起量測，所有 Tab 仍可點選，不使用小數格、不自動放大 Node。一般情況保持單列，整體可用空間由 `HGNode.Width` 決定。
+  - `HGTab`／`HGFoldout` 的字串是以 `/` 分隔的完整群組路徑。`[HGTab("基本"), HGFoldout("基本/進階")]` 是 Tab 包 Foldout；`[HGFoldout("設定"), HGTab("設定/基本")]` 是 Foldout 包 Tab。同欄位並用時兩條路徑必須是嚴格的祖先／子孫關係，欄位進最深處；Attribute 順序無關。descriptor 的 `tab:`／`foldout:` 使用相同規則。
+  - `FieldGroups` 先收集同一物件的群組型別宣告，再依可見欄位建立樹；`HGShowIf` 不移除型別宣告，父群組可宣告在後面的欄位。未明確宣告的中間路徑建立為 Foldout；明確的 Tab 路徑是頁面，可再包含 Tab 或 Foldout。每個父群組各有一條 Tab 列；不同父路徑的同名頁面與摺疊群組互相獨立。
+  - 路徑不可有空白段（包含開頭／結尾 `/`、`//`）；同一路徑不可同時宣告成 Tab 與 Foldout。路徑衝突影響該路徑與其子孫；不合法的欄位回報 `graphkit.metadata.tab-invalid`（Warning）並畫在群組外，不丟棄欄位。整串空白頁名視為未標記。頁面由程式宣告，不提供新增／刪除／改名手勢。
+  - `TabPageOwnerRow` 指向最近的頁面，頁面由 `TabStripRow` 指回分頁列；`IsTabHidden` 沿頁面祖先判定。所有頁面都建列與接線，只隱藏非作用中頁的欄位。量測取各頁最大高度，切頁不讓節點外框跳動；隱藏頁不繪製、不命中，標題列沒有代表接點。連到隱藏欄位的實線不畫，在仍可見的來源端畫淡出虛線（與 Group 共用 `DrawContainerHiddenGhost`）。
+  - 與 Group 共用「只隱藏直接管理內容」：HGTab 管欄位，不管理欄位引用的 Node；`MarkVisibleFrom` 照樣穿越非作用中頁，獨占與共用來源都保留，讓其他頁可接同一顆。Node 仍遵守自身 Group、Slot ⊖ 與 solo 顯示狀態。切頁不改 Slot 引用、不停用、不改驗證或求值。
+  - 跨 HGTab 殘影以「父節點 Id＋欄位另一端的實際 Port key」去重：有可見實線時省略同關係的隱藏頁殘影；只有隱藏頁引用時，依圖的連線順序留第一段可見來源端的殘影。`RebuildTabGhosts` 每次在一般與選取繪線入口先掃完整圖，以 `tabGhostRelations` 優先記實線、再選 `tabGhostLinks`，不依當前繪製層各自挑選。作用中頁的多條實線、不同父節點／不同來源 Port、一般 Slot 殘影與 ListPort 扇形維持各自繪製。僅去除重複繪製，不改接線資料、Port、命中或剪線。
+  - 選擇存在 `GraphViewState._fieldTabs`（`GraphFieldTabSelection`），key＝節點 Id＋`<父容器路徑>/#tabs/`，value＝頁名；`fieldTabs` 僅是重建時從正本重讀的查詢表。根層單頁列仍用 `<物件路徑>/#tabs/`，單層 Foldout 仍用 `<物件路徑>/#<群組名>`；巢狀時逐層接續父列路徑，保留單層版面 key。`SetFieldTab` → `MarkViewStateChanged()`，沿用 Owner／資產的版面 Dirty、Undo／Redo、存檔與取消；無 `IGraphViewStateOwner` 時只在視窗記憶體保存。
+  - 手動切頁清除鍵盤焦點與 Port 互動、退出 solo，來源 Node 的選取保留。`RevealNode`（搜尋與 Console 定位）在目標真的隱藏時沿父欄位切換所屬頁面，再展開欄位、清單與 Foldout；定位已可見的外部來源不切換父層頁面。
 - `[HGFoldout("群組名")]` 把欄位收進節點內的摺疊群組（`HGRowKind.Foldout`，對應 Odin `FoldoutGroup`）：同一個物件裡同名的欄位共用一組，群組列插在第一個成員的位置，成員接在標題列下面，與一般欄位同寬。每組各自展開／收起，可同時展開多組，預設展開；成員都沒長出列（含被 `[HGShowIf]` 整組藏掉）的群組不出現。descriptor 用各 factory 的 `foldout:` 參數。
   - 群組列的 `Height` 是整段：展開時＝標題列 ＋ 成員，收起時＝標題列。成員的 `FoldoutOwnerRow` 指向最近的群組（巢狀時外層靠群組列自己的 `FoldoutOwnerRow` 往上找）。`FinishFoldouts` 把整棵成員子樹的 `Depth` 加 1（巢狀群組逐層累加）。
-  - 收起時成員壓到標題列（`CollapseRows`）並標成隱藏：接點不可見、不能起手或放線，但已接線的欄位照畫線，由標題列右緣伸出，同一組的線共用一把扇（`FoldedListOf` 先找清單鏈、再找群組鏈，回傳看得到的折疊祖先，和折疊清單走同一套 `RebuildFoldFan`）。代表接點由 `DrawFoldoutAnchorPort` 畫 ◎，不是 `HGPort`。群組名後的 ● 是組內有錯誤。
+  - 收起時成員壓到標題列（`CollapseRows`）並標成隱藏：接點不可見、不能起手或放線，但已接線的欄位照畫線，由標題列右緣伸出，同一組的線共用一把扇（`FoldedListOf` 先找清單鏈、再找群組鏈，回傳看得到的折疊祖先，和折疊清單走同一套 `RebuildFoldFan`）。`DrawFoldoutAnchorPort` 使用與 List 相同的 `DrawAggregatePort` 短豎線，不是 `HGPort`；純顯示出口規則見 §5.1。群組名後的 ● 是組內有錯誤。
   - 展開狀態是版面，和清單折疊共用 `listCollapse`／`GraphViewState._folded`、`_unfolded`（key＝群組列的 `CollapseKey`，路徑是 `<物件路徑>/#<群組名>`）；切換走 `SetListFolded` → `MarkViewStateChanged()`，鎖定中也能切。`DefaultCollapsed` 對群組一律是 false。`RevealNode` 會沿父欄位把收起的群組一路展開。
   - 外觀：只畫標題列（`ListHeader`）與左側一條縱向導引線（`ListRule`，落在成員讓出的那格縮排裡），不畫底帶與外框。底帶＋外框是清單「凹進去的容器」的語彙；群組也用它的話，組內的清單和群組長得一樣、左緣重疊，分不出主次。只有箭頭與文字是開關，其餘空白留給拖曳節點。
-  - 群組名不可含 `/`：保留給日後的群組路徑（對齊 Odin `FoldoutGroup` 的路徑語法），含 `/` 的欄位回報 `graphkit.metadata.foldout-path-reserved`（Warning）並畫在群組外。
+  - `/` 表示群組階層，例如 `[HGFoldout("設定/進階")]` 建立兩層 Foldout；父路徑若明確宣告為 Tab 則放在該頁內。建樹完成後由內向外執行 `FinishTabs`／`FinishFoldouts`，只處理本資料物件建立的列，避免重複縮排巢狀資料物件的群組。
 - `[HGEnum]` 只作用在 enum：畫成按鈕列（`[Flags]` 多選），標在 bool 上沒有效果。
 - `[HGBool(trueLabel = "是", falseLabel = "否")]` 把 bool 畫成兩段按鈕，左 true、右 false；沒標的 bool 是 14px 勾選框。和 `[HGEnum]` 一樣可標在欄位或 Slot 類別上，走同一批入口（`HGRow.BoolButtons`，類別用 `HGReflect.BoolButtonsOf`、欄位用 `BoolButtons`，descriptor 用 `HGFieldDescriptor.Create(..., boolButtons:)`）；欄位與類別都標時文字以欄位為準，欄位沒標不能關掉類別宣告。
 - `[HGEnum]` 也可標在 Slot 類別上（子類沿用）：該族的 enum 常數框在一般欄位、descriptor 欄位、清單元素、Token／資產 HEAD、資產參數綁定與變數庫都畫按鈕列。入口是 `HGGraph.SlotRow` 與變數庫面板，兩者都問 `HGReflect.HasEnumButtons(slotType)`。欄位與類別是 OR：欄位只能再開啟，不能關掉類別的宣告；後續設定 `ForceEnumButtons` 一律用 `|=`，不可覆蓋。清單欄位標 `[HGEnum]` 時，`BuildListChildren` 把旗標帶給純值元素列，元素繪製讀 `row.ForceEnumButtons`。

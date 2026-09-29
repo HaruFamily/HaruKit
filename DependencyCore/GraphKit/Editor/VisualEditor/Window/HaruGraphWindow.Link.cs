@@ -46,10 +46,7 @@ public partial class HaruGraphWindow
                     AddInputPort(context, node, row);
 
                 if (row.Kind == HGRowKind.List)
-                {
                     AddAggregatePort(context, node, row);
-                    AddListAppendPort(context, node, row);
-                }
             }
 
             if (!node.IsRoot && node.Carrier != null)
@@ -138,45 +135,11 @@ public partial class HaruGraphWindow
     private void AddAggregatePort(HGPortBuildContext context, HGNodeView node, HGRow row)
     {
         var presentation = new HGDelegatePortPresentation(row, node, row,
-            () => row.InputPortPosition,
+            () => AggregatePortPosition(row.InputPortPosition),
             () => Rect.zero,
-            () => !node.Hidden && row.Collapsed && HasConnectedElement(row),
+            () => !node.Hidden && !row.Hidden && !row.IsTabHidden && row.Collapsed && HasConnectedElement(row),
             () => false);
         context.AddAggregate(new HGPortKey(row.OwnerNodeId, row.Path, HGPortRole.Aggregate), presentation);
-    }
-
-    /// <summary>
-    /// 元素是 Slot、可增刪的清單在標題列掛新增接點（位置與 Aggregate 相同，Aggregate 契約不動）。
-    /// PropertySlot 清單方向相反：新增接點是寫入端，寫入來源要有擁有者載體，根上的清單（沒有載體）不掛。
-    /// </summary>
-    private void AddListAppendPort(HGPortBuildContext context, HGNodeView node, HGRow row)
-    {
-        if (row.Items is not HGListItemSource items || !items.CanEditStructure) return;
-        if (items.ElementType == null || !HGReflect.IsSlotType(items.ElementType)) return;
-        if (!items.TryCreateElement(out object created) || created is not GraphSlotBase prototype) return;
-
-        var presentation = new HGDelegatePortPresentation(row, node, row,
-            () => row.InputPortPosition, () => PortRect(row.InputPortPosition),
-            () => !node.Hidden && !row.Hidden, () => row.Locked || node.InLockedSubtree);
-        if (prototype is PropertySlotBase writer)
-        {
-            if (node.Carrier == null) return;
-            context.AddListAppend(InputKey(row), new HGListAppendWriteBinding(writer, node.Carrier, items),
-                new HGDelegatePortPolicy(() => true), presentation);
-            return;
-        }
-        context.AddListAppend(InputKey(row), new HGListAppendPortBinding(prototype, items),
-            HGListAppend.DefaultPolicy(prototype, node.Carrier), presentation);
-    }
-
-    /// <summary>清單列的新增接點（取值清單是輸入角色、PropertySlot 清單是輸出角色）；沒有就回 null。</summary>
-    private HGPort ListAppendPortOf(HGRow row)
-    {
-        if (graph == null || row == null) return null;
-        foreach (HGPortRole role in new[] { HGPortRole.Input, HGPortRole.Output })
-            if (graph.PortsByKey.TryGetValue(new HGPortKey(row.OwnerNodeId, row.Path, role), out var port)
-                && port.Binding is IHGListAppendBinding) return port;
-        return null;
     }
 
     private void ResolveLinkPorts()
@@ -445,8 +408,6 @@ public partial class HaruGraphWindow
             var port = graph.Ports[i];
             HGRow row = OwnerRowOfPort(port);
             if (!port.IsInput || !port.Presentation.Visible || row == null) continue;
-            // 清單標題的新增接點只收拉線；資產／Token 直接落在列上的路徑要的是有欄位的列。
-            if (port.Binding is IHGListAppendBinding) continue;
             if (!row.ScreenRect.Contains(graphPoint)) continue;
             owner = OwnerNodeOfPort(port);
             return row;
@@ -457,16 +418,35 @@ public partial class HaruGraphWindow
     /// <summary>點線剪斷的命中：與繪製用同一份折線路徑比距離，畫在哪裡就點得到哪裡。</summary>
     private HGLink LinkAt(Vector2 graphPoint)
     {
-        if (graph == null) return null;
+        if (graph == null || IsAggregatePortAt(graphPoint)) return null;
         RebuildFoldFan();
         foreach (var link in graph.Links)
         {
-            if (!IsLinkVisible(link) || link.InputPort == null || link.OutputPort == null) continue;
+            if (foldedDuplicateLinks.Contains(link) || !IsLinkVisible(link) || link.InputPort == null || link.OutputPort == null) continue;
             BuildLinkPathOf(link, linkPath);
             for (int i = 1; i < linkPath.Count; i++)
                 if (PointToSegmentSqrDistance(graphPoint, linkPath[i - 1], linkPath[i]) < 36f) return link;
         }
         return null;
+    }
+
+    /// <summary>純顯示出口的保留區：不剪穿它的線，也不把放線視為落在空白畫布上建立來源。</summary>
+    private bool IsAggregatePortAt(Vector2 graphPoint)
+    {
+        if (graph == null) return false;
+        HGNodeView top = NodeAt(graphPoint);
+        foreach (var node in graph.Nodes)
+        {
+            if (node.Hidden || (top != null && !ReferenceEquals(top, node))) continue;
+            foreach (var row in HGGraph.AllRows(node.Rows))
+            {
+                if (row.Hidden || row.IsTabHidden || !row.Collapsed) continue;
+                if (row.Kind != HGRowKind.List && row.Kind != HGRowKind.Foldout) continue;
+                if (!PortRect(AggregatePortPosition(row.InputPortPosition)).Contains(graphPoint)) continue;
+                if (row.Kind == HGRowKind.List ? HasConnectedElement(row) : FoldoutHasLinkedSlot(row, out _)) return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>
@@ -492,6 +472,11 @@ public partial class HaruGraphWindow
     private void ResolveLink(Vector2 graphMouse)
     {
         if (linkPort == null) return;
+        if (IsAggregatePortAt(graphMouse))
+        {
+            ShowNotification(new GUIContent("彙整出口僅供顯示，請展開後連到元素接點"));
+            return;
+        }
         var target = SnappedCompatiblePort(graphMouse);
         if (target != null)
         {
@@ -518,12 +503,9 @@ public partial class HaruGraphWindow
             ShowNotification(new GUIContent("請連到 Action 的寫入 OutputSlot"));
             return;
         }
-        var append = linkPort.Binding as IHGListAppendBinding;
         if (!TryMutateContent(() =>
         {
             PreserveVisibleNodePositions();
-            // 從清單新增接點拉到空白處＝新增一項並接上一顆空節點；取消或落在不相容處不會走到這裡，不留空項。
-            if (append != null && !append.Commit()) throw new InvalidOperationException("這個清單無法新增項目。");
             GraphNode carrier = NewSource(slot);
             if (slot is PropertySlotBase propertySlot)
             {
@@ -561,12 +543,9 @@ public partial class HaruGraphWindow
             if (target?.Carrier == null || !target.IsPropertyNode) return PortCommandResult.Rejected;
             if (ReferenceEquals(writer.Slot.Node, target.Carrier)
                 && writer.Slot.AcceptsProperty(target.Property)) return PortCommandResult.NoChange;
-            var appendWriter = output.Binding as IHGListAppendBinding;
             if (!TryMutateContent(() =>
             {
                 PreserveVisibleNodePositions();
-                // PropertySlot 清單的新增接點：先把預備的寫入欄位放進清單，再照一般寫入接線。
-                if (appendWriter != null && !appendWriter.Commit()) throw new InvalidOperationException("這個清單無法新增項目。");
                 if (!target.Carrier.IsProtoProperty && target.Property?.FamilyType != writer.Slot.FamilyType)
                 {
                     var local = model.CreateLocalProperty(writer.Slot.FamilyType, out string typeError);
@@ -588,12 +567,9 @@ public partial class HaruGraphWindow
             return PortCommandResult.Rejected;
         if (ReferenceEquals(input.InputSlot.Node, output.Source.OutputNode)) return PortCommandResult.NoChange;
 
-        var append = input.Binding as IHGListAppendBinding;
         if (!TryMutateContent(() =>
         {
             PreserveVisibleNodePositions();
-            // 清單新增接點：先把預備元素放進清單，再照一般欄位接上；兩件事在同一個復原步驟裡。
-            if (append != null && !append.Commit()) throw new InvalidOperationException("這個清單無法新增項目。");
             AttachSource(input.InputSlot, output.Source.OutputNode);
         }, out var error))
         {
@@ -605,7 +581,15 @@ public partial class HaruGraphWindow
     }
 
     // 線的輸入端一律走 Port：命中測試（LinkAt）已經要求兩端都解析得到，走不到沒有 Port 的線。
-    private PortCommandResult CutLink(HGLink link) => CutLink(link?.ParentRow?.InputSlot);
+    private PortCommandResult CutLink(HGLink link)
+    {
+        if (link != null && foldedMergedLinks.Contains(link))
+        {
+            ShowNotification(new GUIContent("此線代表多個欄位引用，請展開清單或摺疊群組後再斷線"));
+            return PortCommandResult.Rejected;
+        }
+        return CutLink(link?.ParentRow?.InputSlot);
+    }
 
     private PortCommandResult CutLink(GraphSlotBase slot)
     {

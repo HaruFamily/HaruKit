@@ -44,7 +44,94 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     case HGRowKind.Foldout:
                         DrawFoldoutRow(node, row, rowRect, nodeRect);
                         break;
+                    case HGRowKind.Tabs:
+                        DrawTabRow(node, row, rowRect, nodeRect);
+                        break;
+                    case HGRowKind.TabPage:
+                        DrawRows(node, row.Children, nodeRect);
+                        break;
                 }
+                if (highlightedFieldFocus == focus?.Id && highlightedFieldNode == node.Id
+                    && highlightedFieldPath == row.Path && EditorApplication.timeSinceStartup < fieldHighlightUntil)
+                {
+                    var highlight = rowRect;
+                    if (row.Kind == HGRowKind.Foldout) highlight.height = HGGraph.RowHeight;
+                    else if (row.Kind == HGRowKind.Tabs) highlight.height = row.TabHeaderHeight;
+                    HGStyles.Frame(highlight, HGStyles.NodeBorderSelected, 2f);
+                    Repaint();
+                }
+            }
+        }
+
+        private void DrawTabRow(HGNodeView node, HGRow tabs, Rect rowRect, Rect nodeRect)
+        {
+            var strip = HGGraph.TabStripRect(tabs, nodeRect.width);
+            var band = ListBandRect(tabs, rowRect);
+            float contentY = rowRect.y + tabs.TabHeaderHeight;
+            Rect opening = default;
+            bool connected = false;
+            HGStyles.Fill(new Rect(band.x, rowRect.y, band.width, tabs.TabHeaderHeight), HGStyles.TabInactive);
+            for (int i = 0; i < tabs.Children.Count; i++)
+            {
+                var page = tabs.Children[i];
+                if (page.TabLayoutWidth <= 0f) continue;
+                var rect = new Rect(nodeRect.x + strip.x + page.TabHeaderOffset.x,
+                    rowRect.y + page.TabHeaderOffset.y, page.TabLayoutWidth, HGGraph.RowHeight);
+                // 格數用完整區域分配，外緣與 Foldout 共用 band；繪製與點擊使用同一個框。
+                rect.xMin = Mathf.Max(rect.xMin, band.xMin);
+                rect.xMax = Mathf.Min(rect.xMax, band.xMax);
+                if (rect.width <= 0f) continue;
+                bool selected = tabs.ActiveTab == page.Label;
+                if (selected)
+                {
+                    // 與內容相鄰的頁籤只畫上、左右框，底端開口；換行時不跨過其他頁籤挖空。
+                    connected = Mathf.Approximately(rect.yMax, contentY);
+                    opening = rect;
+                    HGStyles.RoundedFill(rect, HGStyles.TabAccent, 3f);
+                    var inside = new Rect(rect.x + 1f, rect.y + 1f, Mathf.Max(0f, rect.width - 2f),
+                        rect.height - (connected ? 1f : 2f));
+                    HGStyles.RoundedFill(inside, HGStyles.TabSelected, 2f);
+                    if (connected)
+                        HGStyles.Fill(new Rect(inside.x, rect.yMax - 3f, inside.width, 3f), HGStyles.TabSelected);
+                }
+                else
+                {
+                    HGStyles.Fill(rect, HGStyles.TabInactive);
+                    if (!Mathf.Approximately(rect.yMax, contentY))
+                        HGStyles.Fill(new Rect(rect.x, rect.yMax - 1f, rect.width, 1f), HGStyles.TabAccent);
+                }
+                float inset = Mathf.Min(4f, rect.width * 0.5f);
+                var text = new Rect(rect.x + inset, rect.y, Mathf.Max(0f, rect.width - inset * 2f), rect.height);
+                var style = HGStyles.TabLabel(page.TabAlignment, selected);
+                GUI.Label(text, HGStyles.Elide(page.Label + FoldoutMark(page), style, text.width, page.Label), style);
+                var e = Event.current;
+                if (e.type == EventType.MouseDown && e.button == 0 && rect.Contains(e.mousePosition))
+                {
+                    SelectFieldTab(tabs, page.Label);
+                    e.Use();
+                }
+            }
+            // 使用整個 Tab 區段的高度，短頁保留的空白也屬於頁面，而非後面的常駐欄位。
+            float contentHeight = tabs.Height - tabs.TabHeaderHeight;
+            if (contentHeight > 0f)
+            {
+                HGStyles.Fill(new Rect(band.x, contentY, band.width, contentHeight), HGStyles.TabBody);
+            }
+            DrawRows(node, tabs.Children, nodeRect);
+            // 邊線在內容之後畫，壓在既有 Rect 內；不新增高度或打斷格線對齊。
+            if (contentHeight > 0f)
+            {
+                float line = Mathf.Min(1f, contentHeight);
+                HGStyles.Fill(new Rect(band.x, contentY, line, contentHeight), HGStyles.TabAccent);
+                HGStyles.Fill(new Rect(band.xMax - line, contentY, line, contentHeight), HGStyles.TabAccent);
+                HGStyles.Fill(new Rect(band.x, rowRect.y + tabs.Height - line, band.width, line), HGStyles.TabAccent);
+                if (connected)
+                {
+                    HGStyles.Fill(new Rect(band.x, contentY, opening.xMin - band.x + line, line), HGStyles.TabAccent);
+                    HGStyles.Fill(new Rect(opening.xMax - line, contentY, band.xMax - opening.xMax + line, line), HGStyles.TabAccent);
+                }
+                else
+                    HGStyles.Fill(new Rect(band.x, contentY, band.width, line), HGStyles.TabAccent);
             }
         }
 
@@ -57,24 +144,29 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         private void DrawFoldoutRow(HGNodeView node, HGRow row, Rect rowRect, Rect nodeRect)
         {
             var band = ListBandRect(row, rowRect);
-            HGStyles.RoundedFill(new Rect(band.x, band.y, band.width, HGGraph.RowHeight), HGStyles.ListHeader, 3f);
+            HGStyles.RoundedFill(new Rect(band.x, band.y, band.width, HGGraph.RowHeight), HGStyles.FoldoutHeader, 3f);
             // 導引線落在成員讓出來的那一格縮排裡，對齊標題列的箭頭。
             if (!row.Collapsed && band.height > HGGraph.RowHeight)
+            {
                 HGStyles.Fill(new Rect(band.x + 4f, band.y + HGGraph.RowHeight, 2f, band.height - HGGraph.RowHeight - 2f),
                     HGStyles.ListRule);
+                // 在既有底端向右收尾；與直線相接但不重疊，避免半透明交角變深。
+                HGStyles.Fill(new Rect(band.x + 6f, band.yMax - 4f, 6f, 2f), HGStyles.ListRule);
+            }
 
             var caption = Indent(new Rect(rowRect.x, rowRect.y, rowRect.width - InputPortReserve, HGGraph.RowHeight), row);
             var arrow = new Rect(caption.x, caption.y, 12f, caption.height);
             var text = new Rect(arrow.xMax, caption.y, Mathf.Max(8f, caption.width - 12f), caption.height);
-            GUI.Label(arrow, row.Collapsed ? "▸" : "▾", HGStyles.Tiny);
-            var content = HGStyles.Elide(row.Label + FoldoutMark(row), HGStyles.RowLabel, text.width, "點一下摺疊／展開");
-            GUI.Label(text, content, HGStyles.RowLabel);
+            var labelStyle = HGStyles.TabLabel(TextAnchor.MiddleLeft, true);
+            GUI.Label(arrow, row.Collapsed ? "▸" : "▾", labelStyle);
+            var content = HGStyles.Elide(row.Label + FoldoutMark(row), labelStyle, text.width, "點一下摺疊／展開");
+            GUI.Label(text, content, labelStyle);
 
             if (!row.Collapsed) DrawRows(node, row.Children, nodeRect);
 
             // 同清單標題：只有箭頭與文字本身是開關，剩下的空白留給拖曳節點。
             var toggle = new Rect(arrow.x, caption.y,
-                Mathf.Min(caption.width, 12f + HGStyles.RowLabel.CalcSize(content).x), caption.height);
+                Mathf.Min(caption.width, 12f + labelStyle.CalcSize(content).x), caption.height);
             var e = Event.current;
             if (e.type != EventType.MouseDown || e.button != 0 || !toggle.Contains(e.mousePosition)) return;
             SetListFolded(HGGraph.CollapseKey(row.OwnerNodeId, row), !row.Collapsed);

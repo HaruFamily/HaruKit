@@ -67,6 +67,25 @@ public sealed class GraphViewState
 
     public bool SetNoteCollapsed(string nodeId, bool collapsed) => Toggle(_notesCollapsed ??= new List<string>(), nodeId, collapsed);
 
+    // 節點內欄位分頁。以頁名而非索引保存，條件顯示或欄位重排不會選到別頁。
+    [SerializeField] private List<GraphFieldTabSelection> _fieldTabs = new();
+
+    public IReadOnlyList<GraphFieldTabSelection> FieldTabs => _fieldTabs ??= new List<GraphFieldTabSelection>();
+
+    public bool SetFieldTab(string key, string tab)
+    {
+        if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(tab)) return false;
+        _fieldTabs ??= new List<GraphFieldTabSelection>();
+        int index = _fieldTabs.FindIndex(entry => entry != null && entry.Key == key);
+        if (index < 0) _fieldTabs.Add(new GraphFieldTabSelection(key, tab));
+        else
+        {
+            if (_fieldTabs[index].Tab == tab) return false;
+            _fieldTabs[index] = new GraphFieldTabSelection(key, tab);
+        }
+        return true;
+    }
+
     // 畫布上的節點群組。清單順序＝繪製順序，越後面越上層。欄位名是序列化鍵，型別改名不影響它。
     [SerializeField] private List<GraphNodeGroup> _groups = new();
 
@@ -88,6 +107,23 @@ public sealed class GraphViewState
         if (present) list.Add(key);
         else list.Remove(key);
         return true;
+    }
+}
+
+/// <summary>節點內分頁的版面選擇，不參與圖的執行。</summary>
+[Serializable]
+public sealed class GraphFieldTabSelection
+{
+    [SerializeField] private string _key;
+    [SerializeField] private string _tab;
+
+    public string Key => _key;
+    public string Tab => _tab;
+
+    public GraphFieldTabSelection(string key, string tab)
+    {
+        _key = key;
+        _tab = tab;
     }
 }
 

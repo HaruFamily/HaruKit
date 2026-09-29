@@ -39,14 +39,6 @@ public partial class HaruGraphWindow
                 }
                 if (e.button == 0 && OutputPortAt(graphMouse) is HGPort outputPort)
                 {
-                    // PropertySlot 清單的新增接點是輸出角色，但和取值清單同一個手勢：原地放開＝折疊，拖出去才拉線。
-                    if (outputPort.Binding is IHGListAppendBinding)
-                    {
-                        inputPortClickPort = outputPort;
-                        inputPortClickStart = graphMouse;
-                        e.Use();
-                        break;
-                    }
                     BeginLink(outputPort);
                     e.Use();
                     break;
@@ -171,15 +163,6 @@ public partial class HaruGraphWindow
                     var pressedPort = inputPortClickPort;
                     inputPortClickPort = null;
                     HGRow pressed = OwnerRowOfPort(pressedPort);
-                    // 清單標題的新增接點原地放開＝收起／展開所有元素的子樹（Alt＝solo），與 Slot 接點同一套；
-                    // 清單列的折疊只在標題文字上。沒有任何元素接線時沒有子樹可收，放開就當沒事。
-                    if (pressedPort.Binding is IHGListAppendBinding && pressed != null)
-                    {
-                        if (HasConnectedElement(pressed))
-                            ToggleSlotVisibility(HGGraph.CollapseKey(pressed.OwnerNodeId, pressed), e.alt);
-                        e.Use();
-                        break;
-                    }
                     if (pressed?.InputSlot?.Node != null)
                     {
                         ToggleSlotVisibility(HGGraph.CollapseKey(pressed.OwnerNodeId, pressed), e.alt);
@@ -601,6 +584,105 @@ public partial class HaruGraphWindow
         }
     }
 
+    /// <summary>診斷優先用 NodeId＋FieldPath；舊驗證器的 Slot 則定位到持有它的欄位。</summary>
+    private bool TryFindIssueTarget(HGIssue issue, out HGNodeView node, out HGRow row)
+    {
+        node = null;
+        row = null;
+        if (issue == null || graph == null) return false;
+        var location = issue.Location;
+        if (!string.IsNullOrEmpty(location.NodeId))
+        {
+            node = NodeOfId(location.NodeId);
+            if (node == null) return false;
+            if (!string.IsNullOrEmpty(location.FieldPath))
+            {
+                row = RowOf(node.Id, location.FieldPath);
+                return true;
+            }
+        }
+
+        // Core 診斷可能同時帶來源載體與接收 Slot；沒有 FieldPath 時以真正出錯的 Slot 為準。
+        if (string.IsNullOrEmpty(location.FieldPath) && issue.Slot != null)
+            foreach (var candidate in graph.Nodes)
+                foreach (var field in HGGraph.AllRows(candidate.Rows))
+                    if (ReferenceEquals(field.InputSlot, issue.Slot)) { node = candidate; row = field; return true; }
+
+        if (node == null && issue.Node != null && (string.IsNullOrEmpty(location.FieldPath)
+            || !string.IsNullOrEmpty(location.TokenId) || TryFindRoot(location.FieldPath, out _)))
+        {
+            object target = issue.Node is GraphToken token ? token.Slot : issue.Node;
+            foreach (var candidate in graph.Nodes)
+            {
+                if (ReferenceEquals(candidate.Carrier, target) || ReferenceEquals(candidate.Obj, target))
+                { node = candidate; break; }
+                foreach (var field in HGGraph.AllRows(candidate.Rows))
+                    if (ReferenceEquals(field.InputSlot, target)) { node = candidate; row = field; break; }
+                if (node != null) break;
+            }
+        }
+        if (string.IsNullOrEmpty(location.FieldPath)) return node != null;
+        if (node != null) { row = RowOf(node.Id, location.FieldPath); return true; }
+
+        // 只有路徑的外部診斷必須唯一；同名欄位不能任意選第一顆。
+        foreach (var candidate in graph.Nodes)
+            foreach (var field in HGGraph.AllRows(candidate.Rows))
+            {
+                if (field.Path != location.FieldPath) continue;
+                if (row != null) { node = null; row = null; return false; }
+                node = candidate;
+                row = field;
+            }
+        return node != null;
+    }
+
+    private void FocusIssueTarget(HGNodeView node, HGRow row)
+    {
+        string nodeId = node.Id;
+        string fieldPath = row?.Path;
+        BreakUndoMerge();
+        ClearPortInteractionState();
+        ClearFieldHighlight();
+        inlineName.Cancel();
+        GUIUtility.keyboardControl = 0;
+        EditorGUIUtility.editingTextField = false;
+        pendingCenterTarget = null;
+        if (node.Hidden) RevealNode(node);
+        if (row != null)
+        {
+            soloSlotKey = null;
+            soloRestore.Clear();
+            RevealRowContainers(row);
+            graphDirty = true;
+        }
+        EnsureGraph();
+        node = NodeOfId(nodeId);
+        if (node == null) return;
+        row = fieldPath == null ? null : RowOf(nodeId, fieldPath);
+        selectedIds.Clear();
+        selectedIds.Add(nodeId);
+        float centerY = node.Rect.center.y;
+        if (row != null && !row.Hidden)
+        {
+            centerY = node.Pos.y + row.LocalY + Mathf.Min(row.Height, HGGraph.RowHeight) * 0.5f;
+            highlightedFieldFocus = focus.Id;
+            highlightedFieldNode = nodeId;
+            highlightedFieldPath = fieldPath;
+            fieldHighlightUntil = EditorApplication.timeSinceStartup + 1.5;
+        }
+        pan = new Vector2(canvasRect.width * 0.5f / zoom - node.Rect.center.x,
+            canvasRect.height * 0.5f / zoom - centerY);
+        Repaint();
+    }
+
+    private void ClearFieldHighlight()
+    {
+        highlightedFieldFocus = null;
+        highlightedFieldNode = null;
+        highlightedFieldPath = null;
+        fieldHighlightUntil = 0;
+    }
+
     // ===== 節點搜尋（Ctrl+F） =====
 
     /// <summary>打開畫布內的搜尋列；已開著時只把鍵盤焦點搶回輸入框。</summary>
@@ -722,6 +804,7 @@ public partial class HaruGraphWindow
         EnsureHeadIds(next);
 
         ClearPortInteractionState();
+        ClearFieldHighlight();
         focus = next;
         if (model != null) model.TrackChanges = next.Kind != HGFocusKind.Asset;
         inlineName.Cancel();

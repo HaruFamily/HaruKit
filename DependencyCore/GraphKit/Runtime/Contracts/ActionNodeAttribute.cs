@@ -150,10 +150,10 @@ public sealed class HGBoolAttribute : Attribute
 
 /// <summary>
 /// 把欄位收進節點內的摺疊群組：同名欄位共用一組，群組插在第一個成員的位置，成員接在群組標題列下面。
-/// 每組各自展開／收起、可同時展開多組，預設展開；沒標的欄位照原位置畫在群組外。
+/// 每組各自展開／收起、可同時展開多組，預設展開；用 / 分隔群組路徑，未宣告型別的父層視為 Foldout。
+/// 可與 HGTab 並用，兩條路徑必須是祖先與子群組；欄位放在較深的群組。
 /// 例：<c>[HGFoldout("暴擊")] private FloatSlot critRate;</c>
 /// </summary>
-// 名稱不可含 /：保留給日後的群組路徑（對齊 Odin FoldoutGroup 的路徑語法），含 / 的欄位回報診斷並當成沒標群組。
 [AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
 public sealed class HGFoldoutAttribute : Attribute
 {
@@ -163,6 +163,23 @@ public sealed class HGFoldoutAttribute : Attribute
     {
         Foldout = foldout;
     }
+}
+
+/// <summary>
+/// 同一物件、同一父群組下的頁面共用一條分頁列；未標記的欄位常駐。
+/// 用 / 指定頁面路徑；父層可為 Foldout 或其他已宣告的 Tab 頁面。分頁只控制顯示，不影響求值。
+/// 例：HGTab("基本") 與 HGFoldout("基本/進階") 並用，把欄位放進基本頁的進階摺疊群組。
+/// </summary>
+[AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
+public sealed class HGTabAttribute : Attribute
+{
+    public string Tab { get; }
+    /// <summary>分頁標題文字對齊，預設置中；同頁以第一個可見成員的設定為準。</summary>
+    public UnityEngine.TextAnchor Alignment { get; set; } = UnityEngine.TextAnchor.MiddleCenter;
+    /// <summary>固定寬度，單位為 20px 格數；0＝自動分配剩餘完整格子。</summary>
+    public int Width { get; set; }
+
+    public HGTabAttribute(string tab) => Tab = tab;
 }
 
 }

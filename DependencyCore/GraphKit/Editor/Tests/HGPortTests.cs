@@ -1290,7 +1290,7 @@ MonoBehaviour:
         Assert.That(a.Children[0].LocalY, Is.EqualTo(a.LocalY + HGGraph.RowHeight));
         Assert.That(a.Height, Is.EqualTo(3 * HGGraph.RowHeight));
         Assert.That(b.LocalY, Is.EqualTo(a.LocalY + a.Height));
-        Assert.That(view.Diagnostics.Exists(d => d.Code == "graphkit.metadata.foldout-path-reserved"), Is.True);
+        Assert.That(view.Diagnostics.Exists(d => d.Code == "graphkit.metadata.tab-invalid"), Is.True);
 
         string key = HGGraph.CollapseKey(view.Nodes[0].Id, a);
         view = HGGraph.Build(model, new object[] { owner }, null, "test", "Test",
@@ -1305,6 +1305,85 @@ MonoBehaviour:
         Assert.That(b.Collapsed, Is.False);
         Assert.That(b.LocalY, Is.EqualTo(a.LocalY + HGGraph.RowHeight));
         Assert.That(b.Children[0].Hidden, Is.False);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void GroupPathsNestTabsAndFoldoutsAndRestoreIndependentViewState(bool useDescriptor)
+    {
+        var owner = new NestedFieldGroupOwner();
+        var shared = new GraphNode(new PropertyReaderBody());
+        owner.Left.SetNode(shared);
+        owner.Right.SetNode(shared);
+        IHGEditorMetadataProvider metadata = useDescriptor
+            ? new TestMetadataProvider(new HGNodeDescriptor(typeof(NestedFieldGroupOwner), new[]
+            {
+                HGFieldDescriptor.CreateSlot<NestedFieldGroupOwner, TestFormulaSlot>("Left", target => target.Left,
+                    tab: "Basic/Settings/Left"),
+                HGFieldDescriptor.CreateSlot<NestedFieldGroupOwner, TestFormulaSlot>("Right", target => target.Right,
+                    tab: "Basic/Settings/Right"),
+                HGFieldDescriptor.Create<NestedFieldGroupOwner, int>("Declaration", target => target.Declaration,
+                    isVisible: target => target.Show, tab: "Basic", foldout: "Basic/Settings"),
+                HGFieldDescriptor.Create<NestedFieldGroupOwner, int>("Other", target => target.Other, tab: "Other"),
+            }), null) : null;
+        var model = new HGModel();
+        var view = HGGraph.Build(model, new object[] { owner }, null, "test", "Test", metadata: metadata);
+        Assert.That(view.Diagnostics, Is.Empty);
+        var node = view.Nodes[0];
+        var outer = node.Rows[0];
+        var basic = outer.Children[0];
+        var foldout = basic.Children[0];
+        var inner = foldout.Children[0];
+        var left = inner.Children[0].Children[0];
+        var right = inner.Children[1].Children[0];
+        Assert.That(outer.Kind, Is.EqualTo(HGRowKind.Tabs));
+        Assert.That(basic.Label, Is.EqualTo("Basic"));
+        Assert.That(foldout.Kind, Is.EqualTo(HGRowKind.Foldout));
+        Assert.That(foldout.Label, Is.EqualTo("Settings"));
+        Assert.That(inner.Kind, Is.EqualTo(HGRowKind.Tabs));
+        Assert.That(left.FoldoutOwnerRow, Is.SameAs(foldout));
+        Assert.That(left.TabPageOwnerRow.TabPageOwnerRow, Is.SameAs(basic));
+        Assert.That(left.Depth, Is.EqualTo(foldout.Depth + 2));
+        Assert.That(left.IsInputPortVisible, Is.True);
+        Assert.That(right.IsTabHidden, Is.True);
+        Assert.That(view.Links, Has.Count.EqualTo(2));
+        float height = node.Height;
+        string outerKey = HGGraph.CollapseKey(node.Id, outer);
+        string innerKey = HGGraph.CollapseKey(node.Id, inner);
+        string foldoutKey = HGGraph.CollapseKey(node.Id, foldout);
+        Assert.That(outerKey, Is.Not.EqualTo(innerKey));
+        var selection = new Dictionary<string, string> { [outerKey] = "Other", [innerKey] = "Right" };
+        view = HGGraph.Build(model, new object[] { owner }, null, "test", "Test", metadata: metadata, fieldTabs: selection);
+        inner = view.Nodes[0].Rows[0].Children[0].Children[0].Children[0];
+        Assert.That(inner.Children[1].Children[0].IsTabHidden, Is.True);
+        Assert.That(view.Nodes[0].Height, Is.EqualTo(height));
+
+        selection[outerKey] = "Basic";
+        view = HGGraph.Build(model, new object[] { owner }, null, "test", "Test",
+            new Dictionary<string, bool> { [foldoutKey] = true }, metadata: metadata, fieldTabs: selection);
+        foldout = view.Nodes[0].Rows[0].Children[0].Children[0];
+        Assert.That(foldout.Collapsed, Is.True);
+        foreach (var row in HGGraph.AllRows(foldout.Children)) Assert.That(row.Hidden, Is.True);
+        Assert.That(view.Links, Has.Count.EqualTo(2));
+
+        view = HGGraph.Build(model, new object[] { owner }, null, "test", "Test", metadata: metadata, fieldTabs: selection);
+        inner = view.Nodes[0].Rows[0].Children[0].Children[0].Children[0];
+        Assert.That(inner.Children[1].Children[0].IsInputPortVisible, Is.True);
+        Assert.That(inner.Children[0].Children[0].IsTabHidden, Is.True);
+        Assert.That(owner.Left.Node, Is.SameAs(owner.Right.Node));
+    }
+
+    [Test]
+    public void GroupPathConflictsFallbackWithoutLosingFieldsAndImplicitParentsNest()
+    {
+        var view = HGGraph.Build(new HGModel(), new object[] { new ConflictingFieldGroupOwner() }, null, "test", "Test");
+        var rows = view.Nodes[0].Rows;
+        Assert.That(rows, Has.Count.EqualTo(5));
+        for (int i = 0; i < 4; i++) Assert.That(rows[i].Kind, Is.EqualTo(HGRowKind.NoPort));
+        Assert.That(view.Diagnostics, Has.Count.EqualTo(4));
+        Assert.That(rows[4].Label, Is.EqualTo("Valid"));
+        Assert.That(rows[4].Children[0].Label, Is.EqualTo("Child"));
+        Assert.That(rows[4].Children[0].Children[0].Depth, Is.EqualTo(rows[4].Depth + 2));
     }
 
     [Test]
@@ -1324,6 +1403,59 @@ MonoBehaviour:
         Assert.That(rows[0].DefaultListRow, Is.SameAs(rows[1]));
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void FieldTabsHideRowsWithoutDroppingSharedLinksAndKeepStableLayout(bool useDescriptor)
+    {
+        var owner = new FieldTabOwner();
+        var shared = new GraphNode(new PropertyReaderBody());
+        owner.First.SetNode(shared);
+        owner.Second.SetNode(shared);
+        IHGEditorMetadataProvider metadata = useDescriptor
+            ? new TestMetadataProvider(new HGNodeDescriptor(typeof(FieldTabOwner), new[]
+            {
+                HGFieldDescriptor.Create<FieldTabOwner, bool>("Show", target => target.Show),
+                HGFieldDescriptor.CreateSlot<FieldTabOwner, TestFormulaSlot>("First", target => target.First, tab: "A"),
+                HGFieldDescriptor.CreateSlot<FieldTabOwner, TestFormulaSlot>("Second", target => target.Second,
+                    isVisible: target => target.Show, tab: "B"),
+                HGFieldDescriptor.Create<FieldTabOwner, int>("Third", target => target.Third, tab: "A"),
+            }), null) : null;
+        var model = new HGModel();
+        var view = HGGraph.Build(model, new object[] { owner }, null, "test", "Test", metadata: metadata);
+        Assert.That(view.Diagnostics, Is.Empty);
+        var node = view.Nodes[0];
+        var tabs = node.Rows[1];
+        Assert.That(node.Rows.Count, Is.EqualTo(2));
+        Assert.That(tabs.Kind, Is.EqualTo(HGRowKind.Tabs));
+        Assert.That(tabs.ActiveTab, Is.EqualTo("A"));
+        Assert.That(tabs.Children[0].Children.Count, Is.EqualTo(2));
+        Assert.That(tabs.Children[1].Children[0].IsInputPortVisible, Is.False);
+        Assert.That(view.BySlot[owner.First], Is.SameAs(view.BySlot[owner.Second]));
+        Assert.That(view.Links.Count, Is.EqualTo(2));
+        float height = node.Height;
+        string key = HGGraph.CollapseKey(node.Id, tabs);
+        var selection = new Dictionary<string, string> { [key] = "B" };
+
+        view = HGGraph.Build(model, new object[] { owner }, null, "test", "Test", metadata: metadata, fieldTabs: selection);
+        tabs = view.Nodes[0].Rows[1];
+        Assert.That(tabs.ActiveTab, Is.EqualTo("B"));
+        Assert.That(tabs.Children[0].Children.TrueForAll(row => row.Hidden && row.IsTabHidden), Is.True);
+        Assert.That(tabs.Children[1].Children[0].IsInputPortVisible, Is.True);
+        Assert.That(view.Nodes[0].Height, Is.EqualTo(height));
+        Assert.That(view.Links.Count, Is.EqualTo(2));
+        Assert.That(owner.First.Node, Is.SameAs(shared));
+        Assert.That(owner.Second.Node, Is.SameAs(shared));
+
+        // 條件把作用中頁整頁藏掉時回第一頁，不改寫已儲存的選擇；重新出現會回 B。
+        owner.Show = false;
+        view = HGGraph.Build(model, new object[] { owner }, null, "test", "Test", metadata: metadata, fieldTabs: selection);
+        Assert.That(view.Nodes[0].Rows[1].ActiveTab, Is.EqualTo("A"));
+        Assert.That(view.Nodes[0].Rows[1].Children.Count, Is.EqualTo(1));
+        owner.Show = true;
+        view = HGGraph.Build(model, new object[] { owner }, null, "test", "Test", metadata: metadata, fieldTabs: selection);
+        Assert.That(view.Nodes[0].Rows[1].ActiveTab, Is.EqualTo("B"));
+    }
+
     [Test]
     public void ListFieldEnumAttributeReachesValueElements()
     {
@@ -1333,6 +1465,157 @@ MonoBehaviour:
 
         Assert.That(list.Kind, Is.EqualTo(HGRowKind.List));
         Assert.That(list.Children[0].ForceEnumButtons, Is.True);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void TabWidthsCombineFixedAndAutomaticMetadataOnTheNodeGrid(bool useDescriptor)
+    {
+        var owner = new TabWidthOwner();
+        IHGEditorMetadataProvider metadata = useDescriptor
+            ? new TestMetadataProvider(new HGNodeDescriptor(typeof(TabWidthOwner), new[]
+            {
+                HGFieldDescriptor.Create<TabWidthOwner, int>("Fixed", target => target.Fixed, tab: "Fixed", tabWidthUnits: 4),
+                HGFieldDescriptor.Create<TabWidthOwner, int>("Wider", target => target.Wider, tab: "Wider", tabWidthUnits: 5),
+                HGFieldDescriptor.Create<TabWidthOwner, int>("Automatic", target => target.Automatic, tab: "Automatic"),
+            }), null) : null;
+        var view = HGGraph.Build(new HGModel(), new object[] { owner }, null, "test", "Test", metadata: metadata);
+        Assert.That(view.Diagnostics, Is.Empty);
+        var tabs = view.Nodes[0].Rows[0];
+        Assert.That(tabs.TabHeaderHeight, Is.EqualTo(HGGraph.RowHeight), "三格寬的節點不預留接點空間，三頁各占一格。");
+        Assert.That(tabs.Children[0].LocalY, Is.EqualTo(tabs.LocalY + tabs.TabHeaderHeight));
+        HGGraph.MeasureTabWidths(tabs, 400f);
+        Assert.That(tabs.Children[0].TabLayoutWidth, Is.EqualTo(80f).Within(0.001f));
+        Assert.That(tabs.Children[1].TabLayoutWidth, Is.EqualTo(100f).Within(0.001f));
+        Assert.That(tabs.Children[2].TabLayoutWidth, Is.EqualTo(220f).Within(0.001f));
+        HGGraph.MeasureTabWidths(tabs, 229f);
+        Assert.That(tabs.Children.ConvertAll(page => page.TabLayoutWidth), Is.EqualTo(new[] { 80f, 100f, 40f }));
+
+        var rootStrip = HGGraph.TabStripRect(new HGRow(), 300f);
+        Assert.That(rootStrip.xMin, Is.Zero);
+        Assert.That(rootStrip.xMax, Is.EqualTo(300f));
+        var nested = new HGRow { LeftPad = 30f, Depth = 1 };
+        var strip = HGGraph.TabStripRect(nested, 300f);
+        Assert.That(strip.xMin % HGGraph.GridSize, Is.Zero);
+        Assert.That(strip.xMax % HGGraph.GridSize, Is.Zero);
+        Assert.That(strip.xMin, Is.GreaterThanOrEqualTo(nested.LeftPad + HGGraph.IndentWidth));
+        Assert.That(strip.xMax, Is.EqualTo(300f));
+        var smallest = HGGraph.TabStripRect(nested, HGGraph.GridSize);
+        Assert.That(smallest.xMin, Is.Zero);
+        Assert.That(smallest.width, Is.EqualTo(HGGraph.GridSize));
+    }
+
+    [Test]
+    public void TabWidthsDistributeWholeCellsAndWrapInsteadOfSplittingCells()
+    {
+        var tabs = new HGRow { Kind = HGRowKind.Tabs };
+        tabs.Children.Add(new HGRow { Kind = HGRowKind.TabPage });
+        tabs.Children.Add(new HGRow { Kind = HGRowKind.TabPage });
+        tabs.Children.Add(new HGRow { Kind = HGRowKind.TabPage });
+        HGGraph.MeasureTabWidths(tabs, 300f);
+        Assert.That(tabs.Children.ConvertAll(page => page.TabLayoutWidth), Is.EqualTo(new[] { 100f, 100f, 100f }));
+        HGGraph.MeasureTabWidths(tabs, 209f);
+        Assert.That(tabs.Children.ConvertAll(page => page.TabLayoutWidth), Is.EqualTo(new[] { 80f, 60f, 60f }),
+            "十格分三頁為 4／3／3，尾端不足一格的 9px 留白。");
+
+        tabs.Children[0].TabWidthUnits = 10;
+        tabs.Children[1].TabWidthUnits = 20;
+        HGGraph.MeasureTabWidths(tabs, 200f);
+        // 三頁各保留一格，剩餘七格按 9／19 配額取整，餘格先補第一頁。
+        Assert.That(tabs.Children[0].TabLayoutWidth, Is.EqualTo(80f));
+        Assert.That(tabs.Children[1].TabLayoutWidth, Is.EqualTo(100f));
+        Assert.That(tabs.Children[2].TabLayoutWidth, Is.EqualTo(20f).Within(0.001f));
+        HGGraph.MeasureTabWidths(tabs, 30f);
+        Assert.That(tabs.Children.ConvertAll(page => page.TabLayoutWidth), Is.EqualTo(new[] { 20f, 20f, 20f }));
+        Assert.That(tabs.TabHeaderHeight, Is.EqualTo(3 * HGGraph.RowHeight));
+        Assert.That(tabs.Children[0].TabHeaderOffset, Is.EqualTo(Vector2.zero));
+        Assert.That(tabs.Children[1].TabHeaderOffset, Is.EqualTo(new Vector2(0f, HGGraph.RowHeight)));
+        Assert.That(tabs.Children[2].TabHeaderOffset, Is.EqualTo(new Vector2(0f, 2 * HGGraph.RowHeight)));
+
+        foreach (var page in tabs.Children) page.TabWidthUnits = 1;
+        HGGraph.MeasureTabWidths(tabs, 200f);
+        Assert.That(tabs.Children.ConvertAll(page => page.TabLayoutWidth), Is.EqualTo(new[] { 20f, 20f, 20f }),
+            "全部明確指定時不擅自拉寬，未用滿的空間保留在列尾。");
+    }
+
+    [TestCase("Input", false)]
+    [TestCase("Amount", false)]
+    [TestCase("Input", true)]
+    public void DiagnosticNavigationRevealsTheExactFieldAndItsContainers(string field, bool legacySlot)
+    {
+        var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            owner.Document = new PropertyDocument();
+            var other = new GraphNode(new DiagnosticFieldBody());
+            var target = new GraphNode(new DiagnosticFieldBody());
+            string otherId = other.EnsureId();
+            string targetId = target.EnsureId();
+            owner.Document.Orphans.Add(other);
+            owner.Document.Orphans.Add(target);
+            foreach (string id in new[] { otherId, targetId })
+            {
+                var group = new GraphNodeGroup("tim:*", "Group", new Rect(0, 0, 400, 300), 0);
+                group.AddTab("A");
+                group.AddTab("B");
+                group.SetMember(id, true);
+                group.SetActiveTab(1);
+                group.SetCollapsed(true);
+                owner.Document.ViewState.AddNodeGroup(group);
+                owner.Document.ViewState.SetFolded(id + "#/Details/#Settings", true);
+                owner.Document.ViewState.SetFolded(id + "#/Details/Values", true);
+            }
+            Assert.That(window.BindDocument(owner, PropertyBinding(), PropertyContext()), Is.True);
+            var commands = window.GetDocumentCommands();
+            commands.Query();
+            string path = "/Details/Values[0]/" + field;
+            var view = window.NodeOfId(targetId);
+            var before = System.Linq.Enumerable.Single(HGGraph.AllRows(view.Rows), row => row.Path == path);
+            Assert.That(view.Hidden, Is.True);
+            Assert.That(before.Hidden, Is.True);
+            var diagnostic = new GraphDiagnostic("test.field", GraphDiagnosticSeverity.Error, "Field error",
+                new GraphDiagnosticLocation(focusId: "tim:*", nodeId: targetId, fieldPath: legacySlot ? null : path));
+            var issue = new HGIssue(diagnostic, "Field", null, legacySlot ? before.InputSlot : null, null);
+
+            window.JumpTo(issue);
+            commands.Query();
+            view = window.NodeOfId(targetId);
+            var revealed = System.Linq.Enumerable.Single(HGGraph.AllRows(view.Rows), row => row.Path == path);
+            Assert.That(view.Hidden, Is.False);
+            Assert.That(revealed.Hidden, Is.False);
+            Assert.That(revealed.TabPageOwnerRow.Label, Is.EqualTo("Advanced"));
+            Assert.That(revealed.TabPageOwnerRow.TabStripRow.ActiveTab, Is.EqualTo("Advanced"));
+            Assert.That(revealed.ItemOwnerRow.Collapsed, Is.False);
+            Assert.That(revealed.FoldoutOwnerRow.Collapsed, Is.False);
+            Assert.That(window.NodeOfId(otherId).Hidden, Is.True, "同名欄位不可展開到另一顆節點。");
+            Assert.That(commands.Query().IsDirty, Is.True);
+            Assert.That(owner.Document.ViewState.NodeGroups[1].Collapsed, Is.True, "定位只改工作副本。");
+            Assert.That(commands.Cancel(), Is.EqualTo(HGSessionCommandResult.Changed));
+            commands.Query();
+            Assert.That(window.NodeOfId(targetId).Hidden, Is.True);
+            Assert.That(System.Linq.Enumerable.Single(HGGraph.AllRows(window.NodeOfId(targetId).Rows), row => row.Path == path).Hidden, Is.True);
+        }
+        finally
+        {
+            window.GetDocumentCommands()?.Cancel();
+            UnityEngine.Object.DestroyImmediate(window);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+    }
+
+    [Test]
+    public void MetadataDiagnosticsWithMatchingFieldPathsKeepTheirOwningNodeIds()
+    {
+        var first = new GraphNode(new DiagnosticMetadataBody());
+        var second = new GraphNode(new DiagnosticMetadataBody());
+        var view = HGGraph.Build(new HGModel(), Array.Empty<object>(), new List<GraphNode> { first, second }, "test", "Test");
+        var issues = view.Diagnostics.FindAll(diagnostic => diagnostic.Code == "graphkit.metadata.tab-invalid");
+        Assert.That(issues.Count, Is.EqualTo(2));
+        Assert.That(issues[0].Location.NodeId, Is.EqualTo(first.Id));
+        Assert.That(issues[1].Location.NodeId, Is.EqualTo(second.Id));
+        Assert.That(issues[0].Location.FieldPath, Is.EqualTo("/Value"));
+        Assert.That(issues[1].Location.FieldPath, Is.EqualTo("/Value"));
     }
 
     [Test]
@@ -1366,6 +1649,10 @@ MonoBehaviour:
         Assert.That(state.SetNoteCollapsed("node", true), Is.True);
         Assert.That(state.SetNoteCollapsed("", true), Is.False);
         Assert.That(state.NotesCollapsed, Is.EquivalentTo(new[] { "node" }));
+        Assert.That(state.SetFieldTab("node#/#tabs/", "B"), Is.True);
+        Assert.That(state.SetFieldTab("node#/#tabs/", "B"), Is.False);
+        Assert.That(state.SetFieldTab("", "A"), Is.False);
+        Assert.That(state.FieldTabs.Count, Is.EqualTo(1));
     }
 
     [Test]
@@ -1373,6 +1660,7 @@ MonoBehaviour:
     {
         var document = new ViewStateDocument();
         ((IGraphViewStateOwner)document).ViewState.SetHidden("node#/a", true);
+        ((IGraphViewStateOwner)document).ViewState.SetFieldTab("node#/#tabs/", "B");
 
         var copy = GraphDeepCopy.Copy(document);
         var copied = ((IGraphViewStateOwner)copy).ViewState;
@@ -1380,6 +1668,12 @@ MonoBehaviour:
 
         copied.SetHidden("node#/b", true);
         Assert.That(((IGraphViewStateOwner)document).ViewState.Hidden, Has.Count.EqualTo(1));
+        Assert.That(copied.FieldTabs[0].Tab, Is.EqualTo("B"));
+        copied.SetFieldTab("node#/#tabs/", "A");
+        Assert.That(((IGraphViewStateOwner)document).ViewState.FieldTabs[0].Tab, Is.EqualTo("B"));
+        var restored = JsonUtility.FromJson<GraphViewState>(JsonUtility.ToJson(copied));
+        Assert.That(restored.FieldTabs[0].Key, Is.EqualTo("node#/#tabs/"));
+        Assert.That(restored.FieldTabs[0].Tab, Is.EqualTo("A"));
     }
 
     [Test]
@@ -1922,7 +2216,42 @@ MonoBehaviour:
         [HGFoldout("A")] public int First;
         [HGFoldout("B")] public int Second;
         [HGFoldout("A")] public int Third;
-        [HGFoldout("x/y")] public int Reserved;
+        [HGFoldout("x//y")] public int Reserved;
+    }
+
+    private sealed class NestedFieldGroupOwner
+    {
+        [HGTab("Basic/Settings/Left")] public TestFormulaSlot Left = new();
+        [HGTab("Basic/Settings/Right")] public TestFormulaSlot Right = new();
+        // 型別宣告在子路徑後面，且欄位不可見時仍須保持 Basic 是頁面。
+        [HGTab("Basic"), HGFoldout("Basic/Settings"), HGShowIf(nameof(Show))] public int Declaration;
+        [HGTab("Other")] public int Other;
+        public bool Show => false;
+    }
+
+    private sealed class ConflictingFieldGroupOwner
+    {
+        [HGTab("Conflict")] public int Tab;
+        [HGFoldout("Conflict")] public int Foldout;
+        [HGFoldout("Conflict/Child")] public int Descendant;
+        [HGTab("A"), HGFoldout("B")] public int Unrelated;
+        [HGFoldout("Valid/Child")] public int Nested;
+    }
+
+    private sealed class FieldTabOwner
+    {
+        public bool Show = true;
+        [HGTab("A")] public TestFormulaSlot First = new();
+        [HGTab("B"), HGShowIf(nameof(Show))] public TestFormulaSlot Second = new();
+        [HGTab("A")] public int Third;
+    }
+
+    [HGNode("Tab Width Test", Width = 3)]
+    private sealed class TabWidthOwner
+    {
+        [HGTab("Fixed", Width = 4)] public int Fixed;
+        [HGTab("Wider", Width = 5)] public int Wider;
+        [HGTab("Automatic")] public int Automatic;
     }
 
     private sealed class TestValueOwner
@@ -2047,8 +2376,10 @@ MonoBehaviour:
     }
 
     /// <summary>有 Property 能力的最小文件。欄位刻意不用唯讀自動屬性：GraphDeepCopy 會跳過 readonly 欄位。</summary>
-    private sealed class PropertyDocument : IGraphDocument, IPropertyOwner
+    private sealed class PropertyDocument : IGraphDocument, IPropertyOwner, IGraphViewStateOwner
     {
+        [SerializeField] private GraphViewState viewState = new();
+        public GraphViewState ViewState => viewState;
         private List<GraphNode> orphans = new List<GraphNode>();
         private List<GraphProperty> properties = new List<GraphProperty>();
         private ArrayList roots = new ArrayList();
@@ -2072,6 +2403,28 @@ MonoBehaviour:
         public string TitleOf(object root) => "Root";
         public IList ItemsOf(object root) => null;
         public object AddRoot(object key) => null;
+    }
+
+    private sealed class DiagnosticFieldBody : GraphNodeContent
+    {
+        [HGTab("Basic")] public int Plain;
+        [HGTab("Advanced")] public DiagnosticDetails Details = new();
+    }
+
+    private sealed class DiagnosticDetails
+    {
+        [HGFoldout("Settings")] public List<DiagnosticEntry> Values = new() { new DiagnosticEntry() };
+    }
+
+    private sealed class DiagnosticEntry
+    {
+        public TestFormulaSlot Input = new();
+        public int Amount;
+    }
+
+    private sealed class DiagnosticMetadataBody : GraphNodeContent
+    {
+        [HGTab("bad//path")] public int Value;
     }
 
     private sealed class TestDocument : IGraphDocument

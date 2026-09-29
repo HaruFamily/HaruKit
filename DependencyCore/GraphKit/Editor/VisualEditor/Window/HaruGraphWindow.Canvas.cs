@@ -191,6 +191,10 @@ public partial class HaruGraphWindow
                     && (pointerEvent == EventType.MouseDown || pointerEvent == EventType.DragUpdated
                         || pointerEvent == EventType.DragPerform);
                 HGNodeView pointerOwner = gatePointer ? NodeAt(graphMouse) : null;
+                bool selectControlOwner = pointerOwner != null && pointerEvent == EventType.MouseDown && e.button == 0
+                    && !linking && placingSlot == null
+                    && graphMouse.y >= pointerOwner.Pos.y + HGGraph.HeaderHeight
+                    && InputPortAt(graphMouse) == null && OutputPortAt(graphMouse) == null;
                 // 點到被蓋住的節點露出來的部分＝把它提到最上層。IMGUI 的控制項 id 按繪製順序發，
                 // 順序變了就先放掉鍵盤焦點，否則正在輸入的框會對到另一個節點的欄位。
                 if (pointerEvent == EventType.MouseDown && RaiseNode(pointerOwner)) GUIUtility.keyboardControl = 0;
@@ -206,6 +210,19 @@ public partial class HaruGraphWindow
                         try
                         {
                             DrawNode(node, ReferenceEquals(node, linkTarget), snappedPort);
+                            // 只接回被內容控制項吃掉的左鍵；未消耗事件仍交畫布處理 Ctrl／Shift 選取。
+                            // 不改 keyboardControl／hotControl，讓文字框與拖曳輸入繼續握有焦點。
+                            if (selectControlOwner && ReferenceEquals(node, pointerOwner)
+                                && beforeBlock == EventType.MouseDown && e.type == EventType.Used)
+                            {
+                                selectedNodeGroupId = null;
+                                if (!selectedIds.Contains(node.Id))
+                                {
+                                    selectedIds.Clear();
+                                    selectedIds.Add(node.Id);
+                                }
+                                Repaint();
+                            }
                             DrawNodeGroupStripe(node);
                         }
                         finally
@@ -322,10 +339,11 @@ public partial class HaruGraphWindow
     private void DrawLinks(Vector2 graphMouse)
     {
         Handles.BeginGUI();
+        RebuildTabGhosts();
         RebuildFoldFan();
         foreach (var link in graph.Links)
         {
-            if (IsTracedLink(link)) continue;
+            if (foldedDuplicateLinks.Contains(link) || IsTracedLink(link)) continue;
             if (IsLinkVisible(link)) DrawLink(link, false);
             else DrawInvisibleLink(link, false);
         }
@@ -347,10 +365,11 @@ public partial class HaruGraphWindow
     {
         if (graph == null || selectedIds.Count == 0) return;
         Handles.BeginGUI();
+        RebuildTabGhosts();
         RebuildFoldFan();
         foreach (var link in graph.Links)
         {
-            if (!IsTracedLink(link)) continue;
+            if (foldedDuplicateLinks.Contains(link) || !IsTracedLink(link)) continue;
             if (IsLinkVisible(link)) DrawLink(link, true);
             else DrawInvisibleLink(link, true);
         }
@@ -358,17 +377,59 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>
-    /// 看不到整條的線：欄位收起的畫一般殘影，父欄位被藏起來的不畫。一端被群組關掉的走 <see cref="DrawGroupOffGhost"/>。
+    /// 看不到整條的線：欄位收起畫一般殘影；Group／HGTab 隱藏的連線只在仍可見的一端畫殘影。
     /// </summary>
     private void DrawInvisibleLink(HGLink link, bool traced)
     {
-        // 一端被群組關掉（收合或非作用中分頁）：比照 ⊖ 收起，只在父欄位端畫殘影。
-        if (IsGroupOffLink(link))
+        if (link.ParentRow?.IsTabHidden == true && !tabGhostLinks.Contains(link)) return;
+        if (link.ParentRow?.IsTabHidden == true || IsGroupOffLink(link))
         {
-            DrawGroupOffGhost(link, traced);
+            DrawContainerHiddenGhost(link, link.InputPort, link.OutputPort, traced);
+            DrawContainerHiddenGhost(link, link.OutputPort, link.InputPort, traced);
             return;
         }
         if (IsLinkGhost(link)) DrawLinkGhosts(link, traced);
+    }
+
+    /// <summary>
+    /// 先以完整圖的實線佔用關係，再替只有隱藏頁引用的關係選一條殘影。
+    /// 不依目前繪製層分組，避免選取高亮層與一般層各畫一次；來源端用實際 Port key，包含 Property 寫入的反向端點。
+    /// </summary>
+    private void RebuildTabGhosts()
+    {
+        tabGhostRelations.Clear();
+        tabGhostLinks.Clear();
+        foreach (var link in graph.Links)
+        {
+            if (link.ParentRow == null || !IsLinkVisible(link)) continue;
+            var source = FoldTargetPort(link);
+            if (source != null) tabGhostRelations.Add((link.ParentRow.OwnerNodeId, source.Key));
+        }
+        foreach (var link in graph.Links)
+        {
+            if (link.ParentRow?.IsTabHidden != true || link.InputPort == null || link.OutputPort == null) continue;
+            var source = FoldTargetPort(link);
+            if (source == null || !source.Presentation.Visible) continue;
+            if (tabGhostRelations.Add((link.ParentRow.OwnerNodeId, source.Key))) tabGhostLinks.Add(link);
+        }
+    }
+
+    /// <summary>容器只藏自己的內容；來源或欄位任一端仍可見時，從那端往隱藏端畫淡出虛線。</summary>
+    private void DrawContainerHiddenGhost(HGLink link, HGPort from, HGPort to, bool traced)
+    {
+        if (from == null || to == null || GroupOffOwner(from) != null) return;
+        bool fromIsRow = ReferenceEquals(OwnerRowOfPort(from), link.ParentRow);
+        if (fromIsRow && link.ParentRow.IsTabHidden) return;
+        bool foldedRow = fromIsRow && FoldedListOf(link) != null;
+        if (!from.Presentation.Visible && !foldedRow) return;
+        Vector2 target = to.Presentation.Position;
+        float targetDir = PortDirection(to);
+        string hiddenGroupMember = GroupOffOwner(to);
+        if (hiddenGroupMember != null && nodeGroupMembers.TryGetValue(hiddenGroupMember, out var group) && group.Collapsed)
+            NodeGroupHeaderPortFacing(group, from.Presentation.Position, out target, out targetDir);
+        Vector2 start = foldedRow ? AggregatePortPosition(from.Presentation.Position) : from.Presentation.Position;
+        DrawLinkGhost(start, PortDirection(from), target, targetDir,
+            GhostColor(link, traced), GhostThickness(traced), fromAggregate: foldedRow);
     }
 
     /// <summary>
@@ -377,6 +438,7 @@ public partial class HaruGraphWindow
     /// </summary>
     private bool IsLinkGhost(HGLink link)
     {
+        if (link?.ParentRow?.IsTabHidden == true) return false;
         if (link?.InputPort == null || link.OutputPort == null || link.ParentRow == null) return false;
         if (link.InputOwner == null || link.InputOwner.Hidden) return false;
         return effectiveHidden.Contains(HGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow));
@@ -399,11 +461,13 @@ public partial class HaruGraphWindow
             link.ParentRow.IsProducedValue);
         float thickness = traced ? LinkThickness + 2f : LinkThickness;
         Vector2 slotPos = slotPort.Presentation.Position;
+        bool folded = FoldedListOf(link) != null;
+        if (folded) slotPos = AggregatePortPosition(slotPos);
         float slotDir = PortDirection(slotPort);
         Vector2 targetPos = targetPort.Presentation.Position;
         float targetDir = PortDirection(targetPort);
 
-        DrawLinkGhost(slotPos, slotDir, targetPos, targetDir, color, thickness, slotAngle);
+        DrawLinkGhost(slotPos, slotDir, targetPos, targetDir, color, thickness, slotAngle, folded);
         if (targetPort.Presentation.Visible && link.OutputOwner != null && !link.OutputOwner.Hidden)
             DrawLinkGhost(targetPos, targetDir, slotPos, slotDir, color, thickness);
     }
@@ -415,7 +479,7 @@ public partial class HaruGraphWindow
     /// fromAngle 同 <see cref="BuildLinkPath"/>：代表接點伸出多條時起點那段依角度扇形散開。
     /// </summary>
     private void DrawLinkGhost(Vector2 from, float fromDir, Vector2 to, float toDir, Color color, float thickness,
-        float fromAngle = 0f)
+        float fromAngle = 0f, bool fromAggregate = false)
     {
         float radians = fromAngle * Mathf.Deg2Rad;
         var fromOut = new Vector2(fromDir * Mathf.Cos(radians), Mathf.Sin(radians));
@@ -423,7 +487,7 @@ public partial class HaruGraphWindow
         Vector2 toBend = to + new Vector2(toDir * LinkStub, 0f);
 
         linkPath.Clear();
-        linkPath.Add(from + fromOut * HGGraph.PortRadius);
+        linkPath.Add(fromAggregate ? from : from + fromOut * HGGraph.PortRadius);
         AddLinkCorner(linkPath, from, fromBend, toBend);
         for (int i = 1; i < linkPath.Count; i++) DrawGraphSegment(linkPath[i - 1], linkPath[i], color, thickness);
 
@@ -486,8 +550,9 @@ public partial class HaruGraphWindow
         float outDir = PortDirection(link.OutputPort);
         if (foldFan.TryGetValue(link, out float angle))
         {
-            if (ReferenceEquals(FoldTargetPort(link), link.OutputPort)) BuildLinkPath(inPos, inDir, outPos, outDir, path, angle);
-            else BuildLinkPath(outPos, outDir, inPos, inDir, path, angle);
+            if (ReferenceEquals(FoldTargetPort(link), link.OutputPort))
+                BuildLinkPath(AggregatePortPosition(inPos), inDir, outPos, outDir, path, angle, true);
+            else BuildLinkPath(AggregatePortPosition(outPos), outDir, inPos, inDir, path, angle, true);
             return;
         }
         BuildLinkPath(inPos, inDir, outPos, outDir, path);
@@ -585,15 +650,15 @@ public partial class HaruGraphWindow
     /// 唯一例外是 fromAngle：折疊清單的代表接點伸出多條線時，起點那一段依角度（度，正值朝下）扇形散開。
     /// </summary>
     private static void BuildLinkPath(Vector2 from, float fromDir, Vector2 to, float toDir, List<Vector2> path,
-        float fromAngle = 0f)
+        float fromAngle = 0f, bool fromAggregate = false)
     {
         path.Clear();
         float radians = fromAngle * Mathf.Deg2Rad;
         var fromOut = new Vector2(fromDir * Mathf.Cos(radians), Mathf.Sin(radians));
         Vector2 fromBend = from + fromOut * LinkStub;
         Vector2 toBend = to + new Vector2(toDir * LinkStub, 0f);
-        // 從接點外緣起算：浮到上層的選取線才不會蓋掉 ○／◎。
-        path.Add(from + fromOut * HGGraph.PortRadius);
+        // 一般接點從圓外緣起算；彙整出口從豎線中央起算，由連線本身形成向外短線。
+        path.Add(fromAggregate ? from : from + fromOut * HGGraph.PortRadius);
         AddLinkCorner(path, from, fromBend, toBend);
         AddLinkCorner(path, fromBend, toBend, to);
         path.Add(to + new Vector2(toDir * HGGraph.PortRadius, 0f));
@@ -1185,7 +1250,7 @@ public partial class HaruGraphWindow
             // 清單標題列沒有欄位，不能走下面的一般接點路徑（會讀 row.InputSlot）。
             if (row.Kind == HGRowKind.List)
             {
-                DrawListHeaderPort(row, dim, snappedPort);
+                DrawListHeaderPort(row, dim);
                 continue;
             }
             if (row.Kind == HGRowKind.Foldout)
@@ -1220,31 +1285,18 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>
-    /// 清單標題列的接點。有新增接點的清單一律畫它（○；折疊且裡面有已接元素時 ◎）；
-    /// 沒有新增接點的清單沿用 Aggregate：只在折疊且有連線時畫一顆代表接點，否則線會停在節點邊緣的空白處。
+    /// 清單只在折疊且有連線時畫純顯示的彙整出口，不提供拉線或子樹切換。
     /// </summary>
-    private void DrawListHeaderPort(HGRow row, bool dim, HGPort snappedPort)
+    private void DrawListHeaderPort(HGRow row, bool dim)
     {
-        bool folded = row.Collapsed && HasConnectedElement(row);
-        if (ListAppendPortOf(row) is HGPort append)
-        {
-            if (!append.Presentation.Visible) return;
-            Color color = folded ? AggregatePortColor(row) : append.IsOutput ? HGStyles.OutputPortColor : HGStyles.InputPortLive;
-            DrawSemanticPort(append, color, dim || append.Presentation.Locked, snappedPort, folded);
-            // 收起／展開所有元素的子樹，符號與 Slot 接點相同；沒有元素接線就沒有子樹可收，不畫字。
-            if (HasConnectedElement(row))
-                DrawPortGlyph(HGGraph.CollapseKey(row.OwnerNodeId, row), PortRect(append.Presentation.Position + pan));
-            return;
-        }
-        if (!folded) return;
+        if (!row.Collapsed || !HasConnectedElement(row)) return;
         var aggregateKey = new HGPortKey(row.OwnerNodeId, row.Path, HGPortRole.Aggregate);
         if (!graph.PortsByKey.TryGetValue(aggregateKey, out var aggregate) || !aggregate.Presentation.Visible) return;
-        // 只有裡面有連線時才畫，所以一定是 ◎。
-        DrawSemanticPort(aggregate, AggregatePortColor(row), dim, snappedPort, true);
+        DrawAggregatePort(aggregate.Presentation.Position, AggregatePortColor(row), dim);
     }
 
     /// <summary>
-    /// 收起的摺疊群組的代表接點：組內有接線的欄位時，在標題列右緣畫 ◎，線由這裡伸出。
+    /// 收起的摺疊群組的彙整出口：組內有接線的欄位時，在標題列右緣畫短豎線，連線由中央伸出。
     /// 不是 HGPort，不能起手或放線。展開時標題列沒有接點，成員的接點各在自己那一列。
     /// </summary>
     private void DrawFoldoutAnchorPort(HGNodeView node, HGRow foldout, bool dim)
@@ -1252,9 +1304,20 @@ public partial class HaruGraphWindow
         if (!foldout.Collapsed || foldout.Hidden) return;
         if (!FoldoutHasLinkedSlot(foldout, out bool hasError)) return;
         Color color = hasError ? HGStyles.InputPortError : HGStyles.InputPortLive;
-        if (dim && !hasError) color.a *= 0.45f;
-        var pos = new Vector2(node.Pos.x + node.Width - HGGraph.PortRadius, node.Pos.y + foldout.LocalY + HGGraph.RowHeight * 0.5f);
-        HGStyles.DrawInputPort(PortRect(pos + pan), color, true);
+        var pos = new Vector2(node.Pos.x + node.Width, node.Pos.y + foldout.LocalY + HGGraph.RowHeight * 0.5f);
+        DrawAggregatePort(pos, color, dim);
+    }
+
+    /// <summary>彙整出口位於節點右緣；一般欄位的圓心則向內縮一個半徑。</summary>
+    private static Vector2 AggregatePortPosition(Vector2 slotPosition)
+        => slotPosition + Vector2.right * HGGraph.PortRadius;
+
+    /// <summary>純顯示的 10px 豎線；向外短線由連線路徑繪製，不重疊補畫、不提供命中區。</summary>
+    private void DrawAggregatePort(Vector2 position, Color color, bool dim)
+    {
+        if (dim && color != HGStyles.InputPortError) color.a *= 0.45f;
+        Vector2 center = position + pan;
+        EditorGUI.DrawRect(new Rect(center.x - LinkThickness * 0.5f, center.y - 5f, LinkThickness, 10f), color);
     }
 
     private bool FoldoutHasLinkedSlot(HGRow foldout, out bool hasError)
