@@ -60,7 +60,7 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 
 - 一個族＝三個型別：Formula 基底（計算）、`FormulaAsset<TResult, TPack>` 子類（可重用資產）、`FormulaSlot<TResult, TAsset, TFormula, TPack>` 子類（欄位與族身分）。
 - **族身分是具體 Slot 型別**，不是結果型別。兩個都回 `string` 的 Slot 是兩個族，各自可以有同名 Token。
-- 新增結果種類只要新增這三個型別，編輯器掃描 `FormulaSlotBase` 子類自動列出，不需要登記。`PinTools/LogicGraph/Add Formula Type` 可產生樣板。同一族的新計算只要再繼承該族的 Formula 基底，**不要再產生一個族**。
+- 新增結果種類只要新增這三個型別，編輯器掃描 `FormulaSlotBase` 子類自動列出，不需要登記。`HaruFamily/LogicGraph/Add Formula Type` 可產生樣板。同一族的新計算只要再繼承該族的 Formula 基底，**不要再產生一個族**。
 - Slot 建構子只有 `XSlot()` 和 `XSlot(TResult defaultValue)`。有沒有接來源由 `_node` 決定。
 - 跨族接收：Slot 覆寫 `AllowCompatibleResult` 回 true 後，可額外接受「Pack 相同、結果型別可指派給本族」的其他族公式，並以 `ExcludedFormulaFamilies` 排除特定族（連同子類）。同族永遠優先且不受黑名單影響。不做數值轉換或向下轉型。Token、Property、Formula Asset 不受此開關放寬。
 
@@ -133,7 +133,7 @@ public sealed class LogAmountAction : ActionBase<MyPack>
 
 ### 新增公式族
 
-新增 Formula 基底、`FormulaAsset` 子類、`FormulaSlot` 子類三個型別（或用 `PinTools/LogicGraph/Add Formula Type`）。Slot 標 `[HGKind(name, group, priority)]` 控制在建立選單中的名稱與位置。確認沒有另一個族已經代表同一種語意。
+新增 Formula 基底、`FormulaAsset` 子類、`FormulaSlot` 子類三個型別（或用 `HaruFamily/LogicGraph/Add Formula Type`）。Slot 標 `[HGKind(name, group, priority)]` 控制在建立選單中的名稱與位置。確認沒有另一個族已經代表同一種語意。
 
 ### 改 Core
 

@@ -229,7 +229,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
         return HGSessionCommandResult.Changed;
     }
 
-    [MenuItem("PinTools/HaruGraph")]
+    [MenuItem("HaruFamily/GraphKit/Open")]
     public static void OpenFromMenu()
     {
         var window = OpenWindow();
@@ -259,10 +259,10 @@ public partial class HaruGraphWindow : IHasCustomMenu
     }
 
     /// <summary>從資產開啟（Project 視窗右鍵）。Owner 直接編輯；公式／動作資產則找一個引用它的 Owner 當上下文後下鑽。</summary>
-    [MenuItem("Assets/HaruGraph", false, 30)]
+    [MenuItem("Assets/HaruFamily/Open in HaruGraph", false, 30)]
     public static void OpenFromAsset() => OpenFor(Selection.activeObject);
 
-    [MenuItem("Assets/HaruGraph", true)]
+    [MenuItem("Assets/HaruFamily/Open in HaruGraph", true)]
     public static bool OpenFromAssetValidate()
         => Selection.activeObject is ScriptableObject so && (HGModel.CanEdit(so) || IsSharedAsset(so));
 

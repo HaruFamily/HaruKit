@@ -22,7 +22,7 @@ public static class LogicGraphAutoVerifySweep
         SweepAndReport();
     }
 
-    [MenuItem("PinTools/LogicGraph/驗證全部 Owner")]
+    [MenuItem("HaruFamily/LogicGraph/Verify All Owners")]
     private static void SweepFromMenu() => SweepAndReport(true);
 
     /// <summary>

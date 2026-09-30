@@ -59,12 +59,12 @@ public static class LogicGraphEditor
         Open(owner, field);
     }
 
-    [MenuItem("PinTools/LogicGraph/開啟節點圖")]
-    [MenuItem("Assets/LogicGraph/開啟節點圖", false, 30)]
+    [MenuItem("HaruFamily/LogicGraph/Open Selected")]
+    [MenuItem("Assets/HaruFamily/Open in LogicGraph", false, 30)]
     private static void OpenSelection() => Open(Selection.activeObject);
 
-    [MenuItem("PinTools/LogicGraph/開啟節點圖", true)]
-    [MenuItem("Assets/LogicGraph/開啟節點圖", true)]
+    [MenuItem("HaruFamily/LogicGraph/Open Selected", true)]
+    [MenuItem("Assets/HaruFamily/Open in LogicGraph", true)]
     private static bool CanOpenSelection()
     {
         var field = HGModel.FindSystemField(Selection.activeObject);

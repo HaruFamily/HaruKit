@@ -13,7 +13,7 @@ namespace HaruFamily.UX.Bookmarks
         private bool wasEnabled;
         private string storageError;
 
-        [MenuItem("PinTools/Bookmarks Window")]
+        [MenuItem("HaruFamily/Bookmarks/Open")]
         public static void Open()
         {
             if (!Inspector.IsEnabled) return;
@@ -21,7 +21,7 @@ namespace HaruFamily.UX.Bookmarks
             w.minSize = new Vector2(430, 400);
         }
 
-        [MenuItem("PinTools/Bookmarks Window", true)]
+        [MenuItem("HaruFamily/Bookmarks/Open", true)]
         private static bool ValidateOpen() => Inspector.IsEnabled;
 
         private void OnEnable()

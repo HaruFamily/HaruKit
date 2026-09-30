@@ -11,7 +11,7 @@ namespace HaruFamily.Tools.AssetPipeline
     /// <summary>
     /// Asset pipeline editor tool entry and operation panel.
     /// </summary>
-    [CreateAssetMenu(fileName = "AssetPipeline", menuName = "HaruFamily/Asset Pipeline/Asset Pipeline")]
+    [CreateAssetMenu(fileName = "AssetPipeline", menuName = "HaruFamily/AssetPipeline/Asset Pipeline")]
     public partial class AssetPipeline : ScriptableObject
     {
         private const string DefaultAssetPath = "Assets/Editor/HaruFamily/AssetPipeline/AssetPipeline.asset";
@@ -29,7 +29,7 @@ namespace HaruFamily.Tools.AssetPipeline
 
         [NonSerialized] private PipelineRunResult lastRun;
         public PipelineRunResult LastRun => lastRun;
-        [MenuItem("HaruFamily/Asset Pipeline/Open")]
+        [MenuItem("HaruFamily/AssetPipeline/Open")]
         private static void OpenTool()
         {
             var tool = AssetDatabase.LoadAssetAtPath<AssetPipeline>(DefaultAssetPath);

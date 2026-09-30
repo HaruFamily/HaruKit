@@ -18,7 +18,7 @@ namespace HaruFamily.UX.Bookmarks
         [SettingsProvider]
         public static SettingsProvider CreatePinInspectorSettingsProvider()
         {
-            var provider = new SettingsProvider("Project/Pin Tools/Pin Inspector", SettingsScope.Project)
+            var provider = new SettingsProvider("Project/HaruFamily/Pin Inspector", SettingsScope.Project)
             {
                 label = "Pin Inspector",
 

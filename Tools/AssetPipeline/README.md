@@ -41,7 +41,7 @@ https://github.com/HaruFamily/HaruKit.git?path=/Tools/AssetPipeline
 }
 ```
 
-選單 `HaruFamily/Asset Pipeline/Open` 會建立或選取預設資產 `Assets/Editor/HaruFamily/AssetPipeline/AssetPipeline.asset`。
+選單 `HaruFamily/AssetPipeline/Open` 會建立或選取預設資產 `Assets/Editor/HaruFamily/AssetPipeline/AssetPipeline.asset`。
 
 ## 使用流程
 

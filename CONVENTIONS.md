@@ -75,6 +75,20 @@ HaruKit/                       ← repo root
 - 手冊是該套件維護知識的正本，README 只放安裝、快速使用與限制。同一條規則不要兩邊各寫一份。
 - **改到手冊描述的行為、契約、檔案位置或限制時，同一個 commit 更新手冊與 README。** 手冊只寫現在成立的事實；歷史與理由寫進 commit 訊息。
 
+### 2.6 Editor 入口路徑
+所有套件共用同一個頂層 `HaruFamily`，第二層是套件的 `<Tool>` 資料夾名稱，不用類別、不用個人名稱，選單文字用英文。
+
+| 入口 | 路徑 | 例 |
+|---|---|---|
+| 主選單 `[MenuItem]` | `HaruFamily/<Tool>/<動作>`；開主視窗的動作叫 `Open` | `HaruFamily/Bookmarks/Open` |
+| Project 右鍵 | `Assets/HaruFamily/<動作> in <Tool>` | `Assets/HaruFamily/Open in LogicGraph` |
+| `[CreateAssetMenu]` | `HaruFamily/<Tool>/<資產名>` | `HaruFamily/AssetPipeline/Asset Pipeline` |
+| `[Shortcut]` id | `HaruFamily/<Tool>/<動作>` | `HaruFamily/Bookmarks/Next` |
+| `SettingsProvider` | `Project/HaruFamily/<頁名>` 或 `Preferences/HaruFamily/<頁名>` | `Preferences/HaruFamily/Nexus Service Tree` |
+
+- 使用端專案自己的工具不要放進 `HaruFamily`，由使用端另開自己的頂層。
+- Shortcut id 是使用者自訂按鍵的儲存鍵；改 id 會讓自訂綁定回到預設值，要在 commit 訊息註明。
+
 ---
 
 ## 3. 安裝與版本

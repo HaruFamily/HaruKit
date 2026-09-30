@@ -10,7 +10,7 @@ using UnityEngine;
 /// <summary>
 /// 新增 Formula / FormulaAsset / Slot 公式族的腳手架；具體節點覆寫 OnEvaluate。
 /// 產生 .cs 後由 GraphKit 自動探索 Slot 族，不需額外登記。
-/// 入口：PinTools/LogicGraph/Add Formula Type。
+/// 入口：HaruFamily/LogicGraph/Add Formula Type。
 /// </summary>
 public class FormulaKindScaffolder : EditorWindow
 {
@@ -20,7 +20,7 @@ public class FormulaKindScaffolder : EditorWindow
     private string outputFolder = "Assets";
     private string outputNamespace = "";
 
-    [MenuItem("PinTools/LogicGraph/Add Formula Type")]
+    [MenuItem("HaruFamily/LogicGraph/Add Formula Type")]
     private static void Open() => GetWindow<FormulaKindScaffolder>("新增公式族");
 
     private void OnGUI()

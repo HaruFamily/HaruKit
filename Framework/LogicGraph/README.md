@@ -64,7 +64,7 @@ https://github.com/HaruFamily/HaruKit.git?path=/Framework/LogicGraph
 |---|---|---|
 | 新增副作用 | `ActionBase<TPack>.OnExecute` | Pack、子 Slot、取消 |
 | 在既有族加一種計算 | 該族的 Formula 基底與 `OnEvaluate` | 結果型別與子 Slot |
-| 新增公式族 | Formula／FormulaAsset／Slot；`PinTools/LogicGraph/Add Formula Type` | 族身分是具體 Slot 型別，不只是結果型別 |
+| 新增公式族 | Formula／FormulaAsset／Slot；`HaruFamily/LogicGraph/Add Formula Type` | 族身分是具體 Slot 型別，不只是結果型別 |
 | 讓動作寫出值給後面讀 | `PropertySlot<TResult, TSlot>.Write(value, tokens)` | 只替換目前值；只有 `InitializeProperties()` 會清空 |
 | 把圖接進遊戲 | [完整範例](#完整範例) | Owner、驗證、runtime 副本、觸發 |
 | 限制時機或加領域驗證 | `ILogicGraphUsage<TTiming, TPack>` | [可選的使用規則](#從一個欄位開始) |
@@ -317,7 +317,7 @@ LogicGraph 實作 GraphKit 的 `IGraphExecutionDocument`。`DeepCopy()` 共用�
 
 ## 編寫與驗證
 
-Inspector 卡片是任何 `LogicGraph<,>` 欄位的編輯入口，可開啟與驗證該欄位。`PinTools/LogicGraph/開啟節點圖` 與 `Assets/LogicGraph/開啟節點圖` 用來開啟只有一份文件的 Owner；`PinTools/LogicGraph/驗證全部 Owner` 重驗專案內所有 Owner。
+Inspector 卡片是任何 `LogicGraph<,>` 欄位的編輯入口，可開啟與驗證該欄位。`HaruFamily/LogicGraph/Open Selected` 與 `Assets/HaruFamily/Open in LogicGraph` 用來開啟只有一份文件的 Owner；`HaruFamily/LogicGraph/Verify All Owners` 重驗專案內所有 Owner。
 
 驗證通過後圖才能執行；`TriggerAction` 與 `CreateTokenTable` 拒絕執行未驗證的圖。空的公式 Slot 是合法的常數；啟用中的空動作、重複時機、無效 Token、不相容的資產綁定、圖或資產循環都是錯誤。只能經由停用節點到達的殘缺內容降為警告。
 

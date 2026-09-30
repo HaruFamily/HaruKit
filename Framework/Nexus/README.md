@@ -43,5 +43,5 @@ For a reproducible release, append a Nexus package tag, for example
 
 ## Editor Tools
 
-Use `Tools/Pin/Nexus/Service Tree` to inspect active services. The package includes
+Use `HaruFamily/Nexus/Service Tree` to inspect active services. The package includes
 its only required Base UI helper internally, so no separate Base package is needed.

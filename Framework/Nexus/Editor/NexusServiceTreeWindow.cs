@@ -38,7 +38,7 @@ namespace HaruFamily.Framework.Nexus.Editor
         private bool _firstCaptured; // 本幀是否已記錄第一列 y（用於把列 y 正規化成 content 座標）
         private float _firstRowY, _selRowY, _selRowH; // 第一列 / 選取列的版面位置，供 _scrollToSel 計算
 
-        [MenuItem("Tools/Pin/Nexus/Service Tree")]
+        [MenuItem("HaruFamily/Nexus/Service Tree")]
         private static void Open()
         {
             var w = GetWindow<NexusServiceTreeWindow>("Nexus Tree");
@@ -201,7 +201,7 @@ namespace HaruFamily.Framework.Nexus.Editor
 
             _searchBar.DrawToolbar();
 
-            // Id 顯示等開關已移到設定頁，這裡直接開設定（同 Preferences/Pin Tools/Nexus Service Tree）
+            // Id 顯示等開關已移到設定頁，這裡直接開設定（同 Preferences/HaruFamily/Nexus Service Tree）
             if (GUILayout.Button("設定", EditorStyles.toolbarButton, GUILayout.Width(44)))
                 NexusTreePrefs.OpenSettings();
 
@@ -395,7 +395,7 @@ namespace HaruFamily.Framework.Nexus.Editor
     internal static class NexusTreePrefs
     {
         private const string Prefix = "Nexus.Tree.";
-        public const string SettingsPath = "Preferences/Pin Tools/Nexus Service Tree";
+        public const string SettingsPath = "Preferences/HaruFamily/Nexus Service Tree";
 
         /// <summary>從視窗工具列直接開本設定頁。</summary>
         public static void OpenSettings() => SettingsService.OpenUserPreferences(SettingsPath);
@@ -451,7 +451,7 @@ namespace HaruFamily.Framework.Nexus.Editor
         [SettingsProvider]
         private static SettingsProvider CreateProvider()
         {
-            // Preferences 下的 Pin Tools 分類（色彩為 per-machine 個人偏好，故走 User scope / EditorPrefs）。
+            // Preferences 下的 HaruFamily 分類（色彩為 per-machine 個人偏好，故走 User scope / EditorPrefs）。
             return new SettingsProvider(SettingsPath, SettingsScope.User)
             {
                 label = "Nexus Service Tree",
