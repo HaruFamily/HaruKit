@@ -17,6 +17,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖框架。它提供節點�
 - **具名 Token `GraphToken`**：有自己的畫布與候選池；引用它的節點存物件參照，不存名字字串。
 - **Property `GraphProperty`**：圖內的可寫儲存位置。ProtoProperty 放在變數庫，LocalProperty 是節點私有定義；讀取不觸發寫入者，讀後寫回不算循環。
 - **非泛型契約**：`IGraphDocument`、`IGraphHead`、`IOrphanPool`、`ITokenOwner`、`IPropertyOwner` 等，讓編輯器不必認識使用端型別。文件以 `HGCapabilities` 宣告要啟用哪些庫。
+- **Root 顯示名稱**：文件可選提供 `IGraphRootKeyDisplay`，讓建立選單與下拉顯示友善名稱，同時保留原始識別值；enum 的 `[HGLabel]` 名稱解析可使用 `HGEnumLabels`。規則見維護手冊 §3.4、§6.4。
 - **零欄位的 Slot 基底**：`FormulaSlotBase`、`ActionSlotBase`、`PropertySlotBase` 沒有序列化欄位，使用端加泛型子類不會改變序列化格式。
 - **公式族**：族身分是具體 Slot 型別；可選擇開放「結果型別相容」的跨族接收，並用黑名單排除。提供 Formula 與 Token／Property 宣告 Slot 的共用接收政策，由使用端的 `Accepts*` 接入；寫入仍須同族。
 - **`GraphDeepCopy`**：保留多型 `SerializeReference`、共享參照、循環與 Unity 物件引用。

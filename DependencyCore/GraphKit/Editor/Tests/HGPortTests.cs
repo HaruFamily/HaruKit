@@ -774,6 +774,10 @@ public class HGPortTests
         model.SetRootAdapter(adapter);
 
         Assert.That(model.AvailableRootKeys, Is.EqualTo(new object[] { TestRootKind.Enum, "same", first, second }));
+        Assert.That(model.RootKeyTitle(TestRootKind.Enum), Is.EqualTo(TestRootKind.Enum.ToString()));
+        Assert.That(model.RootKeyTitle("same"), Is.EqualTo("same"));
+        Assert.That(model.RootKeyTitle(first), Is.EqualTo(first.ToString()));
+        Assert.That(model.RootKeyTitle(second), Is.EqualTo(second.ToString()));
         Assert.That(model.HasRoot(TestRootKind.Enum), Is.True);
         Assert.That(model.HasRoot("same"), Is.True);
         Assert.That(model.HasRoot(first), Is.True);

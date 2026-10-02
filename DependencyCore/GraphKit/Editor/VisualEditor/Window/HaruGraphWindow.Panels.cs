@@ -790,17 +790,18 @@ public partial class HaruGraphWindow
                 if (Equals(candidate.RootKey, timing)) { group = candidate; break; }
 
             var captured = timing;
+            string timingTitle = model.RootKeyTitle(timing);
             if (group == null)
             {
-                menu.AddItem(new GUIContent($"{timing}（尚未建立）"), false, () => AddTimingGroup(captured, createPos));
+                menu.AddItem(new GUIContent($"{timingTitle}（尚未建立）"), false, () => AddTimingGroup(captured, createPos));
                 continue;
             }
 
             int actionCount = group.Items?.Count ?? 0;
             int errors = ErrorsOfGroup(group);
             string label = errors > 0
-                ? $"{timing} ({actionCount})　{errors} 個錯誤"
-                : $"{timing} ({actionCount})";
+                ? $"{timingTitle} ({actionCount})　{errors} 個錯誤"
+                : $"{timingTitle} ({actionCount})";
             menu.AddItem(new GUIContent(label), false, () => JumpToTiming(captured));
         }
         menu.ShowAsContext();
@@ -831,7 +832,7 @@ public partial class HaruGraphWindow
     {
         foreach (var timing in model.AvailableRootKeys)
         {
-            var content = new GUIContent(prefix + timing);
+            var content = new GUIContent(prefix + model.RootKeyTitle(timing));
             if (model.HasRoot(timing)) { menu.AddDisabledItem(content); continue; }
             var captured = timing;
             menu.AddItem(content, false, () => AddTimingGroup(captured, createPos, joinGroup));
@@ -851,7 +852,7 @@ public partial class HaruGraphWindow
         if (timing == null) return;
         if (model.HasRoot(timing))
         {
-            ShowNotification(new GUIContent($"{timing} 已經有節點了"));
+            ShowNotification(new GUIContent($"{model.RootKeyTitle(timing)} 已經有節點了"));
             return;
         }
 

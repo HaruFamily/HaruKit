@@ -477,7 +477,7 @@ public interface IGraphDocument : IOrphanPool
     /// 這張畫布可以有哪些 root，以識別值表示（LogicGraph 給的是時機 enum 值）。
     /// 新接入的 Tool 應在 <c>IHGRootAdapter</c> 依 owner 過濾；owner 參數僅保留給舊文件實作。
     /// </summary>
-    // 識別值型別由實作決定，編輯器只做相等比較與 ToString()，不假設它是 enum。
+    // 識別值型別由實作決定；比較使用原值，顯示可由 IGraphRootKeyDisplay 提供，不假設它是 enum。
     IReadOnlyList<object> RootKeys(UnityEngine.Object owner);
 
     /// <summary>這個 root 的識別值。</summary>
@@ -514,6 +514,12 @@ public interface IGraphDocument : IOrphanPool
 
     /// <summary>依識別值建立 root 並加入 <see cref="Roots"/>；已存在則回傳既有的，建不出來回 null。</summary>
     object AddRoot(object key);
+}
+
+/// <summary>可選的 root 識別值顯示契約；尚未建立 root 的選單也能取得名稱，不建立或修改資料。</summary>
+public interface IGraphRootKeyDisplay
+{
+    string TitleOfKey(object rootKey);
 }
 
 }

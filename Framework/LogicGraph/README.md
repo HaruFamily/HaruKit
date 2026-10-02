@@ -11,6 +11,7 @@ LogicGraph 是用來編寫與執行序列化 Action 圖的框架：依時機分�
 ## 功能
 
 - `LogicGraph<TTiming, TPack>` 依使用端定義的時機 enum 與執行上下文分派非同步動作。
+- 時機 enum 可標 `[HGLabel("顯示名稱")]`，同步改變節點標題、下拉與新增選單；執行仍使用 enum 值。完整規則見維護手冊 §3.1。
 - `ActionBase<TPack>` 執行副作用；`FormulaBase<TResult, TPack>` 非同步計算型別化的值。
 - Slot 可以是常數保底值、內嵌節點、可重用資產、具名 Token（公式），或 Property（讀目前值）。
 - Action 以 `PropertySlot<TResult, TSlot>` 寫入 Property；讀取不會觸發寫入者。
@@ -87,7 +88,7 @@ using HaruFamily.Framework.LogicGraph;
 
 namespace LogicGraphQuickStart
 {
-    public enum DemoTiming { Activate }
+    public enum DemoTiming { [HGLabel("啟動")] Activate }
 
     public sealed class DemoPack
     {

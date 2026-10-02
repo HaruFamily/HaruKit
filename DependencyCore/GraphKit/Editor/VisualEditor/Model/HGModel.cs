@@ -44,7 +44,7 @@ public class HGProperty
 }
 
 /// <summary>畫布上的一個 root：識別值與它底下的項目清單。</summary>
-// RootKey 宣告成 object 而不是 Enum：編輯器只做相等比較與 ToString()，
+// RootKey 宣告成 object 而不是 Enum：比較用原值，名稱由文件顯示契約提供，
 // 「識別值是什麼型別」由 IGraphDocument 的實作決定（LogicGraph 給的是時機 enum）。
 public class HGRootGroupView
 {
@@ -495,6 +495,17 @@ public class HGModel
     public List<HGRootGroupView> ReadRootGroups()
     {
         return new List<HGRootGroupView>(rootAdapter.ReadRoots(Doc) ?? Array.Empty<HGRootGroupView>());
+    }
+
+    /// <summary>Root key 的純顯示名稱；可供尚未建立的項目使用，不把名稱當識別值。</summary>
+    public string RootKeyTitle(object rootKey)
+    {
+        if (Doc is IGraphRootKeyDisplay display)
+        {
+            string title = display.TitleOfKey(rootKey);
+            if (!string.IsNullOrWhiteSpace(title)) return title;
+        }
+        return rootKey?.ToString() ?? "";
     }
 
     /// <summary>Separates persisted root identity from its display title and collection index.</summary>

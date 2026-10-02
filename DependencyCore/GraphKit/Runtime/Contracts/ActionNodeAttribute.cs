@@ -1,6 +1,7 @@
 namespace HaruFamily.DependencyCore.GraphKit
 {
 using System;
+using System.Reflection;
 
 [AttributeUsage(AttributeTargets.Class, Inherited = false, AllowMultiple = false)]
 public sealed class HGNodeAttribute : Attribute
@@ -68,6 +69,25 @@ public sealed class HGKindAttribute : Attribute
         Name = name;
         Group = group;
         Priority = priority;
+    }
+}
+
+/// <summary>enum 顯示名稱解析；名稱不參與識別、排序或序列化。</summary>
+public static class HGEnumLabels
+{
+    public static string GetName(Enum value)
+    {
+        if (value == null) return "";
+        string memberName = Enum.GetName(value.GetType(), value);
+        return memberName == null ? value.ToString() : GetName(value.GetType(), memberName);
+    }
+
+    public static string GetName(Type enumType, string memberName)
+    {
+        if (string.IsNullOrEmpty(memberName)) return "";
+        string label = enumType?.GetField(memberName, BindingFlags.Public | BindingFlags.Static)
+            ?.GetCustomAttribute<HGLabelAttribute>()?.Name;
+        return string.IsNullOrWhiteSpace(label) ? memberName : label;
     }
 }
 

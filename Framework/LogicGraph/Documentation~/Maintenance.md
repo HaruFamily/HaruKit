@@ -46,6 +46,7 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 
 - `LogicGraph<TTiming, TPack>` 實作 GraphKit 的 `IGraphDocument`，能力是共用資產、Token、Property 三種全開。
 - 一個時機是一顆 `ActionTimingGroup<TTiming, TPack>` root，本體是有順序的 `ActionSlot<TPack>` 清單。所有時機共用一張畫布，候選池在 `LogicGraph.Orphans`。
+- Timing 的節點標題與 root 選單顯示使用 enum 成員的 `[HGLabel]`，由 HGEnumLabels 共用解析；LogicGraph 實作可選 IGraphRootKeyDisplay 提供未建立時機的名稱。無標記／空白 Name 回成員名，未定義值回原始字串；執行、序列化、允許集合與排序仍使用原 enum 值。同名顯示不合併不同時機。
 - `TriggerAction(timing, pack[, cancellationToken, executionName])` 每次建立新的 `TokenTable`，依清單順序 await 每個動作。
 - `LogicGraph<,>`、`FormulaAssetBase`、`ActionAssetBase` 實作 GraphKit 的 `IGraphViewStateOwner`，`_viewState` 存節點圖的收合版面（規則見 GraphKit 手冊硬規則 13）。它只給編輯器用，不參與執行、驗證與 `InvalidateValidation()`。
 

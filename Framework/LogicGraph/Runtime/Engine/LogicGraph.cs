@@ -15,7 +15,7 @@ using UnityEditor;
 
 [Serializable]
 public partial class LogicGraph<TTiming, TPack> : IGraphDocument, ITokenOwner, IPropertyOwner, IGraphExecutionDocument, IGraphDocumentValidation,
-    IGraphViewStateOwner
+    IGraphViewStateOwner, IGraphRootKeyDisplay
 where TTiming : Enum
 {
     [SerializeReference]
@@ -53,9 +53,11 @@ where TTiming : Enum
     object IGraphDocument.KeyOf(object root)
         => root is ActionTimingGroup<TTiming, TPack> g ? g.Timing : null;
 
-    // 不寫 g.Timing?.ToString()：TTiming 只約束為 Enum，編譯器不當它是可為 null 的型別。
     string IGraphDocument.TitleOf(object root)
-        => root is ActionTimingGroup<TTiming, TPack> g ? g.Timing.ToString() : "（未指定時機）";
+        => root is ActionTimingGroup<TTiming, TPack> g ? HGEnumLabels.GetName(g.Timing) : "（未指定時機）";
+
+    string IGraphRootKeyDisplay.TitleOfKey(object rootKey)
+        => rootKey is TTiming timing ? HGEnumLabels.GetName(timing) : rootKey?.ToString() ?? "";
 
     string IGraphDocument.RootChip => "時機";
 

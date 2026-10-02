@@ -13,7 +13,21 @@ using UnityEngine.TestTools;
 public sealed class LogicGraphUsageTests
 {
     private enum Timing { Start, End }
+    private enum DisplayTiming
+    {
+        [HGLabel("初始化")] Start = 100,
+        [HGLabel("初始化")] SameLabel = 200,
+        End = 300,
+        [HGLabel("")] EmptyLabel = 400,
+        [HGLabel(" \t")] BlankLabel = 500,
+        [HGLabel] UnnamedLabel = 600,
+    }
     private sealed class Pack { }
+
+    private sealed class DisplayOwner : ScriptableObject
+    {
+        public LogicGraph<DisplayTiming, Pack> Graph = new();
+    }
     private abstract class IntFormula : FormulaBase<int, Pack> { }
     private sealed class IntAsset : FormulaAsset<int, Pack> { }
     private sealed class TestActionAsset : ActionAssetBase<Pack> { }
@@ -71,6 +85,53 @@ public sealed class LogicGraphUsageTests
     }
 
     private sealed class InheritedOwner : PrivateOwner { }
+
+    [Test]
+    public void TimingDisplayLabelsMatchHeadersAndMenuTitlesWithoutChangingRootIdentity()
+    {
+        var owner = ScriptableObject.CreateInstance<DisplayOwner>();
+        try
+        {
+            var model = new HGModel();
+            Assert.That(model.Bind(owner), Is.True);
+            Assert.That(model.AvailableRootKeys, Is.EqualTo(new object[]
+            {
+                DisplayTiming.Start, DisplayTiming.SameLabel, DisplayTiming.End,
+                DisplayTiming.EmptyLabel, DisplayTiming.BlankLabel, DisplayTiming.UnnamedLabel,
+            }));
+            Assert.That(model.RootKeyTitle(DisplayTiming.Start), Is.EqualTo("初始化"));
+            Assert.That(model.RootKeyTitle(DisplayTiming.SameLabel), Is.EqualTo("初始化"));
+            Assert.That(model.Doc.Roots, Is.Empty, "讀取未建立時機的名稱不能新增 root。");
+
+            var first = model.AddRoot(DisplayTiming.Start);
+            var second = model.AddRoot(DisplayTiming.SameLabel);
+            Assert.That(model.Doc.TitleOf(first.Root), Is.EqualTo(model.RootKeyTitle(first.RootKey)));
+            Assert.That(model.Doc.TitleOf(second.Root), Is.EqualTo(model.RootKeyTitle(second.RootKey)));
+            Assert.That(first.RootKey, Is.EqualTo(DisplayTiming.Start));
+            Assert.That(second.RootKey, Is.EqualTo(DisplayTiming.SameLabel));
+            Assert.That(model.RootId(first.Root), Is.Not.EqualTo(model.RootId(second.Root)));
+            Assert.That(model.HasRoot(DisplayTiming.Start), Is.True);
+            Assert.That(model.HasRoot(DisplayTiming.SameLabel), Is.True);
+            var built = HGGraph.Build(model, new System.Collections.Generic.List<object> { first.Root, second.Root },
+                null, "roots", "Roots");
+            Assert.That(built.Nodes.Select(node => node.Title), Is.EqualTo(new[] { "初始化", "初始化" }));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void TimingTitlesFallBackToMemberNamesAndUndefinedValues()
+    {
+        IGraphDocument document = new LogicGraph<DisplayTiming, Pack>();
+        var display = (IGraphRootKeyDisplay)document;
+        foreach (var timing in new[] { DisplayTiming.End, DisplayTiming.EmptyLabel, DisplayTiming.BlankLabel, DisplayTiming.UnnamedLabel })
+        {
+            Assert.That(display.TitleOfKey(timing), Is.EqualTo(timing.ToString()));
+            Assert.That(document.TitleOf(document.AddRoot(timing)), Is.EqualTo(timing.ToString()));
+        }
+        Assert.That(display.TitleOfKey((DisplayTiming)999), Is.EqualTo("999"));
+        Assert.That(HGEnumLabels.GetName(typeof(DisplayTiming), nameof(DisplayTiming.Start)), Is.EqualTo("初始化"));
+    }
 
     [Test]
     public void InheritedPrivateSerializedFieldIsDiscoveredWithoutRuntimeScratchFields()

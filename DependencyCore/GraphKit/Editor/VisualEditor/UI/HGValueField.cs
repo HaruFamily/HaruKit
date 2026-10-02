@@ -103,13 +103,7 @@ public static class HGValueField
             var names = Enum.GetNames(type);
             var labels = new string[names.Length];
             for (int i = 0; i < names.Length; i++)
-            {
-                var member = type.GetField(names[i]);
-                var attr = member?.GetCustomAttributes(typeof(HGLabelAttribute), false);
-                labels[i] = attr != null && attr.Length > 0
-                    ? ((HGLabelAttribute)attr[0]).Name
-                    : names[i];
-            }
+                labels[i] = HGEnumLabels.GetName(type, names[i]);
 
             if (type.IsDefined(typeof(FlagsAttribute), false))
             {
