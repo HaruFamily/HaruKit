@@ -127,6 +127,12 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 
 ### 5.1 IMGUI 陷阱
 
+- 縮放共用 `MinZoom = 0.000001`／`MaxZoom = 1.8`（比例值，下限只防除零與極端座標），滾輪每 3 單位 delta 乘／除 1.1，保留滑鼠錨點。`F`／聚焦全部與群組使用 `CalculateFrameZoom` 依 bounds 容納全圖，上限 1.4；FrameAll 只以未 Hidden 節點初始化與擴張 bounds，空圖不移動視角。
+- 低於 30% 進入簡化總覽：節點輪廓、Header 色帶、選取／搜尋外框與連線保留，標題只在投影寬至少 70px 時畫；不建立節點欄位控制項或接點命中，也不允許點線剪斷。單擊選取後左上說明仍以正常大小顯示，雙擊節點回到 100% 並置中後編輯。中鍵平移、滾輪、框選與 F 沿用。總覽切換與 viewport 集合同在 Layout 進行；hotControl、拉線、放置、節點／群組拖曳期間延後切換，避免途中更換控制項。
+- 畫布節點以 graph-space viewport（含 Port 邊距）剔除。控制項集合只在 Layout 更新，輸入與 Repaint 沿用同一集合；`hotControl` 持有期間凍結集合，拖曳釋放後才刷新。文字編輯中且視角未動時也凍結集合，避免打字改變節點高度而丟失 caret。視角移動導致集合更換時結束鍵盤／文字焦點，避免控制項序號改指其他欄位；單純內容重建保留集合，換焦點／文件才清空。剔除不設定 `Hidden`，不影響接線、框選、搜尋、驗證與執行。取消選取的空註解框即使在畫面外也要收起。
+- `RefreshRowGeometry` 只重算座標／寬度改變的節點；建圖、Port 重建時清幾何快取。節點 Id、欄位路徑及列 owner 查詢按 `HGGraphView` 建索引，不能在每條線上重新掃整張圖。`AutoLayout` 用列 owner 索引建立父子關係，保留第一次引用的樹形排版及作者已存座標。
+- 格線與連線只在 Repaint 繪製。`EnsureLinkVisuals` 比對全部 Port 的位置、方向、可見性（包括 Tool provider），改變或重建才重算 Tab 殘影／折疊扇形並作廢折線快取。一般層、高亮層與 `LinkAt` 共用同一份路徑；平移／縮放只改投影。完整折線 bounds 在逐段裁切前排除畫面外路徑，裁切段重用陣列。快取不跨 Port generation。
+- Editor Profiler 標記 `GraphKit.BuildGraph` 涵蓋 dirty 建圖處理，`GraphKit.DrawCanvas` 涵蓋畫布單次 GUI 事件；量測須區分初次開啟、局部平移／縮放、全圖可見及編輯重建，不能把載體減量比例當成耗時改善比例。
 - 節點內容控制項（Tab、Foldout、enum／bool 按鈕、數值與文字輸入等）吃掉左鍵 MouseDown 後，由 `DrawCanvas` 統一同步節點選取：不在選取集合的節點改為單選，已選節點保留多選，清掉畫布群組選取；不移動視角、不碰鍵盤／hotControl、不另加 Dirty。控制項上的 Ctrl／Shift 不切換節點選取。未被控制項消耗的點擊仍交 `HandleCanvasInput`；標題、Port、拉線／放置模式、被浮層遮蔽及既有 hotControl 的事件不走此同步。
 - 變數庫各 Property 獨立展開，不限制同時展開數量；拖入資產只展開目標項。展開狀態由面板按 Id 保存，Reset 時清除，不進 Dirty／Undo。多個清單展開時，項目重排只收集正在拖曳之 Property 的目標位置。
 - Token 庫與變數庫的格子是同一組操作：雙擊改名、拖到「＋」上放開＝複製、拖到「－」上放開＝移除，右鍵選單（改名／複製／移除）是同一組的可見入口。複製 ProtoProperty（`HGModel.DuplicateProperty`）是建立新的儲存位置：定義與初始內容深拷貝（資產只抄參考）、換新 Id、名字「原名 複本」，圖上沒有節點指向它；拖到畫布才是引用。右鍵改名走 `HGInlineRename.Begin`：選單回呼在 OnGUI 之外執行，只記狀態不碰鍵盤焦點，焦點由下一次 `Draw` 搶。
@@ -269,7 +275,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
   - 路徑不可有空白段（包含開頭／結尾 `/`、`//`）；同一路徑不可同時宣告成 Tab 與 Foldout。路徑衝突影響該路徑與其子孫；不合法的欄位回報 `graphkit.metadata.tab-invalid`（Warning）並畫在群組外，不丟棄欄位。整串空白頁名視為未標記。頁面由程式宣告，不提供新增／刪除／改名手勢。
   - `TabPageOwnerRow` 指向最近的頁面，頁面由 `TabStripRow` 指回分頁列；`IsTabHidden` 沿頁面祖先判定。所有頁面都建列與接線，只隱藏非作用中頁的欄位。量測取各頁最大高度，切頁不讓節點外框跳動；隱藏頁不繪製、不命中，標題列沒有代表接點。連到隱藏欄位的實線不畫，在仍可見的來源端畫淡出虛線（與 Group 共用 `DrawContainerHiddenGhost`）。
   - 與 Group 共用「只隱藏直接管理內容」：HGTab 管欄位，不管理欄位引用的 Node；`MarkVisibleFrom` 照樣穿越非作用中頁，獨占與共用來源都保留，讓其他頁可接同一顆。Node 仍遵守自身 Group、Slot ⊖ 與 solo 顯示狀態。切頁不改 Slot 引用、不停用、不改驗證或求值。
-  - 跨 HGTab 殘影以「父節點 Id＋欄位另一端的實際 Port key」去重：有可見實線時省略同關係的隱藏頁殘影；只有隱藏頁引用時，依圖的連線順序留第一段可見來源端的殘影。`RebuildTabGhosts` 每次在一般與選取繪線入口先掃完整圖，以 `tabGhostRelations` 優先記實線、再選 `tabGhostLinks`，不依當前繪製層各自挑選。作用中頁的多條實線、不同父節點／不同來源 Port、一般 Slot 殘影與 ListPort 扇形維持各自繪製。僅去除重複繪製，不改接線資料、Port、命中或剪線。
+  - 跨 HGTab 殘影以「父節點 Id＋欄位另一端的實際 Port key」去重：有可見實線時省略同關係的隱藏頁殘影；只有隱藏頁引用時，依圖的連線順序留第一段可見來源端的殘影。`EnsureLinkVisuals` 在幾何／可見性快取失效時呼叫 `RebuildTabGhosts` 掃完整圖，以 `tabGhostRelations` 優先記實線、再選 `tabGhostLinks`，一般與選取層共用結果。作用中頁的多條實線、不同父節點／不同來源 Port、一般 Slot 殘影與 ListPort 扇形維持各自繪製。僅去除重複繪製，不改接線資料、Port、命中或剪線。
   - 選擇存在 `GraphViewState._fieldTabs`（`GraphFieldTabSelection`），key＝節點 Id＋`<父容器路徑>/#tabs/`，value＝頁名；`fieldTabs` 僅是重建時從正本重讀的查詢表。根層單頁列仍用 `<物件路徑>/#tabs/`，單層 Foldout 仍用 `<物件路徑>/#<群組名>`；巢狀時逐層接續父列路徑，保留單層版面 key。`SetFieldTab` → `MarkViewStateChanged()`，沿用 Owner／資產的版面 Dirty、Undo／Redo、存檔與取消；無 `IGraphViewStateOwner` 時只在視窗記憶體保存。
   - 手動切頁清除鍵盤焦點與 Port 互動、退出 solo，來源 Node 的選取保留。`RevealNode`（搜尋與 Console 定位）在目標真的隱藏時沿父欄位切換所屬頁面，再展開欄位、清單與 Foldout；定位已可見的外部來源不切換父層頁面。
 - `[HGFoldout("群組名")]` 把欄位收進節點內的摺疊群組（`HGRowKind.Foldout`，對應 Odin `FoldoutGroup`）：同一個物件裡同名的欄位共用一組，群組列插在第一個成員的位置，成員接在標題列下面，與一般欄位同寬。每組各自展開／收起，可同時展開多組，預設展開；成員都沒長出列（含被 `[HGShowIf]` 整組藏掉）的群組不出現。descriptor 用各 factory 的 `foldout:` 參數。

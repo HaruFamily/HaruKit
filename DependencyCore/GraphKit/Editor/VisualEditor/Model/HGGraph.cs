@@ -1644,23 +1644,19 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         private static void AutoLayout(HGModel model, HGGraphView view)
         {
             var children = new Dictionary<HGNodeView, List<HGNodeView>>();
+            var rowOwners = new Dictionary<HGRow, HGNodeView>();
             foreach (var n in view.Nodes)
+            {
                 children[n] = new List<HGNodeView>();
+                foreach (var row in AllRows(n.Rows)) rowOwners.TryAdd(row, n);
+            }
 
             var roots = new List<HGNodeView>();
             foreach (var n in view.Nodes)
             {
                 HGNodeView parent = null;
-                if (n.ParentRow != null)
-                {
-                    foreach (var p in view.Nodes)
-                    {
-                        if (p == n) continue;
-                        foreach (var r in AllRows(p.Rows))
-                            if (ReferenceEquals(r, n.ParentRow)) { parent = p; break; }
-                        if (parent != null) break;
-                    }
-                }
+                if (n.ParentRow != null) rowOwners.TryGetValue(n.ParentRow, out parent);
+                if (ReferenceEquals(parent, n)) parent = null;
                 if (parent != null) children[parent].Add(n);
                 else roots.Add(n);
             }

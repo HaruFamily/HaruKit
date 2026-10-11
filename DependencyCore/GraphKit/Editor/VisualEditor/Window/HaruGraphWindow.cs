@@ -34,18 +34,23 @@ public partial class HaruGraphWindow : EditorWindow
     // 折疊清單的元素連線從標題的代表接點扇形散開：相鄰兩條的角度差與整把扇的單側上限（度）。
     private const float FoldFanStep = 15f;
     private const float FoldFanMax = 45f;
-    // 連線路徑的暫存：每條線每幀都要算，重用同一份避免配置。只在主執行緒的 OnGUI 內使用。
+    // 拉線預覽使用暫存；已接連線依接點幾何快取，繪製與命中共用。
     private readonly List<Vector2> linkPath = new();
-    // 折疊清單元素連線的扇形角度（度），由 RebuildFoldFan 在繪製與點線剪斷前重算；不在表內的線照一般路徑。
+    private readonly Dictionary<HGLink, List<Vector2>> linkPaths = new();
+    private readonly Dictionary<HGPort, (Vector2 Position, float Direction, bool Visible)> linkPortGeometry = new();
+    private readonly Dictionary<HGNodeView, (Vector2 Position, float Width)> rowGeometry = new();
+    private bool linkVisualsDirty = true;
+    // 折疊清單元素連線的扇形角度（度）；不在表內的線照一般路徑。
     private readonly Dictionary<HGLink, float> foldFan = new();
     private readonly Dictionary<HGRow, List<HGLink>> foldFanGroups = new();
     private readonly Dictionary<(HGRow Row, HGPortKey Target), HGLink> foldedRelations = new();
     private readonly HashSet<HGLink> foldedDuplicateLinks = new();
     private readonly HashSet<HGLink> foldedMergedLinks = new();
-    // 跨 Tab 的同父節點／同來源接點只留一段殘影；每次繪線重算，實線優先。
+    // 跨 Tab 的同父節點／同來源接點只留一段殘影，實線優先。
     private readonly HashSet<(string ParentId, HGPortKey Source)> tabGhostRelations = new();
     private readonly HashSet<HGLink> tabGhostLinks = new();
     private Vector3[] linkScreenPoints = new Vector3[16];
+    private readonly Vector3[] clippedLinkSegment = new Vector3[2];
     // 就地複製（Ctrl+D）的位移：看得出是新的一份，又還留在原件旁邊。不吸附格線——
     // 吸附會讓複本疊回原件的格子上，正好看不出來多了一顆。
     private const float DuplicateOffset = 28f;
@@ -88,6 +93,10 @@ public partial class HaruGraphWindow : EditorWindow
     private string RootNoun => HGGraph.RootNoun(model?.Doc);
 
     private HGGraphView graph;
+    private HGGraphView indexedGraph;
+    private readonly Dictionary<string, HGNodeView> nodesById = new();
+    private readonly Dictionary<(string NodeId, string Path), HGRow> rowsByPath = new();
+    private readonly Dictionary<HGRow, HGNodeView> ownersByRow = new();
     private bool graphDirty = true;
     private int graphGeneration;
     private HGReport report = new();
@@ -97,11 +106,23 @@ public partial class HaruGraphWindow : EditorWindow
     private bool assetReportStale;
 
     // 畫布
+    private const float MinZoom = 0.000001f;
+    private const float MaxZoom = 1.8f;
+    private const float FrameMaxZoom = 1.4f;
+    private const float OverviewZoom = 0.3f;
     private Vector2 pan = new(20f, 20f);
     private float zoom = 1f;
+    private bool overviewMode;
     private Rect canvasRect;
     private Matrix4x4 canvasGuiMatrix;
     private Rect rootGuiGroupRect;
+    // 控制項集合在 Layout 決定，輸入與 Repaint 共用；hotControl 持有期間不可換集合。
+    private readonly HashSet<string> canvasNodeIds = new();
+    private readonly HashSet<string> nextCanvasNodeIds = new();
+    private bool canvasNodesReady;
+    private Rect canvasNodesViewport;
+    private static readonly Unity.Profiling.ProfilerMarker canvasMarker = new("GraphKit.DrawCanvas");
+    private static readonly Unity.Profiling.ProfilerMarker buildMarker = new("GraphKit.BuildGraph");
 
     // 節點搜尋（Ctrl+F）。命中清單依 graphGeneration 與搜尋字快取，圖一重建就重算。
     private readonly HGNodeSearchBar nodeSearch = new();
@@ -573,6 +594,7 @@ public partial class HaruGraphWindow : EditorWindow
     private void EnsureGraph()
     {
         if (!graphDirty && graph != null) return;
+        using var sample = buildMarker.Auto();
         graphDirty = false;
         carrierUsers.Clear();
         model.ClearAssetParameterCache();
@@ -691,6 +713,11 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private void ClearViewState()
     {
+        ClearCanvasCaches();
+        indexedGraph = null;
+        nodesById.Clear();
+        rowsByPath.Clear();
+        ownersByRow.Clear();
         ClearFieldHighlight();
         tabGhostRelations.Clear();
         tabGhostLinks.Clear();
@@ -716,6 +743,18 @@ public partial class HaruGraphWindow : EditorWindow
         groupOffMembers.Clear();
         tabHiddenMembers.Clear();
         nodeGroupMembers.Clear();
+    }
+
+    private void ClearCanvasCaches(bool clearControls = true)
+    {
+        rowGeometry.Clear();
+        linkPortGeometry.Clear();
+        linkPaths.Clear();
+        linkVisualsDirty = true;
+        if (!clearControls) return;
+        canvasNodeIds.Clear();
+        nextCanvasNodeIds.Clear();
+        canvasNodesReady = false;
     }
 
     /// <summary>

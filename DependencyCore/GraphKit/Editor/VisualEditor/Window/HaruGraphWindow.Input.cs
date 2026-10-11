@@ -53,6 +53,28 @@ public partial class HaruGraphWindow
                 }
 
                 var hit = NodeAt(graphMouse);
+                if (overviewMode && e.button == 0 && hit != null)
+                {
+                    selectedNodeGroupId = null;
+                    if (e.control || e.shift)
+                    {
+                        if (!selectedIds.Add(hit.Id)) selectedIds.Remove(hit.Id);
+                    }
+                    else
+                    {
+                        selectedIds.Clear();
+                        selectedIds.Add(hit.Id);
+                    }
+                    if (e.clickCount == 2)
+                    {
+                        zoom = 1f;
+                        pan = canvasRect.size * (0.5f / zoom) - hit.Rect.center;
+                    }
+                    GUI.FocusControl(null);
+                    Repaint();
+                    e.Use();
+                    break;
+                }
                 if (e.button == 1)
                 {
                     if (hit != null) ShowNodeMenu(hit);
@@ -545,25 +567,37 @@ public partial class HaruGraphWindow
     private void FrameAll()
     {
         if (graph == null || graph.Nodes.Count == 0) return;
-        var bounds = graph.Nodes[0].Rect;
+        Rect bounds = default;
+        bool hasBounds = false;
         foreach (var n in graph.Nodes)
         {
             if (n.Hidden) continue;      // 收起來的節點不該把視野拉到看不見的地方
+            if (!hasBounds)
+            {
+                bounds = n.Rect;
+                hasBounds = true;
+                continue;
+            }
             bounds.xMin = Mathf.Min(bounds.xMin, n.Rect.xMin);
             bounds.yMin = Mathf.Min(bounds.yMin, n.Rect.yMin);
             bounds.xMax = Mathf.Max(bounds.xMax, n.Rect.xMax);
             bounds.yMax = Mathf.Max(bounds.yMax, n.Rect.yMax);
         }
-        FrameRect(bounds);
+        if (hasBounds) FrameRect(bounds);
     }
 
     /// <summary>把視野對準一塊 graph space 範圍：縮放到裝得下（留邊），中心對齊。</summary>
     private void FrameRect(Rect bounds)
     {
-        zoom = Mathf.Clamp(Mathf.Min(canvasRect.width / (bounds.width + 80f), canvasRect.height / (bounds.height + 80f)), 0.45f, 1.4f);
+        if (canvasRect.width <= 0f || canvasRect.height <= 0f) return;
+        zoom = CalculateFrameZoom(canvasRect.size, bounds);
         pan = new Vector2(canvasRect.width * 0.5f / zoom - bounds.center.x, canvasRect.height * 0.5f / zoom - bounds.center.y);
         Repaint();
     }
+
+    internal static float CalculateFrameZoom(Vector2 viewport, Rect bounds)
+        => Mathf.Clamp(Mathf.Min(viewport.x / Mathf.Max(1f, bounds.width + 80f),
+            viewport.y / Mathf.Max(1f, bounds.height + 80f)), MinZoom, FrameMaxZoom);
 
     private void CenterOn(object slotOrNode)
     {
@@ -805,6 +839,7 @@ public partial class HaruGraphWindow
 
         ClearPortInteractionState();
         ClearFieldHighlight();
+        ClearCanvasCaches();
         focus = next;
         if (model != null) model.TrackChanges = next.Kind != HGFocusKind.Asset;
         inlineName.Cancel();

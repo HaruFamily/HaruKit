@@ -29,13 +29,14 @@ public partial class HaruGraphWindow
     private void RebuildPorts()
     {
         ClearPortInteractionState();
+        ClearCanvasCaches(false);
         graphGeneration++;
         graph.Ports.Clear();
         graph.PortsByKey.Clear();
         graph.PrimaryOutputs.Clear();
         graph.PrimaryInputs.Clear();
 
-        foreach (var node in graph.Nodes) UpdateRowGeometry(node, node.Rows);
+        RefreshRowGeometry();
 
         var context = new HGPortBuildContext(graph, graphGeneration, graph.Ports, graph.PortsByKey, graph.PrimaryOutputs);
         foreach (var node in graph.Nodes)
@@ -352,32 +353,45 @@ public partial class HaruGraphWindow
     internal HGNodeView NodeOfId(string nodeId)
     {
         if (graph == null || string.IsNullOrEmpty(nodeId)) return null;
-        foreach (var node in graph.Nodes)
-            if (node.Id == nodeId) return node;
-        return null;
+        EnsureGraphLookups();
+        return nodesById.TryGetValue(nodeId, out var node) ? node : null;
     }
 
     private HGRow RowOf(string nodeId, string path)
     {
-        HGNodeView node = NodeOfId(nodeId);
-        if (node == null) return null;
-        foreach (var row in HGGraph.AllRows(node.Rows))
-            if (row.Path == path) return row;
-        return null;
+        if (graph == null || string.IsNullOrEmpty(nodeId)) return null;
+        EnsureGraphLookups();
+        return rowsByPath.TryGetValue((nodeId, path), out var row) ? row : null;
     }
 
     private HGNodeView OwnerOfRow(HGRow target)
     {
         if (graph == null || target == null) return null;
+        EnsureGraphLookups();
+        return ownersByRow.TryGetValue(target, out var node) ? node : null;
+    }
+
+    private void EnsureGraphLookups()
+    {
+        if (ReferenceEquals(indexedGraph, graph)) return;
+        nodesById.Clear();
+        rowsByPath.Clear();
+        ownersByRow.Clear();
+        indexedGraph = graph;
         foreach (var node in graph.Nodes)
+        {
+            if (!string.IsNullOrEmpty(node.Id)) nodesById.TryAdd(node.Id, node);
             foreach (var row in HGGraph.AllRows(node.Rows))
-                if (ReferenceEquals(row, target)) return node;
-        return null;
+            {
+                rowsByPath.TryAdd((node.Id, row.Path), row);
+                ownersByRow.TryAdd(row, node);
+            }
+        }
     }
 
     private HGPort OutputPortAt(Vector2 graphPoint)
     {
-        if (graph == null) return null;
+        if (graph == null || overviewMode) return null;
         for (int i = graph.Ports.Count - 1; i >= 0; i--)
         {
             var port = graph.Ports[i];
@@ -389,7 +403,7 @@ public partial class HaruGraphWindow
 
     private HGPort InputPortAt(Vector2 graphPoint)
     {
-        if (graph == null) return null;
+        if (graph == null || overviewMode) return null;
         for (int i = graph.Ports.Count - 1; i >= 0; i--)
         {
             var port = graph.Ports[i];
@@ -402,7 +416,7 @@ public partial class HaruGraphWindow
     private HGRow RowAt(Vector2 graphPoint, out HGNodeView owner)
     {
         owner = null;
-        if (graph == null) return null;
+        if (graph == null || overviewMode) return null;
         for (int i = graph.Ports.Count - 1; i >= 0; i--)
         {
             var port = graph.Ports[i];
@@ -418,14 +432,15 @@ public partial class HaruGraphWindow
     /// <summary>點線剪斷的命中：與繪製用同一份折線路徑比距離，畫在哪裡就點得到哪裡。</summary>
     private HGLink LinkAt(Vector2 graphPoint)
     {
-        if (graph == null || IsAggregatePortAt(graphPoint)) return null;
-        RebuildFoldFan();
+        if (graph == null || overviewMode || IsAggregatePortAt(graphPoint)) return null;
+        RefreshRowGeometry();
+        EnsureLinkVisuals();
         foreach (var link in graph.Links)
         {
             if (foldedDuplicateLinks.Contains(link) || !IsLinkVisible(link) || link.InputPort == null || link.OutputPort == null) continue;
-            BuildLinkPathOf(link, linkPath);
-            for (int i = 1; i < linkPath.Count; i++)
-                if (PointToSegmentSqrDistance(graphPoint, linkPath[i - 1], linkPath[i]) < 36f) return link;
+            var path = LinkPathOf(link);
+            for (int i = 1; i < path.Count; i++)
+                if (PointToSegmentSqrDistance(graphPoint, path[i - 1], path[i]) < 36f) return link;
         }
         return null;
     }

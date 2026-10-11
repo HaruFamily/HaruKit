@@ -1518,6 +1518,67 @@ MonoBehaviour:
     }
 
     [Test]
+    public void FrameZoomFitsALargeGraphBelowTheFormerMinimum()
+    {
+        var viewport = new Vector2(1000f, 600f);
+        var bounds = new Rect(-30000f, 20000f, 80000f, 120000f);
+        float zoom = HaruGraphWindow.CalculateFrameZoom(viewport, bounds);
+        Assert.That(zoom, Is.GreaterThan(0f).And.LessThan(0.01f));
+        Assert.That((bounds.width + 80f) * zoom, Is.LessThanOrEqualTo(viewport.x + 0.001f));
+        Assert.That((bounds.height + 80f) * zoom, Is.LessThanOrEqualTo(viewport.y + 0.001f));
+        Assert.That(HaruGraphWindow.CalculateFrameZoom(viewport, new Rect(0f, 0f, 1f, 1f)),
+            Is.EqualTo(1.4f));
+    }
+
+    [TestCase(1f)]
+    [TestCase(0.1f)]
+    [TestCase(0.005f)]
+    public void WheelZoomIsProportionalAndReversibleAtOverviewScales(float start)
+    {
+        float smaller = HaruGraphWindow.CalculateWheelZoom(start, 3f);
+        Assert.That(smaller, Is.GreaterThan(0f).And.LessThan(start));
+        Assert.That(smaller / start,
+            Is.EqualTo(HaruGraphWindow.CalculateWheelZoom(1f, 3f)).Within(0.000001f));
+        Assert.That(HaruGraphWindow.CalculateWheelZoom(smaller, -3f), Is.EqualTo(start).Within(start * 0.00001f));
+        Assert.That(HaruGraphWindow.CalculateWheelZoom(1.8f, -3f), Is.EqualTo(1.8f));
+    }
+
+    [Test]
+    public void LayoutKeepsSharedDescendantsUniqueAndRestoresAuthoredPositions()
+    {
+        var owner = new FieldTabOwner();
+        var shared = new GraphNode(new PropertyReaderBody());
+        var branchBody = new PropertyReaderBody();
+        branchBody.Source.SetNode(shared);
+        var branch = new GraphNode(branchBody);
+        var orphan = new GraphNode(new PropertyReaderBody());
+        owner.First.SetNode(branch);
+        owner.Second.SetNode(shared);
+        var model = new HGModel();
+        var roots = new object[] { owner };
+        var orphans = new List<GraphNode> { orphan };
+
+        var view = HGGraph.Build(model, roots, orphans, "layout", "Layout");
+        Assert.That(view.Diagnostics, Is.Empty);
+        Assert.That(view.Nodes, Has.Count.EqualTo(4));
+        Assert.That(view.Links, Has.Count.EqualTo(3));
+        Assert.That(view.BySlot[owner.Second], Is.SameAs(view.BySlot[branchBody.Source]));
+        var branchView = view.ByCarrier[branch];
+        var sharedView = view.ByCarrier[shared];
+        Assert.That(branchView.Pos.x, Is.GreaterThan(view.Nodes[0].Pos.x));
+        Assert.That(sharedView.Pos.x, Is.GreaterThan(branchView.Pos.x));
+        Assert.That(view.ByCarrier[orphan].Pos.y, Is.GreaterThan(sharedView.Pos.y + sharedView.Height));
+
+        var authoredPosition = new Vector2(120f, 380f);
+        shared.Pos = authoredPosition;
+        view = HGGraph.Build(model, roots, orphans, "layout", "Layout");
+        Assert.That(view.Diagnostics, Is.Empty);
+        Assert.That(view.ByCarrier[shared].Pos, Is.EqualTo(authoredPosition));
+        Assert.That(view.BySlot[owner.Second], Is.SameAs(view.BySlot[branchBody.Source]));
+        Assert.That(view.Links, Has.Count.EqualTo(3));
+    }
+
+    [Test]
     public void ListFieldEnumAttributeReachesValueElements()
     {
         var owner = new EnumListOwner { Values = new List<TestRootKind> { default } };

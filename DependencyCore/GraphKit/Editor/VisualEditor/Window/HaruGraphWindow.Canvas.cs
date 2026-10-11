@@ -150,6 +150,7 @@ public partial class HaruGraphWindow
 
     private void DrawCanvas(Rect r)
     {
+        using var sample = canvasMarker.Auto();
         HGStyles.Fill(r, HGStyles.Canvas);
         DrawGrid(r);
 
@@ -158,7 +159,12 @@ public partial class HaruGraphWindow
         HandleLinkNavigation(e, clipMouse);
         Vector2 graphMouse = clipMouse / zoom - pan;
         bool mouseInCanvas = r.Contains(e.mousePosition);
-        var headerActionsNode = UpdateHeaderActions(graphMouse, mouseInCanvas);
+        if (graph != null)
+        {
+            RefreshRowGeometry();
+            RefreshCanvasNodes(r);
+        }
+        var headerActionsNode = overviewMode ? null : UpdateHeaderActions(graphMouse, mouseInCanvas);
         bool overHeaderActions = headerActionsNode != null
             && HeaderActionsRect(headerActionsNode).Contains(graphMouse) && mouseInCanvas;
         // 搜尋列畫在節點之後，但節點先拿事件：壓在搜尋列底下的節點這一輪要看不到指標事件。
@@ -168,7 +174,6 @@ public partial class HaruGraphWindow
         DrawNodeGroups(r, graphMouse);
         if (graph != null)
         {
-            foreach (var node in graph.Nodes) UpdateRowGeometry(node, node.Rows);
             DrawLinks(graphMouse);
         }
 
@@ -203,13 +208,16 @@ public partial class HaruGraphWindow
                     foreach (var node in graph.Nodes)
                     {
                         if (node.Hidden) continue;
+                        CloseUnselectedEmptyNote(node);
+                        if (!canvasNodeIds.Contains(node.Id)) continue;
                         bool blocked = gatePointer && !ReferenceEquals(node, pointerOwner);
                         // 還原成遮罩前的型別而不是 pointerEvent：上層節點若已 Use()，要維持 Used，不能把按鍵復活。
                         EventType beforeBlock = e.type;
                         if (blocked) e.type = EventType.Ignore;
                         try
                         {
-                            DrawNode(node, ReferenceEquals(node, linkTarget), snappedPort);
+                            if (overviewMode) DrawOverviewNode(node);
+                            else DrawNode(node, ReferenceEquals(node, linkTarget), snappedPort);
                             // 只接回被內容控制項吃掉的左鍵；未消耗事件仍交畫布處理 Ctrl／Shift 選取。
                             // 不改 keyboardControl／hotControl，讓文字框與拖曳輸入繼續握有焦點。
                             if (selectControlOwner && ReferenceEquals(node, pointerOwner)
@@ -230,7 +238,7 @@ public partial class HaruGraphWindow
                             if (blocked) e.type = beforeBlock;
                         }
                     }
-                    DrawExtensionPorts(snappedPort);
+                    if (!overviewMode) DrawExtensionPorts(snappedPort);
                     DrawEmptyTimingHint();
                 }
                 finally
@@ -265,6 +273,9 @@ public partial class HaruGraphWindow
         DrawNodeInfoOverlay(r);
         DrawTimingOverlay(r);
         DrawNodeSearchBar(r);
+        if (overviewMode)
+            GUI.Label(new Rect(r.x + 8f, r.yMax - 22f, Mathf.Max(0f, r.width - 16f), 18f),
+                "總覽 · 雙擊節點放大編輯", HGStyles.Tiny);
         if (mouseInCanvas && !HandleAssetDrag(e, graphMouse)) HandleCanvasInput(e, graphMouse);
     }
 
@@ -318,6 +329,7 @@ public partial class HaruGraphWindow
 
     private void DrawGrid(Rect r)
     {
+        if (Event.current.type != EventType.Repaint) return;
         Handles.BeginGUI();
         float step = 20f * zoom;
         if (step > 4f)
@@ -338,9 +350,9 @@ public partial class HaruGraphWindow
     /// </summary>
     private void DrawLinks(Vector2 graphMouse)
     {
+        if (Event.current.type != EventType.Repaint) return;
+        EnsureLinkVisuals();
         Handles.BeginGUI();
-        RebuildTabGhosts();
-        RebuildFoldFan();
         foreach (var link in graph.Links)
         {
             if (foldedDuplicateLinks.Contains(link) || IsTracedLink(link)) continue;
@@ -363,10 +375,8 @@ public partial class HaruGraphWindow
     /// </summary>
     private void DrawTracedLinks()
     {
-        if (graph == null || selectedIds.Count == 0) return;
+        if (Event.current.type != EventType.Repaint || graph == null || selectedIds.Count == 0) return;
         Handles.BeginGUI();
-        RebuildTabGhosts();
-        RebuildFoldFan();
         foreach (var link in graph.Links)
         {
             if (foldedDuplicateLinks.Contains(link) || !IsTracedLink(link)) continue;
@@ -532,10 +542,34 @@ public partial class HaruGraphWindow
 
     private void DrawLink(HGLink link, bool traced)
     {
-        BuildLinkPathOf(link, linkPath);
         // 停用子樹的線一起壓暗，才看得出整段路徑都不會被求值。
-        DrawGraphPath(linkPath, link.OutputOwner.InDisabledSubtree || link.OutputOwner.InLockedSubtree, traced,
+        DrawGraphPath(LinkPathOf(link), link.OutputOwner.InDisabledSubtree || link.OutputOwner.InLockedSubtree, traced,
             link.ParentRow.IsProducedValue);
+    }
+
+    private void EnsureLinkVisuals()
+    {
+        // Provider 的接點也可能動態改位置／可見性，不能只看 built-in 節點是否移動。
+        foreach (var port in graph.Ports)
+        {
+            var state = (port.Presentation.Position, PortDirection(port), port.Presentation.Visible);
+            if (linkPortGeometry.TryGetValue(port, out var previous) && previous.Equals(state)) continue;
+            linkPortGeometry[port] = state;
+            linkVisualsDirty = true;
+        }
+        if (!linkVisualsDirty) return;
+        RebuildTabGhosts();
+        RebuildFoldFan();
+        foreach (var path in linkPaths.Values) path.Clear();
+        linkVisualsDirty = false;
+    }
+
+    private List<Vector2> LinkPathOf(HGLink link)
+    {
+        if (!linkPaths.TryGetValue(link, out var path))
+            linkPaths.Add(link, path = new List<Vector2>(16));
+        if (path.Count == 0) BuildLinkPathOf(link, path);
+        return path;
     }
 
     /// <summary>
@@ -690,12 +724,19 @@ public partial class HaruGraphWindow
 
         if (linkScreenPoints.Length < path.Count) linkScreenPoints = new Vector3[path.Count];
         bool inside = true;
+        Vector2 min = new(float.PositiveInfinity, float.PositiveInfinity);
+        Vector2 max = new(float.NegativeInfinity, float.NegativeInfinity);
         for (int i = 0; i < path.Count; i++)
         {
             Vector2 p = canvasRect.position + (path[i] + pan) * zoom;
+            min = Vector2.Min(min, p);
+            max = Vector2.Max(max, p);
             linkScreenPoints[i] = new Vector3(p.x, p.y);
             if (!canvasRect.Contains(p)) inside = false;
         }
+        // 路徑可能繞出端點範圍，因此用完整折線的 bounds，而不是只看兩個端點。
+        if (max.x < canvasRect.xMin - thickness || min.x > canvasRect.xMax + thickness
+            || max.y < canvasRect.yMin - thickness || min.y > canvasRect.yMax + thickness) return;
 
         Color oldColor = Handles.color;
         Handles.color = color;
@@ -711,7 +752,9 @@ public partial class HaruGraphWindow
                 Vector2 a = linkScreenPoints[i - 1];
                 Vector2 b = linkScreenPoints[i];
                 if (!ClipLine(canvasRect, ref a, ref b)) continue;
-                Handles.DrawAAPolyLine(thickness, new Vector3(a.x, a.y), new Vector3(b.x, b.y));
+                clippedLinkSegment[0] = new Vector3(a.x, a.y);
+                clippedLinkSegment[1] = new Vector3(b.x, b.y);
+                Handles.DrawAAPolyLine(thickness, 2, clippedLinkSegment);
             }
         }
         Handles.color = oldColor;
@@ -942,6 +985,25 @@ public partial class HaruGraphWindow
         from = to = node.IsActionNode ? HGStyles.HeaderAction : HGStyles.HeaderFormula;
     }
 
+    private void DrawOverviewNode(HGNodeView node)
+    {
+        if (Event.current.type != EventType.Repaint) return;
+        var rect = new Rect(node.Pos + pan, new Vector2(node.Width, node.Height));
+        HGStyles.RoundedFill(rect, NodeBodyColor(node), NodeCornerRadius);
+        HeaderColors(node, out var from, out var to);
+        HGStyles.HeaderFill(new Rect(rect.x, rect.y, rect.width, HGGraph.HeaderHeight), from, to, NodeCornerRadius);
+        bool selected = selectedIds.Contains(node.Id);
+        bool match = NodeSearchHighlighting && searchMatchSet.Contains(node.Id);
+        if (NodeSearchHighlighting && !match)
+            HGStyles.RoundedFill(rect, WithAlpha(HGStyles.Canvas, 0.6f), NodeCornerRadius);
+        HGStyles.RoundedFrame(rect, selected || match ? HGStyles.NodeBorderSelected : HGStyles.NodeBorder,
+            NodeCornerRadius, (selected ? 2f : 1f) / zoom);
+        // 總覽只畫標題，不建立欄位控制項；小到無法閱讀時留下輪廓與連線。
+        if (node.Width * zoom >= 70f)
+            HGStyles.NodeTitle.Draw(new Rect(rect.x + 4f, rect.y, rect.width - 8f, HGGraph.HeaderHeight),
+                new GUIContent(node.Title), false, false, selected, false);
+    }
+
     private void DrawNode(HGNodeView node, bool isLinkTarget, HGPort snappedPort)
     {
         var rect = new Rect(node.Pos + pan, new Vector2(node.Width, node.Height));
@@ -1052,15 +1114,6 @@ public partial class HaruGraphWindow
                 if (string.IsNullOrWhiteSpace(tips)) noteOpenId = node.Id;
                 Invalidate();
             }
-        }
-
-        // 取消選取就收掉還沒打字的空框；有內容的註解不受選取影響。
-        if (node.NoteOpen && string.IsNullOrWhiteSpace(node.Tips) && !selectedIds.Contains(node.Id))
-        {
-            ReleaseNoteFocus(node.Id);
-            noteOpenId = null;
-            graphDirty = true;
-            Repaint();
         }
 
         // 暗紗蓋在內容之上、問題色條之下：不會求值的節點要一眼看出來，但它的錯誤與警告仍然要讀得到。
@@ -1431,6 +1484,56 @@ public partial class HaruGraphWindow
         return allWrites ? HGStyles.OutputPortColor : HGStyles.InputPortLive;
     }
 
+    private void CloseUnselectedEmptyNote(HGNodeView node)
+    {
+        // 視窗外的節點也必須收掉取消選取的空註解框。
+        if (!node.NoteOpen || !string.IsNullOrWhiteSpace(node.Tips) || selectedIds.Contains(node.Id)) return;
+        ReleaseNoteFocus(node.Id);
+        noteOpenId = null;
+        graphDirty = true;
+        Repaint();
+    }
+
+    private void RefreshCanvasNodes(Rect canvas)
+    {
+        if (canvasNodesReady && (Event.current.type != EventType.Layout || GUIUtility.hotControl != 0)) return;
+        var viewport = new Rect(-pan - Vector2.one * HGGraph.PortDiameter,
+            canvas.size / zoom + Vector2.one * (HGGraph.PortDiameter * 2f));
+        // 打字造成列高／節點高度改變時，保留目前控制項集合與 caret；主動移動視角才重選。
+        if (canvasNodesReady && EditorGUIUtility.editingTextField && canvasNodesViewport.Equals(viewport)) return;
+        bool nextOverview = overviewMode;
+        // 拉線／放置／拖曳中的工具維持完整控制項，放手後才切換顯示層級。
+        if (!linking && placingSlot == null && dragNode == null && dragNodeGroup == null)
+            nextOverview = zoom < OverviewZoom;
+        nextCanvasNodeIds.Clear();
+        foreach (var node in graph.Nodes)
+            if (!node.Hidden && viewport.Overlaps(new Rect(node.Pos, new Vector2(node.Width, node.Height))))
+                nextCanvasNodeIds.Add(node.Id);
+        if (canvasNodesReady && (overviewMode != nextOverview || !canvasNodeIds.SetEquals(nextCanvasNodeIds)))
+        {
+            // 視角改變導致控制項集合更換時，結束輸入焦點，避免舊 id 指向另一個欄位。
+            GUIUtility.keyboardControl = 0;
+            EditorGUIUtility.editingTextField = false;
+        }
+        canvasNodeIds.Clear();
+        canvasNodeIds.UnionWith(nextCanvasNodeIds);
+        overviewMode = nextOverview;
+        canvasNodesViewport = viewport;
+        canvasNodesReady = true;
+    }
+
+    private void RefreshRowGeometry()
+    {
+        foreach (var node in graph.Nodes)
+        {
+            var state = (node.Pos, node.Width);
+            if (rowGeometry.TryGetValue(node, out var previous) && previous.Equals(state)) continue;
+            UpdateRowGeometry(node, node.Rows);
+            rowGeometry[node] = state;
+            linkVisualsDirty = true;
+        }
+    }
+
     /// <summary>把每一列的圖面座標（命中測試與接點）更新成目前的節點位置。</summary>
     private static void UpdateRowGeometry(HGNodeView node, List<HGRow> rows)
     {
@@ -1445,14 +1548,18 @@ public partial class HaruGraphWindow
 
     private void ZoomAt(Vector2 clipMouse, float wheelDelta)
     {
-        float nextZoom = Mathf.Clamp(zoom - wheelDelta * 0.03f, 0.45f, 1.8f);
+        float nextZoom = CalculateWheelZoom(zoom, wheelDelta);
         if (Mathf.Approximately(nextZoom, zoom)) return;
 
         // 固定滑鼠下的 Graph 點，縮放期間連線起點與預覽終點都不漂移。
         Vector2 anchor = clipMouse / zoom - pan;
         zoom = nextZoom;
         pan = clipMouse / zoom - anchor;
+        Repaint();
     }
+
+    internal static float CalculateWheelZoom(float current, float wheelDelta)
+        => Mathf.Clamp(current * Mathf.Pow(1.1f, -Mathf.Clamp(wheelDelta, -300f, 300f) / 3f), MinZoom, MaxZoom);
 }
 
 }
