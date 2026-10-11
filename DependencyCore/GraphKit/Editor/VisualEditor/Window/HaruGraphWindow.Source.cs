@@ -624,6 +624,18 @@ public partial class HaruGraphWindow
         if (pushUndo) BreakUndoMerge();
         PreserveVisibleNodePositions();
 
+        // 刪除只移除本載體；先拆開直接來源，避免來源子樹隨唯一引用一起失聯。
+        var children = new HashSet<GraphNode>();
+        if (graph != null && graph.ByCarrier.TryGetValue(carrier, out var view) && !view.IsPropertyNode)
+        {
+            foreach (var row in HGGraph.AllRows(view.Rows))
+            {
+                if (!row.HasSlot || row.InputSlot.Node == null) continue;
+                children.Add(row.InputSlot.Node);
+                row.InputSlot.SetNode(null);
+            }
+        }
+
         foreach (var slot in SlotsInCurrentGraph())
             if (ReferenceEquals(HGReflect.GetNode(slot), carrier)) HGReflect.SetNode(slot, null);
         if (focus.Kind == HGFocusKind.Asset && focus.AssetHostSlot != null
@@ -631,6 +643,10 @@ public partial class HaruGraphWindow
             HGReflect.SetNode(focus.AssetHostSlot, null);
         model.RemoveOrphan(carrier);
         RemoveFromNodeOwners(carrier);
+
+        foreach (var child in children)
+            if (!ReferenceEquals(child, carrier) && CountCarrierUsers(child) == 0)
+                model.AddOrphan(child);
 
         // ProtoProperty 是庫定義，刪掉畫布引用不可連帶刪庫；一般 Property 才跟最後一個引用一起回收。
         if (property != null && !property.Proto && !HasPropertyCarrier(property)) CurrentProperties()?.Remove(property);

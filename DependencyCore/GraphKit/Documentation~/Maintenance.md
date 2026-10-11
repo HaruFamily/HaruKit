@@ -96,6 +96,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 5. **內容有變的存檔必須通過驗證。** 視窗存檔、`HGModel.Save`、非視窗 `Commit` 都要求診斷與文件 `Verify()` 通過。唯一例外是只改版面：`HGModel.ContentDirty` 為 false（只經 `MarkLayoutChanged()`：座標與收合版面；其餘修改一律 `MarkContentChanged()`）且要寫回的副本本身已帶通過旗標時，沿用上次驗證結果直接寫回，與資產焦點的座標存檔一致；遺失型別清理與版本衝突檢查照樣執行。Undo／Redo 與遺失型別清理一律視為內容變更。沒有草稿存檔，也不可為了讓存檔通過而放寬驗證。
 6. **載體存取走型別契約**（`FormulaSlotBase`、`ActionSlotBase`、`IGraphHead`、`IOrphanPool`、`ITokenOwner`、`IPropertyOwner`、`IGraphAsset`），不要用成員名反射。`MethodBase.Invoke` 不會補預設參數，簽章一變就在執行期壞掉。
 7. **斷線不等於刪節點。** 節點只靠 SerializeReference 的引用路徑存活；斷線時要把失去引用的載體放回候選池（先保留可見座標），否則重建時整棵子樹會消失，存檔後資料就真的沒了。
+   - 畫布刪除載體也要先拆開其直接來源，再把沒有其他引用的來源放回目前焦點候選池；來源的子樹與座標保留。多選刪除只移除選中的載體，不沿來源接線遞迴刪除。
 8. **複製節點要重設 Id**（`HGModel.ResetNodeIds`），並正確帶入 `shared`（ProtoProperty 定義、目前作用域的 Token 要沿用同一顆）與 `skip` 集合。LocalProperty 定義跟著節點複製並換新 Id。
 9. **圖走訪的 visited 一律用 `ReferenceComparer.Instance`**（Editor 端 `HGRefComparer`）。裸 `HashSet<object>` 對 struct 走值相等，會無聲跳過子樹。
 10. **Core 驗證與視覺驗證要同步改。** 文件 `Verify()` 決定能不能存檔；`HGValidator` 是同一套規則加上可跳轉位置。只改一邊會變成「存檔鈕按得下去、卻被擋下且看不到原因」。
