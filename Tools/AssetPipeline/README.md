@@ -145,7 +145,7 @@ public class RecordObjects : ActionBase
 
 ## 舊資料遷移
 
-輸入欄位從 `FormulaAsset_*` 改名為 `*Slot` 時，以 `MovedFrom` 記錄原 namespace／assembly／class，欄位名與腳本 GUID 保留。v2 的資料模型與 v1 不相容（v1 的 `IPipelineAsset` 清單改成節點圖），v1 的序列化資料需要重建，沒有自動遷移。
+輸入欄位的序列化身分使用目前的 `*Slot` 型別。匯入仍記錄 `FormulaAsset_*` 的資料前，須使用專用工具遷移或從來源重建，並保留欄位內容、引用與腳本 GUID；不提供舊型別名稱的自動轉接。v1 的 `IPipelineAsset` 清單與目前節點圖模型不相容，需要重建。
 
 ## 測試與限制
 

@@ -16,7 +16,6 @@ namespace HaruFamily.Tools.AssetPipeline
     // 兩層固定值是既有行為：企劃常常只想打一段路徑，而路徑在專案搬動後會失效，
     // 所以保留「資產優先、路徑備援」而不是二選一。
     [Serializable]
-    [UnityEngine.Scripting.APIUpdating.MovedFrom(true, "HaruFamily.Tools.AssetPipeline", "HaruFamily.Tools.AssetPipeline.Editor", "FormulaAsset_Folder")]
     [HGKind(null, group: "Unity 資產型別")]
     public class FolderSlot : FormulaSlot<DefaultAsset, Formula_Folder<NullPack>>
     {

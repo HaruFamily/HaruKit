@@ -10,7 +10,6 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    [UnityEngine.Scripting.APIUpdating.MovedFrom(true, "HaruFamily.Tools.AssetPipeline", "HaruFamily.Tools.AssetPipeline.Editor", "FormulaAsset_Int")]
     [HGKind(null, group: "基本變數型別")]
     public class IntSlot : FormulaSlot<int, Formula_Int<NullPack>>
     {
@@ -29,7 +28,6 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    [UnityEngine.Scripting.APIUpdating.MovedFrom(true, "HaruFamily.Tools.AssetPipeline", "HaruFamily.Tools.AssetPipeline.Editor", "FormulaAsset_ListInt")]
     [HGKind(null, group: "基本變數型別/清單")]
     public class ListIntSlot : FormulaSlot<List<int>, Formula_ListInt<NullPack>>
     {

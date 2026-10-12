@@ -150,5 +150,5 @@ https://github.com/HaruFamily/HaruKit.git?path=/<Category>/<Tool>
 | Tools | AssetPipeline | `com.harufamily.tools.assetpipeline` | `?path=/Tools/AssetPipeline` | GraphKit |
 
 > **同 repo 的套件之間也是 git-only 依賴**（§1.1）：LogicGraph 依賴 GraphKit，但 `dependencies` 寫不進去，
-> 使用端得自己在 `manifest.json` 兩條都列。搬型別跨套件時，序列化資產靠 `[MovedFrom]` 的
-> `sourceAssembly` 遷移，所以 **asmdef name 是契約，改它等於改資料格式**。
+> 使用端得自己在 `manifest.json` 兩條都列。**asmdef name 是契約，改它等於改資料格式**。
+> 搬型別跨套件前，先確認使用端資產記錄與擁有者的遷移政策；由生成器重建或專用工具遷移，不能以相容標記代替資料驗證。

@@ -11,7 +11,6 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    [UnityEngine.Scripting.APIUpdating.MovedFrom(true, "HaruFamily.Tools.AssetPipeline", "HaruFamily.Tools.AssetPipeline.Editor", "FormulaAsset_TextAsset")]
     [HGKind(null, group: "Unity 資產型別")]
     public class TextAssetSlot : FormulaSlot<TextAsset, Formula_TextAsset<NullPack>>
     {
@@ -30,7 +29,6 @@ namespace HaruFamily.Tools.AssetPipeline
     }
 
     [Serializable]
-    [UnityEngine.Scripting.APIUpdating.MovedFrom(true, "HaruFamily.Tools.AssetPipeline", "HaruFamily.Tools.AssetPipeline.Editor", "FormulaAsset_TextAssetList")]
     [HGKind(null, group: "Unity 資產型別/清單")]
     public class TextAssetListSlot : FormulaSlot<List<TextAsset>, Formula_TextAssetList<NullPack>>
     {
