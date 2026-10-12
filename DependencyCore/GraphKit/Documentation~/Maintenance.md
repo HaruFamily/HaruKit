@@ -226,6 +226,13 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - 欄位框以 `NodeBorderSelected` 短暫高亮 1.5 秒。視窗只保存焦點 Id、NodeId、欄位路徑與到期時間，無 Dirty／Undo；換焦點或清空文件時清除。
 - `FocusDocumentNode` 仍是節點定位：已可見的來源只選取置中，不為了它切父層 HGTab。`RevealNode` 與診斷定位共用 `RevealRowContainers`，展開清單元素時同時處理清單折疊。
 
+### 5.6 節點原始碼定位
+
+- 節點右鍵「編輯程式」以實際內容的 Type 呼叫 `HGScriptLocator.Open`，只在點擊後查找，不在建立選單時掃描。
+- 檔名候選與組件資料夾回退搜尋皆須用 `CompilationPipeline.GetAssemblyNameFromScriptPath` 核對目標組件，再比對完整 namespace、外層型別及泛型參數個數；不可只用短類名選第一個宣告。
+- 宣告定位略過註解、一般／逐字字串與字元 literal，保留原始行號；支援區塊／檔案層級 namespace、巢狀 namespace 與型別。此處是文字定位，不是完整 C# 編譯器／條件編譯求值器。
+- 找不到匹配來源時回報目標完整型別，不回退至其他 namespace 或組件的同名類別。快取依 Type 隔離，Domain Reload 後重建。
+
 ## 6. 串接 GraphKit（給 Tool 作者）
 
 ### 6.1 開啟文件

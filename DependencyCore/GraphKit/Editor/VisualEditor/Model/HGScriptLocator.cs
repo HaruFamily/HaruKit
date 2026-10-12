@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using UnityEditor;
+using UnityEditor.Compilation;
 using UnityEngine;
 
 /// <summary>
@@ -49,13 +50,11 @@ public static class HGScriptLocator
         int tick = name.IndexOf('`');
         if (tick >= 0) name = name.Substring(0, tick);
 
-        var declaration = new Regex($@"\b(?:class|struct|record|interface|enum)\s+{Regex.Escape(name)}\b");
-
-        var found = Search(AssetDatabase.FindAssets($"{name} t:MonoScript"), name, declaration);
+        var found = Search(AssetDatabase.FindAssets($"{name} t:MonoScript"), type, name);
         // 沒中就退回逐檔比對，但只掃這個型別所屬組件的資料夾——全專案有近萬個 .cs，
         // 每個都要 LoadAssetAtPath + 讀全文，掃完是秒級停頓。
         if (found.Script == null)
-            found = Search(AssetDatabase.FindAssets("t:MonoScript", SearchFolders(type)), name, declaration);
+            found = Search(AssetDatabase.FindAssets("t:MonoScript", SearchFolders(type)), type, name);
 
         cache[type] = found;
         return found;
@@ -97,14 +96,17 @@ public static class HGScriptLocator
     }
 
     /// <summary>在一批腳本裡找宣告；先用 Contains 篩掉大多數檔案，正則只跑在真的提到這個名字的檔上。</summary>
-    private static Located Search(string[] guids, string name, Regex declaration)
+    private static Located Search(string[] guids, Type type, string name)
     {
         if (guids == null) return default;
+        string expectedAssembly = type.Assembly.GetName().Name;
 
         for (int i = 0; i < guids.Length; i++)
         {
             string path = AssetDatabase.GUIDToAssetPath(guids[i]);
             if (string.IsNullOrEmpty(path) || !path.EndsWith(".cs")) continue;
+            string assembly = CompilationPipeline.GetAssemblyNameFromScriptPath(path);
+            if (assembly != expectedAssembly && assembly != expectedAssembly + ".dll") continue;
 
             var script = AssetDatabase.LoadAssetAtPath<MonoScript>(path);
             if (script == null) continue;
@@ -112,12 +114,65 @@ public static class HGScriptLocator
             string text = script.text;
             if (string.IsNullOrEmpty(text) || text.IndexOf(name, StringComparison.Ordinal) < 0) continue;
 
-            var match = declaration.Match(text);
-            if (!match.Success) continue;
-
-            return new Located { Script = script, Line = LineOf(text, match.Index) };
+            int line = FindDeclarationLine(text, type);
+            if (line == 0) continue;
+            return new Located { Script = script, Line = line };
         }
         return default;
+    }
+
+    // 遮掉註解與字串但保留位置，避免範例宣告或字串內的大括號污染作用域。
+    private static readonly Regex nonCode = new(
+        @"//[^\r\n]*|/\*[\s\S]*?\*/|@""(?:""""|[^""])*""|""(?:\\.|[^""\\])*""|'(?:\\.|[^'\\])*'");
+    private static readonly Regex sourceDeclarations = new(
+        @"\bnamespace\s+(?<ns>@?\w+(?:\s*\.\s*@?\w+)*)\s*(?<nsEnd>[{;])"
+        + @"|\b(?:class|struct|interface|enum|record(?:\s+(?:class|struct))?)\s+(?<type>@?\w+)(?:\s*<(?<args>[^<>{};]+)>)?"
+        + @"|(?<open>\{)|(?<close>\})|(?<end>;)");
+
+    /// <summary>依 namespace、外層型別與泛型參數個數定位宣告；找不到回 0。</summary>
+    internal static int FindDeclarationLine(string text, Type type)
+    {
+        if (string.IsNullOrEmpty(text) || type == null) return 0;
+        if (type.IsGenericType) type = type.GetGenericTypeDefinition();
+        string expected = type.FullName;
+        string code = nonCode.Replace(text, match => Regex.Replace(match.Value, @"[^\r\n]", " "));
+        var scopes = new Stack<(string Namespace, string Parent)>();
+        string currentNamespace = "";
+        string parent = "";
+        string pendingType = null;
+
+        foreach (Match token in sourceDeclarations.Matches(code))
+        {
+            if (token.Groups["ns"].Success)
+            {
+                string name = Regex.Replace(token.Groups["ns"].Value, @"\s|@", "");
+                if (token.Groups["nsEnd"].Value == "{") scopes.Push((currentNamespace, parent));
+                currentNamespace = currentNamespace.Length == 0 ? name : currentNamespace + "." + name;
+                continue;
+            }
+            if (token.Groups["type"].Success)
+            {
+                string name = token.Groups["type"].Value.TrimStart('@');
+                if (token.Groups["args"].Success)
+                    name += "`" + token.Groups["args"].Value.Split(',').Length;
+                string fullName = parent.Length != 0 ? parent + "+" + name
+                    : currentNamespace.Length != 0 ? currentNamespace + "." + name : name;
+                if (fullName == expected) return LineOf(text, token.Index);
+                pendingType = fullName;
+                continue;
+            }
+            if (token.Groups["open"].Success)
+            {
+                scopes.Push((currentNamespace, parent));
+                if (pendingType != null) parent = pendingType;
+                pendingType = null;
+                continue;
+            }
+            if (token.Groups["close"].Success && scopes.Count > 0)
+                (currentNamespace, parent) = scopes.Pop();
+            pendingType = null;
+        }
+        return 0;
     }
 
     /// <summary>字元位置換算成 1-based 行號（AssetDatabase.OpenAsset 吃的就是 1-based）。</summary>

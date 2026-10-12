@@ -8,6 +8,38 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor.Tests
 
 public class HGPortTests
 {
+    [Test]
+    public void ScriptLocationDistinguishesSameNamedTypesAndIgnoresComments()
+    {
+        string source = "namespace Other { public class HGPortTests {} }\n"
+            + "// namespace HaruFamily.DependencyCore.GraphKit.Editor.Tests { class HGPortTests {} }\n"
+            + "namespace HaruFamily.DependencyCore.GraphKit.Editor.Tests\n{\n"
+            + "    // class HGPortTests {}\n"
+            + "    public class HGPortTests<T> {}\n"
+            + "    public class HGPortTests {}\n}";
+
+        Assert.That(HGScriptLocator.FindDeclarationLine(source, typeof(HGPortTests)), Is.EqualTo(7));
+        Assert.That(HGScriptLocator.FindDeclarationLine(
+            "namespace Other { public class HGPortTests {} }", typeof(HGPortTests)), Is.Zero);
+    }
+
+    [Test]
+    public void ScriptLocationResolvesFileScopedAndNestedNamespacesAndTypes()
+    {
+        string fileScoped = "namespace HaruFamily.DependencyCore.GraphKit.Editor.Tests;\n"
+            + "class Other { class WriteTargetSlot {} }\n"
+            + "class HGPortTests\n{\n"
+            + "    const string sample = @\"} class WriteTargetSlot {}\";\n"
+            + "    private class WriteTargetSlot {}\n}";
+        string nested = "namespace HaruFamily\n{\n"
+            + "namespace DependencyCore.GraphKit.Editor.Tests\n{\n"
+            + "class HGPortTests\n{\n"
+            + "    private class WriteTargetSlot {}\n}\n}\n}";
+
+        Assert.That(HGScriptLocator.FindDeclarationLine(fileScoped, typeof(WriteTargetSlot)), Is.EqualTo(6));
+        Assert.That(HGScriptLocator.FindDeclarationLine(nested, typeof(WriteTargetSlot)), Is.EqualTo(7));
+    }
+
     private sealed class WriteTargetSlot : PropertySlotBase
     {
         private GraphNode node;
