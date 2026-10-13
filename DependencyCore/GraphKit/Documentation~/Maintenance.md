@@ -271,7 +271,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - `TabBody`／`TabSelected` 使用 `nodeBody`，未選頁 `TabInactive` 使用 `nodeBody` 向 `fieldBackground` 混合 60%，輪廓 `TabAccent` 使用 `nodeBody` 向 `text` 混合 22%。`TabLabel` 維持一般字重，作用中用 `buttonOnText`、未選用 `muted`，依對齊與選取狀態快取，換主題清除。Foldout 標題使用 `nodeBody` 向 `fieldBackground` 混合 35% 的中性底與一般字重亮字，保留導引線、不包內容框。配色全部由現有主題鍵衍生。
 - `[HGNode(name, description, group, priority)]`（可加 `Width`，單位是 20px 格數）：節點名稱、說明、分類與排序。`Inherited = false`，**每個具體型別都要自己標**，否則節點名退回類別名。
 - 欄位：`[HGLabel]`、`[HGDescription]`、`[HGHide]`（`[HideInInspector]` 視為相同）、`[HGShowIf]`（條件找不到時 fail-open 並記錄一次錯誤）、`[HGHideLabel]`、`[HGEnum]`、`[HGBool]`、`[HGFoldout]`、`[HGTab]`。
-- enum 成員可標 `[HGLabel("顯示名稱")]`；Runtime 的 HGEnumLabels.GetName 共用名稱解析，未標記、Name 為空白時回成員名，未定義值回原本的 enum.ToString()。Editor 的 enum 按鈕亦用此入口；enum 別名按宣告成員名解析標籤，不以顯示字串回推數值。
+- enum 成員可標 `[HGLabel("顯示名稱")]`；Runtime 的 HGEnumLabels.GetName 共用名稱解析，未標記、Name 為空白時回成員名，未定義值回原本的 enum.ToString()。Editor 的 enum 按鈕與自訂標籤下拉共用此入口；下拉不需 `[HGEnum]`，沒有名稱覆寫時沿用原生 EnumPopup。自訂下拉按索引對應實際 enum 值；未定義值與未命名的 Flags 組合保留顯示及原值，直到選取宣告成員。enum 別名按宣告成員名解析標籤，不以顯示字串回推數值。
 - `[HGTab("頁名")]` 把同一物件、同一父群組下的頁面收進同一條分頁列（`HGRowKind.Tabs`，子列是 `TabPage`）：同路徑欄位同頁，依首次出現排序，分頁列插在第一個成員的位置；未標記的欄位常駐。預設第一頁，空頁不出現，作用中頁被 `HGShowIf` 整頁隱藏時暫回第一頁，不覆寫保存的選擇。descriptor 的各 factory 同樣接受 `tab:`。
   - 標題文字對齊由 `[HGTab("頁名", Alignment = TextAnchor.MiddleLeft)]` 指定，預設 `MiddleCenter`；常用 `MiddleLeft`／`MiddleCenter`／`MiddleRight`。descriptor 各 factory 的 `tabAlignment:` 同樣預設置中。同頁的對齊與寬度採第一個可見成員建立頁面時的設定，各成員宜一致。`HGStyles.TabLabel` 依對齊快取獨立樣式、使用對稱邊距，換主題由 `ResetCache` 清除。
   - Tab 標題寬度統一用 `Width`（非負整數，20px 格數），0 表示自動；負值回報 `graphkit.metadata.tab-width-invalid` Warning 並退回自動。descriptor 各 factory 對應 `tabWidthUnits:`。同頁採第一個可見成員建立頁面時的設定。

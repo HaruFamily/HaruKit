@@ -98,12 +98,30 @@ public static class HGValueField
                 if (values.Length == 0) return value;
                 current = (Enum)values.GetValue(0);
             }
-            if (!enumButtons) return EditorGUI.EnumPopup(rect, current);
-
             var names = Enum.GetNames(type);
             var labels = new string[names.Length];
+            bool hasCustomLabel = false;
             for (int i = 0; i < names.Length; i++)
+            {
                 labels[i] = HGEnumLabels.GetName(type, names[i]);
+                hasCustomLabel |= labels[i] != names[i];
+            }
+
+            if (!enumButtons)
+            {
+                if (!hasCustomLabel) return EditorGUI.EnumPopup(rect, current);
+
+                int currentIndex = Array.IndexOf(values, current);
+                // 未定義值與未命名的 Flags 組合保留原值，直到使用者選取宣告成員。
+                if (currentIndex < 0)
+                {
+                    currentIndex = labels.Length;
+                    Array.Resize(ref labels, labels.Length + 1);
+                    labels[currentIndex] = current.ToString();
+                }
+                int nextIndex = EditorGUI.Popup(rect, currentIndex, labels);
+                return nextIndex >= 0 && nextIndex < values.Length ? values.GetValue(nextIndex) : current;
+            }
 
             if (type.IsDefined(typeof(FlagsAttribute), false))
             {
