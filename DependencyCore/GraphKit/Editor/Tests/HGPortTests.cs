@@ -441,6 +441,74 @@ public class HGPortTests
         => new("Property.Document", target => ((PropertyDocumentOwner)target).Document,
             (target, document) => ((PropertyDocumentOwner)target).Document = document);
 
+    [Test]
+    public void SelectionSwitchResolvesTheNewOwnerInsteadOfReusingItsPredecessorsBinding()
+    {
+        var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
+        var nextOwner = ScriptableObject.CreateInstance<TestDocumentOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        var previousSelection = UnityEditor.Selection.activeObject;
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        try
+        {
+            owner.Document = new PropertyDocument();
+            nextOwner.Document = new TestDocument();
+            Assert.That(window.BindDocument(owner, PropertyBinding(), PropertyContext()), Is.True);
+            var previousCommands = window.GetDocumentCommands();
+
+            UnityEditor.Selection.activeObject = nextOwner;
+            typeof(HaruGraphWindow).GetMethod("OnSelectionChange", flags).Invoke(window, null);
+
+            var model = (HGModel)typeof(HaruGraphWindow).GetField("model", flags).GetValue(window);
+            Assert.That(model, Is.Not.Null);
+            Assert.That(model.Owner, Is.SameAs(nextOwner));
+            Assert.That(model.Data, Is.TypeOf<TestDocument>());
+            Assert.That(previousCommands.Query(), Is.Null, "成功切換後舊命令必須失效。");
+            Assert.That(window.GetDocumentCommands().Cancel(), Is.EqualTo(HGSessionCommandResult.Changed));
+        }
+        finally
+        {
+            window.GetDocumentCommands()?.Cancel();
+            UnityEngine.Object.DestroyImmediate(window);
+            UnityEditor.Selection.activeObject = previousSelection;
+            UnityEngine.Object.DestroyImmediate(nextOwner);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+    }
+
+    [Test]
+    public void FailedWindowBindPreservesThePreviousDocumentAndCommands()
+    {
+        var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
+        var nextOwner = ScriptableObject.CreateInstance<TestDocumentOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            owner.Document = new PropertyDocument();
+            Assert.That(window.BindDocument(owner, PropertyBinding(), PropertyContext()), Is.True);
+            var commands = window.GetDocumentCommands();
+            var before = commands.Query();
+            var failingBinding = new HGDocumentBinding<TestDocument>("Failing.Document",
+                _ => throw new InvalidOperationException("read failed"),
+                (target, document) => ((TestDocumentOwner)target).Document = document);
+
+            UnityEngine.TestTools.LogAssert.Expect(LogType.Error,
+                "[GraphKit] 文件 'Failing.Document' 重載失敗，目前工作副本與歷程保留：read failed");
+            Assert.That(window.BindDocument(nextOwner, failingBinding, HGEditorExtensionContext.Default), Is.False);
+
+            Assert.That(commands.Query(), Is.Not.Null, "失敗綁定不能讓原命令失效。");
+            Assert.That(commands.Query().Generation, Is.EqualTo(before.Generation));
+            Assert.That(commands.Cancel(), Is.EqualTo(HGSessionCommandResult.Changed), "取消仍應讀取原 Owner 的 binding。");
+        }
+        finally
+        {
+            window.GetDocumentCommands()?.Cancel();
+            UnityEngine.Object.DestroyImmediate(window);
+            UnityEngine.Object.DestroyImmediate(nextOwner);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public void TokenCandidatesUseSourceSlotPolicyRegardlessOfSharedReaderOrder(bool strictReaderFirst)

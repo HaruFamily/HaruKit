@@ -334,20 +334,17 @@ public partial class HaruGraphWindow : IHasCustomMenu
     public bool Bind(UnityEngine.Object owner, HGEditorExtensionContext context)
     {
         var previous = sessionContext;
-        var previousBinding = sessionBinding;
         bool previousExplicitEntry = usesExplicitToolEntry;
         bool previousReopenRequirement = requiresToolReopenAfterReload;
         sessionContext = context ?? HGEditorExtensionContext.Default;
-        sessionBinding = null;
         requiresToolReopenAfterReload = false;
-        if (BindInSession(owner))
+        if (BindOwner(owner, null))
         {
             usesExplicitToolEntry = !ReferenceEquals(sessionContext, HGEditorExtensionContext.Default);
             requiresToolReopenAfterReload = false;
             return true;
         }
         sessionContext = previous;
-        sessionBinding = previousBinding;
         usesExplicitToolEntry = previousExplicitEntry;
         requiresToolReopenAfterReload = previousReopenRequirement;
         return false;
@@ -358,28 +355,28 @@ public partial class HaruGraphWindow : IHasCustomMenu
     {
         if (binding == null) return false;
         var previousContext = sessionContext;
-        var previousBinding = sessionBinding;
         bool previousExplicitEntry = usesExplicitToolEntry;
         bool previousReopenRequirement = requiresToolReopenAfterReload;
         sessionContext = context ?? HGEditorExtensionContext.Default;
-        sessionBinding = binding;
-        if (BindInSession(owner))
+        if (BindOwner(owner, binding))
         {
             usesExplicitToolEntry = true;
             requiresToolReopenAfterReload = false;
             return true;
         }
         sessionContext = previousContext;
-        sessionBinding = previousBinding;
         usesExplicitToolEntry = previousExplicitEntry;
         requiresToolReopenAfterReload = previousReopenRequirement;
         return false;
     }
 
-    /// <summary>在目前 session 內切換 owner；不支援時只讓目前 owner 退回 default provider。</summary>
+    /// <summary>在目前 context 內切換 Owner；其他 Owner 的文件由唯一欄位重新解析。</summary>
     private bool BindInSession(UnityEngine.Object owner)
+        => BindOwner(owner, ReferenceEquals(owner, model?.Owner) ? sessionBinding : null);
+
+    private bool BindOwner(UnityEngine.Object owner, HGDocumentBinding binding)
     {
-        if (requiresToolReopenAfterReload && sessionBinding == null)
+        if (requiresToolReopenAfterReload && binding == null)
         {
             ShowNotification(new GUIContent("Tool 接入已因重載失效，請從原 Tool 重新開啟節點圖。"));
             return false;
@@ -388,25 +385,24 @@ public partial class HaruGraphWindow : IHasCustomMenu
                 "尚未儲存", $"'{(model?.Owner != null ? model.Owner.name : "?")}' 有未儲存的修改，切換後會遺失。要繼續嗎？", "捨棄並切換", "取消"))
             return false;
 
+        // 新文件成功載入前，保留目前工作副本、歷程與資產焦點。
+        var nextModel = new HGModel();
+        if (!nextModel.Bind(owner, binding)) return false;
+        var nextContext = sessionContext.Supports(owner, nextModel.Doc)
+            ? sessionContext
+            : HGEditorExtensionContext.Default;
+        nextModel.SetRootAdapter(nextContext.Profile?.RootAdapter);
+
         returnFocus = null;
         ClearPortInteractionState();
         ClearAssetDirty();
         assetReport = new HGReport();
         assetVerifiedOnce = false;
         assetReportStale = false;
-        model = new HGModel();
+        model = nextModel;
+        sessionBinding = binding;
+        activeContext = nextContext;
         drawerFailures.Clear();
-        if (!model.Bind(owner, sessionBinding))
-        {
-            model = null;
-            activeContext = HGEditorExtensionContext.Default;
-            UpdateUnsavedState();
-            return false;
-        }
-        activeContext = sessionContext.Supports(owner, model.Doc)
-            ? sessionContext
-            : HGEditorExtensionContext.Default;
-        model.SetRootAdapter(activeContext.Profile?.RootAdapter);
         pendingTarget = null;
 
         focus = new HGFocus();

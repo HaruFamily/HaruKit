@@ -241,6 +241,8 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - `HaruGraphWindow.OpenFor(owner)` 是 legacy 入口，只接受恰好一個 `IGraphDocument` 欄位的 Owner。
 - binding 的 setter 只能指派傳入的文件引用，不可原地修改舊文件或其他 Owner 資料，並要能接受 null。需要偵測原地外部修改時，提供無副作用的 `readRevision`，並在每個外部修改入口維護它。
 - context 與 binding 不會跨 Domain Reload 保存；重新載入後要從 Tool 入口重開。
+- 明確 binding 只用於該次入口指定的 Owner；session 內切換到其他 Owner 時重新探索其唯一文件欄位，不沿用前一個 Owner 的 getter／setter。同一 Owner 的 session 導航保留目前 binding；多文件 Owner 須由 Tool 明確指定文件。
+- 視窗先在候選 Model 完成綁定及 root adapter 設定，成功才替換目前 Model／binding／active context 並清除焦點與互動狀態。綁定失敗保留原工作副本、歷程、資產焦點與命令有效性。
 
 ### 6.2 擴充點
 
