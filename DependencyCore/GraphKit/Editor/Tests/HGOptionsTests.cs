@@ -27,6 +27,45 @@ public sealed class HGOptionsTests
     [HGOptionsSource("GraphKit.Tests.Options.Conflict")]
     private static IEnumerable<string> Strings => new[] { "one" };
 
+    [HGOptionsSource("GraphKit.Tests.Options.Labels")]
+    private static IEnumerable<HGOptionElement<int>> ADescriptions => new[]
+    {
+        new HGOptionElement<int>(1, "簡單", "適合初次遊玩"),
+        new HGOptionElement<int>(2, "簡單", "另一個同名選項"),
+        new HGOptionElement<int>(3, " "),
+    };
+
+    [HGOptionsSource("GraphKit.Tests.Options.Labels")]
+    private static IEnumerable<int> BPlain => new[] { 1, 4 };
+
+    [HGOptionsSource("GraphKit.Tests.Options.InvalidElement")]
+    private static IEnumerable<HGOptionElement<string>> InvalidElement => new[]
+    {
+        new HGOptionElement<string>("valid", "有效"),
+        new HGOptionElement<string>(null, "沒有值"),
+    };
+
+    [Test]
+    public void DescribedIntegersMergeWithPlainValuesWithoutUsingLabelsAsIdentity()
+    {
+        Assert.That(HGOptionsCatalog.TryGet("GraphKit.Tests.Options.Labels", typeof(int), out var entries, out var error), Is.True, error);
+        CollectionAssert.AreEqual(new object[] { 1, 2, 3, 4 }, entries.ConvertAll(entry => entry.Value));
+        CollectionAssert.AreEqual(new[] { "簡單", "簡單", "3", "4" }, entries.ConvertAll(entry => entry.Label));
+        Assert.That(entries[0].Tooltip, Is.EqualTo("適合初次遊玩"));
+        Assert.That(entries[1].Tooltip, Is.EqualTo("另一個同名選項"));
+        Assert.That(entries[3].Tooltip, Is.Empty);
+    }
+
+    [Test]
+    public void DescribedSourcesRejectWrongFieldTypesAndNullUnderlyingValues()
+    {
+        Assert.That(HGOptionsCatalog.TryGet("GraphKit.Tests.Options.Labels", typeof(string), out var entries, out _), Is.False);
+        Assert.That(entries, Is.Empty);
+        Assert.That(HGOptionsCatalog.TryGet("GraphKit.Tests.Options.InvalidElement", typeof(string), out entries, out var error), Is.False);
+        Assert.That(entries, Is.Empty);
+        Assert.That(error, Does.Contain("InvalidElement").And.Contain("null"));
+    }
+
     [Test]
     public void SourcesMergeByValueAndAreEnumeratedAgainForEachSnapshot()
     {

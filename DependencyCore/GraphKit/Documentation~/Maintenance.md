@@ -128,6 +128,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 
 ### 5.1 IMGUI 陷阱
 
+- 開啟 Token／Asset 畫布時，以 100% 縮放將 HEAD 起點放在畫布左上方 20px 內距。定位在建圖完成、套用節點疊放順序之前執行，不用全圖 bounds，避免大圖被縮成總覽。從畫布節點進入時，視窗按焦點 Id 記住來源焦點與 pan／zoom，退出時還原；庫與其他入口只定位起點，不建立返回視角。這些記錄不進資料、Dirty 或 Undo；換文件／重載及 Owner 歷程換副本時清除。Asset 的 Token 返回依目前工作副本重解 Token Id；跨資產返回重新開啟資產交易，不復活已捨棄的內容。
 - 縮放共用 `MinZoom = 0.000001`／`MaxZoom = 1.8`（比例值，下限只防除零與極端座標），滾輪每 3 單位 delta 乘／除 1.1，保留滑鼠錨點。`F`／聚焦全部與群組使用 `CalculateFrameZoom` 依 bounds 容納全圖，上限 1.4；FrameAll 只以未 Hidden 節點初始化與擴張 bounds，空圖不移動視角。
 - 低於 30% 進入簡化總覽：節點輪廓、Header 色帶、選取／搜尋外框與連線保留，標題只在投影寬至少 70px 時畫；不建立節點欄位控制項或接點命中，也不允許點線剪斷。單擊選取後左上說明仍以正常大小顯示，雙擊節點回到 100% 並置中後編輯。中鍵平移、滾輪、框選與 F 沿用。總覽切換與 viewport 集合同在 Layout 進行；hotControl、拉線、放置、節點／群組拖曳期間延後切換，避免途中更換控制項。
 - 畫布節點以 graph-space viewport（含 Port 邊距）剔除。控制項集合只在 Layout 更新，輸入與 Repaint 沿用同一集合；`hotControl` 持有期間凍結集合，拖曳釋放後才刷新。文字編輯中且視角未動時也凍結集合，避免打字改變節點高度而丟失 caret。視角移動導致集合更換時結束鍵盤／文字焦點，避免控制項序號改指其他欄位；單純內容重建保留集合，換焦點／文件才清空。剔除不設定 `Hidden`，不影響接線、框選、搜尋、驗證與執行。取消選取的空註解框即使在畫面外也要收起。
@@ -236,10 +237,13 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 ### 5.7 一般值候選選單
 
 - `[HGOptions("LibraryId")]` 標記一般欄位。`T` 單選，`List<T>` 多選；值型別支援 `HGValueField` 的值型別、`string` 與 Unity 物件引用。資料仍保存原值／原資產引用，不增加序列化包裝型別。此功能走反射建列；完整 metadata descriptor 與 Slot 不使用此 Attribute。
-- `[HGOptionsSource("LibraryId", Group = "可選整批分組")]` 標在靜態欄位、可讀靜態屬性或無參數靜態方法；回傳型別須為 `IEnumerable<T>` 或其實作（例如 `List<T>`、陣列）。來源可位於 Editor 組件，也可跨 class／assembly 合併。只讀來源應在編輯模式可用，不可依賴 Play 初始化、修改圖或資產；來源需為有限集合。
-- 同庫的來源元素型別必須一致，並可指派到欄位元素型別；不做字串／數值隱式轉型。候選依 `Equals` 去重，來源依完整型別與成員名稱排序、各來源保留列舉順序；重複值取先遇到的來源分組。來源不提供逐項說明：一般值顯示 `ToString()`，Unity 物件顯示名稱，tooltip 顯示來源及資產路徑。
-- `HGOptionsCatalog` 只快取反射成員索引。每次開選單重新列舉成候選快照；重繪不再呼叫來源。未知庫、型別衝突、null／Missing 候選或 iterator 例外顯示來源錯誤，整份候選拒絕，不使用半份結果。編譯 Domain Reload 後重建索引。
-- 單選點選後套用；多選搜尋與勾選留在 Popup，按「套用」才以一次內容交易寫回，取消／失焦不修改。未在候選內的既有值在選單標示並保留；清單可取消勾選移除，不在打開時自動清理或去重舊資料。
+- `[HGOptionsSource("LibraryId", Group = "可選整批分組")]` 標在靜態欄位、可讀靜態屬性或無參數靜態方法；回傳 `IEnumerable<T>` 或 `IEnumerable<HGOptionElement<T>>`（含 List／陣列等實作）。`HGOptionElement<T>(value, label, tooltip)` 是顯示描述，透過 `IHGOptionElement` 讀取；只將 Value 寫入圖內 T／List<T>。來源可位於 Editor 組件，也可跨 class／assembly 合併。只讀來源應在編輯模式可用，不可依賴 Play 初始化、修改圖或資產；來源需為有限集合。
+- 同庫的實際值型別 T 必須一致，並可指派到欄位元素型別；一般值與描述元素可混用，不做字串／數值隱式轉型。候選依 Value 的 `Equals` 去重，來源依完整型別與成員名稱排序、各來源保留列舉順序；重複值取先遇到的整份顯示資料。同 Label 不同 Value 仍是不同選項。
+- Label 空白時使用原始值文字（一般值 ToString、Unity 物件名稱）。選單與收起欄位顯示 Label；選單以淡色補不同於 Label 的原始值，搜尋比對 Label、原始值及來源／分組。tooltip 補逐項說明、原始值、來源及資產路徑；未知值保留原值顯示。
+- `HGOptionsCatalog` 只快取反射成員索引。欄位第一次繪製取得列生命週期內的顯示快照，重建列後更新；每次開選單另取最新候選快照。重繪不反覆呼叫來源。未知庫、型別衝突、null／Missing 實際值或 iterator 例外顯示來源錯誤，整份候選拒絕，不使用半份結果。編譯 Domain Reload 後重建索引。
+- 單選點選後寫回並關閉；多選每次勾選、取消勾選或清空立即以一次內容交易寫回，保持 Popup 開啟供連選，每次操作可獨立 Undo。Esc／失焦只關閉，不撤回已寫入內容；僅開啟或搜尋不修改。未在候選內的既有值在選單標示並保留；清單可取消勾選移除，不在打開時自動清理或去重舊資料。
+- Popup 寬度依候選文字限制於 260～420px，高度按開啟時的候選數量配置，最多顯示 12 列後捲動；搜尋不縮放視窗，改搜尋字時回到清單頂端。選項每列 24px，底部保留已選數量與清空。
+- 多選成功寫回後同步重建圖，以同一 Target／Field／Path 重新取得列並採納這次重建的 generation；不得沿用舊 HGRow。外部 Undo／切焦點／重建仍拒絕過期回呼，找不到同一欄位時停止連選並要求重開。
 - `AllowEmpty = true` 為單一參考型別提供清除（string 寫空字串、Unity 引用寫 null）；清單可直接清空。候選庫本身不接受 null。一般數值只能選候選，不提供手填備援。
 - Popup 經 `RequestPopup(GraphToWindowRect(...))` 在結束縮放後開啟。列的繪製 Rect 已含 pan，傳給 GraphToWindowRect 前須先減掉 pan 還原 graph space，不能重複平移。套用前核對 model／focus／graph generation 與待重建狀態；切圖、Undo 或重建後拒絕舊 Popup 寫回。寫回走 `TryMutateContent` 與 `AfterValueEdit`，Owner／獨立資產各自使用既有 Undo 與 dirty 路由。
 - `[HGEnum]` 是 enum 按鈕列；`HGOptions` 是一般值的搜尋選單，兩者不組合成位元運算。Slot 的常數模式未接入候選庫，標在 Slot 上會產生配置診斷。
@@ -250,6 +254,17 @@ private static IEnumerable<int> DamagePresets => new[] { 5, 10, 20 };
 
 [SerializeField, HGOptions("DamagePresets")]
 private int damage;
+
+[HGOptionsSource("Levels")]
+private static IEnumerable<HGOptionElement<int>> Levels => new[]
+{
+    new HGOptionElement<int>(1, "簡單", "適合初次遊玩"),
+    new HGOptionElement<int>(2, "普通"),
+    new HGOptionElement<int>(3, "困難"),
+};
+
+[SerializeField, HGOptions("Levels")]
+private int level;
 
 [SerializeField, HGOptions("Tags")]
 private List<string> tags;
@@ -317,6 +332,7 @@ private List<string> tags;
   - 外觀：只畫標題列（`ListHeader`）與左側一條縱向導引線（`ListRule`，落在成員讓出的那格縮排裡），不畫底帶與外框。底帶＋外框是清單「凹進去的容器」的語彙；群組也用它的話，組內的清單和群組長得一樣、左緣重疊，分不出主次。只有箭頭與文字是開關，其餘空白留給拖曳節點。
   - `/` 表示群組階層，例如 `[HGFoldout("設定/進階")]` 建立兩層 Foldout；父路徑若明確宣告為 Tab 則放在該頁內。建樹完成後由內向外執行 `FinishTabs`／`FinishFoldouts`，只處理本資料物件建立的列，避免重複縮排巢狀資料物件的群組。
 - `[HGEnum]` 只作用在 enum：畫成按鈕列（`[Flags]` 多選），標在 bool 上沒有效果。
+- Slot 的替代 Default enum 同樣預設使用一般下拉選單，只有欄位／Slot 類別明確標記 `[HGEnum]` 或 descriptor 指定 ForceEnumButtons 才畫按鈕列；替代型別不自動啟用。下拉與按鈕皆支援成員 `[HGLabel]`。
 - `[HGBool(trueLabel = "是", falseLabel = "否")]` 把 bool 畫成兩段按鈕，左 true、右 false；沒標的 bool 是 14px 勾選框。和 `[HGEnum]` 一樣可標在欄位或 Slot 類別上，走同一批入口（`HGRow.BoolButtons`，類別用 `HGReflect.BoolButtonsOf`、欄位用 `BoolButtons`，descriptor 用 `HGFieldDescriptor.Create(..., boolButtons:)`）；欄位與類別都標時文字以欄位為準，欄位沒標不能關掉類別宣告。
 - `[HGEnum]` 也可標在 Slot 類別上（子類沿用）：該族的 enum 常數框在一般欄位、descriptor 欄位、清單元素、Token／資產 HEAD、資產參數綁定與變數庫都畫按鈕列。入口是 `HGGraph.SlotRow` 與變數庫面板，兩者都問 `HGReflect.HasEnumButtons(slotType)`。欄位與類別是 OR：欄位只能再開啟，不能關掉類別的宣告；後續設定 `ForceEnumButtons` 一律用 `|=`，不可覆蓋。清單欄位標 `[HGEnum]` 時，`BuildListChildren` 把旗標帶給純值元素列，元素繪製讀 `row.ForceEnumButtons`。
 - 常數是清單的 FormulaSlot（`DefaultEditType` 本身是 `List<T>`／`T[]`，且元素 `HGValueField.CanDraw`）會在 Slot 列下方多一段常數清單，資料來源就是 `DefaultObject`，沿用清單欄位的增刪、重排與元素繪製；null 時就地補空清單。這段清單不畫自己的標題列（`HGRow.HeaderRow` 指向代畫標題的 Slot 列，底帶與外框從那一列算起），由 Slot 列的標籤畫成「`▾` 名稱 (N)」兼任折疊開關（`HGRow.DefaultListRow`）；Slot 列標籤隱藏時才保留清單自己的標題列。一般欄位、descriptor 欄位與 HEAD 來源列都會掛，資產參數綁定列與「元素本身是 Slot 的清單」不掛。變數庫裡元素畫得出輸入框的清單（純值與資產皆是）逐項用 `HGValueField` 編輯，走 `AddInitialValue`／`SetInitialItem` 命令，一律就地改容器；資產清單另外保留從 Project 拖到標題列的加入方式。

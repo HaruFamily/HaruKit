@@ -157,7 +157,7 @@ public sealed class HGOptionsAttribute : Attribute
     public HGOptionsAttribute(string library) => Library = library;
 }
 
-/// <summary>靜態欄位、屬性或無參數方法回傳 IEnumerable&lt;T&gt;，同庫來源合併；編輯器開啟選單時取快照。</summary>
+/// <summary>靜態來源回傳 IEnumerable&lt;T&gt; 或 IEnumerable&lt;HGOptionElement&lt;T&gt;&gt;，同庫依實際值型別合併。</summary>
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property | AttributeTargets.Method, Inherited = false, AllowMultiple = false)]
 public sealed class HGOptionsSourceAttribute : Attribute
 {

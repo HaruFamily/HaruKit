@@ -147,6 +147,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public FieldInfo Field;
         public HGFieldDescriptor Descriptor;
         public IHGValueDrawer ValueDrawer;
+        // 列生命週期內的顯示快照；重繪不重新列舉候選來源。
+        internal List<HGOptionsCatalog.Entry> OptionsEntries;
+        internal string OptionsError;
 
         /// <summary>payload：這一列自己承載一整段項目（List 形狀）。</summary>
         // 「承載一段」與「屬於某一段的某一項」是兩件事，用兩組欄位表示，不從 ItemIndex 是不是 -1 推。

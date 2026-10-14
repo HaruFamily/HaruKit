@@ -88,7 +88,7 @@ public partial class HaruGraphWindow
                     selectedNodeGroupId = null;
                     if (e.clickCount == 2 && hit != null && hit.IsAssetNode && hit.Asset != null) { EnterAsset(hit); e.Use(); break; }
                     // 雙擊Token節點＝下鑽進那個Token的畫布，跟雙擊資產節點同一個手勢。
-                    if (e.clickCount == 2 && hit != null && hit.IsTokenNode && hit.Token != null) { EnterToken(hit.Token); e.Use(); break; }
+                    if (e.clickCount == 2 && hit != null && hit.IsTokenNode && hit.Token != null) { EnterToken(hit.Token, true); e.Use(); break; }
 
                     // 一般線畫在節點底下：點在節點上時看不到線，就不能把它剪掉；選取中的線浮在上層，才照樣可剪。
                     var link = LinkAt(graphMouse);
@@ -841,6 +841,8 @@ public partial class HaruGraphWindow
         ClearFieldHighlight();
         ClearCanvasCaches();
         focus = next;
+        pendingFocusStart = false;
+        pendingCenterTarget = null;
         if (model != null) model.TrackChanges = next.Kind != HGFocusKind.Asset;
         inlineName.Cancel();
         selectedIds.Clear();

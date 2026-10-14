@@ -23,6 +23,24 @@ public class TokenTable<TPack>
 
     /// <summary>本次執行鏈的合作式取消；節點內的非同步工作應沿用此 token。</summary>
     public CancellationToken CancellationToken => ExecutionCancellation;
+    private object scopeIdentity = new();
+    /// <summary>圖實例／資產呼叫位置的執行期身分；跨次執行沿用 Property scope，不作為持久化鍵。</summary>
+    public object ScopeIdentity => (object)Properties ?? scopeIdentity;
+
+    /// <summary>建立獨立求值表，保留 Token／binding 與目前 Property scope；不沿用執行觀察、取消或循環中的狀態。</summary>
+    public TokenTable<TPack> CreateEvaluationScope(CancellationToken cancellationToken = default)
+    {
+        var table = new TokenTable<TPack>
+        {
+            ExecutionCancellation = cancellationToken,
+            Properties = Properties,
+            scopeIdentity = ScopeIdentity,
+            _caller = _caller?.CreateEvaluationScope(cancellationToken),
+        };
+        foreach (var entry in _slots) table._slots.Add(entry.Key, entry.Value);
+        foreach (var entry in _overrides) table._overrides.Add(entry.Key, entry.Value);
+        return table;
+    }
 
     internal GraphNodeExecution EnterNode(GraphNode node)
     {

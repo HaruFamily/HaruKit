@@ -112,6 +112,8 @@ public partial class HaruGraphWindow : EditorWindow
     private const float OverviewZoom = 0.3f;
     private Vector2 pan = new(20f, 20f);
     private float zoom = 1f;
+    private bool pendingFocusStart;
+    private readonly Dictionary<string, (HGFocus Focus, Vector2 Pan, float Zoom)> focusReturns = new();
     private bool overviewMode;
     private Rect canvasRect;
     private Matrix4x4 canvasGuiMatrix;
@@ -632,6 +634,13 @@ public partial class HaruGraphWindow : EditorWindow
             graphDirty = false;
         }
         graph = built;
+        if (pendingFocusStart)
+        {
+            pendingFocusStart = false;
+            zoom = 1f;
+            pan = new Vector2(20f, 20f);
+            if (graph.Nodes.Count > 0) pan -= graph.Nodes[0].Pos;
+        }
         ApplyNodeOrder();
         foreach (var node in graph.Nodes)
             foreach (var row in HGGraph.AllRows(node.Rows))
@@ -1474,6 +1483,7 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private void AfterHistorySwap(HGStepKind step)
     {
+        focusReturns.Clear();
         ClearPortInteractionState();
         focus = focus.Kind == HGFocusKind.Root ? AllRootsFocus() : new HGFocus();
         selectedIds.Clear();

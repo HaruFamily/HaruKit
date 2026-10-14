@@ -64,14 +64,16 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
     /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
     public TResult Default { get => _default; set => _default = value; }
 
+    /// <summary>未接來源時解析欄位設定；可依本次上下文取值，不改變停用或來源失敗時的保底值。</summary>
+    protected virtual TResult EvaluateUnlinked(TPack pack) => _default;
+
     /// <summary>透過此入口求子公式值，沿用收到的 pack 與 tokens，以保留停用、保底值、Token／資產作用域與執行觀察處理。</summary>
     /// <remarks>每次呼叫重新求值；節點本體的例外與取消會向呼叫端傳遞，不會轉成保底值。</remarks>
     public async UniTask<TResult> Evaluate(TPack pack, TokenTable<TPack> tokens)
     {
-        // 空槽回保底值。企劃可以關掉一段公式而不必拆線。
-        if (_node == null) return _default;
+        if (_node == null) return EvaluateUnlinked(pack);
 
-        // 停用與空槽走同一條路：都回保底值。
+        // 停用不解析未接線設定，避免停用的來源改為操作另一個對象。
         if (_node.Disabled) return _default;
 
         using var visit = tokens?.EnterNode(_node);

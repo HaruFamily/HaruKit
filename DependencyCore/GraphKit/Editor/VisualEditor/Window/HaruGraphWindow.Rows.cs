@@ -652,9 +652,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 // 替代型別的常數框（editType != ResultType）語意不同：它只在沒接線時採用，不是失敗保底。
                 bool isSubstitute = editType != row.ResultType;
 
-                // 替代型別的 enum 一律畫成按鈕排：欄位上的 [HGEnum] 是為結果型別下的，替代型別借不到；
-                // 按鈕排才吃得到成員的 [HGLabel]，下拉選單只會顯示 CLR 成員名。
-                bool enumButtons = row.ForceEnumButtons || (isSubstitute && editType.IsEnum);
+                // 一般與替代型別的 enum 都只在明確宣告 HGEnum 時使用按鈕列。
+                bool enumButtons = row.ForceEnumButtons;
                 string tooltip = contentKind switch
                 {
                     null => null,
@@ -776,21 +775,26 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
         private void DrawOptionsField(HGRow row, Rect rect, HGOptionsAttribute options)
         {
-            if (!HGOptionsCatalog.TryValueType(row.Field.FieldType, out _, out bool multiple))
+            if (!HGOptionsCatalog.TryValueType(row.Field.FieldType, out var valueType, out bool multiple))
             {
                 GUI.Label(rect, new GUIContent("不支援的候選型別", "HGOptions 支援一般值、Unity 物件引用及其 List<T>；不支援 Slot。"));
                 return;
             }
             object current = row.Field.GetValue(row.Target);
+            if (row.OptionsEntries == null)
+                HGOptionsCatalog.TryGet(options.Library, valueType, out row.OptionsEntries, out row.OptionsError);
+            string Label(object value) => row.OptionsEntries.Find(entry => Equals(entry.Value, value))?.Label ?? HGOptionsCatalog.Display(value);
             var labels = new List<string>();
+            var rawValues = new List<string>();
             if (multiple && current is IList list)
-                foreach (var value in list) labels.Add(HGOptionsCatalog.Display(value));
-            else if (!multiple && current != null) labels.Add(HGOptionsCatalog.Display(current));
+                foreach (var value in list) { labels.Add(Label(value)); rawValues.Add(HGOptionsCatalog.Display(value)); }
+            else if (!multiple && current != null) { labels.Add(Label(current)); rawValues.Add(HGOptionsCatalog.Display(current)); }
             string full = string.Join(", ", labels);
             string caption = labels.Count == 0 || full.Length == 0 ? "（選取）" : full;
             using (new EditorGUI.DisabledScope(row.Locked || row.Field.IsInitOnly))
             {
-                if (!GUI.Button(rect, HGStyles.Elide(caption, EditorStyles.popup, rect.width - 16f, options.Library + "\n" + full), EditorStyles.popup)) return;
+                if (!GUI.Button(rect, HGStyles.Elide(caption, EditorStyles.popup, rect.width - 16f,
+                    options.Library + "\n" + full + "\n" + string.Join(", ", rawValues) + (string.IsNullOrEmpty(row.OptionsError) ? "" : "\n" + row.OptionsError)), EditorStyles.popup)) return;
             }
             var expectedModel = model;
             var expectedFocus = focus;
@@ -813,6 +817,22 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     return error;
                 }
                 AfterValueEdit();
+                if (multiple)
+                {
+                    // 只採納本次寫入造成的重建，外部 Undo／切圖仍由世代守衛拒絕。
+                    EnsureGraph();
+                    HGRow refreshed = null;
+                    foreach (var node in graph.Nodes)
+                        foreach (var candidate in HGGraph.AllRows(node.Rows))
+                            if (ReferenceEquals(candidate.Target, row.Target) && Equals(candidate.Field, row.Field)
+                                && candidate.Path == row.Path)
+                                refreshed = candidate;
+                    if (refreshed == null || !ReferenceEquals(model, expectedModel) || !ReferenceEquals(focus, expectedFocus))
+                        return "欄位已變更，請重新開啟選單。";
+                    row = refreshed;
+                    expectedGeneration = graphGeneration;
+                    current = row.Field.GetValue(row.Target);
+                }
                 Repaint();
                 return null;
             }

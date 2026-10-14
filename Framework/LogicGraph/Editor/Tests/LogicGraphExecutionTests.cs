@@ -104,7 +104,7 @@ public sealed class LogicGraphExecutionTests
     private sealed class TestActionAsset : ActionAssetBase<Pack> { }
 
     [Serializable]
-    private sealed class IntFormula : FormulaBase<int, Pack>
+    private class IntFormula : FormulaBase<int, Pack>
     {
         protected override UniTask<int> OnEvaluate(Pack pack, TokenTable<Pack> tokens) => UniTask.FromResult(0);
     }
@@ -116,6 +116,86 @@ public sealed class LogicGraphExecutionTests
     {
         public IntSlot() { }
         public IntSlot(int value) : base(value) { }
+    }
+
+    [Serializable]
+    private sealed class ContextualIntSlot : FormulaSlot<int, IntFormulaAsset, IntFormula, Pack>
+    {
+        public int Offset;
+        protected override int EvaluateUnlinked(Pack pack) => pack.Count + Offset;
+    }
+
+    [Serializable]
+    private sealed class ReadContextualInt : IntFormula
+    {
+        public ContextualIntSlot Value = new();
+        protected override UniTask<int> OnEvaluate(Pack pack, TokenTable<Pack> tokens)
+            => Value.Evaluate(pack, tokens);
+    }
+
+    [Test]
+    public async Task UnlinkedDefault_UsesCurrentPackThroughInterfaceAndToken_WithoutChangingLinkedFallback()
+    {
+        var pack = new Pack { Count = 12 };
+        var table = new TokenTable<Pack>();
+        var slot = new ContextualIntSlot { Offset = 3, Default = -1 };
+        IFormulaSlot<int, Pack> typed = slot;
+        Assert.That(await typed.Evaluate(pack, table), Is.EqualTo(15));
+
+        var token = new GraphToken("entity", slot);
+        table.Register(token);
+        var proxy = new GraphNode();
+        proxy.SetToken(token);
+        var caller = new ContextualIntSlot { Default = -2 };
+        caller.SetNode(proxy);
+        pack.Count = 20;
+        Assert.That(await caller.Evaluate(pack, table), Is.EqualTo(23));
+        Assert.That(await table.Resolve<int>(typeof(ContextualIntSlot), "entity", pack), Is.EqualTo(23));
+
+        slot.SetNode(new GraphNode(new IntFormula()));
+        Assert.That(await typed.Evaluate(pack, table), Is.Zero);
+        slot.Node.Disabled = true;
+        Assert.That(await typed.Evaluate(pack, table), Is.EqualTo(-1));
+        slot.SetNode(new GraphNode());
+        Assert.That(await typed.Evaluate(pack, table), Is.EqualTo(-1));
+    }
+
+    [Test]
+    public async Task UnlinkedDefault_ResolvesAssetParameterAndCallerOverrideWithCurrentPack()
+    {
+        var asset = UnityEngine.ScriptableObject.CreateInstance<IntFormulaAsset>();
+        try
+        {
+            var parameter = new GraphToken("entity", new ContextualIntSlot { Offset = 1 });
+            asset.Tokens.Add(parameter);
+            var proxy = new GraphNode();
+            proxy.SetToken(parameter);
+            var body = new ReadContextualInt();
+            body.Value.SetNode(proxy);
+            asset.SetTarget(body);
+            AssetGraphSchema.InvalidateCache();
+
+            var carrier = new GraphNode();
+            carrier.SetAsset(asset);
+            var binding = new NamedFormulaSlot("entity", new ContextualIntSlot { Offset = 5 });
+            carrier.Bindings.Add(binding);
+            var caller = new ContextualIntSlot();
+            caller.SetNode(carrier);
+            var pack = new Pack { Count = 10 };
+            var table = new TokenTable<Pack>();
+            Assert.That(await caller.Evaluate(pack, table), Is.EqualTo(11));
+            binding.OverrideEnabled = true;
+            Assert.That(await caller.Evaluate(pack, table), Is.EqualTo(15));
+            pack.Count = 20;
+            Assert.That(await caller.Evaluate(pack, table), Is.EqualTo(25));
+            carrier.Disabled = true;
+            Assert.That(await caller.Evaluate(pack, table), Is.Zero);
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(asset);
+            AssetGraphSchema.InvalidateCache();
+        }
     }
 
     [Serializable]
@@ -361,6 +441,88 @@ public sealed class LogicGraphExecutionTests
         var reset = new Pack();
         await graph.TriggerAction(Timing.Run, reset);
         Assert.That(reset.Count, Is.EqualTo(1));
+    }
+
+    [Serializable]
+    private sealed class CaptureEvaluationScope : ActionBase<Pack>
+    {
+        public TokenTable<Pack> Captured;
+        protected override UniTask OnExecute(Pack pack, TokenTable<Pack> tokens)
+        {
+            Captured = tokens.CreateEvaluationScope();
+            return UniTask.CompletedTask;
+        }
+    }
+
+    [Test]
+    public async Task DeferredScopeKeepsLivePropertiesButUsesTheNewCancellationToken()
+    {
+        var property = new GraphProperty("Count", new IntSlot(0));
+        var graph = PropertyGraph(property, out _);
+        var captured = new CaptureEvaluationScope();
+        graph.ActionGroups[0].Actions.Add(Slot(new GraphNode(captured)));
+        var value = new GraphToken("Amount", PropertyInput(property));
+        graph.Tokens.Add(value);
+        using var original = new CancellationTokenSource();
+        await graph.TriggerAction(Timing.Run, new Pack(), original.Token, "capture");
+        var saved = captured.Captured;
+        original.Cancel();
+        Assert.That(saved.CreateEvaluationScope().ScopeIdentity, Is.SameAs(saved.ScopeIdentity));
+        Assert.That(saved.ScopeIdentity, Is.SameAs(graph.CreateTokenTable().ScopeIdentity));
+
+        Assert.That(await saved.CreateEvaluationScope().Resolve<int>(typeof(IntSlot), "Amount", new Pack()), Is.EqualTo(1));
+        await graph.TriggerAction(Timing.Run, new Pack());
+        Assert.That(await saved.CreateEvaluationScope().Resolve<int>(typeof(IntSlot), "Amount", new Pack()), Is.EqualTo(2));
+
+        using var current = new CancellationTokenSource();
+        var evaluation = saved.CreateEvaluationScope(current.Token);
+        current.Cancel();
+        Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await evaluation.Resolve<int>(typeof(IntSlot), "Amount", new Pack()));
+    }
+
+    [Test]
+    public async Task DeferredAssetScopeKeepsCallerBindingsAndItsOwnPropertyScope()
+    {
+        var asset = UnityEngine.ScriptableObject.CreateInstance<TestActionAsset>();
+        try
+        {
+            var captured = new CaptureEvaluationScope();
+            asset.SetRoot(new GraphNode(captured));
+            asset.Tokens.Add(new GraphToken("Amount", new IntSlot(-1)));
+            var local = new GraphProperty("Local", new IntSlot(7), true);
+            asset.Properties.Add(local);
+            AssetGraphSchema.InvalidateCache();
+            var callerProperty = new GraphProperty("Caller", new IntSlot(10));
+            var graph = PropertyGraph(callerProperty, out _);
+            var proxy = new GraphNode();
+            var callerToken = new GraphToken("FromCaller", PropertyInput(callerProperty));
+            graph.Tokens.Add(callerToken);
+            proxy.SetToken(callerToken);
+            var bindingValue = new IntSlot();
+            bindingValue.SetNode(proxy);
+            var assetCall = AssetSlot(asset);
+            assetCall.Node.Bindings.Add(new NamedFormulaSlot("Amount", bindingValue) { OverrideEnabled = true });
+            graph.ActionGroups[0].Actions.Add(assetCall);
+            await graph.TriggerAction(Timing.Run, new Pack());
+            var saved = captured.Captured;
+            Assert.That(saved.ScopeIdentity, Is.Not.SameAs(graph.CreateTokenTable().ScopeIdentity));
+            Assert.That(await saved.CreateEvaluationScope().Resolve<int>(typeof(IntSlot), "Amount", new Pack()), Is.EqualTo(11));
+            PropertyTarget(local).Write(42, saved);
+            await graph.TriggerAction(Timing.Run, new Pack());
+            Assert.That(captured.Captured.ScopeIdentity, Is.SameAs(saved.ScopeIdentity));
+            Assert.That(await saved.CreateEvaluationScope().Resolve<int>(typeof(IntSlot), "Amount", new Pack()), Is.EqualTo(12));
+            Assert.That(await PropertyInput(local).Evaluate(new Pack(), saved.CreateEvaluationScope()), Is.EqualTo(42));
+            Assert.That(await PropertyInput(local).Evaluate(new Pack(), graph.CreateTokenTable()), Is.EqualTo(7));
+            graph.ActionGroups[0].Actions.Add(AssetSlot(asset));
+            await graph.TriggerAction(Timing.Run, new Pack());
+            Assert.That(captured.Captured.ScopeIdentity, Is.Not.SameAs(saved.ScopeIdentity), "同一資產的不同呼叫位置必須有獨立身分。");
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(asset);
+            AssetGraphSchema.InvalidateCache();
+        }
     }
 
     [Test]

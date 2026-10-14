@@ -14,8 +14,11 @@ LogicGraph 是用來編寫與執行序列化 Action 圖的框架：依時機分�
 - 時機 enum 可標 `[HGLabel("顯示名稱")]`，同步改變節點標題、下拉與新增選單；執行仍使用 enum 值。完整規則見維護手冊 §3.1。
 - `ActionBase<TPack>` 執行副作用；`FormulaBase<TResult, TPack>` 非同步計算型別化的值。
 - Slot 可以是常數保底值、內嵌節點、可重用資產、具名 Token（公式），或 Property（讀目前值）。
+- Slot 可覆寫 `EvaluateUnlinked(pack)`，將未接線時的 Default 選項依當次上下文解析；配合 GraphKit 的 `DefaultEditType`／`DefaultObject` 編輯，不影響接線與停用保底。
 - Action 以 `PropertySlot<TResult, TSlot>` 寫入 Property；讀取不會觸發寫入者。
 - 資產的 Token 就是它的參數；每次呼叫資產都有獨立的 Token 作用域，可由呼叫端綁定覆蓋。
+- `TokenTable.CreateEvaluationScope(token)` 支援延後求值：保留 Token／binding／Property scope，使用新的取消與循環狀態，不沿用已結束的執行觀察。
+- `TokenTable.ScopeIdentity` 提供圖實例／資產呼叫位置的 runtime 身分，供使用端配對持續效果；不應保存為資產鍵。
 - 驗證在執行前擋下無效來源、重複時機或 Token 名稱、不相容的綁定，以及圖或資產循環。
 - `DeepCopy()` 保留多型 `SerializeReference`、共享參照、循環與 Unity 物件引用。
 - 節點編輯器來自 GraphKit，不依賴 Odin。所有時機在同一張畫布，各是一顆 root。

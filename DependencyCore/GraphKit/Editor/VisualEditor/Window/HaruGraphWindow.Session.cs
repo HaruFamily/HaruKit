@@ -221,6 +221,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
         if (focus.Kind == HGFocusKind.Asset) return HGSessionCommandResult.Rejected;
         ClearPortInteractionState();
         if (!model.TryReload()) return HGSessionCommandResult.Rejected;
+        focusReturns.Clear();
         focus = AllRootsFocus();
         selectedIds.Clear();
         graphDirty = true;
@@ -394,6 +395,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
         nextModel.SetRootAdapter(nextContext.Profile?.RootAdapter);
 
         returnFocus = null;
+        focusReturns.Clear();
         ClearPortInteractionState();
         ClearAssetDirty();
         assetReport = new HGReport();
@@ -556,6 +558,8 @@ public partial class HaruGraphWindow : IHasCustomMenu
         propertyLibrary.Reset();
         pendingTarget = null;
         returnFocus = null;
+        focusReturns.Clear();
+        pendingFocusStart = false;
         ClearAssetDirty();
         ClearViewState();
         UpdateUnsavedState();
@@ -638,6 +642,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
         {
             if (!model.TryReload())
                 throw new InvalidOperationException("文件重載失敗，保留未儲存內容並取消關閉。請查看 Unity Console。");
+            focusReturns.Clear();
             focus = AllRootsFocus();
             graphDirty = true;
         }
@@ -742,6 +747,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
             ShowNotification(new GUIContent("文件重載失敗，目前修改保留。請查看 Unity Console。"));
             return;
         }
+        focusReturns.Clear();
         // 重抓工作副本＝焦點抓的是舊資料，直接回到時機畫布（不回去的話畫面會空白）。
         focus = AllRootsFocus();
         selectedIds.Clear();
@@ -756,17 +762,18 @@ public partial class HaruGraphWindow : IHasCustomMenu
     private void EnterAsset(HGNodeView node)
     {
         if (node.Asset == null || node.ParentSlot == null) return;
-        EnterAsset(node.Asset, node.ParentSlot.GetType());
+        EnterAsset(node.Asset, node.ParentSlot.GetType(), true);
     }
 
     /// <summary>
     /// 下鑽進一個Token的畫布。端點是頭端，它的取值欄位是唯一的來源接點，候選池也掛在它身上。
     /// 資產的Token留在 Asset 焦點裡（只換頭端），資產的存檔交易因此不受影響。
     /// </summary>
-    private void EnterToken(GraphToken endpoint)
+    private void EnterToken(GraphToken endpoint, bool fromCanvas = false)
     {
         if (endpoint == null) return;
         if (ReferenceEquals(focus.Token, endpoint)) return;
+        var origin = (Focus: focus, Pan: pan, Zoom: zoom);
 
         if (focus.Kind == HGFocusKind.Asset)
         {
@@ -785,15 +792,19 @@ public partial class HaruGraphWindow : IHasCustomMenu
         {
             SetFocus(new HGFocus { Kind = HGFocusKind.Token, Token = endpoint });
         }
+        if (fromCanvas) focusReturns[focus.Id] = origin;
+        else focusReturns.Remove(focus.Id);
+        pendingFocusStart = true;
         selectedIds.Clear();
         graphDirty = true;
         Repaint();
     }
 
-    /// <summary>離開Token畫布：資產的Token回資產本體，Owner 的Token回時機畫布。</summary>
+    /// <summary>由節點進入時返回原畫布與視角；其他入口回資產本體或 Owner 畫布。</summary>
     private void ExitToken()
     {
         if (focus.Token == null) return;
+        if (RestoreFocusReturn()) return;
         if (focus.Kind == HGFocusKind.Asset)
         {
             SetFocus(new HGFocus
@@ -813,17 +824,28 @@ public partial class HaruGraphWindow : IHasCustomMenu
     }
 
     /// <summary>slotType 只是用來合成一個型別正確的容器槽，讓資產內容能沿用一般的節點圖流程。</summary>
-    private void EnterAsset(UnityEngine.Object asset, Type slotType)
+    private void EnterAsset(UnityEngine.Object asset, Type slotType, bool fromCanvas = false)
     {
         if (asset == null) return;
         // 已經在這個資產裡：從Token子畫布回到資產本體，不重開交易。
         if (focus.Kind == HGFocusKind.Asset && focus.AssetObject == asset)
         {
-            if (focus.Token != null) ExitToken();
+            SetFocus(new HGFocus
+            {
+                Kind = HGFocusKind.Asset,
+                AssetObject = focus.AssetObject,
+                AssetHostSlot = focus.AssetHostSlot,
+                AssetOrphans = focus.AssetOrphans,
+                AssetTokens = focus.AssetTokens,
+                AssetProperties = focus.AssetProperties,
+            });
+            if (!fromCanvas) focusReturns.Remove(focus.Id);
+            pendingFocusStart = true;
             SelectAssetInProject(asset);
             return;
         }
         HGFocus back = focus.Kind == HGFocusKind.Asset ? returnFocus : focus;
+        var origin = (Focus: focus, Pan: pan, Zoom: zoom);
         if (focus.Kind == HGFocusKind.Asset && !ConfirmLeaveAsset()) return;
 
         var host = slotType != null ? HGReflect.CreateInstance(slotType) as GraphSlotBase : null;
@@ -860,6 +882,9 @@ public partial class HaruGraphWindow : IHasCustomMenu
             AssetProperties = packCopy?[3] as List<GraphProperty> ?? new List<GraphProperty>(),
         });
         returnFocus = back ?? new HGFocus();
+        if (fromCanvas) focusReturns[focus.Id] = origin;
+        else focusReturns.Remove(focus.Id);
+        pendingFocusStart = true;
         ClearAssetDirty();
         // 每個資產是一次獨立交易，復原歷程跟著交易開始；進來當下的狀態就是第一次修改要退回的地方。
         assetHistory.Reset(CaptureAssetState());
@@ -971,17 +996,52 @@ public partial class HaruGraphWindow : IHasCustomMenu
             "這個資產還有尚未存檔的修改，返回會丟掉它們，確定嗎？", "捨棄", "繼續編輯");
     }
 
+    private bool RestoreFocusReturn(string focusId = null)
+    {
+        focusId ??= focus.Id;
+        if (!focusReturns.TryGetValue(focusId, out var origin)) return false;
+        focusReturns.Remove(focusId);
+        if (origin.Focus.Kind == HGFocusKind.Asset)
+        {
+            string tokenId = origin.Focus.Token?.Id;
+            if (focus.AssetObject != origin.Focus.AssetObject)
+            {
+                string assetId = new HGFocus { Kind = HGFocusKind.Asset, AssetObject = origin.Focus.AssetObject }.Id;
+                bool hadReturn = focusReturns.TryGetValue(assetId, out var assetReturn);
+                EnterAsset(origin.Focus.AssetObject, origin.Focus.AssetHostSlot.GetType());
+                if (hadReturn) focusReturns[assetId] = assetReturn;
+                if (focus.AssetObject != origin.Focus.AssetObject) return false;
+            }
+            SetFocus(new HGFocus
+            {
+                Kind = HGFocusKind.Asset,
+                AssetObject = focus.AssetObject,
+                AssetHostSlot = focus.AssetHostSlot,
+                AssetOrphans = focus.AssetOrphans,
+                AssetTokens = focus.AssetTokens,
+                AssetProperties = focus.AssetProperties,
+                Token = focus.AssetTokens?.Find(token => token != null && token.Id == tokenId),
+            });
+        }
+        else SetFocus(origin.Focus);
+        pan = origin.Pan;
+        zoom = origin.Zoom;
+        return true;
+    }
+
     private void ExitAsset()
     {
         var back = returnFocus;
-        returnFocus = null;
         ClearAssetDirty();
         // 交易結束就丟掉歷程：留著只會佔記憶體，而且下次進來的是另一份工作副本，套用舊快照沒有意義。
         assetHistory.Reset(null);
         assetVerifiedOnce = false;
         assetReportStale = false;
         assetReport = new HGReport();
-        SetFocus(back != null && back.Kind != HGFocusKind.None ? back : AllRootsFocus());
+        string assetId = new HGFocus { Kind = HGFocusKind.Asset, AssetObject = focus.AssetObject }.Id;
+        if (!RestoreFocusReturn(assetId))
+            SetFocus(back != null && back.Kind != HGFocusKind.None ? back : AllRootsFocus());
+        if (focus.Kind != HGFocusKind.Asset) returnFocus = null;
         DoVerify(true);
         UpdateUnsavedState();
         Repaint();

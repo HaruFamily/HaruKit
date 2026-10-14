@@ -63,6 +63,7 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 - **族身分是具體 Slot 型別**，不是結果型別。兩個都回 `string` 的 Slot 是兩個族，各自可以有同名 Token。
 - 新增結果種類只要新增這三個型別，編輯器掃描 `FormulaSlotBase` 子類自動列出，不需要登記。`HaruFamily/LogicGraph/Add Formula Type` 可產生樣板。同一族的新計算只要再繼承該族的 Formula 基底，**不要再產生一個族**。
 - Slot 建構子只有 `XSlot()` 和 `XSlot(TResult defaultValue)`。有沒有接來源由 `_node` 決定。
+- 未接來源的求值走 `protected virtual TResult EvaluateUnlinked(TPack pack)`，預設回 `_default`。具體 Slot 可配合 GraphKit 的 `DefaultEditType`／`DefaultObject`，把序列化選項依當次 Pack 解析成結果。一般 Evaluate、IFormulaSlot、Token 及資產參數共用此入口，不以隱藏 Evaluate 或另一個 Resolve API 分流。此入口只處理 `Node == null`；已接但停用、空節點或來源失敗仍回原本保底值，不改取未接線選項。
 - 跨族接收：Slot 覆寫 `AllowCompatibleResult` 回 true 後，可額外接受「Pack 相同、結果型別可指派給本族」的其他族公式，並以 `ExcludedFormulaFamilies` 排除特定族（連同子類）。同族永遠優先且不受黑名單影響。不做數值轉換或向下轉型。Token、Property、Formula Asset 不受此開關放寬。
 
 ### 3.4 Token 與資產參數
@@ -72,6 +73,7 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 - 共用資產（Formula Asset／Action Asset）的 Token 清單就是它的參數介面。呼叫端節點的 `Bindings`（`NamedFormulaSlot`）依（族, 名稱）配對，`OverrideEnabled` 為 false 時用資產內部值。
 - 資產建立自己的 child `TokenTable`，資產內容讀不到呼叫端的 Token，只有 binding 在呼叫端求值。
 - 遞迴解析由 `TokenTable` 擋下，回預設值並警告。
+- `TokenTable.CreateEvaluationScope(cancellationToken)` 用於延後求值：複製 Token／資產 binding 對照與 caller scope 鏈，沿用相同 PropertyScope，目前值保持即時。每次建立獨立的循環集合與取消 token，不沿用原執行的 observer session／Hold／取消狀態。此入口不延長使用端物件的生命週期；使用端須管理登記、回收、操作取消及等待後的身分檢查，不能直接重用已結束時機的 TokenTable 執行狀態。
 
 ### 3.5 Property
 
@@ -79,6 +81,7 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 - 目前值存在非序列化的 `PropertyStore`：每個圖實例一個 root scope，資產呼叫依（資產 × 呼叫節點）建立子 scope。同一位置再次執行沿用舊值。
 - **只有 `InitializeProperties()` 會清空目前值。** `InvalidateValidation()` 只影響編輯與驗證狀態。`DeepCopy()` 不複製執行狀態，複本從未寫入開始。
 - 讀取 Property 只取目前值，不執行寫入它的 Action；寫入端不是求值依賴。
+- `TokenTable.ScopeIdentity` 為 Property scope 的不透明 runtime 身分；同一圖跨次執行及 CreateEvaluationScope 沿用，同資產不同呼叫節點各自獨立。無 Property scope 的手建表有自身身分，延後表沿用該身分；不可序列化此值或把它當作資產 ID。
 
 ## 4. 硬規則
 

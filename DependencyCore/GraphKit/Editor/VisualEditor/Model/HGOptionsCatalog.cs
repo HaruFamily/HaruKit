@@ -15,13 +15,15 @@ public static class HGOptionsCatalog
         public string Label { get; }
         public string Group { get; }
         public string Source { get; }
+        public string Tooltip { get; }
 
-        internal Entry(object value, string group, string source)
+        internal Entry(object value, string group, string source, string label = null, string tooltip = null)
         {
             Value = value;
-            Label = Display(value);
+            Label = string.IsNullOrWhiteSpace(label) ? Display(value) : label;
             Group = group ?? "";
             Source = source;
+            Tooltip = tooltip ?? "";
         }
     }
 
@@ -61,19 +63,24 @@ public static class HGOptionsCatalog
                 Type resultType = ResultType(member);
                 Type elementType = EnumerableElement(resultType);
                 if (elementType == null) throw new InvalidOperationException("來源必須宣告 IEnumerable<T> 或其實作型別。");
-                if (libraryType != null && libraryType != elementType)
-                    throw new InvalidOperationException($"同庫型別衝突：{libraryType} / {elementType}。");
-                libraryType = elementType;
-                if (!valueType.IsAssignableFrom(elementType))
-                    throw new InvalidOperationException($"候選 {elementType} 無法寫入 {valueType}。");
+                bool described = elementType.IsGenericType && elementType.GetGenericTypeDefinition() == typeof(HGOptionElement<>);
+                Type candidateType = described ? elementType.GetGenericArguments()[0] : elementType;
+                if (libraryType != null && libraryType != candidateType)
+                    throw new InvalidOperationException($"同庫型別衝突：{libraryType} / {candidateType}。");
+                libraryType = candidateType;
+                if (!valueType.IsAssignableFrom(candidateType))
+                    throw new InvalidOperationException($"候選 {candidateType} 無法寫入 {valueType}。");
                 if (Read(member) is not IEnumerable values) throw new InvalidOperationException("來源回傳 null。");
                 // 先完成列舉再交給 UI；iterator 的例外亦屬來源失敗，不呈現半份候選。
-                foreach (object value in values)
+                foreach (object item in values)
                 {
+                    if (item == null || !elementType.IsInstanceOfType(item)) throw new InvalidOperationException("候選值不符合宣告型別。");
+                    var presentation = described ? (IHGOptionElement)item : null;
+                    object value = described ? presentation.Value : item;
                     if (value == null || value is UnityEngine.Object asset && asset == null)
                         throw new InvalidOperationException("候選不可為 null 或 Missing 物件；空值由欄位 AllowEmpty 提供。");
-                    if (!elementType.IsInstanceOfType(value)) throw new InvalidOperationException("候選值不符合宣告型別。");
-                    if (seen.Add(value)) entries.Add(new Entry(value, attribute.Group, sourceName));
+                    if (!candidateType.IsInstanceOfType(value)) throw new InvalidOperationException("候選值不符合宣告型別。");
+                    if (seen.Add(value)) entries.Add(new Entry(value, attribute.Group, sourceName, presentation?.Label, presentation?.Tooltip));
                 }
             }
             if (!found) throw new InvalidOperationException($"找不到候選庫 '{library}'。");
