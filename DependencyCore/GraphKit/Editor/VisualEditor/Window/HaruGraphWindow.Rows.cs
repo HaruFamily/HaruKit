@@ -753,6 +753,12 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
             if (row.Field != null && row.Target != null)
             {
+                var options = (HGOptionsAttribute)Attribute.GetCustomAttribute(row.Field, typeof(HGOptionsAttribute));
+                if (options != null)
+                {
+                    DrawOptionsField(row, fieldRect, options);
+                    return;
+                }
                 EditorGUI.BeginChangeCheck();
                 var value = HGValueField.Draw(fieldRect, row.Field.FieldType, row.Field.GetValue(row.Target), row.ForceEnumButtons, row.BoolButtons);
                 if (EditorGUI.EndChangeCheck()) { row.Field.SetValue(row.Target, value); AfterValueEdit(); }
@@ -766,6 +772,54 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             EditorGUI.BeginChangeCheck();
             var element = HGValueField.Draw(fieldRect, items.ElementType, items.Get(row.ItemIndex), row.ForceEnumButtons, row.BoolButtons);
             if (EditorGUI.EndChangeCheck()) { items.Set(row.ItemIndex, element); AfterValueEdit(); }
+        }
+
+        private void DrawOptionsField(HGRow row, Rect rect, HGOptionsAttribute options)
+        {
+            if (!HGOptionsCatalog.TryValueType(row.Field.FieldType, out _, out bool multiple))
+            {
+                GUI.Label(rect, new GUIContent("不支援的候選型別", "HGOptions 支援一般值、Unity 物件引用及其 List<T>；不支援 Slot。"));
+                return;
+            }
+            object current = row.Field.GetValue(row.Target);
+            var labels = new List<string>();
+            if (multiple && current is IList list)
+                foreach (var value in list) labels.Add(HGOptionsCatalog.Display(value));
+            else if (!multiple && current != null) labels.Add(HGOptionsCatalog.Display(current));
+            string full = string.Join(", ", labels);
+            string caption = labels.Count == 0 || full.Length == 0 ? "（選取）" : full;
+            using (new EditorGUI.DisabledScope(row.Locked || row.Field.IsInitOnly))
+            {
+                if (!GUI.Button(rect, HGStyles.Elide(caption, EditorStyles.popup, rect.width - 16f, options.Library + "\n" + full), EditorStyles.popup)) return;
+            }
+            var expectedModel = model;
+            var expectedFocus = focus;
+            var expectedGeneration = graphGeneration;
+            bool IsCurrent() => this != null && ReferenceEquals(model, expectedModel) && ReferenceEquals(focus, expectedFocus)
+                && graphGeneration == expectedGeneration && !graphDirty && !row.Locked;
+            string Apply(object value)
+            {
+                if (!IsCurrent()) return "圖已變更，請重新開啟選單。";
+                bool same = Equals(current, value);
+                if (multiple && current is IList before && value is IList after)
+                {
+                    same = before.Count == after.Count;
+                    for (int i = 0; same && i < before.Count; i++) same = Equals(before[i], after[i]);
+                }
+                if (same) return null;
+                if (!TryMutateContent(() => row.Field.SetValue(row.Target, value), out string error))
+                {
+                    Repaint();
+                    return error;
+                }
+                AfterValueEdit();
+                Repaint();
+                return null;
+            }
+            // 列的繪製座標已包含 pan；先還原 graph space，避免 GraphToWindowRect 再加一次平移。
+            var graphRect = new Rect(rect.position - pan, rect.size);
+            RequestPopup(GraphToWindowRect(graphRect), new HGOptionsPopup(options.Library, row.Field.FieldType, current,
+                options.AllowEmpty, IsCurrent, Apply));
         }
 
         /// <summary>自訂 drawer 只回傳編輯意圖；工作副本寫回仍由這個視窗的既有交易負責。</summary>

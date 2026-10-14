@@ -147,6 +147,26 @@ public sealed class HGDescriptionAttribute : Attribute
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Class, Inherited = true, AllowMultiple = false)]
 public sealed class HGEnumAttribute : Attribute { }
 
+/// <summary>以指定候選庫編輯一般值或 List&lt;T&gt;；只影響編輯介面，不改變儲存型別。</summary>
+[AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
+public sealed class HGOptionsAttribute : Attribute
+{
+    public string Library { get; }
+    public bool AllowEmpty { get; set; }
+
+    public HGOptionsAttribute(string library) => Library = library;
+}
+
+/// <summary>靜態欄位、屬性或無參數方法回傳 IEnumerable&lt;T&gt;，同庫來源合併；編輯器開啟選單時取快照。</summary>
+[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property | AttributeTargets.Method, Inherited = false, AllowMultiple = false)]
+public sealed class HGOptionsSourceAttribute : Attribute
+{
+    public string Library { get; }
+    public string Group { get; set; }
+
+    public HGOptionsSourceAttribute(string library) => Library = library;
+}
+
 /// <summary>
 /// 把 bool 欄位繪製成兩段按鈕：左邊是 true、右邊是 false，順序同建構子參數。沒標的 bool 畫成勾選框。
 /// 標在 Slot 類別上＝這一族的常數框在所有位置都畫按鈕；欄位與類別都標時文字以欄位為準。

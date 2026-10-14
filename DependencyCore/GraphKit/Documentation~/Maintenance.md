@@ -233,6 +233,28 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - 宣告定位略過註解、一般／逐字字串與字元 literal，保留原始行號；支援區塊／檔案層級 namespace、巢狀 namespace 與型別。此處是文字定位，不是完整 C# 編譯器／條件編譯求值器。
 - 找不到匹配來源時回報目標完整型別，不回退至其他 namespace 或組件的同名類別。快取依 Type 隔離，Domain Reload 後重建。
 
+### 5.7 一般值候選選單
+
+- `[HGOptions("LibraryId")]` 標記一般欄位。`T` 單選，`List<T>` 多選；值型別支援 `HGValueField` 的值型別、`string` 與 Unity 物件引用。資料仍保存原值／原資產引用，不增加序列化包裝型別。此功能走反射建列；完整 metadata descriptor 與 Slot 不使用此 Attribute。
+- `[HGOptionsSource("LibraryId", Group = "可選整批分組")]` 標在靜態欄位、可讀靜態屬性或無參數靜態方法；回傳型別須為 `IEnumerable<T>` 或其實作（例如 `List<T>`、陣列）。來源可位於 Editor 組件，也可跨 class／assembly 合併。只讀來源應在編輯模式可用，不可依賴 Play 初始化、修改圖或資產；來源需為有限集合。
+- 同庫的來源元素型別必須一致，並可指派到欄位元素型別；不做字串／數值隱式轉型。候選依 `Equals` 去重，來源依完整型別與成員名稱排序、各來源保留列舉順序；重複值取先遇到的來源分組。來源不提供逐項說明：一般值顯示 `ToString()`，Unity 物件顯示名稱，tooltip 顯示來源及資產路徑。
+- `HGOptionsCatalog` 只快取反射成員索引。每次開選單重新列舉成候選快照；重繪不再呼叫來源。未知庫、型別衝突、null／Missing 候選或 iterator 例外顯示來源錯誤，整份候選拒絕，不使用半份結果。編譯 Domain Reload 後重建索引。
+- 單選點選後套用；多選搜尋與勾選留在 Popup，按「套用」才以一次內容交易寫回，取消／失焦不修改。未在候選內的既有值在選單標示並保留；清單可取消勾選移除，不在打開時自動清理或去重舊資料。
+- `AllowEmpty = true` 為單一參考型別提供清除（string 寫空字串、Unity 引用寫 null）；清單可直接清空。候選庫本身不接受 null。一般數值只能選候選，不提供手填備援。
+- Popup 經 `RequestPopup(GraphToWindowRect(...))` 在結束縮放後開啟。列的繪製 Rect 已含 pan，傳給 GraphToWindowRect 前須先減掉 pan 還原 graph space，不能重複平移。套用前核對 model／focus／graph generation 與待重建狀態；切圖、Undo 或重建後拒絕舊 Popup 寫回。寫回走 `TryMutateContent` 與 `AfterValueEdit`，Owner／獨立資產各自使用既有 Undo 與 dirty 路由。
+- `[HGEnum]` 是 enum 按鈕列；`HGOptions` 是一般值的搜尋選單，兩者不組合成位元運算。Slot 的常數模式未接入候選庫，標在 Slot 上會產生配置診斷。
+
+```csharp
+[HGOptionsSource("DamagePresets", Group = "常用")]
+private static IEnumerable<int> DamagePresets => new[] { 5, 10, 20 };
+
+[SerializeField, HGOptions("DamagePresets")]
+private int damage;
+
+[SerializeField, HGOptions("Tags")]
+private List<string> tags;
+```
+
 ## 6. 串接 GraphKit（給 Tool 作者）
 
 ### 6.1 開啟文件

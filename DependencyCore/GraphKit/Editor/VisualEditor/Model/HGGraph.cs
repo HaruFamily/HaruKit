@@ -944,6 +944,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
                 if (HGReflect.IsSlotType(t))
                 {
+                    if (f.IsDefined(typeof(HGOptionsAttribute), false))
+                        diagnostics?.Add(new GraphDiagnostic("graphkit.options.unsupported-slot", GraphDiagnosticSeverity.Error,
+                            "HGOptions 只支援一般值欄位與 List<T>，不可標在 Slot 上。",
+                            new GraphDiagnosticLocation(fieldPath: fieldPath)));
                     var slot = f.GetValue(obj);
                     if (slot == null)
                     {
@@ -961,6 +965,22 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     row.HideLabel = HGReflect.IsLabelHidden(f);
                     dest.Add(row);
                     AddDefaultListRow(dest, row, diagnostics);
+                    continue;
+                }
+
+                if (f.IsDefined(typeof(HGOptionsAttribute), false))
+                {
+                    dest.Add(new HGRow
+                    {
+                        Kind = HGRowKind.NoPort,
+                        Label = label,
+                        Depth = depth,
+                        Path = fieldPath,
+                        LeftPad = leftPad,
+                        Target = obj,
+                        Field = f,
+                        HideLabel = HGReflect.IsLabelHidden(f),
+                    });
                     continue;
                 }
 
