@@ -1,10 +1,8 @@
 namespace HaruFamily.Framework.LogicGraph
 {
 using System;
-#if UNITY_EDITOR
 using System.Collections.Generic;
 using HaruFamily.DependencyCore.GraphKit;
-#endif
 
 /// <summary>可選的專案設定入口。沒有實作時，LogicGraph 使用全部時機與基本圖驗證。</summary>
 public interface ILogicGraphUsage<TTiming, TPack> where TTiming : Enum
@@ -14,7 +12,6 @@ public interface ILogicGraphUsage<TTiming, TPack> where TTiming : Enum
 #endif
 }
 
-#if UNITY_EDITOR
 /// <summary>每次查詢重新建立的使用設定；只宣告規則，不持有 Owner 或改寫文件。</summary>
 public sealed class LogicGraphUsage<TTiming, TPack> where TTiming : Enum
 {
@@ -107,5 +104,4 @@ public sealed class LogicGraphValidation
         if (diagnostic != null) diagnostics.Add(diagnostic);
     }
 }
-#endif
 }

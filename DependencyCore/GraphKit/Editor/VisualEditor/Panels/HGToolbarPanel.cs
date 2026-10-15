@@ -43,6 +43,7 @@ public struct HGToolbarCommands
     public Action<Rect> PickOwner;
 
     public Action Save;
+    public Action Validate;
     public Action Back;
     public Action Undo;
     public Action Redo;
@@ -88,6 +89,10 @@ public static class HGToolbarPanel
         if (GUI.Button(saveRect, new GUIContent(view.SaveLabel, view.SaveTooltip))) cmd.Save();
         GUI.backgroundColor = saveColor;
         GUI.enabled = true;
+
+        x -= 52f + Gap;
+        if (GUI.Button(new Rect(x, y, 52f, ButtonHeight), new GUIContent("檢查", "檢查目前圖；結果不影響存檔")))
+            cmd.Validate?.Invoke();
 
         // 取消會捨棄全部修改，與存檔之間多留一點距離，避免順手按錯。
         x -= 60f + 8f;

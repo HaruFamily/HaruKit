@@ -186,7 +186,7 @@ public static class HGValidator
             {
                 Err(report, "graphkit.serialize-reference.missing-type", null, "資產本體",
                     $"有節點的程式類別已不存在：{missing.namespaceName}.{missing.className}（{missing.assemblyName}）",
-                    "請重新開啟圖執行遺失資料清理；正常驗證錯誤仍需修正後才能存檔。", null, null);
+                    "請重新開啟圖執行遺失資料清理；內容錯誤可先保存，執行前再修正。", null, null);
             }
         }
 

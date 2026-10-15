@@ -225,7 +225,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
         focus = AllRootsFocus();
         selectedIds.Clear();
         graphDirty = true;
-        DoVerify(true);
+        ClearValidationReport();
         UpdateUnsavedState();
         return HGSessionCommandResult.Changed;
     }
@@ -410,11 +410,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
         focus = new HGFocus();
         ClearViewState();
         graphDirty = true;
-        verifiedOnce = false;
-        report = HGValidator.Run(model, includeMissingTypes: true);
-        AddExtensionDiagnostics(report);
-        verifiedOnce = true;
-        reportStale = false;
+        ClearValidationReport();
 
         // 所有時機共用一張畫布，綁定後直接進去；不再有「記住上次看的是哪個時機」這件事。
         SetFocus(AllRootsFocus());
@@ -711,16 +707,6 @@ public partial class HaruGraphWindow : IHasCustomMenu
     private bool DoSave(bool showDialog = true)
     {
         model.LastCommitDiagnostic = null;
-        DoVerify(true);
-        // 只改版面時不擋：寫回的內容與已驗證的版本相同，錯誤是它本來就有的，不該連位置都存不了（與資產焦點一致）。
-        if (!model.HasOnlyLayoutChanges && !report.CanSave)
-        {
-            console.RevealErrors();
-            // Console 已經被展開切到錯誤頁，細節都在那裡；再彈一個要按「好」的框只是多一次跨螢幕來回。
-            if (showDialog)
-                ShowNotification(new GUIContent($"無法存檔：還有 {report.ErrorCount} 個錯誤，請先在 Console 修正"));
-            return false;
-        }
         bool saved = model.Save();
         if (!saved)
         {
@@ -731,13 +717,13 @@ public partial class HaruGraphWindow : IHasCustomMenu
             }
             if (showDialog)
                 ShowNotification(new GUIContent(model.LastCommitDiagnostic?.Message
-                    ?? "無法存檔：Core 驗證未通過，Owner 未寫入。詳見 Unity Console"));
+                    ?? "無法存檔：複製或寫入失敗，目前修改保留。詳見 Unity Console"));
             return false;
         }
         // Owner 的引用內容變了，反向索引跟著失效。下次要用時才重算，這裡不掃。
         HGReferenceIndex.Invalidate();
         AssetDatabase.SaveAssets();
-        DoVerify(true);
+        ClearValidationReport();
         UpdateUnsavedState();
         ShowNotification(new GUIContent("已存檔"));
         return true;
@@ -759,7 +745,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
         focus = AllRootsFocus();
         selectedIds.Clear();
         graphDirty = true;
-        DoVerify(true);
+        ClearValidationReport();
         UpdateUnsavedState();
     }
 
@@ -897,7 +883,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
         assetHistory.Reset(CaptureAssetState());
         assetVerifiedOnce = false;
         assetReportStale = false;
-        DoVerify(true);
+        ClearValidationReport();
         UpdateUnsavedState();
         SelectAssetInProject(asset);
     }
@@ -916,16 +902,6 @@ public partial class HaruGraphWindow : IHasCustomMenu
         var asset = focus.AssetObject;
         var host = focus.AssetHostSlot;
         if (asset == null || host == null) return false;
-
-        DoVerify(true);
-        // 只搬過座標時不擋：寫回去的內容跟磁碟上完全一樣，錯誤是它本來就有的，沒必要連位置都存不了。
-        if (assetContentDirty && !assetReport.CanSave)
-        {
-            console.RevealErrors();
-            if (showDialog)
-                ShowNotification(new GUIContent($"無法存檔：這個資產還有 {assetReport.ErrorCount} 個錯誤"));
-            return false;
-        }
 
         var rootCarrier = host.Node;
         if (rootCarrier?.Kind is NodeKind.Asset or NodeKind.Token or NodeKind.Property)
@@ -977,11 +953,10 @@ public partial class HaruGraphWindow : IHasCustomMenu
         EditorUtility.SetDirty(asset);
         AssetDatabase.SaveAssets();
         // 內容沒變就不要驚動別人：座標是編輯器視覺，改它不會讓任何引用者的驗證結果不一樣。
-        if (assetContentDirty) VerifyAssetUsers(asset);
+        if (assetContentDirty) InvalidateAssetUsers(asset);
 
         ClearAssetDirty();
-        assetVerifiedOnce = true;
-        assetReportStale = false;
+        ClearValidationReport();
         // 存檔只是寫回資產，不退出畫布：接著要繼續編輯還是按「返回」由使用者決定。
         ShowNotification(new GUIContent("資產已存檔"));
         UpdateUnsavedState();
@@ -1049,30 +1024,30 @@ public partial class HaruGraphWindow : IHasCustomMenu
         if (!RestoreFocusReturn(assetId))
             SetFocus(back != null && back.Kind != HGFocusKind.None ? back : AllRootsFocus());
         if (focus.Kind != HGFocusKind.Asset) returnFocus = null;
-        DoVerify(true);
+        ClearValidationReport();
         UpdateUnsavedState();
         Repaint();
     }
 
-    /// <summary>
-    /// 資產內容變了，所有引用它的 Owner 都要重新驗證。**當場驗完**而不是只標記未驗證：
-    /// 「未驗證」在別人的畫面上看不出來，等到執行時才被 runtime 擋下就太晚了。
-    ///
-    /// 驗證本身不碰檔案，所以名單再長也只是跑一遍記憶體。**只有驗證結果真的翻轉的 Owner 才 SetDirty**
-    /// ——沒被改壞的人不該因為別人存了個資產就被改寫一次。
-    /// </summary>
-    private static void VerifyAssetUsers(UnityEngine.Object asset)
+    /// <summary>共用資產修改撤銷引用者的舊驗證結果，實際內容留待手動檢查或執行入口驗證。</summary>
+    private static void InvalidateAssetUsers(UnityEngine.Object asset)
     {
-        var failed = new List<string>();
         var touched = 0;
         foreach (var so in HGReferenceIndex.Users(asset as ScriptableObject))
         {
-            // 索引是這個 session 算的，中間可能有人刪掉資產；碰 name 前先擋掉已銷毀的引用。
             if (!HGOwnerValidation.CanVerify(so)) continue;
-
-            bool nowValidated = HGOwnerValidation.Verify(so, out bool changed, invalidate: true);
-
-            if (!nowValidated) failed.Add(so.name);
+            bool changed = false;
+            if (so is IGraphOwner legacy)
+            {
+                changed = legacy.IsGraphValidated();
+                legacy.InvalidateGraphValidation();
+            }
+            else foreach (var field in HGOwnerValidation.DocumentFields(so.GetType()))
+                if (field.GetValue(so) is IGraphDocument document)
+                {
+                    changed |= document.IsValidated;
+                    document.InvalidateValidation();
+                }
             if (!changed) continue;
 
             EditorUtility.SetDirty(so);
@@ -1080,10 +1055,6 @@ public partial class HaruGraphWindow : IHasCustomMenu
         }
 
         if (touched > 0) AssetDatabase.SaveAssets();
-        if (failed.Count == 0) return;
-
-        Debug.LogError($"[GraphKit] 資產 '{asset.name}' 存檔後，這些引用它的對象驗證不通過（多半是參數被改名／刪除／換型別）：" +
-            string.Join("、", failed), asset);
     }
 }
 

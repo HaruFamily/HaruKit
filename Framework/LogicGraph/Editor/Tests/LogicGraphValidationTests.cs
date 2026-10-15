@@ -314,8 +314,8 @@ public sealed class LogicGraphValidationTests
             owner.Reject = true;
             Assert.That(commands.Validate().Count(d => d.Code == "test.domain.rejected"), Is.EqualTo(1));
             Assert.That(owner.Inspected, Is.Not.SameAs(second), "診斷必須使用工作副本。");
-            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
-            Assert.That(owner.Second, Is.SameAs(second));
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(owner.Second, Is.Not.SameAs(second));
             owner.Reject = false;
             Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
             Assert.That(owner.Second, Is.Not.SameAs(second));
@@ -330,7 +330,7 @@ public sealed class LogicGraphValidationTests
     }
 
     [Test]
-    public void NonWindowConsumersCanReuseTheOfficialContextAndDomainCommitGate()
+    public void NonWindowConsumersCanInspectDomainErrorsAndSaveUnfinishedGraphs()
     {
         var owner = ScriptableObject.CreateInstance<Owner>();
         try
@@ -340,11 +340,12 @@ public sealed class LogicGraphValidationTests
             Assert.That(HGDocumentSession<LogicGraph<Timing, Pack>>.TryOpen(owner, binding,
                 LogicGraphEditor.Context, out var session, out var error), Is.True, error?.Message);
             owner.Reject = true;
-            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
+            Assert.That(session.CollectDiagnostics().Any(d => d.Code == "test.domain.rejected"), Is.True);
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
             Assert.That(owner.Second.IsValidated, Is.False);
             owner.Reject = false;
             Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
-            Assert.That(owner.Second.IsValidated, Is.True);
+            Assert.That(owner.Second.IsValidated, Is.False);
         }
         finally { UnityEngine.Object.DestroyImmediate(owner); }
     }

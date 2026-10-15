@@ -1171,6 +1171,8 @@ public class HGPortTests
 
             Assert.That(model.Save(), Is.True);
 
+            Assert.That(owner.Document.IsValidated, Is.False, "保存不執行驗證。");
+            owner.Document.Verify();
             Assert.That(owner.Document.IsValidated, Is.True);
             Assert.That(model.Doc.IsValidated, Is.False, "未驗證的工作副本不能取代已寫回文件的旗標。");
             Assert.That(model.IsStoredDocumentValidated, Is.True);

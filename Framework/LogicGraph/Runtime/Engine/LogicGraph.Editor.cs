@@ -1,13 +1,12 @@
 namespace HaruFamily.Framework.LogicGraph
 {
-#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 
-/// <summary>Editor-only validation surface for a LogicGraph working copy.</summary>
+/// <summary>Validation diagnostics used by Editor integrations.</summary>
 public interface ILogicGraphEditorDiagnostics
 {
     IReadOnlyList<GraphDiagnostic> CollectDiagnostics(IExternalTokenKeys external = null, IGraphDomainDiagnostics domain = null);
@@ -54,8 +53,15 @@ where TTiming : Enum
     }
 
     private IReadOnlyList<GraphDiagnostic> RunOwnerValidation(UnityEngine.Object owner, bool updateValidationState)
-        => RunValidation(owner as IExternalTokenKeys, owner as IGraphDomainDiagnostics, updateValidationState, ReadUsage(owner));
+    {
+#if UNITY_EDITOR
+        return RunValidation(owner as IExternalTokenKeys, owner as IGraphDomainDiagnostics, updateValidationState, ReadUsage(owner));
+#else
+        return RunValidation(owner as IExternalTokenKeys, owner as IGraphDomainDiagnostics, updateValidationState);
+#endif
+    }
 
+#if UNITY_EDITOR
     private static LogicGraphUsage<TTiming, TPack> ReadUsage(UnityEngine.Object owner)
     {
         var usage = new LogicGraphUsage<TTiming, TPack>();
@@ -72,6 +78,20 @@ where TTiming : Enum
         }
         catch (Exception exception) { usage.RejectConfiguration(exception.Message); }
         return usage;
+    }
+#endif
+
+    /// <summary>檢查當下圖結構，不要求已儲存的驗證旗標、不寫入資產，也不輸出 Console 摘要。</summary>
+    public bool TryValidate(out string error)
+    {
+        foreach (var diagnostic in RunValidation(null, null, updateValidationState: false))
+            if (diagnostic.Severity == GraphDiagnosticSeverity.Error)
+            {
+                error = $"[{diagnostic.Code}] {diagnostic.Location.FieldPath}：{diagnostic.Message}";
+                return false;
+            }
+        error = null;
+        return true;
     }
 
     private IReadOnlyList<GraphDiagnostic> RunValidation(IExternalTokenKeys external, IGraphDomainDiagnostics domain,
@@ -417,11 +437,7 @@ where TTiming : Enum
     }
 
     private static object AssetContent(UnityEngine.Object asset)
-    {
-        if (asset is ActionAssetBase<TPack> actionAsset) return actionAsset.EditorGetAction();
-        if (asset is FormulaAssetBase formulaAsset) return formulaAsset.EditorGetTargetObject();
-        return null;
-    }
+        => (asset as IGraphAsset)?.ContentObject;
 
     // ===== 節點內容檢查（空節點 / 內容為 null / 型別與欄位不相容）=====
 
@@ -692,6 +708,5 @@ where TTiming : Enum
         }
     }
 }
-#endif
 
 }

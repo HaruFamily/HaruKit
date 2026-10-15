@@ -24,7 +24,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖框架。它提供節點�
 - **零欄位的 Slot 基底**：`FormulaSlotBase`、`ActionSlotBase`、`PropertySlotBase` 沒有序列化欄位，使用端加泛型子類不會改變序列化格式。
 - **公式族**：族身分是具體 Slot 型別；可選擇開放「結果型別相容」的跨族接收，並用黑名單排除。提供 Formula 與 Token／Property 宣告 Slot 的共用接收政策，由使用端的 `Accepts*` 接入；寫入仍須同族。
 - **`GraphDeepCopy`**：保留多型 `SerializeReference`、共享參照、循環與 Unity 物件引用。
-- **編輯器**：工作副本編輯、存檔前驗證、Undo／Redo、左右可停駐的 Token 庫／變數庫／資產庫、遺失型別自動清理、執行觀察與 Hold。不依賴 Odin。
+- **編輯器**：工作副本編輯、未完成內容保存、手動檢查、Undo／Redo、左右可停駐的 Token 庫／變數庫／資產庫、遺失型別自動清理、執行觀察與 Hold。不依賴 Odin。
 - **節點內欄位分組**：`[HGFoldout("群組")]` 可同時展開多組；`[HGTab("頁名")]` 一次顯示一頁欄位，保留來源 Node 供跨頁接線。Group 只隱藏直接成員；兩者都在可見端用淡出虛線提示隱藏的關係，不影響執行。用法與限制見維護手冊 §5.4、§6.4。
 - **跨頁殘影去重**：同一父節點、同一來源 Port 優先顯示實線；只有隱藏頁引用時合併成一段殘影，避免重疊加粗。
 - **收合連線合併**：同一 List／Foldout 的代表接點連到同一 Port 時只畫一條，實線優先；不同目標才扇形散開。代表多筆引用的線需展開後逐筆斷線。
@@ -84,7 +84,7 @@ var binding = new HGDocumentBinding<MyDocument>(
 HaruGraphWindow.OpenForDocument(owner, binding, extensions);
 ```
 
-- 編輯器在清理遺失型別後 DeepCopy 出工作副本；存檔時驗證通過才寫回 Owner，取消則捨棄工作副本。
+- 編輯器在清理遺失型別後 DeepCopy 出工作副本；存檔可寫回未完成內容，內容驗證不阻擋保存，取消則捨棄工作副本。版本衝突與複製／寫入失敗仍保留修改。
 - `HaruGraphWindow.OpenFor(owner)` 是舊的便利入口，只接受恰好有一個 `IGraphDocument` 欄位的 Owner。
 - Setter 只能指派傳入的文件引用。需要偵測「同一個文件實例被外部原地修改」時，在 binding 提供無副作用的 `readRevision`。
 

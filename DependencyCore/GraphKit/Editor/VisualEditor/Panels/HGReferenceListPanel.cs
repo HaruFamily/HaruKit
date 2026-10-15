@@ -78,7 +78,7 @@ public sealed class HGReferenceListPanel
                 HGStyles.Elide(so.name, HGStyles.RowLabel, row.width - 26f), HGStyles.RowLabel);
             GUI.Label(new Rect(row.xMax - 20f, row.y + 2f, 16f, 17f),
                 new GUIContent(validated ? "✓" : "✗",
-                    validated ? "已驗證" : "未驗證（多半是這顆資產改過，存檔它就會重驗）"),
+                    validated ? "已驗證" : "未驗證（可手動檢查；存檔不會自動重驗）"),
                 validated ? HGStyles.Tiny : HGStyles.RowLabelError);
 
             var e = Event.current;

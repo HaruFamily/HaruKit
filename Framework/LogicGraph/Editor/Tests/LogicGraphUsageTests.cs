@@ -221,7 +221,7 @@ public sealed class LogicGraphUsageTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public void UsageErrorsBlockCommitWithDefaultAndOfficialContexts(bool official)
+    public void UsageErrorsRemainInspectableWithoutBlockingCommit(bool official)
     {
         var owner = ScriptableObject.CreateInstance<ConfiguredOwner>();
         var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
@@ -233,11 +233,11 @@ public sealed class LogicGraphUsageTests
             Assert.That(window.BindDocument(owner, SecondBinding(), context), Is.True);
             var commands = window.GetDocumentCommands();
             Assert.That(commands.Validate().Count(item => item.Code == "consumer.rejected"), Is.EqualTo(1));
-            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
-            Assert.That(owner.Second, Is.SameAs(original));
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(owner.Second, Is.Not.SameAs(original));
             owner.Reject = false;
             Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
-            Assert.That(owner.Second.IsValidated, Is.True);
+            Assert.That(owner.Second.IsValidated, Is.False);
         }
         finally
         {
@@ -248,7 +248,7 @@ public sealed class LogicGraphUsageTests
     }
 
     [Test]
-    public void NonWindowDefaultSessionAlsoEnforcesUsageAndConfigurationFailures()
+    public void NonWindowSessionReportsUsageFailuresAndAllowsSaving()
     {
         var owner = ScriptableObject.CreateInstance<ConfiguredOwner>();
         try
@@ -257,14 +257,14 @@ public sealed class LogicGraphUsageTests
             Assert.That(HGDocumentSession<LogicGraph<Timing, Pack>>.TryOpen(owner, SecondBinding(), out var session), Is.True);
             owner.ThrowConfiguration = true;
             Assert.That(((IGraphDocument)session.Document).RootKeys(owner), Is.Empty);
-            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
-            Assert.That(session.LastDiagnostic.Code, Is.EqualTo("logicgraph.usage.configuration-failed"));
-            Assert.That(owner.Second, Is.SameAs(original));
+            Assert.That(session.CollectDiagnostics().Any(d => d.Code == "logicgraph.usage.configuration-failed"), Is.True);
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(owner.Second, Is.Not.SameAs(original));
 
             owner.ThrowConfiguration = false;
             owner.ThrowValidation = true;
-            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
-            Assert.That(session.LastDiagnostic.Code, Is.EqualTo("logicgraph.usage.validation-failed"));
+            Assert.That(session.CollectDiagnostics().Any(d => d.Code == "logicgraph.usage.validation-failed"), Is.True);
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
             owner.ThrowValidation = false;
             Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
         }

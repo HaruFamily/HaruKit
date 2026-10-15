@@ -51,8 +51,8 @@ public sealed class HGPublicConsumerTests
             var liveErrors = commands.Validate();
             Assert.That(System.Linq.Enumerable.Any(liveErrors, issue => issue.Code == "consumer.rejected"
                 && issue.Location.NodeId == sourceId && issue.Location.FieldPath == "/Percent"), Is.True);
-            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
-            Assert.That(owner.B.Root.Items[0].Node, Is.Null);
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(owner.B.Root.Items[0].Node, Is.Not.Null);
             provider.Reject = false;
             Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
             Assert.That(((ConsumerBody)owner.B.Root.Items[0].Node.BodyObject).Percent.Value, Is.EqualTo(0.75f));
@@ -341,7 +341,7 @@ public sealed class HGPublicConsumerTests
     }
 
     [Test]
-    public void SessionUsesTheSameProviderDiagnosticsForLiveAndCommit()
+    public void SessionReportsProviderDiagnosticsWithoutBlockingCommit()
     {
         var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
         try
@@ -350,9 +350,10 @@ public sealed class HGPublicConsumerTests
             Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, Binding(), new HGEditorExtensionContext(new ConsumerProvider()),
                 out var session, out _), Is.True);
             var live = session.CollectDiagnostics()[0];
-            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
-            Assert.That(session.LastDiagnostic.Code, Is.EqualTo(live.Code));
-            Assert.That(session.LastDiagnostic.Location.FieldPath, Is.EqualTo(live.Location.FieldPath));
+            Assert.That(live.Severity, Is.EqualTo(GraphDiagnosticSeverity.Error));
+            Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(session.LastDiagnostic, Is.Null);
+            Assert.That(owner.B.IsValidated, Is.False);
         }
         finally { UnityEngine.Object.DestroyImmediate(owner); }
     }
@@ -536,7 +537,7 @@ public sealed class HGPublicConsumerTests
             var diagnostics = commands.Validate();
             Assert.That(System.Linq.Enumerable.Any(diagnostics, d => d.Code == "graphkit.commit.owner-changed"), Is.False);
             Assert.That(System.Linq.Enumerable.Any(diagnostics, d => d.Code == "graphkit.root.action-missing"), Is.True);
-            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
             reloaded = commands.Query();
             Assert.That(commands.Connect(reloaded.Generation, provider.Output, provider.Input), Is.EqualTo(HGSessionCommandResult.Changed));
             Assert.That(System.Linq.Enumerable.Select(
@@ -555,7 +556,7 @@ public sealed class HGPublicConsumerTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public void WindowAndProgrammaticSaveBothRejectInvalidEdits(bool coreOnlyFailure)
+    public void WindowAndProgrammaticSaveBothPreserveUnfinishedEdits(bool coreOnlyFailure)
     {
         var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
         var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
@@ -570,16 +571,15 @@ public sealed class HGPublicConsumerTests
             var commands = window.GetDocumentCommands();
             var snapshot = commands.Query();
             Assert.That(commands.Connect(snapshot.Generation, provider.Output, provider.Input), Is.EqualTo(HGSessionCommandResult.Changed));
-            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
-            Assert.That(owner.B, Is.SameAs(original));
-            Assert.That(commands.Query().IsDirty, Is.True);
-
-            Assert.Throws<InvalidOperationException>(() => window.SaveChanges());
-
-            Assert.That(owner.B, Is.SameAs(original));
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(owner.B, Is.Not.SameAs(original));
+            Assert.That(commands.Query().IsDirty, Is.False);
+            snapshot = commands.Query();
+            Assert.That(commands.Disconnect(snapshot.Generation, provider.Input), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.DoesNotThrow(() => window.SaveChanges());
             Assert.That(owner.B.Root.Items[0].Node, Is.Null);
             Assert.That(owner.B.IsValidated, Is.False);
-            Assert.That(commands.Query().IsDirty, Is.True);
+            Assert.That(commands.Query().IsDirty, Is.False);
         }
         finally
         {
@@ -921,7 +921,7 @@ public sealed class HGPublicConsumerTests
     }
 
     [Test]
-    public void PublicSession_PreservesDirtyWorkingCopyWhenCommitValidationFails()
+    public void PublicSession_SavesUnfinishedContentAndKeepsWorkingCopyIsolated()
     {
         var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
         owner.B = ConsumerDocument.Create(rejectValidation: true);
@@ -944,13 +944,15 @@ public sealed class HGPublicConsumerTests
         var workingCopy = session.Document;
         int generation = session.Generation;
 
-        Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.ValidationFailed));
+        Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
         Assert.That(session.Document, Is.SameAs(workingCopy));
         Assert.That(session.Document.Root.Items[0].Node, Is.SameAs(source));
-        Assert.That(session.IsDirty, Is.True);
-        Assert.That(session.CanUndo, Is.True);
-        Assert.That(session.Generation, Is.EqualTo(generation));
-        Assert.That(owner.B.Root.Items[0].Node, Is.Null);
+        Assert.That(session.IsDirty, Is.False);
+        Assert.That(session.CanUndo, Is.False);
+        Assert.That(session.Generation, Is.GreaterThan(generation));
+        Assert.That(owner.B.Root.Items[0].Node, Is.Not.SameAs(source));
+        Assert.That(owner.B.Root.Items[0].Node.Id, Is.EqualTo(source.Id));
+        Assert.That(owner.B.IsValidated, Is.False);
 
         UnityEngine.Object.DestroyImmediate(owner);
     }

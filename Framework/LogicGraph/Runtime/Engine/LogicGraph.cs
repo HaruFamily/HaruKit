@@ -121,6 +121,8 @@ where TTiming : Enum
     GraphViewState IGraphViewStateOwner.ViewState => _viewState ??= new GraphViewState();
 
     [NonSerialized] private bool _hasLoggedValidationFailure;
+    [NonSerialized] private bool runtimeValidationChecked;
+    [NonSerialized] private string runtimeValidationError;
     [NonSerialized] private GraphExecutionSource executionSource;
     [NonSerialized] private string executionRevision;
     [NonSerialized] private List<GraphExecutionSession> activeExecutions;
@@ -137,11 +139,13 @@ where TTiming : Enum
     public void InvalidateValidation()
     {
         _validated = false;
+        runtimeValidationChecked = false;
+        runtimeValidationError = null;
         _hasLoggedValidationFailure = false;
         executionRevision = Guid.NewGuid().ToString("N");
     }
 
-    /// <summary>執行期標記已驗證。僅供程式建立且已自行驗證的空圖或資料；編輯器內容一律走 Verify()，勿用此繞過驗證閘。</summary>
+    /// <summary>標記已自行確認的圖；只設定驗證旗標，不略過 runtime 首次結構檢查。</summary>
     public void MarkValidated() => _validated = true;
 
     /// <summary>深層複製整套動作集（含 ActionGroups / Orphans / _validated 的 SerializeReference 多型樹）。Owner 建構期抄給實體用，免共用 SO 被 runtime 改動污染。</summary>
@@ -172,18 +176,26 @@ where TTiming : Enum
     // 清的是 scope 裡的值而不是 store 本身，已經拿到 scope 的 TokenTable 才會一起回到未寫入狀態。
     public void InitializeProperties() => propertyStore?.Initialize();
 
-    /// <summary>建立本圖的具名求值表。未驗證時記錄錯誤並回空表；獨立查詢不建立時機執行觀察 session。</summary>
+    private bool EnsureRuntimeValidation()
+    {
+        if (!runtimeValidationChecked)
+        {
+            TryValidate(out runtimeValidationError);
+            runtimeValidationChecked = true;
+        }
+        if (runtimeValidationError == null) return true;
+        if (!_hasLoggedValidationFailure)
+        {
+            Debug.LogError($"[LogicGraph] 圖內容不合法，停止執行／求值：{runtimeValidationError}");
+            _hasLoggedValidationFailure = true;
+        }
+        return false;
+    }
+
+    /// <summary>建立本圖的具名求值表。首次使用檢查實際圖內容，失敗回空表；獨立查詢不建立時機執行觀察 session。</summary>
     public TokenTable<TPack> CreateTokenTable()
     {
-        if (!_validated)
-        {
-            if (!_hasLoggedValidationFailure)
-            {
-                Debug.LogError("[LogicGraph] 尚未通過驗證或資料已變動，請按「驗證」按鈕重新驗證後才能執行。");
-                _hasLoggedValidationFailure = true;
-            }
-            return new TokenTable<TPack>();
-        }
+        if (!EnsureRuntimeValidation()) return new TokenTable<TPack>();
 
         var table = new TokenTable<TPack> { Properties = (propertyStore ??= new PropertyStore()).Root(Properties) };
         foreach (var endpoint in Tokens) table.Register(endpoint);
@@ -216,23 +228,15 @@ where TTiming : Enum
         return new List<ActionSlot<TPack>>();
     }
 
-    /// <summary>依清單順序執行指定時機的動作。圖須先在 Editor 通過驗證；此多載不帶呼叫端生命週期取消。</summary>
+    /// <summary>依清單順序執行指定時機的動作；此多載不帶呼叫端生命週期取消。</summary>
     public UniTask TriggerAction(TTiming timing, TPack pack)
         => TriggerAction(timing, pack, CancellationToken.None);
 
     /// <summary>依清單順序執行指定時機的動作，並將呼叫端的生命週期取消傳入 TokenTable；每次呼叫建立新的表。</summary>
-    /// <remarks>未驗證時記錄錯誤並跳過，不在 runtime 補驗證。節點沿用 tokens.CancellationToken，取消與例外向 await 呼叫端傳遞。</remarks>
+    /// <remarks>首次使用檢查實際圖內容；不合法時記錄錯誤並跳過。節點沿用 tokens.CancellationToken，取消與例外向 await 呼叫端傳遞。</remarks>
     public async UniTask TriggerAction(TTiming timing, TPack pack, CancellationToken cancellationToken, string executionName = null)
     {
-        if (!_validated)
-        {
-            if (!_hasLoggedValidationFailure)
-            {
-                Debug.LogError("[LogicGraph] 尚未通過驗證或資料已變動，TriggerAction 已跳過。");
-                _hasLoggedValidationFailure = true;
-            }
-            return;
-        }
+        if (!EnsureRuntimeValidation()) return;
         var tokens = CreateTokenTable();
         var actions = GetActions(timing);
         cancellationToken.ThrowIfCancellationRequested();

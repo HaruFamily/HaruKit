@@ -314,7 +314,7 @@ public partial class HaruGraphWindow : EditorWindow
     private bool assetDirty;
 
     // 內容真的變了（接線、換型別、綁定、刪節點）才會是 true；只搬座標不算。
-    // 只有它為 true 才需要擋存檔與通知 subscriber 重新驗證——搬個位置不該驚動任何引用者。
+    // 內容改動才撤銷引用者的驗證；純版面不影響引用者。
     private bool assetContentDirty;
     private HGReport assetReport = new();
 
@@ -667,7 +667,7 @@ public partial class HaruGraphWindow : EditorWindow
         {
             if (focus.Kind == HGFocusKind.Asset) MarkAssetContentChanged();
             else { model.MarkContentChanged(); reportStale = true; }
-            LiveVerify();
+            ClearValidationReport();
         }
 
         ApplyVisibility();
@@ -1244,12 +1244,12 @@ public partial class HaruGraphWindow : EditorWindow
         // 套用後的那份快照已經是活資料，歷程不能跟它共用參考，否則下一次修改會連歷程一起改掉。
         assetHistory.Rebase(CaptureAssetState());
 
-        // 退回去的狀態和磁碟上那份多半仍不同，一律當未存檔；驗證就地重跑，不必先標 stale。
+        // 退回去的狀態和磁碟上那份多半仍不同，一律當未存檔並清除舊診斷。
         assetDirty = true;
         assetContentDirty = true;
         selectedIds.Clear();
         graphDirty = true;
-        DoVerify(true);
+        ClearValidationReport();
         UpdateUnsavedState();
         Repaint();
     }
@@ -1314,33 +1314,23 @@ public partial class HaruGraphWindow : EditorWindow
             model.MarkContentChanged();
             reportStale = true;
         }
-        LiveVerify();
+        ClearValidationReport();
         UpdateUnsavedState();
     }
 
-    /// <summary>
-    /// 每次修改後重跑驗證：接上來源、換型別、刪節點都會立刻反映在徽章與 Console。
-    /// 規則與存檔時完全相同（含 Token 循環、Asset 參照循環）；差別只有 SerializeReference
-    /// 型別遺失那一項——它看的是 Owner 本體，編輯工作副本不會改變它。
-    /// </summary>
-    private void LiveVerify()
+    /// <summary>內容與焦點變更只清除舊報告；完整檢查由作者明確操作。</summary>
+    private void ClearValidationReport()
     {
-        if (model?.Data == null) return;
-
         if (focus.Kind == HGFocusKind.Asset)
         {
-            if (focus.AssetHostSlot == null) return;
-            assetReport = HGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
-            AddExtensionDiagnostics(assetReport);
-            assetReport.ReplaceGraphViewDiagnostics(graph?.Diagnostics);
-            assetVerifiedOnce = true;
+            assetReport = new HGReport();
+            assetVerifiedOnce = false;
+            assetReportStale = true;
             return;
         }
-
-        report = HGValidator.Run(model);
-        AddExtensionDiagnostics(report);
-        report.ReplaceGraphViewDiagnostics(graph?.Diagnostics);
-        verifiedOnce = true;
+        report = new HGReport();
+        verifiedOnce = false;
+        reportStale = true;
     }
 
     private void AddExtensionDiagnostics(HGReport target)
@@ -1502,7 +1492,7 @@ public partial class HaruGraphWindow : EditorWindow
         selectedIds.Clear();
 
         graphDirty = true;
-        DoVerify(true);
+        ClearValidationReport();
         UpdateUnsavedState();
         Repaint();
     }
@@ -1516,16 +1506,8 @@ public partial class HaruGraphWindow : EditorWindow
         string ownerPath = AssetDatabase.GetAssetPath(model.Owner);
         if (string.IsNullOrEmpty(ownerPath)) ownerPath = "Scene";
 
-        bool blocked = !Rep.CanSave;
-        // 資產只搬過座標時不擋：內容沒變，存回去的東西跟磁碟上一樣，不該被它本來就有的錯誤鎖住位置。
-        if (inAsset && !assetContentDirty) blocked = false;
-        bool layoutOnly = !inAsset && model.HasOnlyLayoutChanges;
-        if (layoutOnly) blocked = false;
-        // 共用資產存檔會把引用它的 Owner 標成未驗證，但工作副本一個字都沒改（Dirty=false）。
-        // 存檔是唯一會重跑 Core Verify 並寫回 Owner 的入口，這時候不開它就沒有任何路可以把圖救回已驗證。
-        bool needsRevalidate = !inAsset && !model.IsStoredDocumentValidated;
         bool hasChanges = inAsset ? assetDirty : model.Dirty;
-        bool canSave = (hasChanges || needsRevalidate) && !blocked;
+        bool canSave = hasChanges;
 
         return new HGToolbarView
         {
@@ -1537,12 +1519,7 @@ public partial class HaruGraphWindow : EditorWindow
             SaveEnabled = canSave,
             SaveHighlight = canSave && hasChanges,
             SaveLabel = "存檔",
-            SaveTooltip = blocked ? "驗證有錯誤，先在 Console 修正才能存檔"
-                : needsRevalidate ? "重新驗證目前圖，通過後儲存"
-                : !hasChanges ? "目前沒有未儲存的修改"
-                : layoutOnly ? "只改了版面：內容未變，沿用上次驗證結果直接寫回"
-                : !IsCurrentReportFresh ? "按下後先做完整驗證（含循環與型別遺失），通過才會存檔"
-                : "驗證通過後寫回資產",
+            SaveTooltip = hasChanges ? "保存目前內容，允許尚未完成的圖" : "目前沒有未儲存的修改",
             // 資產焦點的「返回」與存檔分開：存檔留在畫布上，返回才退出（有未存修改會先問要不要捨棄）。
             BackLabel = inAsset ? "返回" : "取消",
             BackTooltip = inAsset ? "回到上一層；有未儲存的修改會先問要不要捨棄" : "捨棄自上次存檔以來的所有修改",
@@ -1556,6 +1533,7 @@ public partial class HaruGraphWindow : EditorWindow
     {
         PickOwner = rect => HGOwnerIndex.ShowPicker(rect, PickOwner),
         Save = () => { if (focus.Kind == HGFocusKind.Asset) SaveAsset(); else DoSave(); },
+        Validate = () => DoVerify(false),
         Back = () => { if (focus.Kind == HGFocusKind.Asset) LeaveAsset(); else DoCancel(); },
         Undo = () => DoUndo(),
         Redo = () => DoRedo(),

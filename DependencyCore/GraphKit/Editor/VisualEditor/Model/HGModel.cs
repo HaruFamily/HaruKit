@@ -98,7 +98,7 @@ public class HGModel
 
     /// <summary>
     /// 自上次存檔或載入後，是否改過會影響執行的內容。只改版面（座標）時為 false：
-    /// 內容與上次通過驗證的版本相同，存檔可以略過 Core 驗證，不被既有錯誤擋住。
+    /// 內容是否修改，決定保存時是否撤銷既有驗證狀態。
     /// </summary>
     public bool ContentDirty { get; private set; }
 
@@ -309,7 +309,7 @@ public class HGModel
     public bool CanUndo => undoStack.Count > 0;
     public bool CanRedo => redoStack.Count > 0;
 
-    /// <summary>會影響執行的修改（接線、換來源、參數值、停用、備註…）：記 Undo、標未存檔，存檔要重新驗證。</summary>
+    /// <summary>內容修改（接線、換來源、參數值、停用、備註…）：記 Undo、標未存檔，保存時撤銷既有驗證。</summary>
     public void MarkContentChanged() => RecordChange(true);
 
     /// <summary>只改版面（座標、收合）：記 Undo、標未存檔，但存檔沿用上次驗證結果。</summary>
@@ -381,7 +381,7 @@ public class HGModel
             baseline = DeepCopy(Data);
             lastPushTime = 0d;
             Dirty = true;
-            // 快照換掉整份資料，分不出退回的是內容還是座標：保守當成內容變了，下次存檔照常驗證。
+            // 快照換掉整份資料，分不出退回的是內容還是座標：保守當內容變更，保存時撤銷既有驗證。
             ContentDirty = true;
             return HGStepKind.Graph;
         }
@@ -434,20 +434,9 @@ public class HGModel
         if (LastCommitDiagnostic != null) return false;
         var toStore = DeepCopy(Data);
         if (toStore == null) return false;
-        // 只改版面、而且目前已儲存的就是通過驗證的版本：寫回的內容與它相同，沿用驗證結果，不重跑也不被既有錯誤擋住。
-        // 遺失型別清理與版本衝突檢查不屬於驗證，上面照樣跑過。
+        // 保存未完成內容不要求驗證；內容修改撤銷舊結果，純版面沿用既有狀態。
         if (!IsLayoutOnlySave(toStore))
-        {
             toStore.InvalidateValidation();
-            HGOwnerValidation.VerifyDocument(toStore, Owner);
-            if (!toStore.IsValidated)
-            {
-                LastCommitDiagnostic = new GraphDiagnostic("graphkit.commit.validation-failed", GraphDiagnosticSeverity.Error,
-                    "Core 驗證未通過，Owner 未寫入；請修正 Console 中的錯誤。",
-                    new GraphDiagnosticLocation(documentId: DocumentId));
-                return false;
-            }
-        }
 
         if (!commitGuard.TryWrite(toStore, out var failure))
         {

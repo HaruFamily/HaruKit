@@ -38,7 +38,7 @@ internal sealed class HGDocumentCommitGuard
                 return new GraphDiagnostic("graphkit.serialize-reference.missing-type", GraphDiagnosticSeverity.Error,
                     "Owner 含有遺失型別的 SerializeReference，提交已停止以保留原資料。",
                     new GraphDiagnosticLocation(documentId: binding.DocumentId),
-                    "請重新開啟圖以清理遺失資料；清理後仍須通過正常驗證才能存檔。");
+                    "請重新開啟圖以清理遺失資料；清理完成後可保存未完成內容。");
             return null;
         }
         catch (Exception exception)

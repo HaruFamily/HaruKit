@@ -8,20 +8,8 @@ using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 using HaruFamily.DependencyCore.GraphKit.Editor;
 
-[InitializeOnLoad]
 public static class LogicGraphAutoVerifySweep
 {
-    static LogicGraphAutoVerifySweep()
-    {
-        EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
-    }
-
-    private static void OnPlayModeStateChanged(PlayModeStateChange state)
-    {
-        if (state != PlayModeStateChange.ExitingEditMode) return;
-        SweepAndReport();
-    }
-
     [MenuItem("HaruFamily/LogicGraph/Verify All Owners")]
     private static void SweepFromMenu() => SweepAndReport(true);
 
@@ -29,7 +17,7 @@ public static class LogicGraphAutoVerifySweep
     /// 全專案 Owner 重驗。**不看已存的「已驗證」旗標**：它的正確性取決於引用到的共用資產，
     /// 而資產可能在編輯器外被改（git pull、Inspector 直接動）。跳過已驗證的就是信任一份可能過期的快取。
     /// 驗證本身不碰檔案；只有結果真的翻轉的 Owner 才寫檔。
-    /// 也**沒有逐 Owner 的豁免開關**：能存檔的圖本來就通過驗證，掃到失敗必定是底下的共用資產變了——正是不該被靜音的那種。
+    /// 由選單明確觸發；未完成的圖可以保存，不在進入 Play 時掃描全專案。
     /// </summary>
     private static void SweepAndReport(bool notifyWhenClean = false)
     {

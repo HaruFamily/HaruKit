@@ -38,7 +38,7 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 | `Editor/` | `LogicGraphEditor`（正式入口與驗證）、`LogicGraphDrawer`（Inspector 卡片）、`LogicGraphAutoVerifySweep`、`FormulaKindScaffolder` |
 | `Editor/Tests/` | `GraphDeepCopyTests`、`LogicGraphExecutionTests`、`LogicGraphValidationTests`、`LogicGraphUsageTests` |
 
-`LogicGraph.Editor.cs` 整檔包在 `#if UNITY_EDITOR`，但必須留在 Runtime 組件，因為它是 `LogicGraph<,>` 的 partial。
+`LogicGraph.Editor.cs` 提供共用結構驗證與 Editor 診斷入口，位於 Runtime 組件；僅 Owner Usage 探索受 `UNITY_EDITOR` 限制。`TryValidate(out error)` 在 Player 也可使用，唯讀檢查當下結構，不要求或修改已儲存驗證旗標。
 
 ## 3. 核心模型
 
@@ -88,8 +88,8 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 1. **序列化身分是資料契約**（類別名、命名空間、組件名）。改之前先掃使用端資產裡實際的 `{class, ns, asm}` 記錄，並取得擁有者同意。
 2. **`ActionSlot._disabled` 等反向旗標不可改名成 `_enabled`。**
 3. `FormulaSlotBase`／`ActionSlotBase` 在 GraphKit，泛型的 `FormulaSlot<,,,>`／`ActionSlot<>` 在本套件，兩者**分檔**，基底維持零欄位。
-4. **未驗證的圖不執行。** `TriggerAction` 與 `CreateTokenTable` 在 `_validated` 為 false 時記錄錯誤並跳過；runtime 不可自行補驗證。`MarkValidated()` 只能用在程式建立且已自行保證正確的圖。
-5. 程式修改圖之後呼叫 `InvalidateValidation()`，再用 Inspector 或 Editor-only 的 `LogicGraphEditor.Verify(owner)` 驗證。無參數的 `graph.Verify()` 只驗 Core 規則，拿不到 Owner 的 Usage。
+4. **執行檢查實際內容，不依賴編輯器旗標。** `TriggerAction` 與 `CreateTokenTable` 首次使用每份 runtime 圖時執行 Core 結構驗證，快取當次結果；失敗只回報一次並停止執行／回空表。DeepCopy 不繼承 runtime 快取。`MarkValidated()` 不可繞過 runtime 檢查。Owner 的領域配置與 Default 回退由使用端載入入口處理。
+5. 程式修改圖之後呼叫 `InvalidateValidation()`，同時撤銷編輯器旗標與 runtime 檢查快取。Inspector 與 `LogicGraphEditor.Verify(owner)` 可手動檢查 Usage；`TryValidate` 與無 Owner 的 `Verify()` 只驗 Core 規則。
 6. **驗證有兩趟**：第一趟不穿透停用節點（殘缺是錯誤），第二趟補走停用子樹（殘缺降為警告）。順序不可顛倒；只要還有一條啟用路徑指著同一個載體，殘缺仍是錯誤。GraphKit 的 `HGValidator` 要同步同一套判準。
 7. **不要把 Node 的序列化欄位當跨呼叫的快取**；每次執行的上下文放在 Pack。
 8. 缺來源或停用的公式回 Slot 保底值；**節點本體丟出的例外照常往外傳**，保底值不是通用例外處理。runtime 遇到型別不符或空節點時，每個 Slot 只警告一次並回保底值。
@@ -107,7 +107,7 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 4. 執行時用 `definition.graph.DeepCopy()` 建立 runtime 副本，再 `await copy.TriggerAction(timing, pack, cancellationToken, name)`。
 5. 執行對象釋放時呼叫該副本的 `CancelObservedExecutions()`；取消會傳到 await 的呼叫端，呼叫端要自己收尾。
 
-一個 Owner 有多個 LogicGraph 欄位時，要從 Inspector 按鈕或明確 binding 開啟，選單入口只接受唯一文件欄位。`LogicGraphAutoVerifySweep` 在離開 Edit Mode 時重驗所有 Owner，只記錄錯誤、不擋 Play。
+一個 Owner 有多個 LogicGraph 欄位時，要從 Inspector 按鈕或明確 binding 開啟，選單入口只接受唯一文件欄位。`LogicGraphAutoVerifySweep` 僅由 Verify All Owners 選單執行，不在進入 Play 時掃描資產。
 
 ## 6. 常見修改
 
@@ -154,7 +154,7 @@ public sealed class LogAmountAction : ActionBase<MyPack>
 
 ## 8. 描述編譯
 
-`Compile(template, pack, passes)` 依呼叫端傳入的 `ICompilePass<TPack>` 順序處理 `CompileContext`。Core 不規定模板語法；未驗證的圖取到空 Token 表，pass 查不到值就保留原文。
+`Compile(template, pack, passes)` 依呼叫端傳入的 `ICompilePass<TPack>` 順序處理 `CompileContext`。Core 不規定模板語法；Core 結構不合法的圖取到空 Token 表，pass 查不到值就保留原文。
 
 ## 9. 驗證
 

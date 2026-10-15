@@ -205,15 +205,7 @@ public sealed class HGDocumentSession<TDocument>
         LastDiagnostic = commitGuard.Check();
         if (LastDiagnostic != null) return HGDocumentCommitGuard.ResultOf(LastDiagnostic);
         if (!TryClone(Document, out TDocument toStore)) return HGSessionCommandResult.WriteFailed;
-        foreach (var diagnostic in CollectDiagnostics(toStore))
-            if (diagnostic.Severity == GraphDiagnosticSeverity.Error)
-            {
-                LastDiagnostic = diagnostic;
-                return HGSessionCommandResult.ValidationFailed;
-            }
         toStore.InvalidateValidation();
-        HGOwnerValidation.VerifyDocument(toStore, Owner);
-        if (!toStore.IsValidated) return HGSessionCommandResult.ValidationFailed;
         if (!commitGuard.TryWrite(toStore, out var failure))
         {
             LastDiagnostic = failure;

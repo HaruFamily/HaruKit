@@ -49,7 +49,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 
 | `NodeKind` | 值 | 內容 |
 |---|---|---|
-| `Empty` | 0 | 還沒選內容的空節點（合法的編輯狀態，存檔驗證會擋） |
+| `Empty` | 0 | 還沒選內容的空節點（可保存的未完成狀態，執行前須檢查） |
 | `Inline` | 1 | 內嵌的具體節點內容（`GraphNodeContent`） |
 | `Asset` | 2 | 共用資產 ScriptableObject |
 | `Token` | 4 | 具名 Token 的引用（存物件參照，不存名字字串） |
@@ -93,13 +93,13 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 2. **反向旗標不可改名。** `_disabled` 不可改成 `_enabled`：舊資產沒有這個欄位，反序列化成 false 會把全部內容關掉。
 3. **零欄位基底保持零欄位。** `GraphSlotBase`、`FormulaSlotBase`、`ActionSlotBase`、`PropertySlotBase`、形狀基底只能加抽象或虛擬成員，不能加序列化欄位。
 4. **編輯器只改工作副本。** 開圖時 DeepCopy 出 `HGModel.Data`，所有編輯都在副本上，存檔成功才寫回 Owner；取消就重抓 Owner。不可在編輯流程直接改 Owner 上的文件。唯一例外是已確認遺失的 SerializeReference 資料清理（§6.3）。
-5. **內容有變的存檔必須通過驗證。** 視窗存檔、`HGModel.Save`、非視窗 `Commit` 都要求診斷與文件 `Verify()` 通過。唯一例外是只改版面：`HGModel.ContentDirty` 為 false（只經 `MarkLayoutChanged()`：座標與收合版面；其餘修改一律 `MarkContentChanged()`）且要寫回的副本本身已帶通過旗標時，沿用上次驗證結果直接寫回，與資產焦點的座標存檔一致；遺失型別清理與版本衝突檢查照樣執行。Undo／Redo 與遺失型別清理一律視為內容變更。沒有草稿存檔，也不可為了讓存檔通過而放寬驗證。
+5. **保存與驗證分離。** 視窗存檔、`HGModel.Save`、非視窗 `Commit` 與獨立資產焦點都允許未完成內容，不呼叫診斷／Verify 作存檔閘門。內容修改撤銷已驗證旗標；Owner 純版面且原本已驗證時可沿用旗標。工作副本、遺失型別清理、版本衝突、複製與寫入失敗仍走既有交易。驗證規則不因可保存而放寬，使用端負責執行前檢查。
 6. **載體存取走型別契約**（`FormulaSlotBase`、`ActionSlotBase`、`IGraphHead`、`IOrphanPool`、`ITokenOwner`、`IPropertyOwner`、`IGraphAsset`），不要用成員名反射。`MethodBase.Invoke` 不會補預設參數，簽章一變就在執行期壞掉。
 7. **斷線不等於刪節點。** 節點只靠 SerializeReference 的引用路徑存活；斷線時要把失去引用的載體放回候選池（先保留可見座標），否則重建時整棵子樹會消失，存檔後資料就真的沒了。
    - 畫布刪除載體也要先拆開其直接來源，再把沒有其他引用的來源放回目前焦點候選池；來源的子樹與座標保留。多選刪除只移除選中的載體，不沿來源接線遞迴刪除。
 8. **複製節點要重設 Id**（`HGModel.ResetNodeIds`），並正確帶入 `shared`（ProtoProperty 定義、目前作用域的 Token 要沿用同一顆）與 `skip` 集合。LocalProperty 定義跟著節點複製並換新 Id。
 9. **圖走訪的 visited 一律用 `ReferenceComparer.Instance`**（Editor 端 `HGRefComparer`）。裸 `HashSet<object>` 對 struct 走值相等，會無聲跳過子樹。
-10. **Core 驗證與視覺驗證要同步改。** 文件 `Verify()` 決定能不能存檔；`HGValidator` 是同一套規則加上可跳轉位置。只改一邊會變成「存檔鈕按得下去、卻被擋下且看不到原因」。
+10. **Core 驗證與視覺驗證要同步改。** 文件 `Verify()` 與手動 `HGValidator` 使用相同規則；視覺驗證補上可跳轉位置，診斷不阻擋保存。
 11. **診斷是純資料。** `GraphDiagnostic` 只存穩定 `Code` 和字串位置（document／focus／node／token／field path），不可持有 `HGRow`、`FieldInfo` 或視窗物件。Code 用穩定機器識別，不用本地化文字或方法名。
 12. **面板不認識 model 與焦點。** 面板只收一次性快照與命令委派，不可反過來呼叫視窗；版面由視窗管理，面板自己的視圖狀態（高度、捲動）自己存。
 13. **視窗偏好不進文件。** 庫的停駐、排序、顯示、欄寬等偏好存在 EditorPrefs（`HaruGraph.*` 鍵），不標 Dirty、不進 Undo。節點圖本身的收合版面（欄位 ⊖／⊕、清單折疊、註解框收合、節點內摺疊群組）與節點群組（§5.4）是例外：它和座標一樣是作者安排的版面，存在實作 `IGraphViewStateOwner` 的文件或資產上（`GraphViewState`），切換標未存檔、進 Undo，但以 `MarkLayoutChanged()` 記成版面修改，存檔沿用上次驗證。
@@ -122,7 +122,9 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 | `.Execution.cs` | 執行觀察、session 選擇、Hold |
 | `.NodeGroups.cs` | 畫布節點群組：建立、繪製、整組移位、分頁、註解、改色、選取、右鍵選單、拖放進出的成員判定 |
 
-資料流：Owner → 明確 binding 或 legacy 欄位探索 → DeepCopy 成 `HGModel.Data` → `HGFocus` 決定中間畫布在編輯哪些 root → `HGGraph.Build` 每次資料變動整份重建節點與列 → 視窗用 IMGUI 繪製 → 存檔時清理遺失型別、DeepCopy、驗證、通過才寫回。
+資料流：Owner → 明確 binding 或 legacy 欄位探索 → DeepCopy 成 `HGModel.Data` → `HGFocus` 決定中間畫布在編輯哪些 root → `HGGraph.Build` 每次資料變動整份重建節點與列 → 視窗用 IMGUI 繪製 → 存檔時清理遺失型別、DeepCopy、撤銷過期驗證、通過版本守衛後寫回。
+
+開圖、切焦點、編輯與保存只清除舊報告；工具列「檢查」與公開 `Validate()` 明確執行診斷。共用資產內容保存後只撤銷引用者驗證，不自動重驗或洗 Console。
 
 **節點搜尋（Ctrl+F）**：畫布上按 Ctrl+F，或按工具列的「搜尋」鈕，開畫布內搜尋列 `HGNodeSearchBar`（`Panels/`，畫布右上角），搜目前焦點 `graph.Nodes` 的全部節點，包括被收起的，不跨焦點。比對節點名稱（Token／資產／Property 補引用對象，`NodeSearchName`）、chip、註解，以及所屬群組的註解與所在分頁名稱；空白分詞，每詞都要命中同一顆節點，不分大小寫，所以群組名可以和節點名組合著篩。群組的修改不重建圖，`MarkViewStateChanged` 會作廢命中快取。輸入時只高亮：命中的節點加淡選取色外框，沒命中的壓暗；沒有命中時不壓暗。Enter／↓／F3 跳下一筆，Shift+Enter／↑／Shift+F3 跳上一筆，頭尾循環；跳轉走 `FocusDocumentNode`：被收起的先 `RevealNode`（展開欄位、清單、群組與分頁，寫回 `GraphViewState`，記成版面修改），再選取並置中。因為會寫版面，輸入時不自動跳。Esc／✕ 關閉，視角停在目前這一筆。搜尋列在 TextField 之前自己判 Enter／Esc／方向鍵；點回畫布時放掉輸入框焦點，畫布快捷鍵才收得到。游標壓在搜尋列上時，底下的節點、Header 工具列與群組標題都要遮掉指標事件（IMGUI 讓先畫的先拿事件）。
 
@@ -316,9 +318,9 @@ private List<int> levelCounts;
 
 ### 6.3 提交安全與遺失型別
 
-- 提交順序：遺失型別清理 → DeepCopy → 副本 `InvalidateValidation()`／`Verify()` → 通過 → 版本檢查 → 寫回。驗證、衝突或寫入失敗都不清除 Dirty。
+- 提交順序：遺失型別清理 → DeepCopy → 撤銷過期驗證 → 版本檢查 → 寫回。衝突、複製或寫入失敗不清除 Dirty；內容驗證錯誤不阻擋保存。
 - 文件引用被其他入口替換時回 `Conflict`，保留工作副本與歷程。
-- 遺失的 SerializeReference 型別在開圖、驗證、提交前自動清理，不備份、不詢問，只改記憶體並標記 Dirty。清理依 Unity 的 missing managed-reference ID 和序列化位置定位；Unity 回報 `-2` 時唯讀查詢 Owner 的 YAML `rid` 連結。**不可擴大成「刪掉所有 null」或「斷開所有不相容線」**。清理後仍須通過正常驗證才能存檔。
+- 遺失的 SerializeReference 型別在開圖、手動驗證、提交前自動清理，不備份、不詢問，只改記憶體並標記 Dirty。清理依 Unity 的 missing managed-reference ID 和序列化位置定位；Unity 回報 `-2` 時唯讀查詢 Owner 的 YAML `rid` 連結。**不可擴大成「刪掉所有 null」或「斷開所有不相容線」**。清理完成後可保存未完成內容；無法安全定位／清理仍拒絕提交。
 
 ### 6.4 節點屬性
 
@@ -382,7 +384,7 @@ private List<int> levelCounts;
 
 ## 8. 驗證
 
-- `Editor/Tests/`：`HGPortTests`（Port 模型與相容）、`HGPublicConsumerTests`（只用公開 API 的非視窗與視窗命令、別名、descriptor 編輯、Undo／Redo、領域錯誤阻擋、commit／rebind／cancel）、`GraphExecutionTests`（執行觀察與 Hold）。
+- `Editor/Tests/`：`HGPortTests`（Port 模型與相容）、`HGPublicConsumerTests`（只用公開 API 的非視窗與視窗命令、別名、descriptor 編輯、Undo／Redo、未完成內容保存與診斷、commit／rebind／cancel）、`GraphExecutionTests`（執行觀察與 Hold）。
 - AssetPipeline 的 `GraphKitCrossToolSessionTests` 也只透過公開 API 使用 GraphKit，可用來確認沒有破壞使用端。
 - 在 Unity Test Runner 以 EditMode 執行。從 UPM 安裝時，要把套件名稱加進使用端 `Packages/manifest.json` 的 `testables` 才看得到測試。
 - 手勢、IMGUI 版面、資產序列化來回，自動測試涵蓋不到，要在 Unity 實際操作確認。**沒有實際執行的測試不可回報為通過。**

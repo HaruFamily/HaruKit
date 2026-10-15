@@ -325,6 +325,44 @@ public sealed class LogicGraphExecutionTests
     }
 
     [Test]
+    public async Task UnverifiedSavedContentExecutesAfterRuntimeValidation()
+    {
+        var graph = Create(new Increment(), out _);
+        graph.Tokens.Add(new GraphToken("Amount", new IntSlot(7)));
+        graph.InvalidateValidation();
+        var runtime = graph.DeepCopy();
+        var pack = new Pack();
+
+        Assert.That(runtime.IsValidated, Is.False);
+        Assert.That(runtime.TryValidate(out var error), Is.True, error);
+        Assert.That(await runtime.CreateTokenTable().Resolve<int>(typeof(IntSlot), "Amount", pack), Is.EqualTo(7));
+        await runtime.TriggerAction(Timing.Run, pack);
+        Assert.That(pack.Count, Is.EqualTo(1));
+        Assert.That(graph.IsValidated, Is.False, "Runtime 檢查不可替作者資產寫入已驗證旗標。");
+    }
+
+    [Test]
+    public async Task RuntimeRejectsInvalidContentDespiteStoredFlagAndRechecksAfterRepair()
+    {
+        var graph = Create(new Increment(), out var node);
+        node.Clear();
+        Assert.That(graph.IsValidated, Is.True);
+        Assert.That(graph.TryValidate(out var error), Is.False);
+        StringAssert.Contains("logicgraph.action.missing", error);
+        var pack = new Pack();
+        UnityEngine.TestTools.LogAssert.Expect(UnityEngine.LogType.Error,
+            new System.Text.RegularExpressions.Regex("\\[LogicGraph\\] 圖內容不合法"));
+        await graph.TriggerAction(Timing.Run, pack);
+        await graph.TriggerAction(Timing.Run, pack);
+        Assert.That(pack.Count, Is.Zero);
+
+        node.SetBody(new Increment());
+        graph.InvalidateValidation();
+        await graph.TriggerAction(Timing.Run, pack);
+        Assert.That(pack.Count, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task RuntimeCopiesShareObservationButHoldOnlyOneExecutionChain()
     {
         var authored = Create(new Increment(), out var node);
