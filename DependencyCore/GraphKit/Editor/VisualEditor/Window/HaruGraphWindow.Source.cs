@@ -230,10 +230,12 @@ public partial class HaruGraphWindow
             foreach (var type in bodyTypes)
             {
                 Type captured = type;
+                string label = HGReflect.TypeName(type);
+                // AdvancedDropdown 以顯示文字搜尋，保留原始類別名供查找。
                 options.Add(new HGSourceOption
                 {
                     Group = kind + "/" + HGReflect.TypeCategory(type),
-                    Name = HGReflect.TypeName(type),
+                    Name = label == type.Name ? label : $"{label} ({type.Name})",
                     IsCurrent = node.Obj?.GetType() == type,
                     Apply = () => ReplaceNodeType(node, captured),
                 });

@@ -121,6 +121,7 @@ public partial class HaruGraphWindow : EditorWindow
     // 控制項集合在 Layout 決定，輸入與 Repaint 共用；hotControl 持有期間不可換集合。
     private readonly HashSet<string> canvasNodeIds = new();
     private readonly HashSet<string> nextCanvasNodeIds = new();
+    private readonly HashSet<string> canvasGraphNodeIds = new();
     private bool canvasNodesReady;
     private Rect canvasNodesViewport;
     private static readonly Unity.Profiling.ProfilerMarker canvasMarker = new("GraphKit.DrawCanvas");
@@ -763,6 +764,7 @@ public partial class HaruGraphWindow : EditorWindow
         if (!clearControls) return;
         canvasNodeIds.Clear();
         nextCanvasNodeIds.Clear();
+        canvasGraphNodeIds.Clear();
         canvasNodesReady = false;
     }
 

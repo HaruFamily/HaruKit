@@ -1499,8 +1499,15 @@ public partial class HaruGraphWindow
         if (canvasNodesReady && (Event.current.type != EventType.Layout || GUIUtility.hotControl != 0)) return;
         var viewport = new Rect(-pan - Vector2.one * HGGraph.PortDiameter,
             canvas.size / zoom + Vector2.one * (HGGraph.PortDiameter * 2f));
-        // 打字造成列高／節點高度改變時，保留目前控制項集合與 caret；主動移動視角才重選。
-        if (canvasNodesReady && EditorGUIUtility.editingTextField && canvasNodesViewport.Equals(viewport)) return;
+        // 只有節點集合未變的文字編輯才保留 caret；新增／刪除節點必須重選控制項集合。
+        if (canvasNodesReady && EditorGUIUtility.editingTextField && canvasNodesViewport.Equals(viewport))
+        {
+            bool sameNodes = canvasGraphNodeIds.Count == graph.Nodes.Count;
+            if (sameNodes)
+                foreach (var node in graph.Nodes)
+                    if (!canvasGraphNodeIds.Contains(node.Id)) { sameNodes = false; break; }
+            if (sameNodes) return;
+        }
         bool nextOverview = overviewMode;
         // 拉線／放置／拖曳中的工具維持完整控制項，放手後才切換顯示層級。
         if (!linking && placingSlot == null && dragNode == null && dragNodeGroup == null)
@@ -1511,12 +1518,14 @@ public partial class HaruGraphWindow
                 nextCanvasNodeIds.Add(node.Id);
         if (canvasNodesReady && (overviewMode != nextOverview || !canvasNodeIds.SetEquals(nextCanvasNodeIds)))
         {
-            // 視角改變導致控制項集合更換時，結束輸入焦點，避免舊 id 指向另一個欄位。
+            // 控制項集合更換時，結束輸入焦點，避免舊 id 指向另一個欄位。
             GUIUtility.keyboardControl = 0;
             EditorGUIUtility.editingTextField = false;
         }
         canvasNodeIds.Clear();
         canvasNodeIds.UnionWith(nextCanvasNodeIds);
+        canvasGraphNodeIds.Clear();
+        foreach (var node in graph.Nodes) canvasGraphNodeIds.Add(node.Id);
         overviewMode = nextOverview;
         canvasNodesViewport = viewport;
         canvasNodesReady = true;
