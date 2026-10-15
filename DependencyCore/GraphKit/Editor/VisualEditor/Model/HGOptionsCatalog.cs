@@ -56,14 +56,14 @@ public static class HGOptionsCatalog
             bool found = false;
             foreach (var member in sources)
             {
-                var attribute = member.GetCustomAttribute<HGOptionsSourceAttribute>();
+                var attribute = member.GetCustomAttribute<HGCatalogAttribute>();
                 if (attribute.Library != library) continue;
                 found = true;
                 sourceName = member.DeclaringType.FullName + "." + member.Name;
                 Type resultType = ResultType(member);
                 Type elementType = EnumerableElement(resultType);
                 if (elementType == null) throw new InvalidOperationException("來源必須宣告 IEnumerable<T> 或其實作型別。");
-                bool described = elementType.IsGenericType && elementType.GetGenericTypeDefinition() == typeof(HGOptionElement<>);
+                bool described = elementType.IsGenericType && elementType.GetGenericTypeDefinition() == typeof(HGCatalogEntry<>);
                 Type candidateType = described ? elementType.GetGenericArguments()[0] : elementType;
                 if (libraryType != null && libraryType != candidateType)
                     throw new InvalidOperationException($"同庫型別衝突：{libraryType} / {candidateType}。");
@@ -75,7 +75,7 @@ public static class HGOptionsCatalog
                 foreach (object item in values)
                 {
                     if (item == null || !elementType.IsInstanceOfType(item)) throw new InvalidOperationException("候選值不符合宣告型別。");
-                    var presentation = described ? (IHGOptionElement)item : null;
+                    var presentation = described ? (IHGCatalogEntry)item : null;
                     object value = described ? presentation.Value : item;
                     if (value == null || value is UnityEngine.Object asset && asset == null)
                         throw new InvalidOperationException("候選不可為 null 或 Missing 物件；空值由欄位 AllowEmpty 提供。");
@@ -109,7 +109,7 @@ public static class HGOptionsCatalog
             {
                 if (type == null) continue;
                 foreach (var member in type.GetMembers(flags))
-                    if (member.IsDefined(typeof(HGOptionsSourceAttribute), false)) result.Add(member);
+                    if (member.IsDefined(typeof(HGCatalogAttribute), false)) result.Add(member);
             }
         }
         result.Sort((a, b) => StringComparer.Ordinal.Compare(

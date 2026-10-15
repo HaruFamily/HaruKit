@@ -161,6 +161,8 @@ public partial class HaruGraphWindow : EditorWindow
 
     /// <summary>就地改名。焦點列、左欄兩庫與參數列共用同一份編輯狀態，所以它住在框架不住在面板。</summary>
     private HGInlineRename inlineName;
+    private readonly HGSpinnerField spinnerField = new();
+    private readonly Dictionary<string, int> spinnerPages = new();
 
     /// <summary>清單面板拖到畫布的跨區拖曳。來源可能是左框也可能是右框，所以狀態住在框架。</summary>
     private readonly HGLibraryDrag drag = new();
@@ -381,7 +383,11 @@ public partial class HaruGraphWindow : EditorWindow
         // 新的一次按下代表上一次拖曳一定結束了。清在這裡是因為 MouseUp 不保證收得到——
         // 在視窗外放開就沒有那個事件，狀態會一直掛著，之後任何一次拖曳都會被誤判成「還在拖那個東西」。
         // 順序很重要：先清，再讓左欄在同一個 MouseDown 裡重新設定。
-        if (Event.current.type == EventType.MouseDown) drag.Clear();
+        if (Event.current.type == EventType.MouseDown)
+        {
+            drag.Clear();
+            spinnerField.Cancel();
+        }
 
         drag.PromoteOnDrag();
 
@@ -597,6 +603,7 @@ public partial class HaruGraphWindow : EditorWindow
     private void EnsureGraph()
     {
         if (!graphDirty && graph != null) return;
+        spinnerField.Cancel();
         using var sample = buildMarker.Auto();
         graphDirty = false;
         carrierUsers.Clear();
@@ -635,6 +642,10 @@ public partial class HaruGraphWindow : EditorWindow
             graphDirty = false;
         }
         graph = built;
+        foreach (var node in graph.Nodes)
+            foreach (var row in HGGraph.AllRows(node.Rows))
+                if (spinnerPages.TryGetValue(focus.Id + "/" + row.OwnerNodeId + "/" + row.Path, out int start))
+                    row.SpinnerStart = start;
         if (pendingFocusStart)
         {
             pendingFocusStart = false;

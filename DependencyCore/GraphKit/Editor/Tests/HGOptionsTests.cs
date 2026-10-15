@@ -5,45 +5,70 @@ using NUnit.Framework;
 
 public sealed class HGOptionsTests
 {
-    [HGOptionsSource("GraphKit.Tests.Options.Merge", Group = "First")]
+    [HGCatalog("GraphKit.Tests.Options.Merge", Group = "First")]
     private static readonly List<string> first = new() { "core:damage", "core:heal" };
 
-    [HGOptionsSource("GraphKit.Tests.Options.Merge", Group = "Second")]
+    [HGCatalog("GraphKit.Tests.Options.Merge", Group = "Second")]
     private static IEnumerable<string> Second => new[] { "core:damage", "mod:fire" };
 
-    [HGOptionsSource("GraphKit.Tests.Options.Numbers")]
+    [HGCatalog("GraphKit.Tests.Options.Numbers")]
     private static IEnumerable<float> Numbers() => new[] { 0.5f, 1.5f };
 
-    [HGOptionsSource("GraphKit.Tests.Options.Throw")]
+    [HGCatalog("GraphKit.Tests.Options.Throw")]
     private static IEnumerable<int> Broken()
     {
         yield return 1;
         throw new System.InvalidOperationException("iterator failed");
     }
 
-    [HGOptionsSource("GraphKit.Tests.Options.Conflict")]
+    [HGCatalog("GraphKit.Tests.Options.Conflict")]
     private static IEnumerable<int> Integers => new[] { 1 };
 
-    [HGOptionsSource("GraphKit.Tests.Options.Conflict")]
+    [HGCatalog("GraphKit.Tests.Options.Conflict")]
     private static IEnumerable<string> Strings => new[] { "one" };
 
-    [HGOptionsSource("GraphKit.Tests.Options.Labels")]
-    private static IEnumerable<HGOptionElement<int>> ADescriptions => new[]
+    [HGCatalog("GraphKit.Tests.Options.Labels")]
+    private static IEnumerable<HGCatalogEntry<int>> ADescriptions => new[]
     {
-        new HGOptionElement<int>(1, "簡單", "適合初次遊玩"),
-        new HGOptionElement<int>(2, "簡單", "另一個同名選項"),
-        new HGOptionElement<int>(3, " "),
+        new HGCatalogEntry<int>(1, "簡單", "適合初次遊玩"),
+        new HGCatalogEntry<int>(2, "簡單", "另一個同名選項"),
+        new HGCatalogEntry<int>(3, " "),
     };
 
-    [HGOptionsSource("GraphKit.Tests.Options.Labels")]
+    [HGCatalog("GraphKit.Tests.Options.Labels")]
     private static IEnumerable<int> BPlain => new[] { 1, 4 };
 
-    [HGOptionsSource("GraphKit.Tests.Options.InvalidElement")]
-    private static IEnumerable<HGOptionElement<string>> InvalidElement => new[]
+    [HGCatalog("GraphKit.Tests.Options.InvalidElement")]
+    private static IEnumerable<HGCatalogEntry<string>> InvalidElement => new[]
     {
-        new HGOptionElement<string>("valid", "有效"),
-        new HGOptionElement<string>(null, "沒有值"),
+        new HGCatalogEntry<string>("valid", "有效"),
+        new HGCatalogEntry<string>(null, "沒有值"),
     };
+
+    [Test]
+    public void SpinnerCountEditsPreserveUnknownValuesAndLeaveSourceUntouched()
+    {
+        var original = new List<int> { -1, 42, 1, 1, -1 };
+        var values = HGSpinnerField.Copy(original);
+        HGSpinnerField.SetCount(values, 1, 3);
+        HGSpinnerField.SetCount(values, -1, 1);
+        var result = HGSpinnerField.Materialize(typeof(List<int>), values);
+        CollectionAssert.AreEqual(new[] { -1, 42, 1, 1, 1 }, result);
+        CollectionAssert.AreEqual(new[] { -1, 42, 1, 1, -1 }, original);
+        HGSpinnerField.SetCount(values, 42, 0);
+        Assert.That(HGSpinnerField.Count(values, 42), Is.Zero);
+    }
+
+    [Test]
+    public void SpinnerArraysStoreValuesRatherThanDisplayLabels()
+    {
+        Assert.That(HGOptionsCatalog.TryGet("GraphKit.Tests.Options.Labels", typeof(int), out var entries, out var error), Is.True, error);
+        var values = HGSpinnerField.Copy(new[] { 3 });
+        HGSpinnerField.SetCount(values, entries[0].Value, 2);
+        HGSpinnerField.SetCount(values, entries[1].Value, 1);
+        CollectionAssert.AreEqual(new[] { 3, 1, 1, 2 }, HGSpinnerField.Materialize(typeof(int[]), values));
+        Assert.That(HGSpinnerField.TryElementType(typeof(IEnumerable<int>), out _), Is.False);
+    }
 
     [Test]
     public void DescribedIntegersMergeWithPlainValuesWithoutUsingLabelsAsIdentity()

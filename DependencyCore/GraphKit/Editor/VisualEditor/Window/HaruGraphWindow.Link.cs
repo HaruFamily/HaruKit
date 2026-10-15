@@ -28,7 +28,7 @@ public partial class HaruGraphWindow
     /// <summary>Rebuild all generation-local Port adapters and discard every old hit/compatibility reference.</summary>
     private void RebuildPorts()
     {
-        ClearPortInteractionState();
+        ClearPortInteractionState(false);
         ClearCanvasCaches(false);
         graphGeneration++;
         graph.Ports.Clear();
@@ -260,8 +260,10 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>Invalidates generation-local Port references before the graph, focus, or working copy changes.</summary>
-    private void ClearPortInteractionState()
+    private void ClearPortInteractionState(bool clearSpinnerPages = true)
     {
+        spinnerField.Cancel();
+        if (clearSpinnerPages) spinnerPages.Clear();
         EndLink();
         inputPortClickPort = null;
         inputPortClickStart = Vector2.zero;

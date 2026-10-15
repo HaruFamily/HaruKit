@@ -714,6 +714,12 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// <summary>沒有接點的值列：直接編欄位；清單裡沒有 FieldInfo 的基本型別元素改用「清單 + 索引」寫回。</summary>
         private void DrawNoPortRow(HGRow row, Rect rowRect)
         {
+            if (row.Descriptor == null && row.Field != null && row.Target != null
+                && Attribute.GetCustomAttribute(row.Field, typeof(HGSpinnerAttribute)) is HGSpinnerAttribute spinner)
+            {
+                DrawSpinnerField(row, rowRect, spinner);
+                return;
+            }
             float rightInset = 20f + ListRightInset(row);
             SplitRow(rowRect, row, rightInset, out var labelRect, out var fieldRect);
 
@@ -771,6 +777,88 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             EditorGUI.BeginChangeCheck();
             var element = HGValueField.Draw(fieldRect, items.ElementType, items.Get(row.ItemIndex), row.ForceEnumButtons, row.BoolButtons);
             if (EditorGUI.EndChangeCheck()) { items.Set(row.ItemIndex, element); AfterValueEdit(); }
+        }
+
+        private void DrawSpinnerField(HGRow row, Rect rect, HGSpinnerAttribute settings)
+        {
+            rect = HGGraph.SpinnerRect(rect, row);
+            var header = new Rect(rect.x, rect.y, rect.width, HGGraph.RowHeight);
+            float densityWidth = Mathf.Min(138f, header.width * 0.6f);
+            if (!row.HideLabel)
+            {
+                float labelWidth = Mathf.Max(0f, header.width - densityWidth - 4f);
+                GUI.Label(new Rect(header.x, header.y, labelWidth, header.height),
+                    HGStyles.Elide(row.Label, HGStyles.RowLabel, labelWidth, HGReflect.FieldDescription(row.Field)), HGStyles.RowLabel);
+            }
+            rect.y += HGGraph.RowHeight;
+            rect.height = HGSpinnerField.Height;
+            if (!string.IsNullOrEmpty(row.DrawerError))
+            {
+                EditorGUI.HelpBox(rect, row.DrawerError, MessageType.Error);
+                return;
+            }
+            if (!HGSpinnerField.TryElementType(row.Field.FieldType, out var element)) return;
+            if (row.OptionsEntries == null)
+                HGOptionsCatalog.TryGet(settings.Library, element, out row.OptionsEntries, out row.OptionsError);
+            if (!string.IsNullOrEmpty(row.OptionsError))
+            {
+                EditorGUI.HelpBox(rect, row.OptionsError, MessageType.Error);
+                return;
+            }
+            var current = row.Field.GetValue(row.Target) as IList;
+            int candidateCount = HGSpinnerField.Entries(row.OptionsEntries, current).Count;
+            string pageKey = focus.Id + "/" + row.OwnerNodeId + "/" + row.Path;
+            int columns = Mathf.Clamp(row.SpinnerColumns, 1, Mathf.Max(1, candidateCount));
+            float densityX = header.xMax - densityWidth;
+            float captionWidth = Mathf.Min(58f, densityWidth * 0.48f);
+            GUI.Label(new Rect(densityX, header.y, captionWidth, header.height),
+                new GUIContent($"顯示 {(candidateCount == 0 ? 0 : columns)} 格", "調整同時顯示的候選數量；按目錄自動保存為本機編輯器偏好，不需按存檔。"), HGStyles.Tiny);
+            int nextColumns;
+            using (new EditorGUI.DisabledScope(spinnerField.IsPainting || candidateCount < 2))
+                nextColumns = Mathf.Clamp(Mathf.RoundToInt(GUI.HorizontalSlider(
+                    new Rect(densityX + captionWidth, header.y + 3f, Mathf.Max(8f, densityWidth - captionWidth), 16f),
+                    columns, 1f, Mathf.Max(2, candidateCount))), 1, Mathf.Max(1, candidateCount));
+            row.SpinnerColumns = nextColumns;
+            if (nextColumns != columns)
+            {
+                HGSpinnerField.SavePreferredColumns(settings.Library, nextColumns);
+                if (row.SpinnerStart >= 0)
+                    row.SpinnerStart = Mathf.Clamp(Mathf.RoundToInt(row.SpinnerStart + (columns - nextColumns) * 0.5f),
+                        0, Mathf.Max(0, candidateCount - nextColumns));
+                spinnerPages[pageKey] = row.SpinnerStart;
+                // 只重量版面，不重建圖／更換控制項持有者，也不寫入內容歷程。
+                var node = graph.Nodes.Find(candidate => candidate.Id == row.OwnerNodeId);
+                if (node != null)
+                {
+                    HGGraph.MeasureNode(node);
+                    rowGeometry.Remove(node);
+                }
+                Repaint();
+                return;
+            }
+            rect.height = HGSpinnerField.MeasureHeight(rect.width, nextColumns, row.OptionsEntries, current);
+            IList next;
+            bool changed;
+            using (new EditorGUI.DisabledScope(row.Locked || row.Field.IsInitOnly))
+                changed = spinnerField.Draw(rect, row, row.Field.FieldType, current, row.OptionsEntries, settings,
+                    nextColumns, ref row.SpinnerStart, out next);
+            spinnerPages[pageKey] = row.SpinnerStart;
+            if (!changed)
+            {
+                if (Event.current.type == EventType.Used) Repaint();
+                return;
+            }
+            bool same = (current?.Count ?? 0) == next.Count;
+            for (int i = 0; same && i < next.Count; i++) same = Equals(current[i], next[i]);
+            if (same) return;
+            if (!TryMutateContent(() => row.Field.SetValue(row.Target, next), out string error))
+            {
+                ShowNotification(new GUIContent("Spinner 寫入失敗：" + error));
+                Repaint();
+                return;
+            }
+            AfterValueEdit();
+            Repaint();
         }
 
         private void DrawOptionsField(HGRow row, Rect rect, HGOptionsAttribute options)

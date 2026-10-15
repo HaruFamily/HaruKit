@@ -94,6 +94,8 @@ public static class HGStyles
     public static Color TabAccent => Color.Lerp(T.nodeBody, T.text, 0.22f);
     public static Color TabBody => T.nodeBody;
     public static Color FoldoutHeader => Color.Lerp(T.nodeBody, T.fieldBackground, 0.35f);
+    public static Color SpinnerBackground => new(T.fieldBackground.r * 0.5f, T.fieldBackground.g * 0.5f, T.fieldBackground.b * 0.5f, 1f);
+    public static Color SpinnerBorder => Color.Lerp(SpinnerBackground, T.text, 0.12f);
     public static Color ListRowHover => T.listRowHover;
     public static Color ListRowDragging => T.listRowDragging;
 
@@ -160,6 +162,7 @@ public static class HGStyles
         gradientCache.Clear();
         elideCache.Clear();
         tabLabels.Clear();
+        spinnerArrow = spinnerNumber = spinnerNumberError = spinnerLabel = null;
     }
 
     /// <summary>
@@ -202,6 +205,34 @@ public static class HGStyles
     }, Text);
 
     public static GUIStyle RowLabelError => rowLabelError ??= Ink(new GUIStyle(RowLabel), Error);
+
+    private static GUIStyle spinnerArrow, spinnerNumber, spinnerNumberError, spinnerLabel;
+
+    public static GUIStyle SpinnerArrow => spinnerArrow ??= Ink(new GUIStyle(EditorStyles.label)
+    {
+        alignment = TextAnchor.MiddleCenter,
+        padding = new RectOffset(0, 0, 0, 0),
+        fontSize = 12,
+    }, Muted);
+
+    public static GUIStyle SpinnerNumber => spinnerNumber ??= Ink(new GUIStyle(EditorStyles.label)
+    {
+        alignment = TextAnchor.MiddleCenter,
+        padding = new RectOffset(0, 0, 0, 0),
+        fontSize = 14,
+        fontStyle = FontStyle.Bold,
+    }, Text);
+
+    public static GUIStyle SpinnerNumberError => spinnerNumberError ??= Ink(new GUIStyle(SpinnerNumber), Error);
+
+    public static GUIStyle SpinnerLabel => spinnerLabel ??= Ink(new GUIStyle(EditorStyles.label)
+    {
+        alignment = TextAnchor.UpperCenter,
+        padding = new RectOffset(0, 0, 0, 0),
+        fontSize = 11,
+        wordWrap = true,
+        clipping = TextClipping.Clip,
+    }, Text);
 
     private static readonly Dictionary<(TextAnchor alignment, bool selected), GUIStyle> tabLabels = new();
 

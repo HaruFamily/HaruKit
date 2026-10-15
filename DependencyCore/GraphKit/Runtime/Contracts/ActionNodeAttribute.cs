@@ -157,14 +157,30 @@ public sealed class HGOptionsAttribute : Attribute
     public HGOptionsAttribute(string library) => Library = library;
 }
 
-/// <summary>靜態來源回傳 IEnumerable&lt;T&gt; 或 IEnumerable&lt;HGOptionElement&lt;T&gt;&gt;，同庫依實際值型別合併。</summary>
+/// <summary>以共用候選目錄編輯 List&lt;T&gt; 或 T[]；重複值表示數量，適用不依賴順序的集合。</summary>
+[AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
+public sealed class HGSpinnerAttribute : Attribute
+{
+    public string Library { get; }
+    public int CountMin { get; }
+    public int CountMax { get; }
+
+    public HGSpinnerAttribute(string library, int countMin = 0, int countMax = 1)
+    {
+        Library = library;
+        CountMin = countMin;
+        CountMax = countMax;
+    }
+}
+
+/// <summary>靜態來源回傳 IEnumerable&lt;T&gt; 或 IEnumerable&lt;HGCatalogEntry&lt;T&gt;&gt;，供候選控制項共用。</summary>
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property | AttributeTargets.Method, Inherited = false, AllowMultiple = false)]
-public sealed class HGOptionsSourceAttribute : Attribute
+public sealed class HGCatalogAttribute : Attribute
 {
     public string Library { get; }
     public string Group { get; set; }
 
-    public HGOptionsSourceAttribute(string library) => Library = library;
+    public HGCatalogAttribute(string library) => Library = library;
 }
 
 /// <summary>

@@ -150,6 +150,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         // 列生命週期內的顯示快照；重繪不重新列舉候選來源。
         internal List<HGOptionsCatalog.Entry> OptionsEntries;
         internal string OptionsError;
+        internal int SpinnerStart = -1;
+        internal int SpinnerColumns = 5;
 
         /// <summary>payload：這一列自己承載一整段項目（List 形狀）。</summary>
         // 「承載一段」與「屬於某一段的某一項」是兩件事，用兩組欄位表示，不從 ItemIndex 是不是 -1 推。
@@ -947,9 +949,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
                 if (HGReflect.IsSlotType(t))
                 {
-                    if (f.IsDefined(typeof(HGOptionsAttribute), false))
+                    if (f.IsDefined(typeof(HGOptionsAttribute), false) || f.IsDefined(typeof(HGSpinnerAttribute), false))
                         diagnostics?.Add(new GraphDiagnostic("graphkit.options.unsupported-slot", GraphDiagnosticSeverity.Error,
-                            "HGOptions 只支援一般值欄位與 List<T>，不可標在 Slot 上。",
+                            "HGOptions／HGSpinner 不可標在 Slot 上。",
                             new GraphDiagnosticLocation(fieldPath: fieldPath)));
                     var slot = f.GetValue(obj);
                     if (slot == null)
@@ -968,6 +970,25 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     row.HideLabel = HGReflect.IsLabelHidden(f);
                     dest.Add(row);
                     AddDefaultListRow(dest, row, diagnostics);
+                    continue;
+                }
+
+                var spinner = f.GetCustomAttribute<HGSpinnerAttribute>();
+                if (spinner != null)
+                {
+                    string error = f.IsDefined(typeof(HGOptionsAttribute), false) ? "HGSpinner 與 HGOptions 不可同時使用。"
+                        : !HGSpinnerField.TryElementType(t, out _) ? "HGSpinner 僅支援一般值的 List<T> 或一維 T[]。"
+                        : spinner.CountMin < 0 || spinner.CountMax < spinner.CountMin ? "HGSpinner 數量範圍須滿足 0 ≤ CountMin ≤ CountMax。"
+                        : string.IsNullOrWhiteSpace(spinner.Library) ? "HGSpinner 候選目錄名稱不可為空。" : null;
+                    if (error != null)
+                        diagnostics?.Add(new GraphDiagnostic("graphkit.spinner.configuration", GraphDiagnosticSeverity.Error,
+                            error, new GraphDiagnosticLocation(fieldPath: fieldPath)));
+                    dest.Add(new HGRow
+                    {
+                        Kind = HGRowKind.NoPort, Label = label, Depth = depth, Path = fieldPath,
+                        LeftPad = leftPad, Target = obj, Field = f, HideLabel = HGReflect.IsLabelHidden(f), DrawerError = error,
+                        SpinnerColumns = HGSpinnerField.PreferredColumns(spinner.Library),
+                    });
                     continue;
                 }
 
@@ -1628,6 +1649,18 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
         private static float DescriptorHeight(HGRow row, float nodeWidth)
         {
+            if (row.Descriptor == null && row.Field?.GetCustomAttribute<HGSpinnerAttribute>() is HGSpinnerAttribute spinner)
+            {
+                float height = HGSpinnerField.Height;
+                if (string.IsNullOrEmpty(row.DrawerError) && HGSpinnerField.TryElementType(row.Field.FieldType, out var element))
+                {
+                    if (row.OptionsEntries == null)
+                        HGOptionsCatalog.TryGet(spinner.Library, element, out row.OptionsEntries, out row.OptionsError);
+                    height = HGSpinnerField.MeasureHeight(SpinnerRect(new Rect(0f, 0f, nodeWidth, 0f), row).width,
+                        row.SpinnerColumns, row.OptionsEntries, row.Field.GetValue(row.Target) as IList);
+                }
+                return height + RowHeight + 3f;
+            }
             if (row.Descriptor == null || row.ValueDrawer == null) return RowHeight;
             try
             {
@@ -1641,6 +1674,13 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 row.DrawerError = exception.Message;
                 return RowHeight;
             }
+        }
+
+        internal static Rect SpinnerRect(Rect rect, HGRow row)
+        {
+            float left = 4f + row.LeftPad + row.Depth * IndentWidth;
+            float right = 4f + (row.IsItem ? ListDeleteWidth : 0f);
+            return new Rect(rect.x + left, rect.y + 1f, Mathf.Max(8f, rect.width - left - right), rect.height - 2f);
         }
 
         internal static Rect ValueFieldRect(Rect rect, HGRow row)

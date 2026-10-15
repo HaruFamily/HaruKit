@@ -236,13 +236,13 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - 宣告定位略過註解、一般／逐字字串與字元 literal，保留原始行號；支援區塊／檔案層級 namespace、巢狀 namespace 與型別。此處是文字定位，不是完整 C# 編譯器／條件編譯求值器。
 - 找不到匹配來源時回報目標完整型別，不回退至其他 namespace 或組件的同名類別。快取依 Type 隔離，Domain Reload 後重建。
 
-### 5.7 一般值候選選單
+### 5.7 共用候選目錄與控制項
 
 - `[HGOptions("LibraryId")]` 標記一般欄位。`T` 單選，`List<T>` 多選；值型別支援 `HGValueField` 的值型別、`string` 與 Unity 物件引用。資料仍保存原值／原資產引用，不增加序列化包裝型別。此功能走反射建列；完整 metadata descriptor 與 Slot 不使用此 Attribute。
-- `[HGOptionsSource("LibraryId", Group = "可選整批分組")]` 標在靜態欄位、可讀靜態屬性或無參數靜態方法；回傳 `IEnumerable<T>` 或 `IEnumerable<HGOptionElement<T>>`（含 List／陣列等實作）。`HGOptionElement<T>(value, label, tooltip)` 是顯示描述，透過 `IHGOptionElement` 讀取；只將 Value 寫入圖內 T／List<T>。來源可位於 Editor 組件，也可跨 class／assembly 合併。只讀來源應在編輯模式可用，不可依賴 Play 初始化、修改圖或資產；來源需為有限集合。
+- `[HGCatalog("LibraryId", Group = "可選整批分組")]` 標在靜態欄位、可讀靜態屬性或無參數靜態方法；回傳 `IEnumerable<T>` 或 `IEnumerable<HGCatalogEntry<T>>`（含 List／陣列等實作）。`HGCatalogEntry<T>(value, label, tooltip)` 是顯示描述，透過 `IHGCatalogEntry` 讀取；只將 Value 寫入圖內欄位。目錄由 HGOptions 與 HGSpinner 共用。來源可位於 Editor 組件，也可跨 class／assembly 合併。只讀來源應在編輯模式可用，不可依賴 Play 初始化、修改圖或資產；來源需為有限集合。
 - 同庫的實際值型別 T 必須一致，並可指派到欄位元素型別；一般值與描述元素可混用，不做字串／數值隱式轉型。候選依 Value 的 `Equals` 去重，來源依完整型別與成員名稱排序、各來源保留列舉順序；重複值取先遇到的整份顯示資料。同 Label 不同 Value 仍是不同選項。
 - Label 空白時使用原始值文字（一般值 ToString、Unity 物件名稱）。選單與收起欄位顯示 Label；選單以淡色補不同於 Label 的原始值，搜尋比對 Label、原始值及來源／分組。tooltip 補逐項說明、原始值、來源及資產路徑；未知值保留原值顯示。
-- `HGOptionsCatalog` 只快取反射成員索引。欄位第一次繪製取得列生命週期內的顯示快照，重建列後更新；每次開選單另取最新候選快照。重繪不反覆呼叫來源。未知庫、型別衝突、null／Missing 實際值或 iterator 例外顯示來源錯誤，整份候選拒絕，不使用半份結果。編譯 Domain Reload 後重建索引。
+- `HGOptionsCatalog` 只快取反射成員索引。HGOptions 第一次繪製、HGSpinner 建列量測時取得列生命週期內的顯示快照，重建列後更新；每次開選單另取最新候選快照。重繪不反覆呼叫來源。未知庫、型別衝突、null／Missing 實際值或 iterator 例外顯示來源錯誤，整份候選拒絕，不使用半份結果。編譯 Domain Reload 後重建索引。
 - 單選點選後寫回並關閉；多選每次勾選、取消勾選或清空立即以一次內容交易寫回，保持 Popup 開啟供連選，每次操作可獨立 Undo。Esc／失焦只關閉，不撤回已寫入內容；僅開啟或搜尋不修改。未在候選內的既有值在選單標示並保留；清單可取消勾選移除，不在打開時自動清理或去重舊資料。
 - Popup 寬度依候選文字限制於 260～420px，高度按開啟時的候選數量配置，最多顯示 12 列後捲動；搜尋不縮放視窗，改搜尋字時回到清單頂端。選項每列 24px，底部保留已選數量與清空。
 - 多選成功寫回後同步重建圖，以同一 Target／Field／Path 重新取得列並採納這次重建的 generation；不得沿用舊 HGRow。外部 Undo／切焦點／重建仍拒絕過期回呼，找不到同一欄位時停止連選並要求重開。
@@ -251,18 +251,18 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - `[HGEnum]` 是 enum 按鈕列；`HGOptions` 是一般值的搜尋選單，兩者不組合成位元運算。Slot 的常數模式未接入候選庫，標在 Slot 上會產生配置診斷。
 
 ```csharp
-[HGOptionsSource("DamagePresets", Group = "常用")]
+[HGCatalog("DamagePresets", Group = "常用")]
 private static IEnumerable<int> DamagePresets => new[] { 5, 10, 20 };
 
 [SerializeField, HGOptions("DamagePresets")]
 private int damage;
 
-[HGOptionsSource("Levels")]
-private static IEnumerable<HGOptionElement<int>> Levels => new[]
+[HGCatalog("Levels")]
+private static IEnumerable<HGCatalogEntry<int>> Levels => new[]
 {
-    new HGOptionElement<int>(1, "簡單", "適合初次遊玩"),
-    new HGOptionElement<int>(2, "普通"),
-    new HGOptionElement<int>(3, "困難"),
+    new HGCatalogEntry<int>(1, "簡單", "適合初次遊玩"),
+    new HGCatalogEntry<int>(2, "普通"),
+    new HGCatalogEntry<int>(3, "困難"),
 };
 
 [SerializeField, HGOptions("Levels")]
@@ -270,6 +270,22 @@ private int level;
 
 [SerializeField, HGOptions("Tags")]
 private List<string> tags;
+```
+
+#### Spinner 數量格位
+
+- `[HGSpinner("LibraryId", countMin = 0, countMax = 1)]` 標記一般值 `List<T>` 或一維 `T[]`，T 沿用候選值型別規則。介面將重複值呈現為數量，只適用不依賴集合順序的欄位；不改欄位儲存型別。不得與 HGOptions 並用、不可標在 Slot，完整 metadata descriptor 不使用此 Attribute。錯誤型別、空目錄名稱及非 `0 ≤ CountMin ≤ CountMax` 會產生配置診斷。
+- 標題右側提供「顯示 N 格」Slider，預設 5 格（不超過候選總數），可調 1～全部候選；候選包含既有未知值。改顯示數量時盡量保留目前視窗中心。格位等分整個可用寬度，欄距上限 8px，窄欄按比例縮小；不保留固定欄寬的兩側剩餘空間。
+- 欄位標題下方以圓角近黑底框包住格位至位置 Slider。外框沿節點內容左右各 4px；巢狀左縮排與清單刪除鈕另依列結構計入，不預留純值列沒有的接點空間。框內左右內距 6px；數量框最多 40×24px，上下箭頭無外框，三者共用同一中心線。Label 按目前欄寬量測整份目錄（含未知值），短標籤只留一行、長標籤最多兩行，移動位置 Slider 不跳高度。完整名稱保留於 Tooltip；位置 Slider 緊接 Label 下方 4px。HGGraph.SpinnerRect 與 HGSpinnerField.MeasureHeight 共用量測／繪製尺寸。
+- 樣式與黑底由 HGStyles 管理，黑底從主題 fieldBackground 壓暗衍生並隨主題重建。顯示密度變更只重算節點尺寸、作廢該節點的列幾何快取，不重建圖、不寫內容／Undo。使用者調整密度時立即寫入 EditorPrefs 的 `HaruGraph.Spinner.Columns.<LibraryId>`，按候選目錄共用本機偏好；建列時讀取，未設定預設 5。重開視窗、重載或 Undo 重建均保留偏好，不需圖的存檔；候選暫時不足只限制當次顯示數，不覆寫偏好。一般內容重建僅依焦點 Id／NodeId／FieldPath 恢復暫態觀看位置，清除互動視圖時重設位置。HideLabel 只隱藏欄位名稱，密度控制列仍保留。
+- 底部只有全寬位置 Slider，逐格移動可見候選視窗，候選全數可見時停用；不提供左右翻頁按鈕或資訊圖示。Slider 滑入提示顯示可見索引與全部已選候選摘要，數量越界在該格以錯誤字色與 Tooltip 呈現。第一次定位至第一個已選值附近，無選取時置於目錄中段。兩個 Slider 都不進資料、Dirty 或 Undo，拖曳塗選期間停用。
+- 箭頭以一步調整數量，達邊界停用；既有越界數量仍原樣顯示並警示，只有使用者編輯該格才修正。CountMin 是每個候選的編輯下限，開圖不自動補值或清理資料。點中央格切換下限與下限加一（上限封頂）；拖曳按起始格決定塗選或取消，塗選保留既有較高數量，取消降至下限。
+- 拖曳只改 UI 預覽，MouseUp 一次寫回；Esc、失焦、重建、切圖與 Undo 取消未提交預覽並釋放 hotControl。寫回使用 TryMutateContent／AfterValueEdit，整次拖曳一步 Undo，箭頭每次獨立一步。數量框間的留白不接受起手點擊；拖過多格仍補齊中間格。繪製途中不重建圖；一般內容重建後以焦點 Id／NodeId／FieldPath 恢復暫態顯示位置，切圖／Undo 清除。
+- 未知既有值追加為警告格，保留實際值並允許減少或取消，不允許增加。其他格的修改不清除未知值、不去重或重新排序原有項目；減少從尾端移除指定值，增加追加至尾端。目錄失敗停止編輯並顯示錯誤，不以部分候選覆蓋資料。
+
+```csharp
+[SerializeField, HGSpinner("Levels", 0, 9)]
+private List<int> levelCounts;
 ```
 
 ## 6. 串接 GraphKit（給 Tool 作者）

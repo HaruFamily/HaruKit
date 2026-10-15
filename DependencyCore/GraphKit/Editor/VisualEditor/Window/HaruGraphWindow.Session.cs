@@ -599,6 +599,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
 
     private void OnDisable()
     {
+        spinnerField.Cancel();
         EditorApplication.update -= UpdateExecutionView;
         EditorApplication.playModeStateChanged -= ExecutionPlayModeChanged;
         AssemblyReloadEvents.beforeAssemblyReload -= CancelObservedExecutions;
@@ -610,6 +611,12 @@ public partial class HaruGraphWindow : IHasCustomMenu
         SaveLibraryLayout();
         EditorPrefs.SetFloat(PrefLeftWidth, leftWidth);
         EditorPrefs.SetFloat(PrefRefSection, refSectionHeight);
+    }
+
+    private void OnLostFocus()
+    {
+        spinnerField.Cancel();
+        Repaint();
     }
 
     public override void SaveChanges()
