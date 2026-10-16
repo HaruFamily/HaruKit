@@ -8,8 +8,7 @@ using UnityEngine;
 /// 共用資產的存放位置與命名規則。
 ///
 /// 位置由使用端專案決定，不由套件寫死：套件若硬指一個 Assets 底下的路徑，等於替每個安裝它的專案
-/// 決定資料夾配置，而且刪掉那個資料夾後下次抽出又會自己長回來。這裡改成第一次抽出時問使用者，
-/// 選擇存在 EditorPrefs（key 綁專案，換專案不互相污染）。
+/// 決定資料夾配置。使用者從資產庫選擇資料夾，選擇存在 EditorPrefs（key 綁專案，換專案不互相污染）。
 /// </summary>
 public static class HGAssetStore
 {
@@ -43,32 +42,57 @@ public static class HGAssetStore
     }
 
     /// <summary>開資料夾選擇器讓使用者指定存放位置，成功時寫回 EditorPrefs。</summary>
-    public static bool TryPickFolder(out string folder)
+    public static bool TryPickFolder(out string folder, System.Action<string> onError = null)
     {
         folder = null;
 
-        string picked = EditorUtility.OpenFolderPanel("選擇共用資產存放資料夾", Application.dataPath, string.Empty);
+        string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+        string current = Folder;
+        string startFolder = string.IsNullOrEmpty(current) ? Application.dataPath : Path.Combine(projectRoot, current);
+        string picked = EditorUtility.OpenFolderPanel("選擇共用資產存放資料夾", startFolder, string.Empty);
         if (string.IsNullOrEmpty(picked)) return false;
 
         // AssetDatabase 只認 "Assets/" 開頭的相對路徑；選到專案外的資料夾一律擋掉。
-        string projectRoot = Directory.GetParent(Application.dataPath).FullName.Replace('\\', '/');
-        picked = picked.Replace('\\', '/');
-        if (!picked.StartsWith($"{projectRoot}/Assets", System.StringComparison.OrdinalIgnoreCase))
+        string assetsRoot = Path.GetFullPath(Application.dataPath).Replace('\\', '/').TrimEnd('/');
+        picked = Path.GetFullPath(picked).Replace('\\', '/').TrimEnd('/');
+        var comparison = Application.platform == RuntimePlatform.WindowsEditor
+            ? System.StringComparison.OrdinalIgnoreCase : System.StringComparison.Ordinal;
+        if (!string.Equals(picked, assetsRoot, comparison) && !picked.StartsWith(assetsRoot + "/", comparison))
         {
-            Debug.LogError($"[GraphKit] 共用資產資料夾必須在 Assets 底下：{picked}");
-            return false;
+            return FolderSelectionFailed($"請選擇目前專案 Assets 內的資料夾：{picked}", onError);
         }
 
-        string relative = picked.Substring(projectRoot.Length + 1);
+        if (!Directory.Exists(picked))
+            return FolderSelectionFailed($"選擇的資料夾已不存在：{picked}", onError);
+
+        string relative = "Assets" + picked.Substring(assetsRoot.Length);
+        // 原生選擇器中剛建立的資料夾可能尚未匯入；只在需要時同步刷新，再驗證登記結果。
         if (!AssetDatabase.IsValidFolder(relative))
         {
-            Debug.LogError($"[GraphKit] 不是有效的專案資料夾：{relative}");
-            return false;
+            try
+            {
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            }
+            catch (System.Exception exception)
+            {
+                return FolderSelectionFailed($"匯入資產庫資料夾失敗：{relative}\n{exception.Message}", onError);
+            }
+        }
+        if (!AssetDatabase.IsValidFolder(relative))
+        {
+            return FolderSelectionFailed($"Unity 尚未識別資料夾：{relative}\n請查看 Console 的匯入錯誤，修正後重新選擇。", onError);
         }
 
         Folder = relative;
         folder = relative;
         return true;
+    }
+
+    private static bool FolderSelectionFailed(string message, System.Action<string> onError)
+    {
+        Debug.LogError($"[GraphKit] {message}\n資產庫設定未變更。");
+        onError?.Invoke(message);
+        return false;
     }
 
     private static string SanitizeFileName(string value)

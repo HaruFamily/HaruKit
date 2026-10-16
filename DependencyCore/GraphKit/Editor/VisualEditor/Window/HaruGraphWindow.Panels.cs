@@ -230,9 +230,15 @@ public partial class HaruGraphWindow
 
         var prevColor = GUI.color;
         if (unset) GUI.color = HGStyles.Warning;
-        if (GUI.Button(folderButton, folderLabel, EditorStyles.miniButton) && HGAssetStore.TryPickFolder(out _))
-            HGAssetIndex.Refresh();
+        bool pickFolder = GUI.Button(folderButton, folderLabel, EditorStyles.miniButton);
         GUI.color = prevColor;
+        if (pickFolder && HGAssetStore.TryPickFolder(out string selectedFolder,
+                error => ShowNotification(new GUIContent(error))))
+        {
+            HGAssetIndex.Refresh();
+            ShowNotification(new GUIContent($"資產庫已設定：{selectedFolder}"));
+            Repaint();
+        }
 
         assetLibrary.Draw(assetRect, assetRect.y + 24f, AssetLibraryView(), inlineName, drag, AssetLibraryCommands());
 
