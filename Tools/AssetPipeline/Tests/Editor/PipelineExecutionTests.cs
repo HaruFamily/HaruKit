@@ -79,7 +79,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [TestCase("unrelated-empty")]
         [TestCase("unrelated-null")]
         [TestCase("conflict")]
-        public void MissingTypeCleanupRemovesOnlyAffectedDataAndStillRequiresValidGraph(string mode)
+        public void MissingTypeCleanupPreservesUnfinishedDataAndSeparatesSaveFromValidation(string mode)
             => RunMissingTypeCleanupCase(mode, false);
 
         [TestCase("carrier")]
@@ -170,6 +170,8 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                     Assert.That(session.Document.Actions.Count, Is.EqualTo(1));
                     Assert.That(session.IsDirty, Is.True);
                     Assert.That(session.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+                    Assert.That(pipeline.graph.IsValidated, Is.False, "Commit 只保存清理後內容。");
+                    pipeline.graph.Verify();
                     Assert.That(pipeline.graph.IsValidated, Is.True);
                     Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
                     return;
@@ -215,14 +217,12 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 if (mode == "conflict") pipeline.graph = GraphDeepCopy.Copy(pipeline.graph);
                 var oldGraph = pipeline.graph;
 
-                bool shouldFail = mode == "conflict" || invalid;
-                if (invalid) LogAssert.Expect(LogType.Error, new System.Text.RegularExpressions.Regex("\\[AssetPipeline\\] 驗證未通過"));
+                bool shouldFail = mode == "conflict";
                 bool saved = model.Save();
                 Assert.That(saved, Is.EqualTo(!shouldFail), model.LastCommitDiagnostic?.Message);
                 if (shouldFail)
                 {
-                    if (mode == "conflict") Assert.That(model.LastCommitDiagnostic.Code, Is.EqualTo("graphkit.commit.owner-changed"));
-                    else Assert.That(model.LastCommitDiagnostic.Code, Is.EqualTo("graphkit.commit.validation-failed"));
+                    Assert.That(model.LastCommitDiagnostic.Code, Is.EqualTo("graphkit.commit.owner-changed"));
                     Assert.That(File.ReadAllBytes(path), Is.EqualTo(before));
                     Assert.That(pipeline.graph, Is.SameAs(oldGraph));
                     Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
@@ -235,17 +235,20 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 Assert.That(model.LastCommitDiagnostic, Is.Null);
                 Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
                 Assert.That(pipeline.graph, Is.Not.SameAs(oldGraph), "舊 session 必須失去提交基準。");
-                Assert.That(pipeline.graph.IsValidated, Is.True);
-                int count = mode == "empty" ? 0 : 1;
+                Assert.That(pipeline.graph.IsValidated, Is.False, "保存未完成內容不設定驗證旗標。");
+                Assert.That(GraphVerifier.CollectDiagnostics(pipeline.graph)
+                    .Exists(d => d.Severity == GraphDiagnosticSeverity.Error), Is.EqualTo(invalid),
+                    "允許保存不能放寬內容驗證，也不能清掉無關的錯誤資料。");
+                int count = mode == "empty" ? 0 : unrelatedEmpty ? 2 : 1;
                 Assert.That(pipeline.graph.Actions.Count, Is.EqualTo(count));
                 if (count > 0)
                 {
-                    Assert.That(((RepairValidBody)pipeline.graph.Actions[count - 1].Node.BodyObject).value, Is.EqualTo(99));
-                    Assert.That(pipeline.graph.Actions[count - 1].Node.Id, Is.EqualTo(validId));
+                    Assert.That(((RepairValidBody)pipeline.graph.Actions[0].Node.BodyObject).value, Is.EqualTo(99));
+                    Assert.That(pipeline.graph.Actions[0].Node.Id, Is.EqualTo(validId));
                 }
                 Assert.That(model.Data, Is.SameAs(working));
                 Assert.That(model.Dirty, Is.False);
-                Assert.That(model.Save(), Is.True, "清理後可繼續正常驗證與存檔。");
+                Assert.That(model.Save(), Is.True, "清理後可繼續保存，內容錯誤由明確驗證回報。");
                 Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
 
                 AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
@@ -253,9 +256,21 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 Assert.That(UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(pipeline), Is.False);
                 Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
                 Assert.That(pipeline.graph.Actions.Count, Is.EqualTo(count));
-                Assert.That(pipeline.graph.IsValidated, Is.True);
+                Assert.That(pipeline.graph.IsValidated, Is.False);
                 if (count > 0)
-                    Assert.That(((RepairValidBody)pipeline.graph.Actions[count - 1].Node.BodyObject).value, Is.EqualTo(99));
+                    Assert.That(((RepairValidBody)pipeline.graph.Actions[0].Node.BodyObject).value, Is.EqualTo(99));
+                if (mode == "unrelated-empty")
+                    Assert.That(pipeline.graph.Actions[1].Node.Kind, Is.EqualTo(NodeKind.Empty));
+                if (mode == "unrelated-null") Assert.That(pipeline.graph.Actions[1].Node, Is.Null);
+                if (mode == "token-mixed")
+                {
+                    Assert.That(pipeline.graph.Tokens.Count, Is.EqualTo(1));
+                    Assert.That(pipeline.graph.Tokens[0].Name, Is.EqualTo("Unconfigured"));
+                    Assert.That(pipeline.graph.Tokens[0].Slot, Is.Null);
+                }
+                if (invalid) LogAssert.Expect(LogType.Error, new System.Text.RegularExpressions.Regex("\\[AssetPipeline\\] 驗證未通過"));
+                pipeline.graph.Verify();
+                Assert.That(pipeline.graph.IsValidated, Is.EqualTo(!invalid), "重載後仍須依實際內容驗證。");
             }
             finally
             {

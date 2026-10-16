@@ -389,11 +389,15 @@ public class HGModel
         return HGStepKind.None;
     }
 
-    /// <summary>先以 Core 規則驗證副本；通過後才寫回 Owner。</summary>
+    /// <summary>保存工作副本；內容錯誤不阻擋，仍檢查清理、版本與寫入安全。</summary>
     public bool Save()
+        => Save(false);
+
+    /// <summary>視窗剛完成驗證時，允許隨交易保存該次旗標；不在保存時執行驗證。</summary>
+    internal bool Save(bool preserveValidation)
     {
         LastCommitDiagnostic = null;
-        try { return SaveCore(); }
+        try { return SaveCore(preserveValidation); }
         catch (Exception exception)
         {
             LastCommitDiagnostic = new GraphDiagnostic("graphkit.commit.save-failed", GraphDiagnosticSeverity.Error,
@@ -426,16 +430,18 @@ public class HGModel
         return true;
     }
 
-    private bool SaveCore()
+    private bool SaveCore(bool preserveValidation)
     {
         if (commitGuard == null) return false;
+        if (Owner != null && (UnityEditor.SerializationUtility.HasManagedReferencesWithMissingTypes(Owner)
+            || HGMissingTypeCleanup.HasLostContent(Doc))) preserveValidation = false;
         if (!CleanMissingTypes()) return false;
         LastCommitDiagnostic = commitGuard.Check();
         if (LastCommitDiagnostic != null) return false;
         var toStore = DeepCopy(Data);
         if (toStore == null) return false;
         // 保存未完成內容不要求驗證；內容修改撤銷舊結果，純版面沿用既有狀態。
-        if (!IsLayoutOnlySave(toStore))
+        if (!preserveValidation && !IsLayoutOnlySave(toStore))
             toStore.InvalidateValidation();
 
         if (!commitGuard.TryWrite(toStore, out var failure))
@@ -447,13 +453,16 @@ public class HGModel
         if (Owner is Component component && component.gameObject.scene.IsValid())
             EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
         AssetDatabase.SaveAssets();
+        // 工作副本仍供下一次編輯使用，不可讓後續純版面保存復活舊驗證旗標。
+        if (!toStore.IsValidated) Doc.InvalidateValidation();
         Dirty = false;
         ContentDirty = false;
         return true;
     }
 
     /// <summary>這次存檔可以沿用上次的驗證結果：內容沒變，而且要寫回的副本本身就帶著通過的旗標。</summary>
-    private bool IsLayoutOnlySave(IGraphDocument toStore) => !ContentDirty && toStore.IsValidated;
+    private bool IsLayoutOnlySave(IGraphDocument toStore)
+        => !ContentDirty && toStore.IsValidated && IsStoredDocumentValidated;
 
     /// <summary>視窗用：目前的未存修改只有版面，存檔不會被驗證錯誤擋住。</summary>
     public bool HasOnlyLayoutChanges => Dirty && !ContentDirty && IsStoredDocumentValidated;

@@ -183,19 +183,21 @@ where TTiming : Enum
             TryValidate(out runtimeValidationError);
             runtimeValidationChecked = true;
         }
-        if (runtimeValidationError == null) return true;
-        if (!_hasLoggedValidationFailure)
-        {
-            Debug.LogError($"[LogicGraph] 圖內容不合法，停止執行／求值：{runtimeValidationError}");
-            _hasLoggedValidationFailure = true;
-        }
-        return false;
+        return runtimeValidationError == null;
     }
 
     /// <summary>建立本圖的具名求值表。首次使用檢查實際圖內容，失敗回空表；獨立查詢不建立時機執行觀察 session。</summary>
     public TokenTable<TPack> CreateTokenTable()
     {
-        if (!EnsureRuntimeValidation()) return new TokenTable<TPack>();
+        if (!EnsureRuntimeValidation())
+        {
+            if (!_hasLoggedValidationFailure)
+            {
+                Debug.LogError($"[LogicGraph] 圖內容不合法，停止求值：{runtimeValidationError}");
+                _hasLoggedValidationFailure = true;
+            }
+            return new TokenTable<TPack>();
+        }
 
         var table = new TokenTable<TPack> { Properties = (propertyStore ??= new PropertyStore()).Root(Properties) };
         foreach (var endpoint in Tokens) table.Register(endpoint);
@@ -233,10 +235,12 @@ where TTiming : Enum
         => TriggerAction(timing, pack, CancellationToken.None);
 
     /// <summary>依清單順序執行指定時機的動作，並將呼叫端的生命週期取消傳入 TokenTable；每次呼叫建立新的表。</summary>
-    /// <remarks>首次使用檢查實際圖內容；不合法時記錄錯誤並跳過。節點沿用 tokens.CancellationToken，取消與例外向 await 呼叫端傳遞。</remarks>
+    /// <remarks>首次使用檢查實際圖內容；不合法時以 InvalidOperationException 傳回失敗，不執行動作。節點沿用 tokens.CancellationToken，取消與例外向 await 呼叫端傳遞。</remarks>
     public async UniTask TriggerAction(TTiming timing, TPack pack, CancellationToken cancellationToken, string executionName = null)
     {
-        if (!EnsureRuntimeValidation()) return;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!EnsureRuntimeValidation())
+            throw new InvalidOperationException($"[LogicGraph] {executionName ?? timing.ToString()} 圖內容不合法，拒絕執行：{runtimeValidationError}");
         var tokens = CreateTokenTable();
         var actions = GetActions(timing);
         cancellationToken.ThrowIfCancellationRequested();

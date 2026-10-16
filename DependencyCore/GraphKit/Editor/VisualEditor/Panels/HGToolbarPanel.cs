@@ -91,7 +91,7 @@ public static class HGToolbarPanel
         GUI.enabled = true;
 
         x -= 52f + Gap;
-        if (GUI.Button(new Rect(x, y, 52f, ButtonHeight), new GUIContent("檢查", "檢查目前圖；結果不影響存檔")))
+        if (GUI.Button(new Rect(x, y, 52f, ButtonHeight), new GUIContent("驗證", "驗證目前圖；未儲存內容的結果隨存檔寫回。Ctrl+S 連按兩次可驗證並存檔。")))
             cmd.Validate?.Invoke();
 
         // 取消會捨棄全部修改，與存檔之間多留一點距離，避免順手按錯。

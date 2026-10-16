@@ -274,11 +274,12 @@ public partial class HaruGraphWindow
                 // F3 不是輸入字元，搜尋框握著焦點時也要能跳下一筆，所以排在文字輸入判斷之前。
                 if (e.keyCode == KeyCode.F3 && nodeSearch.IsOpen) { StepNodeSearch(e.shift ? -1 : 1); e.Use(); break; }
                 // 左欄與焦點列的輸入框畫在畫布之後，按鍵先到這裡：正在打字時不能當快捷鍵吃掉，
-                // 否則 F 會被 FrameAll 搶走、Delete 會刪節點。改名框只看 IsEditing：它可能這一幀剛好沒握焦點。
+                // 否則 A／空白會被聚焦操作搶走、Delete 會刪節點。改名框只看 IsEditing：它可能這一幀剛好沒握焦點。
                 if (inlineName.IsEditing || EditorGUIUtility.editingTextField) break;
                 // 選著群組時 Delete 只刪群組、節點留著；沒選群組才刪選取的節點。
                 if (e.keyCode == KeyCode.Delete) { if (!DeleteSelectedNodeGroup()) DeleteSelection(); e.Use(); }
-                else if (e.keyCode == KeyCode.F && !e.control) { FrameAll(); e.Use(); }
+                else if (e.keyCode == KeyCode.A && !e.control && !e.command && !e.alt && !e.shift) { FrameAll(); e.Use(); }
+                else if (e.keyCode == KeyCode.Space && !e.control && !e.command && !e.alt && !e.shift) { FrameNodes(true); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.F) { OpenNodeSearch(); e.Use(); }
                 else if (e.keyCode == KeyCode.Escape && nodeSearch.IsOpen) { nodeSearch.Close(); e.Use(); }
                 else if (e.control && e.keyCode == KeyCode.C) { CopySelection(); e.Use(); }
@@ -565,6 +566,9 @@ public partial class HaruGraphWindow
     }
 
     private void FrameAll()
+        => FrameNodes(false);
+
+    private void FrameNodes(bool selectedOnly)
     {
         if (graph == null || graph.Nodes.Count == 0) return;
         Rect bounds = default;
@@ -572,6 +576,7 @@ public partial class HaruGraphWindow
         foreach (var n in graph.Nodes)
         {
             if (n.Hidden) continue;      // 收起來的節點不該把視野拉到看不見的地方
+            if (selectedOnly && !selectedIds.Contains(n.Id)) continue;
             if (!hasBounds)
             {
                 bounds = n.Rect;

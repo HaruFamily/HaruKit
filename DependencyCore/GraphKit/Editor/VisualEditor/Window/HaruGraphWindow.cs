@@ -104,6 +104,10 @@ public partial class HaruGraphWindow : EditorWindow
     private bool reportStale;
     private bool assetVerifiedOnce;
     private bool assetReportStale;
+    private bool pendingValidationSave;
+    private const double SaveChordSeconds = 0.8;
+    private double lastSaveShortcut = double.NegativeInfinity;
+    private bool saveKeyHeld;
 
     // 畫布
     private const float MinZoom = 0.000001f;
@@ -667,7 +671,6 @@ public partial class HaruGraphWindow : EditorWindow
         {
             if (focus.Kind == HGFocusKind.Asset) MarkAssetContentChanged();
             else { model.MarkContentChanged(); reportStale = true; }
-            ClearValidationReport();
         }
 
         ApplyVisibility();
@@ -1244,12 +1247,12 @@ public partial class HaruGraphWindow : EditorWindow
         // 套用後的那份快照已經是活資料，歷程不能跟它共用參考，否則下一次修改會連歷程一起改掉。
         assetHistory.Rebase(CaptureAssetState());
 
-        // 退回去的狀態和磁碟上那份多半仍不同，一律當未存檔並清除舊診斷。
+        // 快照換掉內容，舊診斷留作參考但不得當成本次結果。
         assetDirty = true;
         assetContentDirty = true;
         selectedIds.Clear();
         graphDirty = true;
-        ClearValidationReport();
+        assetReportStale = true;
         UpdateUnsavedState();
         Repaint();
     }
@@ -1314,13 +1317,13 @@ public partial class HaruGraphWindow : EditorWindow
             model.MarkContentChanged();
             reportStale = true;
         }
-        ClearValidationReport();
         UpdateUnsavedState();
     }
 
-    /// <summary>內容與焦點變更只清除舊報告；完整檢查由作者明確操作。</summary>
+    /// <summary>載入另一份資料或資產交易時清除舊報告；內容編輯只標示結果過期。</summary>
     private void ClearValidationReport()
     {
+        lastSaveShortcut = double.NegativeInfinity;
         if (focus.Kind == HGFocusKind.Asset)
         {
             assetReport = new HGReport();
@@ -1329,6 +1332,7 @@ public partial class HaruGraphWindow : EditorWindow
             return;
         }
         report = new HGReport();
+        pendingValidationSave = false;
         verifiedOnce = false;
         reportStale = true;
     }
@@ -1451,6 +1455,10 @@ public partial class HaruGraphWindow : EditorWindow
     private void HandleGlobalKeys()
     {
         var e = Event.current;
+        if (e.rawType == EventType.KeyUp && e.keyCode == KeyCode.S) saveKeyHeld = false;
+        if (e.type == EventType.MouseDown || (e.type == EventType.KeyDown
+            && e.keyCode != KeyCode.S && e.keyCode != KeyCode.LeftControl && e.keyCode != KeyCode.RightControl))
+            lastSaveShortcut = double.NegativeInfinity;
         if (e.type != EventType.KeyDown) return;
 
         // 放置模式攔在最前面：Esc 取消，不必先把滑鼠移回畫布。
@@ -1473,10 +1481,19 @@ public partial class HaruGraphWindow : EditorWindow
             if (!DoRedo()) ShowNotification(new GUIContent("沒有可重做的步驟"));
             e.Use();
         }
-        else if (e.keyCode == KeyCode.S)
+        else if (e.keyCode == KeyCode.S && !e.shift && !e.alt)
         {
-            if (focus.Kind == HGFocusKind.Asset) SaveAsset(); else DoSave();
             e.Use();
+            if (saveKeyHeld) return;
+            saveKeyHeld = true;
+            bool validate = EditorApplication.timeSinceStartup - lastSaveShortcut <= SaveChordSeconds;
+            lastSaveShortcut = double.NegativeInfinity;
+            if (validate) DoVerify(true, syncStoredState: false);
+            bool saved = focus.Kind == HGFocusKind.Asset ? SaveAsset() : DoSave();
+            if (saved && validate)
+                ShowNotification(new GUIContent(Rep.ErrorCount == 0 && IsCurrentReportFresh
+                    ? "驗證通過，已存檔" : "已存檔；驗證未通過，請查看下方錯誤"));
+            else if (saved) lastSaveShortcut = EditorApplication.timeSinceStartup;
         }
     }
 
@@ -1492,7 +1509,7 @@ public partial class HaruGraphWindow : EditorWindow
         selectedIds.Clear();
 
         graphDirty = true;
-        ClearValidationReport();
+        reportStale = true;
         UpdateUnsavedState();
         Repaint();
     }
@@ -1519,7 +1536,7 @@ public partial class HaruGraphWindow : EditorWindow
             SaveEnabled = canSave,
             SaveHighlight = canSave && hasChanges,
             SaveLabel = "存檔",
-            SaveTooltip = hasChanges ? "保存目前內容，允許尚未完成的圖" : "目前沒有未儲存的修改",
+            SaveTooltip = "Ctrl+S：存檔；0.8 秒內再按 Ctrl+S：驗證並存檔。允許保存未完成的圖。",
             // 資產焦點的「返回」與存檔分開：存檔留在畫布上，返回才退出（有未存修改會先問要不要捨棄）。
             BackLabel = inAsset ? "返回" : "取消",
             BackTooltip = inAsset ? "回到上一層；有未儲存的修改會先問要不要捨棄" : "捨棄自上次存檔以來的所有修改",

@@ -611,6 +611,8 @@ public partial class HaruGraphWindow : IHasCustomMenu
 
     private void OnLostFocus()
     {
+        lastSaveShortcut = double.NegativeInfinity;
+        saveKeyHeld = false;
         spinnerField.Cancel();
         Repaint();
     }
@@ -664,8 +666,9 @@ public partial class HaruGraphWindow : IHasCustomMenu
             : $"'{ownerName}' 有未儲存的修改。是否在關閉前存檔？";
     }
 
-    private void DoVerify(bool silent)
+    private void DoVerify(bool silent, bool syncStoredState = true)
     {
+        EnsureGraph();
         if (focus.Kind == HGFocusKind.Asset)
         {
             assetReport = HGValidator.RunSubtree(model, focus, focus.AssetHostSlot, focus.Title);
@@ -680,11 +683,18 @@ public partial class HaruGraphWindow : IHasCustomMenu
 
         bool hadMissingTypes = model.Owner != null && (SerializationUtility.HasManagedReferencesWithMissingTypes(model.Owner)
             || HGMissingTypeCleanup.HasLostContent(model.Doc));
+        pendingValidationSave = false;
         if (!model.CleanMissingTypes())
         {
             report = new HGReport();
+            verifiedOnce = true;
+            reportStale = false;
+            model.Doc.InvalidateValidation();
             if (model.LastCommitDiagnostic != null)
                 report.Issues.Add(new HGIssue(model.LastCommitDiagnostic, "遺失資料清理", null, null, null));
+            else
+                report.Issues.Add(new HGIssue(new GraphDiagnostic("graphkit.validation.cleanup-failed",
+                    GraphDiagnosticSeverity.Error, "遺失資料無法清理，驗證未完成。"), "遺失資料清理", null, null, null));
             console.RevealErrors();
             return;
         }
@@ -693,12 +703,41 @@ public partial class HaruGraphWindow : IHasCustomMenu
             ClearPortInteractionState();
             graphDirty = true;
             UpdateUnsavedState();
+            EnsureGraph();
         }
         report = HGValidator.Run(model, includeMissingTypes: true);
         AddExtensionDiagnostics(report);
         report.ReplaceGraphViewDiagnostics(graph?.Diagnostics);
+        model.Doc.InvalidateValidation();
+        if (report.ErrorCount == 0)
+        {
+            try
+            {
+                HGOwnerValidation.VerifyDocument(model.Doc, model.Owner);
+                if (!model.Doc.IsValidated)
+                    report.Issues.Add(new HGIssue(new GraphDiagnostic("graphkit.validation.rejected",
+                        GraphDiagnosticSeverity.Error, "文件驗證未通過。"), "文件驗證", null, null, null));
+            }
+            catch (Exception exception)
+            {
+                model.Doc.InvalidateValidation();
+                report.Issues.Add(new HGIssue(new GraphDiagnostic("graphkit.validation.failed",
+                    GraphDiagnosticSeverity.Error, exception.Message), "文件驗證", null, null, null));
+            }
+        }
         verifiedOnce = true;
         reportStale = false;
+        pendingValidationSave = true;
+        // 沒有未存修改時，透過同一版本守衛同步驗證旗標，讓 Inspector 讀到此次結果。
+        if (syncStoredState && !model.Dirty)
+        {
+            if (model.Save(true)) pendingValidationSave = false;
+            else if (model.LastCommitDiagnostic != null)
+                report.Issues.Add(new HGIssue(model.LastCommitDiagnostic, "驗證結果同步", null, null, null));
+            else
+                report.Issues.Add(new HGIssue(new GraphDiagnostic("graphkit.validation.sync-failed",
+                    GraphDiagnosticSeverity.Error, "驗證結果無法寫回，請重新存檔。"), "驗證結果同步", null, null, null));
+        }
         if (report.ErrorCount > 0) console.RevealErrors();
         if (!silent && report.ErrorCount == 0 && report.WarningCount == 0)
             ShowNotification(new GUIContent("驗證通過"));
@@ -707,7 +746,9 @@ public partial class HaruGraphWindow : IHasCustomMenu
     private bool DoSave(bool showDialog = true)
     {
         model.LastCommitDiagnostic = null;
-        bool saved = model.Save();
+        if (model.Owner != null && (SerializationUtility.HasManagedReferencesWithMissingTypes(model.Owner)
+            || HGMissingTypeCleanup.HasLostContent(model.Doc))) reportStale = true;
+        bool saved = model.Save(pendingValidationSave && verifiedOnce && !reportStale);
         if (!saved)
         {
             if (model.LastCommitDiagnostic != null)
@@ -721,9 +762,9 @@ public partial class HaruGraphWindow : IHasCustomMenu
             return false;
         }
         // Owner 的引用內容變了，反向索引跟著失效。下次要用時才重算，這裡不掃。
+        pendingValidationSave = false;
         HGReferenceIndex.Invalidate();
         AssetDatabase.SaveAssets();
-        ClearValidationReport();
         UpdateUnsavedState();
         ShowNotification(new GUIContent("已存檔"));
         return true;
@@ -953,10 +994,13 @@ public partial class HaruGraphWindow : IHasCustomMenu
         EditorUtility.SetDirty(asset);
         AssetDatabase.SaveAssets();
         // 內容沒變就不要驚動別人：座標是編輯器視覺，改它不會讓任何引用者的驗證結果不一樣。
-        if (assetContentDirty) InvalidateAssetUsers(asset);
+        if (assetContentDirty)
+        {
+            InvalidateAssetUsers(asset);
+            reportStale = true;
+        }
 
         ClearAssetDirty();
-        ClearValidationReport();
         // 存檔只是寫回資產，不退出畫布：接著要繼續編輯還是按「返回」由使用者決定。
         ShowNotification(new GUIContent("資產已存檔"));
         UpdateUnsavedState();

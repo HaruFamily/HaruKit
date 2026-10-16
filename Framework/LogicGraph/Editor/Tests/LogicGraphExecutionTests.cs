@@ -345,15 +345,28 @@ public sealed class LogicGraphExecutionTests
     public async Task RuntimeRejectsInvalidContentDespiteStoredFlagAndRechecksAfterRepair()
     {
         var graph = Create(new Increment(), out var node);
+        graph.Tokens.Add(new GraphToken("Amount", new IntSlot(7)));
         node.Clear();
         Assert.That(graph.IsValidated, Is.True);
         Assert.That(graph.TryValidate(out var error), Is.False);
         StringAssert.Contains("logicgraph.action.missing", error);
         var pack = new Pack();
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                await graph.TriggerAction(Timing.Run, pack);
+                Assert.Fail("不合法圖必須向呼叫端回報失敗，包括快取失敗的再次執行。");
+            }
+            catch (InvalidOperationException exception)
+            {
+                StringAssert.Contains("logicgraph.action.missing", exception.Message);
+            }
+        }
         UnityEngine.TestTools.LogAssert.Expect(UnityEngine.LogType.Error,
             new System.Text.RegularExpressions.Regex("\\[LogicGraph\\] 圖內容不合法"));
-        await graph.TriggerAction(Timing.Run, pack);
-        await graph.TriggerAction(Timing.Run, pack);
+        Assert.That(graph.CreateTokenTable().Has(typeof(IntSlot), "Amount"), Is.False);
+        graph.CreateTokenTable();
         Assert.That(pack.Count, Is.Zero);
 
         node.SetBody(new Increment());
@@ -515,7 +528,8 @@ public sealed class LogicGraphExecutionTests
         using var current = new CancellationTokenSource();
         var evaluation = saved.CreateEvaluationScope(current.Token);
         current.Cancel();
-        Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        Assert.That(evaluation.CancellationToken, Is.EqualTo(current.Token));
+        Assert.CatchAsync<OperationCanceledException>(async () =>
             await evaluation.Resolve<int>(typeof(IntSlot), "Amount", new Pack()));
     }
 
@@ -531,7 +545,8 @@ public sealed class LogicGraphExecutionTests
             var local = new GraphProperty("Local", new IntSlot(7), true);
             asset.Properties.Add(local);
             AssetGraphSchema.InvalidateCache();
-            var callerProperty = new GraphProperty("Caller", new IntSlot(10));
+            var callerProperty = new GraphProperty("Caller", new IntSlot(10), true);
+            Assert.That(callerProperty.InitialValue, Is.EqualTo(10));
             var graph = PropertyGraph(callerProperty, out _);
             var proxy = new GraphNode();
             var callerToken = new GraphToken("FromCaller", PropertyInput(callerProperty));

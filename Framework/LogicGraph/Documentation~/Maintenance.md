@@ -88,7 +88,7 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 1. **序列化身分是資料契約**（類別名、命名空間、組件名）。改之前先掃使用端資產裡實際的 `{class, ns, asm}` 記錄，並取得擁有者同意。
 2. **`ActionSlot._disabled` 等反向旗標不可改名成 `_enabled`。**
 3. `FormulaSlotBase`／`ActionSlotBase` 在 GraphKit，泛型的 `FormulaSlot<,,,>`／`ActionSlot<>` 在本套件，兩者**分檔**，基底維持零欄位。
-4. **執行檢查實際內容，不依賴編輯器旗標。** `TriggerAction` 與 `CreateTokenTable` 首次使用每份 runtime 圖時執行 Core 結構驗證，快取當次結果；失敗只回報一次並停止執行／回空表。DeepCopy 不繼承 runtime 快取。`MarkValidated()` 不可繞過 runtime 檢查。Owner 的領域配置與 Default 回退由使用端載入入口處理。
+4. **執行檢查實際內容，不依賴編輯器旗標。** `TriggerAction` 與 `CreateTokenTable` 首次使用每份 runtime 圖時執行 Core 結構驗證，快取當次結果。`TriggerAction` 先檢查取消；圖不合法時，每次呼叫均以 `InvalidOperationException` 使 UniTask 失敗，含時機／執行名稱與診斷，不執行動作，也不建立觀察 session。呼叫端須沿用失敗／清理路徑，不得當作動作完成；不保證回滾呼叫前的副作用。獨立 `CreateTokenTable` 失敗只記錄一次錯誤並回空表，供描述等讀值流程保底。DeepCopy 不繼承 runtime 快取。`MarkValidated()` 不可繞過 runtime 檢查。Owner 的領域配置與 Default 回退由使用端載入入口處理。
 5. 程式修改圖之後呼叫 `InvalidateValidation()`，同時撤銷編輯器旗標與 runtime 檢查快取。Inspector 與 `LogicGraphEditor.Verify(owner)` 可手動檢查 Usage；`TryValidate` 與無 Owner 的 `Verify()` 只驗 Core 規則。
 6. **驗證有兩趟**：第一趟不穿透停用節點（殘缺是錯誤），第二趟補走停用子樹（殘缺降為警告）。順序不可顛倒；只要還有一條啟用路徑指著同一個載體，殘缺仍是錯誤。GraphKit 的 `HGValidator` 要同步同一套判準。
 7. **不要把 Node 的序列化欄位當跨呼叫的快取**；每次執行的上下文放在 Pack。

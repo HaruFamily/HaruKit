@@ -236,7 +236,7 @@ namespace LogicGraphQuickStart
 6. 把 `DemoGraphRunner` 加到場景物件上並指定 definition。
 7. 進入 Play Mode，Console 應出現 **LogicGraph amount: 12**。
 
-`Amount` 沒接線時結果是常數 1；接上公式後是呼叫端的 10 加上 Bonus 的 2。沒有訊息時，檢查 definition 是否指定、`Activate` 的動作是否接好並啟用，以及驗證錯誤。Runtime 首次使用圖時檢查實際結構，不要求先按過驗證；內容不合法會記錄錯誤並停止，不自動修復。Play 中修改範本後要重新進入 Play Mode 才會建立新副本。
+`Amount` 沒接線時結果是常數 1；接上公式後是呼叫端的 10 加上 Bonus 的 2。沒有訊息時，檢查 definition 是否指定、`Activate` 的動作是否接好並啟用，以及驗證錯誤。Runtime 首次使用圖時檢查實際結構，不要求先按過驗證；內容不合法時 `TriggerAction` 以 `InvalidOperationException` 向 await 呼叫端回報失敗，不自動修復。Play 中修改範本後要重新進入 Play Mode 才會建立新副本。
 
 ### 隨手要記得的規則
 
@@ -323,7 +323,7 @@ LogicGraph 實作 GraphKit 的 `IGraphExecutionDocument`。`DeepCopy()` 共用�
 
 Inspector 卡片是任何 `LogicGraph<,>` 欄位的編輯入口，可開啟與驗證該欄位。`HaruFamily/LogicGraph/Open Selected` 與 `Assets/HaruFamily/Open in LogicGraph` 用來開啟只有一份文件的 Owner；`HaruFamily/LogicGraph/Verify All Owners` 重驗專案內所有 Owner。
 
-未完成的圖可以保存，工具列「檢查」才列出診斷。`TriggerAction` 與 `CreateTokenTable` 首次使用時自動檢查實際結構並快取結果，失敗停止執行；不信任已儲存的驗證旗標。空的公式 Slot 是合法的常數；啟用中的空動作、重複時機、無效 Token、不相容的資產綁定、圖或資產循環都是錯誤。只能經由停用節點到達的殘缺內容降為警告。使用端載入入口另行檢查領域規則，並決定是否換用 Default。
+未完成的圖可以保存，工具列「檢查」更新診斷；修改後舊報告標示「待重新檢查」。`TriggerAction` 與 `CreateTokenTable` 首次使用時自動檢查實際結構並快取結果，不信任已儲存的驗證旗標。圖不合法時 `TriggerAction` 每次皆以 `InvalidOperationException` 使 UniTask 失敗，呼叫端不可視為成功完成；獨立 `CreateTokenTable` 只記錄一次錯誤並回空表。空的公式 Slot 是合法的常數；啟用中的空動作、重複時機、無效 Token、不相容的資產綁定、圖或資產循環都是錯誤。只能經由停用節點到達的殘缺內容降為警告。使用端載入入口另行檢查領域規則，並決定是否換用 Default。
 
 全專案檢查由 `HaruFamily/LogicGraph/Verify All Owners` 明確執行，不在離開 Edit Mode 時自動掃描。
 

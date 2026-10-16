@@ -14,13 +14,15 @@ public struct HGConsoleView
     /// <summary>要列出的問題清單與計數。</summary>
     public HGReport Report;
 
-    /// <summary>這張圖驗證過至少一次。false 時狀態欄顯示「尚未驗證」。</summary>
+    /// <summary>本次編輯期間已產生驗證報告。</summary>
     public bool VerifiedOnce;
 
-    /// <summary>目前的報告是完整驗證的結果，不是編輯途中的即時結果。</summary>
+    /// <summary>目前報告仍對應當下內容；false 且 VerifiedOnce 時為過期結果。</summary>
     public bool Fresh;
+    /// <summary>沒有本次報告時，可使用與目前內容一致的已儲存驗證結果。</summary>
+    public bool StoredValidated;
 
-    /// <summary>標頭右側的警告字串；null 或空＝不顯示。</summary>
+    /// <summary>標頭右側的儲存狀態字串；null 或空＝不顯示。</summary>
     public string OwnerWarning;
 }
 
@@ -119,14 +121,14 @@ public sealed class HGConsolePanel
         if (DrawTab(new Rect(tx, head.y + 2f, 68f, 17f), $"警告 {report.WarningCount}", tab == 2)) tab = 2;
 
         string verifyStatus = view.Fresh
-            ? $"完整驗證 {report.Time:HH:mm:ss}"
+            ? $"{(report.ErrorCount > 0 ? "驗證失敗" : "驗證通過")} {report.Time:HH:mm:ss}"
             : view.VerifiedOnce
-                ? $"即時驗證 {report.Time:HH:mm:ss}"
-                : "尚未驗證";
+                ? $"待重新驗證（舊結果 {report.Time:HH:mm:ss}）"
+                : view.StoredValidated ? "驗證通過（已儲存）" : "尚未驗證";
         GUI.Label(new Rect(head.xMax - 274f, head.y + 3f, 270f, 16f), verifyStatus, HGStyles.Tiny);
 
         if (!string.IsNullOrEmpty(view.OwnerWarning))
-            GUI.Label(new Rect(head.xMax - 470f, head.y + 3f, 192f, 16f), view.OwnerWarning, HGStyles.RowLabelError);
+            GUI.Label(new Rect(head.xMax - 470f, head.y + 3f, 192f, 16f), view.OwnerWarning, HGStyles.Tiny);
 
         if (collapsed) return;
 

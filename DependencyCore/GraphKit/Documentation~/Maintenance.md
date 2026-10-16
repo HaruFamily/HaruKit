@@ -93,7 +93,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 2. **反向旗標不可改名。** `_disabled` 不可改成 `_enabled`：舊資產沒有這個欄位，反序列化成 false 會把全部內容關掉。
 3. **零欄位基底保持零欄位。** `GraphSlotBase`、`FormulaSlotBase`、`ActionSlotBase`、`PropertySlotBase`、形狀基底只能加抽象或虛擬成員，不能加序列化欄位。
 4. **編輯器只改工作副本。** 開圖時 DeepCopy 出 `HGModel.Data`，所有編輯都在副本上，存檔成功才寫回 Owner；取消就重抓 Owner。不可在編輯流程直接改 Owner 上的文件。唯一例外是已確認遺失的 SerializeReference 資料清理（§6.3）。
-5. **保存與驗證分離。** 視窗存檔、`HGModel.Save`、非視窗 `Commit` 與獨立資產焦點都允許未完成內容，不呼叫診斷／Verify 作存檔閘門。內容修改撤銷已驗證旗標；Owner 純版面且原本已驗證時可沿用旗標。工作副本、遺失型別清理、版本衝突、複製與寫入失敗仍走既有交易。驗證規則不因可保存而放寬，使用端負責執行前檢查。
+5. **保存與驗證分離。** 視窗存檔、`HGModel.Save`、非視窗 `Commit` 與獨立資產焦點都允許未完成內容，不呼叫診斷／Verify 作存檔閘門。內容修改撤銷已驗證旗標；Owner 純版面且原本已驗證時可沿用旗標。視窗剛明確驗證且內容未再變更時，保存該次旗標。工作副本、遺失型別清理、版本衝突、複製與寫入失敗仍走既有交易。驗證規則不因可保存而放寬，使用端負責執行前檢查。
 6. **載體存取走型別契約**（`FormulaSlotBase`、`ActionSlotBase`、`IGraphHead`、`IOrphanPool`、`ITokenOwner`、`IPropertyOwner`、`IGraphAsset`），不要用成員名反射。`MethodBase.Invoke` 不會補預設參數，簽章一變就在執行期壞掉。
 7. **斷線不等於刪節點。** 節點只靠 SerializeReference 的引用路徑存活；斷線時要把失去引用的載體放回候選池（先保留可見座標），否則重建時整棵子樹會消失，存檔後資料就真的沒了。
    - 畫布刪除載體也要先拆開其直接來源，再把沒有其他引用的來源放回目前焦點候選池；來源的子樹與座標保留。多選刪除只移除選中的載體，不沿來源接線遞迴刪除。
@@ -124,7 +124,13 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 
 資料流：Owner → 明確 binding 或 legacy 欄位探索 → DeepCopy 成 `HGModel.Data` → `HGFocus` 決定中間畫布在編輯哪些 root → `HGGraph.Build` 每次資料變動整份重建節點與列 → 視窗用 IMGUI 繪製 → 存檔時清理遺失型別、DeepCopy、撤銷過期驗證、通過版本守衛後寫回。
 
-開圖、切焦點、編輯與保存只清除舊報告；工具列「檢查」與公開 `Validate()` 明確執行診斷。共用資產內容保存後只撤銷引用者驗證，不自動重驗或洗 Console。
+工具列「驗證」與公開 `Validate()` 明確執行診斷。內容修改、Undo／Redo 保留舊報告並標示「待重新驗證」；過期報告只供參考，須重新驗證才能跳轉。純版面修改與一般保存不清除報告；載入／取消或開啟另一份資產交易才清除。保存前若需清理遺失資料，報告也標過期。共用資產內容保存後撤銷引用者驗證並將目前 Owner 報告標過期，不自動重驗或洗 Console。
+
+Owner 手動驗證先收結構／Tool／畫布診斷，無錯誤才經 `HGOwnerValidation.VerifyDocument` 驗證工作副本；未通過或例外必須回報錯誤。沒有未存修改時，經 Model 的同一版本守衛保存驗證旗標，供 Inspector 讀取；有未存修改時只記 `pendingValidationSave`，由下一次保存寫回。保存可沿用這次仍新鮮的結果；其餘內容保存撤銷工作副本及儲存副本的驗證。純版面保存只有在工作副本與目前已儲存文件都已驗證時才保留舊旗標。非視窗 Commit 仍撤銷旗標。
+
+Console 只有一個驗證結果，另以中性文字顯示「有未儲存變更」。沒有本次報告且圖無未存修改時，可顯示目前 binding 的已儲存驗證結果；不彙總 Owner 的其他文件。
+
+**存檔快捷鍵**：Ctrl+S 立即保存目前 Owner／獨立資產；第一次成功保存後 0.8 秒內，再放開並按下 S（Ctrl 可持續按住），先驗證再保存。長按 S 的重複 KeyDown 不執行；其他按鍵（Ctrl 除外）、滑鼠按下、失焦或清除報告中斷連按。驗證失敗仍可存檔，保留錯誤報告與未驗證旗標。工具列存檔提示提供這兩種操作。
 
 **節點搜尋（Ctrl+F）**：畫布上按 Ctrl+F，或按工具列的「搜尋」鈕，開畫布內搜尋列 `HGNodeSearchBar`（`Panels/`，畫布右上角），搜目前焦點 `graph.Nodes` 的全部節點，包括被收起的，不跨焦點。比對節點名稱（Token／資產／Property 補引用對象，`NodeSearchName`）、chip、註解，以及所屬群組的註解與所在分頁名稱；空白分詞，每詞都要命中同一顆節點，不分大小寫，所以群組名可以和節點名組合著篩。群組的修改不重建圖，`MarkViewStateChanged` 會作廢命中快取。輸入時只高亮：命中的節點加淡選取色外框，沒命中的壓暗；沒有命中時不壓暗。Enter／↓／F3 跳下一筆，Shift+Enter／↑／Shift+F3 跳上一筆，頭尾循環；跳轉走 `FocusDocumentNode`：被收起的先 `RevealNode`（展開欄位、清單、群組與分頁，寫回 `GraphViewState`，記成版面修改），再選取並置中。因為會寫版面，輸入時不自動跳。Esc／✕ 關閉，視角停在目前這一筆。搜尋列在 TextField 之前自己判 Enter／Esc／方向鍵；點回畫布時放掉輸入框焦點，畫布快捷鍵才收得到。游標壓在搜尋列上時，底下的節點、Header 工具列與群組標題都要遮掉指標事件（IMGUI 讓先畫的先拿事件）。
 
@@ -133,7 +139,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - Node Header 的來源替換選單中，Action／Formula 候選顯示「節點名稱 (原始 class 名稱)」；兩者完全相同時只顯示一次。`AdvancedDropdown` 搜尋使用這份顯示文字，因此 Label 與原始 class 名稱皆可查找。
 
 - 開啟 Token／Asset 畫布時，以 100% 縮放將 HEAD 起點放在畫布左上方 20px 內距。定位在建圖完成、套用節點疊放順序之前執行，不用全圖 bounds，避免大圖被縮成總覽。從畫布節點進入時，視窗按焦點 Id 記住來源焦點與 pan／zoom，退出時還原；庫與其他入口只定位起點，不建立返回視角。這些記錄不進資料、Dirty 或 Undo；換文件／重載及 Owner 歷程換副本時清除。Asset 的 Token 返回依目前工作副本重解 Token Id；跨資產返回重新開啟資產交易，不復活已捨棄的內容。
-- 縮放共用 `MinZoom = 0.000001`／`MaxZoom = 1.8`（比例值，下限只防除零與極端座標），滾輪每 3 單位 delta 乘／除 1.1，保留滑鼠錨點。`F`／聚焦全部與群組使用 `CalculateFrameZoom` 依 bounds 容納全圖，上限 1.4；FrameAll 只以未 Hidden 節點初始化與擴張 bounds，空圖不移動視角。
+- 縮放共用 `MinZoom = 0.000001`／`MaxZoom = 1.8`（比例值，下限只防除零與極端座標），滾輪每 3 單位 delta 乘／除 1.1，保留滑鼠錨點。`A`／聚焦全部、`Space`／聚焦選取與群組使用 `CalculateFrameZoom` 依 bounds 容納目標，上限 1.4；`FrameNodes` 只以未 Hidden 節點初始化與擴張 bounds，聚焦選取時再依 `selectedIds` 篩選。多選框住整組，無符合節點時不移動視角；聚焦不改選取、資料或 Dirty。
 - 低於 30% 進入簡化總覽：節點輪廓、Header 色帶、選取／搜尋外框與連線保留，標題只在投影寬至少 70px 時畫；不建立節點欄位控制項或接點命中，也不允許點線剪斷。單擊選取後左上說明仍以正常大小顯示，雙擊節點回到 100% 並置中後編輯。中鍵平移、滾輪、框選與 F 沿用。總覽切換與 viewport 集合同在 Layout 進行；hotControl、拉線、放置、節點／群組拖曳期間延後切換，避免途中更換控制項。
 - 畫布節點以 graph-space viewport（含 Port 邊距）剔除。控制項集合只在 Layout 更新，輸入與 Repaint 沿用同一集合；`hotControl` 持有期間凍結集合，拖曳釋放後才刷新。文字編輯中且視角未動、全圖節點 Id 集合未變時才凍結集合，避免打字改變節點高度而丟失 caret；新增／刪除節點須在下一次可更新的 Layout 刷新。全圖 Id 快照與可見 Id 清單分開保存，不以每次內容重建的 generation 判斷結構變更。控制項集合更換時結束鍵盤／文字焦點，避免控制項序號改指其他欄位；單純內容重建保留集合，換焦點／文件才清空。剔除不設定 `Hidden`，不影響接線、框選、搜尋、驗證與執行。取消選取的空註解框即使在畫面外也要收起。
 - `RefreshRowGeometry` 只重算座標／寬度改變的節點；建圖、Port 重建時清幾何快取。節點 Id、欄位路徑及列 owner 查詢按 `HGGraphView` 建索引，不能在每條線上重新掃整張圖。`AutoLayout` 用列 owner 索引建立父子關係，保留第一次引用的樹形排版及作者已存座標。
@@ -144,7 +150,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - Token 庫與變數庫的格子是同一組操作：雙擊改名、拖到「＋」上放開＝複製、拖到「－」上放開＝移除，右鍵選單（改名／複製／移除）是同一組的可見入口。複製 ProtoProperty（`HGModel.DuplicateProperty`）是建立新的儲存位置：定義與初始內容深拷貝（資產只抄參考）、換新 Id、名字「原名 複本」，圖上沒有節點指向它；拖到畫布才是引用。右鍵改名走 `HGInlineRename.Begin`：選單回呼在 OnGUI 之外執行，只記狀態不碰鍵盤焦點，焦點由下一次 `Draw` 搶。
 - 座標：graph → clip 是 `(graphPos + pan) × zoom`；自訂命中測試（節點、連線、框選）一律在 graph space 計算。
 - **先畫節點、再處理畫布互動**，控制項才會先吃掉事件。畫布平移前仍要確認 `GUIUtility.hotControl == 0`。
-- **畫布快捷鍵要讓給文字輸入**：左右庫與焦點列畫在畫布之後，游標停在畫布上時按鍵會先到 `HandleCanvasInput`。它的 `KeyDown` 分支在 `inlineName.IsEditing` 或 `EditorGUIUtility.editingTextField` 時一律不處理（F、Delete、Ctrl 系列都不攔），只有 F3（搜尋跳下一筆）排在這個判斷之前。新增畫布快捷鍵要放在判斷之後；改名框只看 `IsEditing`，因為它重新搶焦點的那一幀並未握著焦點。
+- **畫布快捷鍵要讓給文字輸入**：左右庫與焦點列畫在畫布之後，游標停在畫布上時按鍵會先到 `HandleCanvasInput`。它的 `KeyDown` 分支在 `inlineName.IsEditing` 或 `EditorGUIUtility.editingTextField` 時一律不處理（A、Space、Delete、Ctrl 系列都不攔），只有 F3（搜尋跳下一筆）排在這個判斷之前。新增畫布快捷鍵要放在判斷之後；改名框只看 `IsEditing`，因為它重新搶焦點的那一幀並未握著焦點。
 - **節點重疊時輸入跟著畫面走**：`graph.Nodes` 的順序就是繪製順序（越後越上層）。IMGUI 依繪製順序分發事件，所以 `DrawCanvas` 在 `hotControl == 0` 的 MouseDown／DragUpdated／DragPerform 先用 `NodeAt` 找出最上層節點，其餘節點畫的時候把事件設成 `Ignore`，畫完還原成遮罩前的型別（不可還原成原始型別，會把已 `Use()` 的按鍵復活）。接點命中（`InputPortAt`／`OutputPortAt`）同樣只認最上層節點。
 - 連線：一般線在節點之前畫（壓在節點下），選取中節點的線在 `EndZoomedCanvas` 之後畫（浮在最上層）。形狀固定為「水平短線 → 圓角 → 斜直線 → 圓角 → 水平短線」（`BuildLinkPath`），方向依接點位在節點左半或右半決定，不依輸入／輸出。點線剪斷（`LinkAt`）用同一份路徑，點在節點上時只剪得到浮在上層的線。清單／Foldout 折疊時，元素的線仍從標題列的代表接點畫出（接點本身不可起手或放線）；不同目標依高度扇形等角散開（`RebuildFoldFan`），這是頭端不水平的唯一例外。
 - 收合線以「可見的折疊祖先列＋另一端的實際 `HGPortKey`」合併，同一關係只畫一條，實線優先於殘影；不同容器、不同 Port 不合併。`RebuildFoldFan` 先掃完整圖挑代表線，再依去重後的目標數分配角度；一般層、選取層與 `LinkAt` 都跳過 `foldedDuplicateLinks`。Group 隱藏端的重複殘影也合併，維持原有朝向、不加入扇形。只有一個目標時角度為 0。合併不改 `HGLink`／Slot 資料；點擊 `foldedMergedLinks` 的多引用代表線只提示先展開，單引用線與展開後的各欄位照常剪斷。

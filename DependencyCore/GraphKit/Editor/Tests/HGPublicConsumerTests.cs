@@ -603,11 +603,86 @@ public sealed class HGPublicConsumerTests
             Assert.That(model.Bind(owner, Binding()), Is.True);
             Assert.That(model.IsStoredDocumentValidated, Is.False);
             Assert.That(model.Save(), Is.True);
+            Assert.That(model.IsStoredDocumentValidated, Is.False, "保存不代替明確驗證。");
+            owner.B.Verify();
             Assert.That(model.IsStoredDocumentValidated, Is.True);
             owner.A.InvalidateValidation();
             Assert.That(model.IsStoredDocumentValidated, Is.True);
             owner.B.InvalidateValidation();
             Assert.That(model.IsStoredDocumentValidated, Is.False);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void WindowValidationPersistsForTheValidatedContentOnly(bool editBeforeValidation)
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            owner.A = ConsumerDocument.Create();
+            owner.B = ConsumerDocument.Create();
+            string sourceId = owner.B.Orphans[0].Id;
+            owner.B.Root.Items[0].SetNode(owner.B.Orphans[0]);
+            var provider = new WindowConsumerProvider(sourceId);
+            var context = new HGEditorExtensionContext(provider, provider, new HGEditorProfile(HGCapabilities.None));
+            Assert.That(window.BindDocument(owner, Binding(), context), Is.True);
+            var commands = window.GetDocumentCommands();
+            if (editBeforeValidation)
+                Assert.That(commands.EditValue(commands.Query().Generation, sourceId, "/Percent", new ConsumerPercent(0.75f)),
+                    Is.EqualTo(HGSessionCommandResult.Changed));
+
+            Assert.That(System.Linq.Enumerable.Any(commands.Validate(), d => d.Severity == GraphDiagnosticSeverity.Error), Is.False);
+            Assert.That(owner.B.IsValidated, Is.EqualTo(!editBeforeValidation), "未存內容不得由驗證按鈕提前寫回。");
+            Assert.That(owner.A.IsValidated, Is.False, "驗證只更新指定文件。");
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(owner.B.IsValidated, Is.True, "存檔必須保留剛驗證的結果。");
+
+            Assert.That(commands.EditValue(commands.Query().Generation, sourceId, "/Percent", new ConsumerPercent(0.5f)),
+                Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(owner.B.IsValidated, Is.False, "再次修改後不得沿用舊驗證。");
+        }
+        finally
+        {
+            window.GetDocumentCommands()?.Cancel();
+            UnityEngine.Object.DestroyImmediate(window);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void LayoutSaveDoesNotRestoreInvalidatedValidation(bool invalidateStoredDocument)
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            owner.B.Root.Items[0].SetNode(owner.B.Orphans[0]);
+            owner.B.Verify();
+            var model = new HGModel();
+            Assert.That(model.Bind(owner, Binding()), Is.True);
+            model.MarkLayoutChanged();
+            Assert.That(model.Save(), Is.True);
+            Assert.That(owner.B.IsValidated, Is.True, "未修改內容時可保留有效驗證。");
+
+            if (invalidateStoredDocument) owner.B.InvalidateValidation();
+            else
+            {
+                ((ConsumerDocument)model.Data).Root.Items[0].SetNode(null);
+                model.MarkContentChanged();
+                Assert.That(model.Save(), Is.True);
+                Assert.That(owner.B.IsValidated, Is.False);
+                Assert.That(model.Doc.IsValidated, Is.False);
+            }
+
+            model.MarkLayoutChanged();
+            Assert.That(model.Save(), Is.True);
+            Assert.That(owner.B.IsValidated, Is.False, "純版面保存不可復活已撤銷的驗證。");
+            Assert.That(model.Doc.IsValidated, Is.False);
         }
         finally { UnityEngine.Object.DestroyImmediate(owner); }
     }

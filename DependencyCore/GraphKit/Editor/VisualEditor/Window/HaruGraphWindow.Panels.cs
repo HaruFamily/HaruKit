@@ -980,23 +980,26 @@ public partial class HaruGraphWindow
     {
         bool isAsset = focus.Kind == HGFocusKind.Asset;
 
-        // 查已儲存文件的驗證旗標；不把驗證、未存修改與執行混為同一個狀態。
-        string warning = !isAsset && model != null && !model.IsStoredDocumentValidated
-            ? "已儲存圖尚未通過驗證"
-            : null;
+        bool dirty = isAsset ? assetDirty : model != null && model.Dirty;
 
         return new HGConsoleView
         {
             Report = Rep,
             VerifiedOnce = isAsset ? assetVerifiedOnce : verifiedOnce,
             Fresh = IsCurrentReportFresh,
-            OwnerWarning = warning,
+            StoredValidated = !isAsset && !dirty && model != null && model.IsStoredDocumentValidated,
+            OwnerWarning = dirty ? "有未儲存變更" : null,
         };
     }
 
     internal void JumpTo(HGIssue issue)
     {
         if (issue == null || model?.Owner == null) return;
+        if ((focus.Kind == HGFocusKind.Asset ? assetVerifiedOnce : verifiedOnce) && !IsCurrentReportFresh)
+        {
+            ShowNotification(new GUIContent("這是修改前的診斷，請先按「驗證」更新位置。"));
+            return;
+        }
         var location = issue.Location;
         if (!string.IsNullOrEmpty(location.DocumentId) && location.DocumentId != model.DocumentId) return;
         if (!string.IsNullOrEmpty(location.FocusId))

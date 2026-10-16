@@ -182,6 +182,8 @@ public sealed class LogicGraphUsageTests
             Assert.That(window.GetDocumentCommands().Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
             Assert.That(owner.First, Is.SameAs(first));
             Assert.That(owner.Second, Is.Not.SameAs(second));
+            Assert.That(owner.Second.IsValidated, Is.False, "保存不代替明確驗證。");
+            Assert.That(LogicGraphEditor.Verify(owner, typeof(PlainOwner).GetField(nameof(PlainOwner.Second))), Is.True);
             Assert.That(owner.Second.IsValidated, Is.True);
         }
         finally

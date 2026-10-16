@@ -141,8 +141,10 @@ public sealed class LogicGraphValidationTests
             var binding = LogicGraphEditor.CreateBinding(typeof(Owner).GetField(nameof(Owner.Second)));
             Assert.That(window.BindDocument(owner, binding, LogicGraphEditor.Context), Is.True);
             // 只呼叫既有私有 UI 命令；測試不存檔，也不以另一份模擬快照取代真正的視窗歷程。
-            typeof(HaruGraphWindow).GetMethod("EnterAsset", flags, null,
-                new[] { typeof(UnityEngine.Object), typeof(Type) }, null).Invoke(window, new object[] { asset, typeof(ActionSlot<Pack>) });
+            var enterAsset = typeof(HaruGraphWindow).GetMethod("EnterAsset", flags, null,
+                new[] { typeof(UnityEngine.Object), typeof(Type), typeof(bool) }, null);
+            Assert.That(enterAsset, Is.Not.Null, "測試須使用目前資產畫布入口的完整簽章。");
+            enterAsset.Invoke(window, new object[] { asset, typeof(ActionSlot<Pack>), false });
             HGFocus Focus() => (HGFocus)typeof(HaruGraphWindow).GetField("focus", flags).GetValue(window);
             var focus = Focus();
             var working = focus.AssetProperties.Single();
