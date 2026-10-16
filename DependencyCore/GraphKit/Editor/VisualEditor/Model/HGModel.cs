@@ -842,9 +842,10 @@ public class HGModel
         return true;
     }
 
-    /// <summary>取一個在 scope 內同族不重複的預設名（Token1、Token2…）。</summary>
+    /// <summary>以族的 chip 名稱加編號，取一個在 scope 內同族不重複的預設名。</summary>
     public string NextTokenName(IEnumerable<GraphToken> scope, Type kind)
     {
+        string prefix = HGReflect.SlotKindName(kind);
         var used = new HashSet<string>();
         foreach (var other in scope ?? new List<GraphToken>())
             if (other != null && other.FamilyType == kind && !string.IsNullOrEmpty(other.Name))
@@ -852,7 +853,7 @@ public class HGModel
 
         for (int i = 1; ; i++)
         {
-            string key = "Token" + i;
+            string key = prefix + i;
             if (!used.Contains(key)) return key;
         }
     }
@@ -1001,9 +1002,10 @@ public class HGModel
         return copy;
     }
 
-    /// <summary>取一個在 scope 內全域不重複的預設名（Property1、Property2…）。</summary>
+    /// <summary>以族的 chip 名稱加編號，取一個在 scope 內全域不重複的預設名。</summary>
     public string NextPropertyName(IEnumerable<GraphProperty> scope, Type kind)
     {
+        string prefix = HGReflect.SlotKindName(kind);
         var used = new HashSet<string>();
         foreach (var other in scope ?? new List<GraphProperty>())
             if (other?.Proto == true && !string.IsNullOrEmpty(other.Name))
@@ -1011,7 +1013,7 @@ public class HGModel
 
         for (int i = 1; ; i++)
         {
-            string key = "Property" + i;
+            string key = prefix + i;
             if (!used.Contains(key)) return key;
         }
     }

@@ -265,7 +265,7 @@ public class HGPortTests
     }
 
     [Test]
-    public void ProtoPropertyNamesShareOneSequenceAcrossFamiliesAndRejectCrossFamilyDuplicates()
+    public void ProtoPropertyNamesUseChipAndRejectCrossFamilyDuplicates()
     {
         var model = new HGModel();
         var scope = new List<GraphProperty>();
@@ -275,9 +275,10 @@ public class HGPortTests
 
         Assert.That(firstError, Is.Null);
         Assert.That(secondError, Is.Null);
-        Assert.That(first.Name, Is.EqualTo("Property1"));
-        Assert.That(second.Name, Is.EqualTo("Property2"), "自動編號跨族共用同一個序號，不按族重新起算。");
-        Assert.That(model.RenameProperty(second, "Property1", scope, out string renameError), Is.False,
+        string chip = HGReflect.SlotKindName(typeof(TestFormulaSlot));
+        Assert.That(first.Name, Is.EqualTo(chip + "1"));
+        Assert.That(second.Name, Is.EqualTo(chip + "2"), "不同族若 chip 名稱相同，仍須避開庫內重名。");
+        Assert.That(model.RenameProperty(second, first.Name, scope, out string renameError), Is.False,
             "名稱在庫作用域內全域唯一，不同族也不可同名。");
         Assert.That(renameError, Is.Not.Null);
     }
