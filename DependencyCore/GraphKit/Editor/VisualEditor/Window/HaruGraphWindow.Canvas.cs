@@ -1071,6 +1071,8 @@ public partial class HaruGraphWindow
         // 色塊帶是底圖、沒有自己的熱區，問題提示併進名稱區：整條名稱都是可滑到的地方。
         string titleTip = !hasNodeIssue ? null
             : nodeError ? "此節點有錯誤，詳見 Console" : "此節點有警告，詳見 Console";
+        if (node.Carrier?.Kind == NodeKind.Inline && node.Obj != null)
+            titleTip = $"{node.Obj.GetType().FullName}\n{HGReflect.TypeDescription(node.Obj.GetType())}\n{titleTip}".TrimEnd();
         GUI.Label(titleRect, HGStyles.Elide(node.Title, HGStyles.NodeTitle, textWidth, titleTip), HGStyles.NodeTitle);
 
         // 資產、Token 與 ProtoProperty 的本體是一列「選哪一個」的下拉。

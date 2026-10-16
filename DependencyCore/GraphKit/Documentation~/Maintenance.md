@@ -136,7 +136,7 @@ Console 只有一個驗證結果，另以中性文字顯示「有未儲存變更
 
 ### 5.1 IMGUI 陷阱
 
-- Node Header 的來源替換選單中，Action／Formula 候選顯示「節點名稱 (原始 class 名稱)」；兩者完全相同時只顯示一次。`AdvancedDropdown` 搜尋使用這份顯示文字，因此 Label 與原始 class 名稱皆可查找。
+- Node Header 與來源替換選單的 Action／Formula 顯示 Label，完整 class 名稱與功能說明放 Tooltip。來源選單使用 `HGSourceDropdown`（PopupWindowContent），Group 以資料夾導覽；搜尋獨立比對 Label、Group、結果型別與原始 class 名稱，空白分詞且每詞皆須符合，不受目前資料夾限制。同名候選補結果型別，搜尋時另補分類路徑；項目仍以自身 Apply 身分選取，不以名稱反查。上下鍵選取、Enter 確認、Esc 關閉；點路徑返回上一層。畫布 Ctrl+F 同樣支援 inline class 名稱。來源候選依 Group、Priority、Label、完整型別名稱排序。
 
 - 開啟 Token／Asset 畫布時，以 100% 縮放將 HEAD 起點放在畫布左上方 20px 內距。定位在建圖完成、套用節點疊放順序之前執行，不用全圖 bounds，避免大圖被縮成總覽。從畫布節點進入時，視窗按焦點 Id 記住來源焦點與 pan／zoom，退出時還原；庫與其他入口只定位起點，不建立返回視角。這些記錄不進資料、Dirty 或 Undo；換文件／重載及 Owner 歷程換副本時清除。Asset 的 Token 返回依目前工作副本重解 Token Id；跨資產返回重新開啟資產交易，不復活已捨棄的內容。
 - 縮放共用 `MinZoom = 0.000001`／`MaxZoom = 1.8`（比例值，下限只防除零與極端座標），滾輪每 3 單位 delta 乘／除 1.1，保留滑鼠錨點。`A`／聚焦全部、`Space`／聚焦選取與群組使用 `CalculateFrameZoom` 依 bounds 容納目標，上限 1.4；`FrameNodes` 只以未 Hidden 節點初始化與擴張 bounds，聚焦選取時再依 `selectedIds` 篩選。多選框住整組，無符合節點時不移動視角；聚焦不改選取、資料或 Dirty。

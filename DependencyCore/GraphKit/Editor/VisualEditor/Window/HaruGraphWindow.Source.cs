@@ -227,15 +227,27 @@ public partial class HaruGraphWindow
         if (bodyTypes.Count > 0)
         {
             string kind = isAction ? "Action" : "Formula";
-            foreach (var type in bodyTypes)
+            var sortedTypes = new List<Type>(bodyTypes);
+            sortedTypes.Sort((a, b) =>
+            {
+                int order = string.Compare(HGReflect.TypeCategory(a), HGReflect.TypeCategory(b), StringComparison.Ordinal);
+                if (order != 0) return order;
+                order = HGReflect.TypePriority(a).CompareTo(HGReflect.TypePriority(b));
+                if (order != 0) return order;
+                order = string.Compare(HGReflect.TypeName(a), HGReflect.TypeName(b), StringComparison.Ordinal);
+                return order != 0 ? order : string.Compare(a.FullName, b.FullName, StringComparison.Ordinal);
+            });
+            foreach (var type in sortedTypes)
             {
                 Type captured = type;
                 string label = HGReflect.TypeName(type);
-                // AdvancedDropdown 以顯示文字搜尋，保留原始類別名供查找。
                 options.Add(new HGSourceOption
                 {
                     Group = kind + "/" + HGReflect.TypeCategory(type),
-                    Name = label == type.Name ? label : $"{label} ({type.Name})",
+                    Name = label,
+                    SearchText = type.FullName,
+                    Tooltip = $"{type.FullName}\n{HGReflect.TypeDescription(type)}",
+                    Detail = isAction ? "Action" : HGReflect.ResultTypeName(HGReflect.FormulaResultType(type)),
                     IsCurrent = node.Obj?.GetType() == type,
                     Apply = () => ReplaceNodeType(node, captured),
                 });

@@ -157,7 +157,7 @@ public static class HGTypeIndex
             Debug.LogWarning("[GraphKit] 找不到可用的 Node 來源。");
             return;
         }
-        new HGSourceDropdown(new AdvancedDropdownState(), options, title).Show(rect);
+        PopupWindow.Show(rect, new HGSourceDropdown(options, title));
     }
 }
 
@@ -165,59 +165,142 @@ public class HGSourceOption
 {
     public string Group;
     public string Name;
+    public string SearchText;
+    public string Tooltip;
+    public string Detail;
     public bool IsCurrent;
     public Action Apply;
 }
 
 /// <summary>統一選擇 inline Node、Token 與 Asset 的搜尋下拉。</summary>
-public class HGSourceDropdown : AdvancedDropdown
+public class HGSourceDropdown : PopupWindowContent
 {
-    private class SourceItem : AdvancedDropdownItem
-    {
-        public readonly HGSourceOption Option;
-        public SourceItem(HGSourceOption option) : base(option.IsCurrent ? "✓ " + option.Name : option.Name)
-            => Option = option;
-    }
-
     private readonly List<HGSourceOption> options;
     private readonly string title;
+    private readonly List<(string label, string group, HGSourceOption option)> rows = new();
+    private string group = "";
+    private string search = "";
+    private Vector2 scroll;
+    private int selected;
+    private bool focusSearch = true;
+    private bool revealSelection;
+    private const float RowHeight = 26f;
 
-    public HGSourceDropdown(AdvancedDropdownState state, List<HGSourceOption> options, string title) : base(state)
+    public HGSourceDropdown(List<HGSourceOption> options, string title)
     {
         this.options = options;
         this.title = title;
-        minimumSize = new Vector2(280f, 360f);
+        RebuildRows();
     }
 
-    protected override AdvancedDropdownItem BuildRoot()
+    public override Vector2 GetWindowSize() => new(380f, 360f);
+
+    public override void OnOpen() => editorWindow.wantsMouseMove = true;
+
+    private void RebuildRows()
     {
-        var root = new AdvancedDropdownItem(title);
-        var folders = new Dictionary<string, AdvancedDropdownItem>();
+        rows.Clear();
+        var folders = new HashSet<string>(StringComparer.Ordinal);
+        string prefix = string.IsNullOrEmpty(group) ? "" : group + "/";
+        string[] terms = search.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
         foreach (var option in options)
         {
-            var parent = root;
-            string path = "";
-            // 沒有分組的選項直接掛在根，不要為它生一個空資料夾。
-            foreach (string part in (option.Group ?? "").Split('/'))
+            string path = (option.Group ?? "").Trim('/');
+            if (terms.Length > 0)
             {
-                if (string.IsNullOrEmpty(part)) continue;
-                path = string.IsNullOrEmpty(path) ? part : path + "/" + part;
-                if (!folders.TryGetValue(path, out var folder))
-                {
-                    folder = new AdvancedDropdownItem(part);
-                    folders[path] = folder;
-                    parent.AddChild(folder);
-                }
-                parent = folder;
+                string text = $"{option.Name} {path} {option.SearchText} {option.Detail}";
+                bool matches = true;
+                foreach (string term in terms)
+                    if (text.IndexOf(term, StringComparison.OrdinalIgnoreCase) < 0) { matches = false; break; }
+                if (matches) rows.Add((option.Name, path, option));
+                continue;
             }
-            parent.AddChild(new SourceItem(option));
+            if (path == group) rows.Add((option.Name, path, option));
+            else if (path.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                string child = path.Substring(prefix.Length).Split('/')[0];
+                if (child.Length > 0 && folders.Add(child)) rows.Add((child, prefix + child, null));
+            }
         }
-        return root;
+        selected = 0;
+        scroll = Vector2.zero;
     }
 
-    protected override void ItemSelected(AdvancedDropdownItem item)
+    private void Activate(int index)
     {
-        if (item is SourceItem source) source.Option.Apply?.Invoke();
+        if (index < 0 || index >= rows.Count) return;
+        var row = rows[index];
+        if (row.option == null)
+        {
+            group = row.group;
+            RebuildRows();
+            GUIUtility.ExitGUI();
+            return;
+        }
+        var apply = row.option.Apply;
+        editorWindow.Close();
+        apply?.Invoke();
+        GUIUtility.ExitGUI();
+    }
+
+    public override void OnGUI(Rect rect)
+    {
+        using (HGSkin.Scope())
+        {
+            var e = Event.current;
+            if (e.type == EventType.KeyDown)
+            {
+                if (e.keyCode == KeyCode.Escape) { editorWindow.Close(); e.Use(); return; }
+                if (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter)
+                { e.Use(); Activate(selected); }
+                else if (e.keyCode == KeyCode.DownArrow || e.keyCode == KeyCode.UpArrow)
+                {
+                    selected = Mathf.Clamp(selected + (e.keyCode == KeyCode.DownArrow ? 1 : -1), 0, Mathf.Max(0, rows.Count - 1));
+                    revealSelection = true;
+                    e.Use();
+                    editorWindow.Repaint();
+                }
+            }
+            GUI.Label(new Rect(8f, 4f, rect.width - 16f, 22f), title, EditorStyles.boldLabel);
+            GUI.SetNextControlName("HGSourceSearch");
+            string nextSearch = GUI.TextField(new Rect(8f, 30f, rect.width - 16f, 22f), search, EditorStyles.toolbarSearchField);
+            if (focusSearch) { GUI.FocusControl("HGSourceSearch"); focusSearch = false; }
+            if (nextSearch != search) { search = nextSearch; RebuildRows(); }
+            if (GUI.Button(new Rect(8f, 58f, rect.width - 16f, 24f),
+                string.IsNullOrEmpty(search) ? (group.Length == 0 ? "全部來源" : "‹ " + group) : "搜尋全部來源",
+                EditorStyles.miniButton) && search.Length == 0 && group.Length > 0)
+            {
+                int slash = group.LastIndexOf('/');
+                group = slash < 0 ? "" : group.Substring(0, slash);
+                RebuildRows();
+            }
+            var viewport = new Rect(4f, 88f, rect.width - 8f, rect.height - 92f);
+            if (revealSelection)
+            {
+                scroll.y = Mathf.Clamp(scroll.y, (selected + 1) * RowHeight - viewport.height, selected * RowHeight);
+                scroll.y = Mathf.Max(0f, scroll.y);
+                revealSelection = false;
+            }
+            scroll = GUI.BeginScrollView(viewport, scroll, new Rect(0f, 0f, viewport.width - 18f, Mathf.Max(viewport.height, rows.Count * RowHeight)));
+            for (int i = 0; i < rows.Count; i++)
+            {
+                var row = rows[i];
+                var area = new Rect(0f, i * RowHeight, viewport.width - 18f, RowHeight);
+                if (e.type == EventType.MouseMove && area.Contains(e.mousePosition)) { selected = i; editorWindow.Repaint(); }
+                if (i == selected) EditorGUI.DrawRect(area, HGStyles.HeaderOverlay);
+                string label = row.option?.IsCurrent == true ? "✓ " + row.label : row.label;
+                if (row.option == null) label += "  ›";
+                else
+                {
+                    bool duplicate = rows.Exists(other => other.option != null && other.option != row.option && other.label == row.label);
+                    if (duplicate && (!string.IsNullOrEmpty(row.option.Detail) || search.Length > 0))
+                        label += " · " + (search.Length > 0 ? row.group + " / " : "") + row.option.Detail;
+                }
+                if (GUI.Button(area, new GUIContent(label, row.option?.Tooltip), EditorStyles.label)) Activate(i);
+            }
+            if (rows.Count == 0) GUI.Label(new Rect(8f, 4f, viewport.width - 24f, RowHeight), "沒有符合的來源", EditorStyles.miniLabel);
+            GUI.EndScrollView();
+        }
     }
 }
 

@@ -834,7 +834,8 @@ public partial class HaruGraphWindow
     private static string NodeSearchName(HGNodeView node)
     {
         string reference = node.Token?.Name ?? (node.Asset != null ? node.Asset.name : null) ?? node.Property?.Name;
-        return string.IsNullOrEmpty(reference) ? node.Title : $"{node.Title} {reference}";
+        string typeName = node.Carrier?.Kind == NodeKind.Inline ? node.Obj?.GetType().FullName : null;
+        return $"{node.Title} {reference} {typeName}";
     }
 
     private void SetFocus(HGFocus next)
