@@ -615,7 +615,7 @@ public class HGModel
         // 族的身份是 Slot 型別本身。需要「唯一挑一個」的呼叫端必須自己帶 Slot 型別來，不能用結果型別反查。
         foreach (var t in UnityEditor.TypeCache.GetTypesDerivedFrom<FormulaSlotBase>())
         {
-            if (t.IsAbstract || t.ContainsGenericParameters) continue;
+            if (t.IsAbstract || t.ContainsGenericParameters || typeof(UnionSlotBase).IsAssignableFrom(t)) continue;
             // 測試組件的替身也會進 TypeCache，不可提供給企劃序列化為正式族。
             if (!testAssemblies.TryGetValue(t.Assembly, out bool isTestAssembly))
             {

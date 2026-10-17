@@ -68,6 +68,15 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - `AcceptsCompatibleBody` 與 `AcceptsCompatibleSlot` 將來源資訊交給同一個 `AcceptsSource`：同族優先，跨族才檢查開關、Pack、Result 與排除名單。Body 以實際公式型別判族／排除；Token／Property 以宣告 Slot 的 `FamilyType`／`BodyBaseType` 判定，不追入 Token 子樹、不依目前值猜型別。使用端先確認自己的求值能力，再委派相容政策；AP 的三種讀取來源共用此政策，LogicGraph 的 Token／Property 仍採同族契約。寫入端與資產接收另依原契約。
 - Formula／Token 換來源候選共用 `ReplacementFormulaSlot`，依來源自身族取 Property／Token 的宣告 Slot，或同族父欄位實例，再回退型別建立。Token 選單與 picker 都問 `AcceptsToken`；拿不到實例才沿用族／結果型別的近似判斷。多個接收端不改變已定型來源的候選，替換後逐條用 `Accepts*` 保留或斷開連線。
 
+### 多族輸入
+
+- `UnionSlotBase : FormulaSlotBase` 是多族輸入載體，只序列化一個 `selectedSlot`，來源 Node 與常數由此 Slot 持有。2～5 分支由使用端 factory 提供；非序列化候選只供相容判定。GraphKit 不求值或轉換結果。
+- 接收共用四種 `Accepts*`：優先唯一原生族配對，其次唯一相容分支；仍有歧義則拒接，不按宣告順序猜測。分支不得重複或巢狀，必須相同 Pack。
+- 一個欄位一個 Port，chip 顯示各族以 ` | ` 分隔；常數左側可選族，有來源時停用切族。選族走內容交易／Undo，過期選單不得寫入舊副本。
+- Union 不列入 FormulaKinds 或族名稱索引；來源節點的結果／chip、轉存 Token／Asset 與資產下鑽使用實際選中族，不能把 Union 的 TResult 當成來源結果。
+- 來源原地換型後，所有仍相容的 Union 接收端必須以 SetNode 重新選族，包含視窗與非視窗交易。ConfigurationError 為只讀診斷，getter 不自動修復序列化內容。
+- 執行層繼承此載體並實作求值；LogicGraph 提供非同步泛型 Union，AP 原有同步 Slot 不受影響。既有四種零欄位 Slot 基底維持零欄位。
+
 ### 3.3 Token 與 Property
 
 - `GraphToken`：具名的公式端點，有自己的畫布、取值欄位與候選池。唯一性是「族＋名稱」。Token 節點存 `GraphToken` 物件參照，改名不斷線、刪除立刻變 null 由驗證報錯。**不要改回字串 key**。
@@ -256,7 +265,11 @@ Console 只有一個驗證結果，另以中性文字顯示「有未儲存變更
 - `[HGCatalog("LibraryId", Group = "可選整批分組")]` 標在靜態欄位、可讀靜態屬性或無參數靜態方法；回傳 `IEnumerable<T>` 或 `IEnumerable<HGCatalogEntry<T>>`（含 List／陣列等實作）。`HGCatalogEntry<T>(value, label, tooltip)` 是顯示描述，透過 `IHGCatalogEntry` 讀取；只將 Value 寫入圖內欄位。目錄由 HGOptions 與 HGSpinner 共用。來源可位於 Editor 組件，也可跨 class／assembly 合併。只讀來源應在編輯模式可用，不可依賴 Play 初始化、修改圖或資產；來源需為有限集合。
 - 同庫的實際值型別 T 必須一致，並可指派到欄位元素型別；一般值與描述元素可混用，不做字串／數值隱式轉型。候選依 Value 的 `Equals` 去重，來源依完整型別與成員名稱排序、各來源保留列舉順序；重複值取先遇到的整份顯示資料。同 Label 不同 Value 仍是不同選項。
 - Label 空白時使用原始值文字（一般值 ToString、Unity 物件名稱）。選單與收起欄位顯示 Label；選單以淡色補不同於 Label 的原始值，搜尋比對 Label、原始值及來源／分組。tooltip 補逐項說明、原始值、來源及資產路徑；未知值保留原值顯示。
-- `HGOptionsCatalog` 只快取反射成員索引。HGOptions 第一次繪製、HGSpinner 建列量測時取得列生命週期內的顯示快照，重建列後更新；每次開選單另取最新候選快照。重繪不反覆呼叫來源。未知庫、型別衝突、null／Missing 實際值或 iterator 例外顯示來源錯誤，整份候選拒絕，不使用半份結果。編譯 Domain Reload 後重建索引。
+- `HGOptionsCatalog` 依（目錄 ID、值型別）共用唯讀 `IReadOnlyList<Entry>` 快照；TryGet 在來源版本一致時回傳同一實例，不重新列舉、排序或建立候選。開關視窗、切圖、建列、Undo 與修改圖內容不清除此快取。首次需要或 Domain Reload 後仍須建立索引及快照。
+- 動態來源在 HGCatalog 指定 `RevisionMember = nameof(版本成員)`，指向同類的靜態欄位、可讀屬性或無參數方法。版本讀取必須便宜、無副作用且回傳可用 Equals 比較的不可變版本值；內容、Label、Tooltip、Group 或資產有效性改變時都須改版。來源可能重建時把實例身分與版本一起回傳，不能只比較重設後可能重複的計數。未指定 RevisionMember 表示固定來源，快照保留至 Domain Reload。多來源合併庫任一版本改變就重建整份快照。
+- HGOptions 每次顯示只檢查版本並取得共用快照；Popup 開啟時取同一份快照，提交前重新確認來源未改版，過期時停止這次寫入並提示重開。HGSpinner 在 Layout／量測取得快照；版本改變取消塗選、重新量測節點與幾何，寫回前也檢查快照一致。更新顯示不改資料、Dirty 或 Undo。
+- 型別衝突、null／Missing 或 iterator 例外不暴露部分候選；失敗結果也按版本快取，避免每次重繪重跑失敗來源。版本改變才重新嘗試列舉。版本讀取本身失敗則回報錯誤與空候選，不沿用舊資料冒充最新結果。
+- 來源索引只掃 GraphKit 本身與直接引用 GraphKit 的已載入非動態組件；保留欄位、屬性與方法來源，來源身分排序不變。Profiler 的 `GraphKit.Catalog.Discover` 與 `GraphKit.Catalog.BuildSnapshot` 分別量測來源索引與候選列舉；不以程式路徑減少推論實際耗時改善。
 - 單選點選後寫回並關閉；多選每次勾選、取消勾選或清空立即以一次內容交易寫回，保持 Popup 開啟供連選，每次操作可獨立 Undo。Esc／失焦只關閉，不撤回已寫入內容；僅開啟或搜尋不修改。未在候選內的既有值在選單標示並保留；清單可取消勾選移除，不在打開時自動清理或去重舊資料。
 - Popup 寬度依候選文字限制於 260～420px，高度按開啟時的候選數量配置，最多顯示 12 列後捲動；搜尋不縮放視窗，改搜尋字時回到清單頂端。選項每列 24px，底部保留已選數量與清空。
 - 多選成功寫回後同步重建圖，以同一 Target／Field／Path 重新取得列並採納這次重建的 generation；不得沿用舊 HGRow。外部 Undo／切焦點／重建仍拒絕過期回呼，找不到同一欄位時停止連選並要求重開。
@@ -336,6 +349,16 @@ private List<int> levelCounts;
 
 ### 6.4 節點屬性
 
+#### Slot 內建設定
+
+- Slot 的常數／預設值固定留在主列，接線後弱化顯示但仍可編輯；Union 的提示依目前分支的 ResultType 判斷是否為替代 Default，不以 Union 輸出型別判斷。
+- Slot 自帶的序列化值欄位以 `[HGSlotSetting]` 宣告；沿用 HGLabel／HGDescription／HGShowIf、一般值控制項及欄位群組。完整 metadata descriptor 也可直接描述 Slot 設定。設定只能包含值配置，不能包含其他 Slot 接線；配置錯誤回報 `graphkit.metadata.slot-settings-input`。
+- 一般 Slot 與 Union 共用同一入口；Union 同時呈現外層與 SelectedSlot 的設定。只讀取明確標記的欄位，不把內部 Node、Default 或分支儲存欄位再次展開。有可見設定才顯示主列左側箭頭，初次預設收合，展開後不增加獨立標題列；預設值、chip 與主列 Port 保持原位。
+- 一般欄位、清單元素、HEAD 與資產參數綁定都在 Collect 階段統一掛入設定。設定繼承父欄位的群組／分頁／清單歸屬與 binding 鎖定；鎖定時仍可切換主列箭頭，設定值不可編輯。
+- `SlotSettingsRow` 是以主列作 HeaderRow 的 Foldout，沿用 `GraphViewState._folded`／`_unfolded`；key＝節點 Id＋`<Slot 路徑>/#slot-settings/`（HEAD 路徑為 `/head`）。切換走 SetListFolded／MarkViewStateChanged，隨圖存檔、Undo／Redo／取消及重開還原；純版面不改求值或內容驗證旗標。無 IGraphViewStateOwner 時只存於視窗記憶體。
+
+#### 共用欄位呈現
+
 - Foldout 展開時左側導引線末端向右延伸 6px，形成淡色「└」收尾（2px 線寬，沿用 `ListRule`）。收尾與直線不重疊，保留距底部 2px 的原有位置，完全位於既有縮排區內；收合時不畫，不增加高度或改動 Grid。
 - Tab 標題的實際繪製／點擊框限制在與 Foldout 共用的 `ListBandRect`（左右 2px 內距，左側加父容器縮排），使用同樣 3px 圓角。格數量測仍使用完整邏輯區域，外緣只裁去內距，不因 4px 裝飾邊距少分配一整格。
 - Tab 內容在 `FinishTabs` 逐頁將整棵內容子樹縮排一層，標題列保持父層縮排；巢狀 Tab／Foldout 逐層累加。`DrawTabRow` 採相連頁籤：作用中頁籤與內容共用 `TabBody` 中性底，頁籤畫上／左右輪廓，內容以 1px 細框圈住（含短頁留白）；相鄰作用中頁籤下方的內容上框留開口，兩者連成一塊。換行時只對緊鄰內容的作用中頁籤開口，非末列的作用中頁籤用完整輪廓，不跨其他頁籤挖空。所有線都在既有 Rect 內，不加間距、不改 Grid 量測，亦不參與命中。
@@ -360,7 +383,7 @@ private List<int> levelCounts;
 - `[HGFoldout("群組名")]` 把欄位收進節點內的摺疊群組（`HGRowKind.Foldout`，對應 Odin `FoldoutGroup`）：同一個物件裡同名的欄位共用一組，群組列插在第一個成員的位置，成員接在標題列下面，與一般欄位同寬。每組各自展開／收起，可同時展開多組，預設展開；成員都沒長出列（含被 `[HGShowIf]` 整組藏掉）的群組不出現。descriptor 用各 factory 的 `foldout:` 參數。
   - 群組列的 `Height` 是整段：展開時＝標題列 ＋ 成員，收起時＝標題列。成員的 `FoldoutOwnerRow` 指向最近的群組（巢狀時外層靠群組列自己的 `FoldoutOwnerRow` 往上找）。`FinishFoldouts` 把整棵成員子樹的 `Depth` 加 1（巢狀群組逐層累加）。
   - 收起時成員壓到標題列（`CollapseRows`）並標成隱藏：接點不可見、不能起手或放線，但已接線的欄位照畫線，由標題列右緣伸出，同一組的線共用一把扇（`FoldedListOf` 先找清單鏈、再找群組鏈，回傳看得到的折疊祖先，和折疊清單走同一套 `RebuildFoldFan`）。`DrawFoldoutAnchorPort` 使用與 List 相同的 `DrawAggregatePort` 短豎線，不是 `HGPort`；純顯示出口規則見 §5.1。群組名後的 ● 是組內有錯誤。
-  - 展開狀態是版面，和清單折疊共用 `listCollapse`／`GraphViewState._folded`、`_unfolded`（key＝群組列的 `CollapseKey`，路徑是 `<物件路徑>/#<群組名>`）；切換走 `SetListFolded` → `MarkViewStateChanged()`，鎖定中也能切。`DefaultCollapsed` 對群組一律是 false。`RevealNode` 會沿父欄位把收起的群組一路展開。
+  - 展開狀態是版面，和清單折疊共用 `listCollapse`／`GraphViewState._folded`、`_unfolded`（key＝群組列的 `CollapseKey`，路徑是 `<物件路徑>/#<群組名>`）；切換走 `SetListFolded` → `MarkViewStateChanged()`，鎖定中也能切。`DefaultCollapsed` 對一般 HGFoldout 群組是 false；Slot 設定預設收合。`RevealNode` 會沿父欄位把收起的群組一路展開。
   - 外觀：只畫標題列（`ListHeader`）與左側一條縱向導引線（`ListRule`，落在成員讓出的那格縮排裡），不畫底帶與外框。底帶＋外框是清單「凹進去的容器」的語彙；群組也用它的話，組內的清單和群組長得一樣、左緣重疊，分不出主次。只有箭頭與文字是開關，其餘空白留給拖曳節點。
   - `/` 表示群組階層，例如 `[HGFoldout("設定/進階")]` 建立兩層 Foldout；父路徑若明確宣告為 Tab 則放在該頁內。建樹完成後由內向外執行 `FinishTabs`／`FinishFoldouts`，只處理本資料物件建立的列，避免重複縮排巢狀資料物件的群組。
 - `[HGEnum]` 只作用在 enum：畫成按鈕列（`[Flags]` 多選），標在 bool 上沒有效果。

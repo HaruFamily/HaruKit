@@ -4,7 +4,10 @@ using Cysharp.Threading.Tasks;
 using System;
 using HaruFamily.DependencyCore.GraphKit;
 
-public interface IFormulaSlot<T, TPack>
+/// <summary>Slot 所使用的執行上下文；多族輸入可檢查 Pack 而不抹除各族的結果型別。</summary>
+public interface IFormulaSlot<TPack> { }
+
+public interface IFormulaSlot<T, TPack> : IFormulaSlot<TPack>
 {
     UniTask<T> Evaluate(TPack pack, TokenTable<TPack> tokens);
 }

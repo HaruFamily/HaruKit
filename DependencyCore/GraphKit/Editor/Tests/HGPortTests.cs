@@ -1471,6 +1471,50 @@ MonoBehaviour:
         Assert.That(b.Children[0].Hidden, Is.False);
     }
 
+    [Test]
+    public void SlotSettingsPersistIndependentlyAndKeepDefaultsAndConnectionsOnMainRows()
+    {
+        var owner = new SlotSettingsOwner();
+        owner.A.DefaultObject = 9;
+        var source = new GraphNode(new PropertyReaderBody());
+        owner.A.SetNode(source);
+        owner.B.SetNode(source);
+        var model = new HGModel();
+        var view = HGGraph.Build(model, new object[] { owner }, null, "settings", "Settings");
+        Assert.That(view.Diagnostics, Is.Empty);
+        var a = view.Nodes[0].Rows[0];
+        var b = view.Nodes[0].Rows[1];
+        float mainY = a.LocalY;
+        Assert.That(a.SlotSettingsRow.Collapsed, Is.True);
+        Assert.That(b.SlotSettingsRow.Collapsed, Is.True);
+        Assert.That(a.SlotSettingsRow.Children, Has.Count.EqualTo(1));
+        Assert.That(a.SlotSettingsRow.Children[0].Hidden, Is.True);
+        Assert.That(a.Hidden, Is.False);
+        Assert.That(view.Links, Has.Count.EqualTo(2));
+
+        var state = new GraphViewState();
+        string key = HGGraph.CollapseKey(view.Nodes[0].Id, a.SlotSettingsRow);
+        state.SetFolded(key, false);
+        state = JsonUtility.FromJson<GraphViewState>(JsonUtility.ToJson(GraphDeepCopy.Copy(state)));
+        var folds = new Dictionary<string, bool>();
+        foreach (var folded in state.Folded) folds[folded] = true;
+        foreach (var unfolded in state.Unfolded) folds[unfolded] = false;
+        view = HGGraph.Build(model, new object[] { owner }, null, "settings", "Settings", folds);
+        a = view.Nodes[0].Rows[0];
+        b = view.Nodes[0].Rows[1];
+        Assert.That(a.SlotSettingsRow.Collapsed, Is.False);
+        Assert.That(b.SlotSettingsRow.Collapsed, Is.True);
+        Assert.That(a.LocalY, Is.EqualTo(mainY));
+        Assert.That(a.Height, Is.EqualTo(HGGraph.RowHeight));
+        Assert.That(a.SlotSettingsRow.Children[0].LocalY, Is.EqualTo(mainY + a.Height));
+        Assert.That(b.LocalY, Is.EqualTo(mainY + 2 * HGGraph.RowHeight));
+        Assert.That(a.InputSlot, Is.SameAs(owner.A));
+        Assert.That(((FormulaSlotBase)a.InputSlot).DefaultObject, Is.EqualTo(9));
+        Assert.That(a.SlotSettingsRow.Children[0].Target, Is.SameAs(owner.A));
+        Assert.That(view.Links, Has.Count.EqualTo(2));
+        Assert.That(view.Nodes[0].Rows[2].SlotSettingsRow, Is.Null);
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public void GroupPathsNestTabsAndFoldoutsAndRestoreIndependentViewState(bool useDescriptor)
@@ -2414,6 +2458,18 @@ MonoBehaviour:
         public override Type BodyBaseType => null;
         public override Type AssetBaseType => null;
         public override void SetNode(GraphNode value) => node = value;
+    }
+
+    private sealed class SettingsTestSlot : TestFormulaSlot
+    {
+        [HGSlotSetting] public bool RoundUp;
+    }
+
+    private sealed class SlotSettingsOwner
+    {
+        public SettingsTestSlot A = new();
+        public SettingsTestSlot B = new();
+        public TestFormulaSlot Plain = new();
     }
 
     private sealed class CompatibleTestFormulaSlot : TestFormulaSlot

@@ -3,6 +3,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
     using System;
     using System.Collections;
     using System.Collections.Generic;
+    using System.Linq;
     using UnityEditor;
     using UnityEngine;
 
@@ -33,6 +34,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     case HGRowKind.InputPort:
                         if (row.IsItem) DrawListElementControls(row, rowRect, nodeRect);
                         DrawInputPortRow(row, rowRect);
+                        if (row.SlotSettingsRow != null)
+                            using (new EditorGUI.DisabledScope(row.Locked)) DrawRows(node, row.Children, nodeRect);
                         break;
                     case HGRowKind.Group:
                         if (row.IsItem) DrawListElementControls(row, rowRect, nodeRect);
@@ -143,6 +146,20 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// </summary>
         private void DrawFoldoutRow(HGNodeView node, HGRow row, Rect rowRect, Rect nodeRect)
         {
+            if (row.HeaderHidden)
+            {
+                if (!row.Collapsed)
+                {
+                    var settingsBand = ListBandRect(row, rowRect);
+                    if (settingsBand.height >= 4f)
+                    {
+                        HGStyles.Fill(new Rect(settingsBand.x + 4f, settingsBand.y, 2f, settingsBand.height - 2f), HGStyles.ListRule);
+                        HGStyles.Fill(new Rect(settingsBand.x + 6f, settingsBand.yMax - 4f, 6f, 2f), HGStyles.ListRule);
+                    }
+                    DrawRows(node, row.Children, nodeRect);
+                }
+                return;
+            }
             var band = ListBandRect(row, rowRect);
             HGStyles.RoundedFill(new Rect(band.x, band.y, band.width, HGGraph.RowHeight), HGStyles.FoldoutHeader, 3f);
             // 導引線落在成員讓出來的那一格縮排裡，對齊標題列的箭頭。
@@ -565,6 +582,24 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 labelRect.xMin += 20f;
             }
 
+            if (row.SlotSettingsRow is { } settings)
+            {
+                var arrow = new Rect(labelRect.x, labelRect.y, 12f, labelRect.height);
+                GUI.Label(arrow, new GUIContent(settings.Collapsed ? "▸" : "▾", "展開／收合 Slot 設定（隨圖存檔）"), HGStyles.RowLabel);
+                var evt = Event.current;
+                if (evt.type == EventType.MouseDown && evt.button == 0 && arrow.Contains(evt.mousePosition))
+                {
+                    BreakUndoMerge();
+                    GUIUtility.keyboardControl = 0;
+                    EditorGUIUtility.editingTextField = false;
+                    SetListFolded(HGGraph.CollapseKey(settings.OwnerNodeId, settings), !settings.Collapsed);
+                    graphDirty = true;
+                    Repaint();
+                    evt.Use();
+                }
+                labelRect.xMin += 14f;
+            }
+
             // 沒勾覆蓋＝資產用自己內部的預設，這一列填什麼都不會被採用，所以連名稱帶欄位一起鎖住。
             EditorGUI.BeginDisabledGroup(row.Locked);
 
@@ -602,6 +637,31 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             if (row.HideLabel)
                 fieldRect = new Rect(labelRect.x, rowRect.y + 1f,
                     Mathf.Max(20f, rowRect.xMax - labelRect.x - inputPortInset), rowRect.height - 3f);
+
+            if (slot is UnionSlotBase union)
+            {
+                var branchRect = new Rect(fieldRect.x, fieldRect.y, Mathf.Min(65f, fieldRect.width * 0.45f), fieldRect.height);
+                string branchName = union.SelectedSlot == null ? "選族" : HGReflect.SlotKindName(union.SelectedSlot);
+                using (new EditorGUI.DisabledScope(union.Node != null))
+                    if (GUI.Button(branchRect, new GUIContent(branchName + " ▾", "常數輸入族；接線時依來源自動選擇。"), HGStyles.Tiny))
+                    {
+                        var menu = new GenericMenu();
+                        int generation = graphGeneration;
+                        for (int i = 0; i < union.BranchCount; i++)
+                        {
+                            int index = i;
+                            menu.AddItem(new GUIContent(HGReflect.SlotKindName(union.BranchType(i))),
+                                union.SelectedSlot?.FamilyType == union.BranchType(i), () =>
+                                {
+                                    if (generation != graphGeneration || graphDirty) return;
+                                    if (TryMutateContent(() => union.SelectBranch(index), out string error)) Invalidate();
+                                    else ShowNotification(new GUIContent(error));
+                                });
+                        }
+                        menu.ShowAsContext();
+                    }
+                fieldRect.xMin = branchRect.xMax + 3f;
+            }
 
             if (labelIsContent)
             {
@@ -650,7 +710,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
                 // 常數框永遠在。接了公式／資產／Token時它是解析失敗的保底值，只是視覺上轉灰；鎖住時整列不可編。
                 // 替代型別的常數框（editType != ResultType）語意不同：它只在沒接線時採用，不是失敗保底。
-                bool isSubstitute = editType != row.ResultType;
+                Type defaultResultType = slot is UnionSlotBase unionDefault ? unionDefault.SelectedSlot?.ResultType : row.ResultType;
+                bool isSubstitute = editType != defaultResultType;
 
                 // 一般與替代型別的 enum 都只在明確宣告 HGEnum 時使用按鈕列。
                 bool enumButtons = row.ForceEnumButtons;
@@ -798,8 +859,22 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 return;
             }
             if (!HGSpinnerField.TryElementType(row.Field.FieldType, out var element)) return;
-            if (row.OptionsEntries == null)
+            if (row.OptionsEntries == null || Event.current.type == EventType.Layout)
+            {
+                var previous = row.OptionsEntries;
+                string previousError = row.OptionsError;
                 HGOptionsCatalog.TryGet(settings.Library, element, out row.OptionsEntries, out row.OptionsError);
+                if (!ReferenceEquals(previous, row.OptionsEntries) || previousError != row.OptionsError)
+                {
+                    spinnerField.Cancel();
+                    var ownerNode = graph.Nodes.Find(candidate => candidate.Id == row.OwnerNodeId);
+                    if (ownerNode != null)
+                    {
+                        HGGraph.MeasureNode(ownerNode);
+                        rowGeometry.Remove(ownerNode);
+                    }
+                }
+            }
             if (!string.IsNullOrEmpty(row.OptionsError))
             {
                 EditorGUI.HelpBox(rect, row.OptionsError, MessageType.Error);
@@ -848,6 +923,14 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 if (Event.current.type == EventType.Used) Repaint();
                 return;
             }
+            if (!HGOptionsCatalog.TryGet(settings.Library, element, out var latestEntries, out var catalogError)
+                || !ReferenceEquals(latestEntries, row.OptionsEntries))
+            {
+                spinnerField.Cancel();
+                ShowNotification(new GUIContent(catalogError ?? "候選資料已更新，本次數量編輯已取消。"));
+                Repaint();
+                return;
+            }
             bool same = (current?.Count ?? 0) == next.Count;
             for (int i = 0; same && i < next.Count; i++) same = Equals(current[i], next[i]);
             if (same) return;
@@ -869,9 +952,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 return;
             }
             object current = row.Field.GetValue(row.Target);
-            if (row.OptionsEntries == null)
-                HGOptionsCatalog.TryGet(options.Library, valueType, out row.OptionsEntries, out row.OptionsError);
-            string Label(object value) => row.OptionsEntries.Find(entry => Equals(entry.Value, value))?.Label ?? HGOptionsCatalog.Display(value);
+            HGOptionsCatalog.TryGet(options.Library, valueType, out row.OptionsEntries, out row.OptionsError);
+            string Label(object value) => row.OptionsEntries.FirstOrDefault(entry => Equals(entry.Value, value))?.Label ?? HGOptionsCatalog.Display(value);
             var labels = new List<string>();
             var rawValues = new List<string>();
             if (multiple && current is IList list)

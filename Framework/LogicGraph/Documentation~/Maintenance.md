@@ -66,6 +66,15 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 - 未接來源的求值走 `protected virtual TResult EvaluateUnlinked(TPack pack)`，預設回 `_default`。具體 Slot 可配合 GraphKit 的 `DefaultEditType`／`DefaultObject`，把序列化選項依當次 Pack 解析成結果。一般 Evaluate、IFormulaSlot、Token 及資產參數共用此入口，不以隱藏 Evaluate 或另一個 Resolve API 分流。此入口只處理 `Node == null`；已接但停用、空節點或來源失敗仍回原本保底值，不改取未接線選項。
 - 跨族接收：Slot 覆寫 `AllowCompatibleResult` 回 true 後，可額外接受「Pack 相同、結果型別可指派給本族」的其他族公式，並以 `ExcludedFormulaFamilies` 排除特定族（連同子類）。同族永遠優先且不受黑名單影響。不做數值轉換或向下轉型。Token、Property、Formula Asset 不受此開關放寬。
 
+### 多族輸入 UnionSlot
+
+- `UnionSlot<TResult, TPack, TA, TB>` 提供 2、3、4、5 個來源族的泛型版本，共用求值入口；TA～TE 是具有公開無參數建構子的具體 FormulaSlotBase，同一 Pack、不同族，且實作 `IFormulaSlot<TPack>`。不接受巢狀 Union。
+- 使用端以具體可序列化子類實作 `OnEvaluate(pack, tokens)`，對 `SelectedSlot` 分支呼叫其正式 `Evaluate` 並轉為 TResult。外層只做配置及前後取消檢查；不重複 EnterNode，不把 Slot 求值降成裸 Formula 呼叫。
+- 預設選第一族，具體子類可在建構子用 `SetSelectedSlot` 改初始常數。`SelectBranch(index)` 僅供未接線常數；接線用 `SetNode` 依來源選族，斷線保留目前族與常數。內層 Slot 負責停用／失敗保底，子類仍轉換其結果。
+- Union 是輸入欄位，不作為 Token／Property 的宣告族；來源的 Token／Property 使用原生族讀取。公式輸出仍由既有 FormulaBase 決定。
+- 程式原地替換來源載體內容後，須對受影響 Union 再呼叫 `SetNode(carrier)` 重新選族；編輯器換來源與非視窗 ReplaceSource 在同一交易內完成。配置不一致由 Core／Editor 驗證回報。
+- GraphKit 的載體／選族／畫面規則見其維護手冊「多族輸入」。`UnionSlotTests` 涵蓋二族求值、四種來源、五族常數、序列化／DeepCopy、取消與 Editor 換來源／Undo。
+
 ### 3.4 Token 與資產參數
 
 - Token 是**具名的計算**，不是快取變數：每次查詢都重新求值，隨機公式每次結果不同。不做記憶化。

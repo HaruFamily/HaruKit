@@ -378,6 +378,8 @@ public sealed class HGDocumentSession<TDocument>
                 CollectDirectChildren(carrier.Bindings, children, new HashSet<object>(ReferenceComparer.Instance));
                 var pool = FindOrphanPool(carrier);
                 source.Apply(carrier, shared);
+                foreach (var slot in slots)
+                    if (slot is UnionSlotBase && ReferenceEquals(slot.Node, carrier)) slot.SetNode(carrier);
                 foreach (var input in HGModel.WalkSlots(carrier, new HashSet<object>(HGRefComparer.Instance)))
                     if (input.Node != null && !ReferenceEquals(input.Node, carrier)) RemoveFromOrphanPools(input.Node);
                 foreach (var child in children) ReturnUnreferenced(child, pool);

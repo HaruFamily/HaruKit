@@ -171,7 +171,11 @@ public static class HGReflect
     }
 
     public static void SetAsset(GraphSlotBase slot, UnityEngine.Object asset)
-        => EnsureNode(slot).SetAsset(asset as UnityEngine.ScriptableObject);
+    {
+        var node = EnsureNode(slot);
+        node.SetAsset(asset as UnityEngine.ScriptableObject);
+        if (slot is UnionSlotBase) slot.SetNode(node);
+    }
 
     /// <summary>這個欄位接的具名Token（沒接或不是Token節點回 null）。</summary>
     public static GraphToken GetToken(GraphSlotBase slot) => GetNode(slot)?.Token;
@@ -184,7 +188,9 @@ public static class HGReflect
             GetNode(slot)?.Clear();
             return;
         }
-        EnsureNode(slot).SetToken(endpoint);
+        var node = EnsureNode(slot);
+        node.SetToken(endpoint);
+        if (slot is UnionSlotBase) slot.SetNode(node);
     }
 
     /// <summary>斷開來源：公式欄位回常數、動作欄位回空槽。</summary>
@@ -602,7 +608,16 @@ public static class HGReflect
     /// 這個 Slot 所屬族的 [HGKind] 顯示名。手上有 Slot 就用這支，才分得出同一結果型別的不同族
     /// （例：string 同時有 String 與 Key）。沒標 [HGKind] 時退回結果型別的短名。
     /// </summary>
-    public static string SlotKindName(object slot) => SlotKindName(slot?.GetType());
+    public static string SlotKindName(object slot)
+    {
+        if (slot is UnionSlotBase union)
+        {
+            var names = new string[union.BranchCount];
+            for (int i = 0; i < names.Length; i++) names[i] = SlotKindName(union.BranchType(i));
+            return string.Join(" | ", names);
+        }
+        return SlotKindName(slot?.GetType());
+    }
 
     /// <inheritdoc cref="SlotKindName(object)"/>
     public static string SlotKindName(Type slotType)
@@ -653,7 +668,7 @@ public static class HGReflect
         // （string 有 String 與 Key，但只有 Key 標了 HGKind）若不數族，String 的 chip 會被叫成 Key。
         foreach (var slotType in UnityEditor.TypeCache.GetTypesDerivedFrom<FormulaSlotBase>())
         {
-            if (slotType.IsAbstract || slotType.ContainsGenericParameters) continue;
+            if (slotType.IsAbstract || slotType.ContainsGenericParameters || typeof(UnionSlotBase).IsAssignableFrom(slotType)) continue;
             var resultType = ResultType(slotType);
             if (resultType == null) continue;
 

@@ -21,6 +21,7 @@ where TTiming : Enum
     // 節點內容檢查跑兩趟：第一趟只走啟用路徑，第二趟才穿透停用節點。見 ValidateSlotSources。
     [NonSerialized] private bool _walkDisabled;
     [NonSerialized] private HashSet<GraphNode> _checkedNodes = new();
+    [NonSerialized] private HashSet<UnionSlotBase> _checkedUnions = new();
 
     /// <summary>Current verification output for Editor integrations; rebuilt by every Verify call.</summary>
     public IReadOnlyList<GraphDiagnostic> Diagnostics
@@ -116,6 +117,8 @@ where TTiming : Enum
         // 所以順序不能顛倒，也不能只走一趟。
         _checkedNodes ??= new HashSet<GraphNode>();
         _checkedNodes.Clear();
+        _checkedUnions ??= new HashSet<UnionSlotBase>();
+        _checkedUnions.Clear();
 
         _walkDisabled = false;
         ValidateTokens();
@@ -501,6 +504,9 @@ where TTiming : Enum
         }
         if (node is GraphSlotBase fsb)
         {
+            if (fsb is UnionSlotBase union && (_walkDisabled || fsb.Node?.Disabled != true)
+                && _checkedUnions.Add(union) && union.ConfigurationError is string unionError)
+                Issue("slot.union-invalid", unionError, location);
             CheckNode(fsb.Node, fsb.GetType().Name, fsb.AcceptsBody, fsb.AcceptsAsset, fsb.AcceptsToken, fsb.AcceptsProperty, location);
             ValidateSlotSources(fsb.Node, visited, location);
             return;

@@ -356,6 +356,10 @@ public static class HGValidator
         var carrier = slot.Node;
         var contentKind = carrier?.Kind;
 
+        if (slot is UnionSlotBase union && union.ConfigurationError is string unionError)
+            Issue(report, "graphkit.slot.union-invalid", disabled, focus, where, unionError,
+                "重新選擇輸入族或重新接線。", slot, carrier);
+
         if (contentKind is NodeKind.Inline or NodeKind.Empty)
         {
             var formula = HGReflect.GetFormula(slot);

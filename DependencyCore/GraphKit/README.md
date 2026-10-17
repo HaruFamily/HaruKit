@@ -24,6 +24,9 @@ GraphKit 是**沒有領域語意**的序列化節點圖框架。它提供節點�
 - **非泛型契約**：`IGraphDocument`、`IGraphHead`、`IOrphanPool`、`ITokenOwner`、`IPropertyOwner` 等，讓編輯器不必認識使用端型別。文件以 `HGCapabilities` 宣告要啟用哪些庫。
 - **Root 顯示名稱**：文件可選提供 `IGraphRootKeyDisplay`，讓建立選單與下拉顯示友善名稱，同時保留原始識別值；enum 的 `[HGLabel]` 名稱解析可使用 `HGEnumLabels`。規則見維護手冊 §3.4、§6.4。
 - **零欄位的 Slot 基底**：`FormulaSlotBase`、`ActionSlotBase`、`PropertySlotBase` 沒有序列化欄位，使用端加泛型子類不會改變序列化格式。
+- **多族輸入**：`UnionSlotBase` 描述單一來源的 2～5 族接收；支援選族常數框、接線與換來源，結果轉換由執行層負責。
+- **Slot 內建設定**：預設值固定在主列；Slot 的額外序列化值欄位標記 `[HGSlotSetting]`，由左側箭頭展開。一般 Slot 與 Union 共用，收合狀態隨圖保存，支援 Undo／Redo。用法與限制見維護手冊 §6.4。
+- **候選目錄快取**：欄位、選單與不同 Graph 共用唯讀候選；動態來源以 `[HGCatalog("ID", RevisionMember = nameof(Revision))]` 提供版本，改版才重新列舉。未指定版本的固定來源保留至 Domain Reload。版本與失敗處理契約見維護手冊 §5.7。
 - **公式族**：族身分是具體 Slot 型別；可選擇開放「結果型別相容」的跨族接收，並用黑名單排除。提供 Formula 與 Token／Property 宣告 Slot 的共用接收政策，由使用端的 `Accepts*` 接入；寫入仍須同族。
 - **`GraphDeepCopy`**：保留多型 `SerializeReference`、共享參照、循環與 Unity 物件引用。
 - **編輯器**：工作副本編輯、未完成內容保存、手動驗證、Undo／Redo、左右可停駐的 Token 庫／變數庫／資產庫、遺失型別自動清理、執行觀察與 Hold。不依賴 Odin。

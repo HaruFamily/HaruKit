@@ -3,13 +3,16 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
 
 /// <summary>選取即寫回；多選保留面板供連續勾選，關閉不撤回修改。</summary>
 internal sealed class HGOptionsPopup : PopupWindowContent
 {
-    private readonly List<HGOptionsCatalog.Entry> entries;
+    private readonly IReadOnlyList<HGOptionsCatalog.Entry> entries;
+    private readonly string library;
+    private readonly Type valueType;
     private readonly List<object> selected = new();
     private readonly List<object> unknown = new();
     private readonly bool multiple;
@@ -28,10 +31,11 @@ internal sealed class HGOptionsPopup : PopupWindowContent
         Func<bool> isCurrent, Func<object, string> apply)
     {
         this.fieldType = fieldType;
+        this.library = library;
         this.allowEmpty = allowEmpty;
         this.apply = apply;
         this.isCurrent = isCurrent;
-        HGOptionsCatalog.TryValueType(fieldType, out var valueType, out multiple);
+        HGOptionsCatalog.TryValueType(fieldType, out valueType, out multiple);
         HGOptionsCatalog.TryGet(library, valueType, out entries, out error);
         if (multiple)
         {
@@ -41,7 +45,7 @@ internal sealed class HGOptionsPopup : PopupWindowContent
         foreach (var value in selected)
         {
             if (!multiple && allowEmpty && (value == null || value is string text && text.Length == 0)) continue;
-            if (!entries.Exists(entry => Equals(entry.Value, value)) && !unknown.Contains(value)) unknown.Add(value);
+            if (!entries.Any(entry => Equals(entry.Value, value)) && !unknown.Contains(value)) unknown.Add(value);
         }
     }
 
@@ -181,6 +185,12 @@ internal sealed class HGOptionsPopup : PopupWindowContent
 
     private void Commit(object value)
     {
+        if (!HGOptionsCatalog.TryGet(library, valueType, out var currentEntries, out error)) return;
+        if (!ReferenceEquals(entries, currentEntries))
+        {
+            error = "候選資料已更新，請重新開啟選單。";
+            return;
+        }
         error = apply(value);
         if (string.IsNullOrEmpty(error) && !multiple) editorWindow.Close();
     }

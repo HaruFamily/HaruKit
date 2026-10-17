@@ -796,7 +796,8 @@ public partial class HaruGraphWindow : IHasCustomMenu
     private void EnterAsset(HGNodeView node)
     {
         if (node.Asset == null || node.ParentSlot == null) return;
-        EnterAsset(node.Asset, node.ParentSlot.GetType(), true);
+        EnterAsset(node.Asset, node.ParentSlot is UnionSlotBase union
+            ? union.SelectedSlot?.GetType() : node.ParentSlot.GetType(), true);
     }
 
     /// <summary>

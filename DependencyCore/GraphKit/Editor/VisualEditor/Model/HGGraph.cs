@@ -147,8 +147,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public FieldInfo Field;
         public HGFieldDescriptor Descriptor;
         public IHGValueDrawer ValueDrawer;
-        // 列生命週期內的顯示快照；重繪不重新列舉候選來源。
-        internal List<HGOptionsCatalog.Entry> OptionsEntries;
+        // 目錄共用的唯讀快照；版本改變才替換，重繪不重新列舉候選來源。
+        internal IReadOnlyList<HGOptionsCatalog.Entry> OptionsEntries;
         internal string OptionsError;
         internal int SpinnerStart = -1;
         internal int SpinnerColumns = 5;
@@ -158,14 +158,17 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public HGItemSource Items;
         public bool Collapsed;           // 只對 List／Foldout 形狀有意義：折疊時子列不畫、不可互動
 
-        /// <summary>代畫這段清單標題的 Slot 列（常數清單）。有值時清單自己不畫標題列、高度為 0，底帶與外框從這一列算起。</summary>
+        /// <summary>代畫常數清單標題或設定箭頭的 Slot 列。有值時容器自身不佔標題高度。</summary>
         public HGRow HeaderRow;
 
-        /// <summary>清單自己的標題列不畫，標題由 <see cref="HeaderRow"/> 代畫。</summary>
+        /// <summary>容器自己的標題列不畫，由 <see cref="HeaderRow"/> 提供操作入口。</summary>
         public bool HeaderHidden => HeaderRow != null;
 
         /// <summary>Slot 列下方的常數清單（見 AddDefaultListRow）。有值時這一列的標籤兼任該清單的折疊開關與項數。</summary>
         public HGRow DefaultListRow;
+
+        /// <summary>Slot 自帶設定的無標題 Foldout；主列只代畫左側箭頭，常數框維持原位。</summary>
+        public HGRow SlotSettingsRow;
 
         public List<HGRow> Children = new();
 
@@ -499,6 +502,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             string id = carrier.EnsureId();
             // 候選節點沒有父欄位，用建立時記下的族當代表；有父欄位時一律以父欄位為準。
             Type slotType = parentSlot?.GetType() ?? hintSlotType;
+            if (parentSlot is UnionSlotBase union && carrier.Kind != NodeKind.Empty)
+                slotType = union.SelectedSlot?.GetType();
             bool slotIsAction = slotType != null && HGReflect.IsActionSlotType(slotType);
             Type slotResultType = slotType != null && !slotIsAction ? HGReflect.ResultType(slotType) : null;
 
@@ -626,7 +631,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 ParentSlot = parentSlot,
                 ParentRow = parentRow,
                 Title = HGReflect.TypeName(obj.GetType()),
-                Chip = ChipText(isAction ? null : parentSlot?.GetType(), resultType, isAction, obj.GetType()),
+                Chip = ChipText(isAction ? null : parentSlot is UnionSlotBase union
+                    ? union.SelectedSlot?.GetType() : parentSlot?.GetType(), resultType, isAction, obj.GetType()),
                 Desc = HGReflect.TypeDescription(obj.GetType()),
                 IsActionNode = isAction,
                 ResultType = resultType,
@@ -672,6 +678,17 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     Collect(model, childNode, view, depth + 1, listCollapse, node.InDisabledSubtree, locked, metadata, diagnostics);
                 }
             }
+            int firstSettingDiagnostic = diagnostics?.Count ?? 0;
+            AddSlotSettings(node.Rows, metadata, diagnostics);
+            if (diagnostics != null)
+                for (int i = firstSettingDiagnostic; i < diagnostics.Count; i++)
+                {
+                    var diagnostic = diagnostics[i];
+                    var location = diagnostic.Location;
+                    diagnostics[i] = new GraphDiagnostic(diagnostic.Code, diagnostic.Severity, diagnostic.Message,
+                        new GraphDiagnosticLocation(location.DocumentId, location.FocusId, node.Id, location.TokenId, location.FieldPath),
+                        diagnostic.Fix);
+                }
             // 節點 Id 到這裡才確定，所以列的歸屬也在這裡補；折疊與分支收合都靠它組 key。
             // 鎖定＝這一段不會被採用：整顆節點在鎖定子樹裡，或這一列自己是沒勾覆蓋的資產參數。
             foreach (var row in AllRows(node.Rows))
@@ -774,8 +791,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// <summary>清單折疊狀態的鍵：節點 Id + 欄位路徑，重建圖之後仍然指到同一個清單。</summary>
         public static string CollapseKey(string nodeId, HGRow row) => nodeId + "#" + row.Path;
 
-        /// <summary>沒有明確記錄過的清單，項數多就預設折疊；摺疊群組沒有項目，一律預設展開。</summary>
-        private static bool DefaultCollapsed(HGRow row) => (row.Items?.Count ?? 0) > ListAutoCollapseCount;
+        /// <summary>Slot 設定預設收合；一般群組預設展開，清單依項數決定。</summary>
+        private static bool DefaultCollapsed(HGRow row)
+            => (row.Kind == HGRowKind.Foldout && row.HeaderHidden) || (row.Items?.Count ?? 0) > ListAutoCollapseCount;
 
         /// <summary>清單與摺疊群組共用同一份折疊記錄（key 見 <see cref="CollapseKey"/>）。</summary>
         private static void ApplyListCollapse(HGNodeView node, IReadOnlyDictionary<string, bool> listCollapse)
@@ -799,6 +817,70 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         }
 
         // ===== 參數列 =====
+
+        private static void AddSlotSettings(List<HGRow> rows, IHGEditorMetadataProvider metadata,
+            List<GraphDiagnostic> diagnostics)
+        {
+            foreach (var row in rows)
+            {
+                AddSlotSettings(row.Children, metadata, diagnostics);
+                if (row.InputSlot == null) continue;
+                var branch = (row.InputSlot as UnionSlotBase)?.SelectedSlot;
+                bool hasOwnSettings = HasSlotSettings(row.InputSlot, metadata);
+                bool hasBranchSettings = HasSlotSettings(branch, metadata);
+                if (!hasOwnSettings && !hasBranchSettings) continue;
+                var settings = new HGRow
+                {
+                    Kind = HGRowKind.Foldout,
+                    HeaderRow = row,
+                    Label = "設定",
+                    Path = (row.Path ?? "/head") + "/#slot-settings/",
+                    Depth = row.Depth,
+                    LeftPad = row.LeftPad,
+                    FoldoutOwnerRow = row.FoldoutOwnerRow,
+                    TabPageOwnerRow = row.TabPageOwnerRow,
+                };
+                var fieldsVisited = new HashSet<object>(HGRefComparer.Instance);
+                // 設定物件從自己的資料深度開始走訪，再加上主列縮排；外層 Tab／Foldout 深度不限制設定顯示。
+                if (hasOwnSettings)
+                    BuildRows(row.InputSlot, 0, settings.Children, fieldsVisited,
+                        row.Path ?? "/head", row.LeftPad, metadata, diagnostics);
+                if (hasBranchSettings)
+                    BuildRows(branch, 0, settings.Children, fieldsVisited,
+                        (row.Path ?? "/head") + "/selectedSlot", row.LeftPad, metadata, diagnostics);
+
+                // 設定是值配置，不提供第二套隱藏的接線入口。
+                bool hasSlot = false;
+                foreach (var child in AllRows(settings.Children)) hasSlot |= child.HasSlot;
+                if (hasSlot)
+                {
+                    diagnostics?.Add(new GraphDiagnostic("graphkit.metadata.slot-settings-input", GraphDiagnosticSeverity.Error,
+                        "Slot 設定僅接受值欄位，不可包含另一個 Slot。", new GraphDiagnosticLocation(fieldPath: row.Path)));
+                    continue;
+                }
+                if (settings.Children.Count == 0) continue;
+                foreach (var child in settings.Children) MarkFoldoutSubtree(child, settings);
+                settings.AssetBinding = row.AssetBinding;
+                foreach (var child in AllRows(settings.Children))
+                {
+                    child.Depth += row.Depth + 1;
+                    child.TabPageOwnerRow ??= row.TabPageOwnerRow;
+                    child.AssetBinding = row.AssetBinding;
+                }
+                if (row.ItemSource != null) MarkItemSubtree(settings, row.ItemSource, row.ItemOwnerRow, row.ItemIndex);
+                row.SlotSettingsRow = settings;
+                row.Children.Add(settings);
+            }
+        }
+
+        private static bool HasSlotSettings(GraphSlotBase slot, IHGEditorMetadataProvider metadata)
+        {
+            if (slot == null) return false;
+            if (metadata != null && metadata.TryGetNodeDescriptor(slot.GetType(), out _)) return true;
+            foreach (var field in HGReflect.Fields(slot.GetType()))
+                if (field.IsDefined(typeof(HGSlotSettingAttribute), false)) return true;
+            return false;
+        }
 
         private static void BuildRows(object obj, int depth, List<HGRow> into, HashSet<object> visited, string path, float leftPad,
             IHGEditorMetadataProvider metadata, List<GraphDiagnostic> diagnostics)
@@ -927,7 +1009,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
             // 先收宣告再建列：父群組可宣告在後面的欄位，ShowIf 不改變群組型別。
             foreach (var f in HGReflect.Fields(obj.GetType()))
-                if (!SkipFields.Contains(f.Name) && !HGReflect.IsHidden(f) && !f.IsNotSerialized && !f.IsStatic)
+                if (!SkipFields.Contains(f.Name) && !HGReflect.IsHidden(f) && !f.IsNotSerialized && !f.IsStatic
+                    && (obj is not GraphSlotBase || f.IsDefined(typeof(HGSlotSettingAttribute), false)))
                     groups.Declare(HGReflect.TabOf(f), HGReflect.FoldoutOf(f));
             foreach (var f in HGReflect.Fields(obj.GetType()))
             {
@@ -935,6 +1018,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 if (HGReflect.IsHidden(f)) continue;
                 if (f.IsNotSerialized) continue;
                 if (f.IsStatic) continue;
+                if (obj is GraphSlotBase && !f.IsDefined(typeof(HGSlotSettingAttribute), false)) continue;
 
                 var t = f.FieldType;
                 string label = HGReflect.FieldLabel(f);
@@ -1627,12 +1711,13 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         y += RowHeight;
                         break;
                     case HGRowKind.Foldout:
-                        y += RowHeight;
+                        float headerHeight = r.HeaderHidden ? 0f : RowHeight;
+                        y += headerHeight;
                         if (r.Collapsed)
                         {
                             // 同折疊清單：成員不佔高度，接點收斂到標題列中心，已接的線由標題列右緣伸出。
-                            CollapseRows(r.Children, r.LocalY, RowHeight);
-                            r.Height = RowHeight;
+                            CollapseRows(r.Children, r.HeaderRow?.LocalY ?? r.LocalY, RowHeight);
+                            r.Height = headerHeight;
                             break;
                         }
                         y = MeasureRows(r.Children, y, nodeWidth);
@@ -1641,6 +1726,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     default:
                         r.Height = DescriptorHeight(r, nodeWidth);
                         y += r.Height;
+                        if (r.SlotSettingsRow != null) y = MeasureRows(r.Children, y, nodeWidth);
                         break;
                 }
             }
@@ -1654,8 +1740,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 float height = HGSpinnerField.Height;
                 if (string.IsNullOrEmpty(row.DrawerError) && HGSpinnerField.TryElementType(row.Field.FieldType, out var element))
                 {
-                    if (row.OptionsEntries == null)
-                        HGOptionsCatalog.TryGet(spinner.Library, element, out row.OptionsEntries, out row.OptionsError);
+                    HGOptionsCatalog.TryGet(spinner.Library, element, out row.OptionsEntries, out row.OptionsError);
                     height = HGSpinnerField.MeasureHeight(SpinnerRect(new Rect(0f, 0f, nodeWidth, 0f), row).width,
                         row.SpinnerColumns, row.OptionsEntries, row.Field.GetValue(row.Target) as IList);
                 }

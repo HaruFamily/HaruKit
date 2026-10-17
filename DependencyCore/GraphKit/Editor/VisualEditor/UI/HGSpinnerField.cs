@@ -27,7 +27,7 @@ internal sealed class HGSpinnerField
     internal static void SavePreferredColumns(string library, int columns)
         => EditorPrefs.SetInt(ColumnsPreference + library, Mathf.Max(1, columns));
 
-    internal static List<HGOptionsCatalog.Entry> Entries(List<HGOptionsCatalog.Entry> catalog, IList current)
+    internal static List<HGOptionsCatalog.Entry> Entries(IReadOnlyList<HGOptionsCatalog.Entry> catalog, IList current)
     {
         var entries = new List<HGOptionsCatalog.Entry>(catalog);
         if (current != null)
@@ -47,7 +47,7 @@ internal sealed class HGSpinnerField
         return Mathf.Min(28f, height);
     }
 
-    internal static float MeasureHeight(float width, int columns, List<HGOptionsCatalog.Entry> catalog, IList current)
+    internal static float MeasureHeight(float width, int columns, IReadOnlyList<HGOptionsCatalog.Entry> catalog, IList current)
     {
         var entries = Entries(catalog, current);
         columns = Mathf.Clamp(columns, 1, Mathf.Max(1, entries.Count));
@@ -110,7 +110,7 @@ internal sealed class HGSpinnerField
         return list;
     }
 
-    internal bool Draw(Rect rect, object key, Type type, IList current, List<HGOptionsCatalog.Entry> catalog,
+    internal bool Draw(Rect rect, object key, Type type, IList current, IReadOnlyList<HGOptionsCatalog.Entry> catalog,
         HGSpinnerAttribute settings, int columns, ref int start, out IList result)
     {
         result = null;

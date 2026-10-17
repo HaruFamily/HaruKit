@@ -692,7 +692,9 @@ public partial class HaruGraphWindow
     {
         if (slot == null || node is not GraphNodeContent body) return;
         PreserveVisibleNodePositions();
-        NewSource(slot).SetBody(body);
+        var carrier = NewSource(slot);
+        carrier.SetBody(body);
+        if (slot is UnionSlotBase) slot.SetNode(carrier);
         Invalidate();
     }
 }

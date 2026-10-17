@@ -14,6 +14,7 @@ LogicGraph 是用來編寫與執行序列化 Action 圖的框架：依時機分�
 - 時機 enum 可標 `[HGLabel("顯示名稱")]`，同步改變節點標題、下拉與新增選單；執行仍使用 enum 值。完整規則見維護手冊 §3.1。
 - `ActionBase<TPack>` 執行副作用；`FormulaBase<TResult, TPack>` 非同步計算型別化的值。
 - Slot 可以是常數保底值、內嵌節點、可重用資產、具名 Token（公式），或 Property（讀目前值）。
+- `UnionSlot<TResult, TPack, TA, TB, ...>` 支援 2～5 種輸入族；具體子類覆寫 `OnEvaluate` 統一結果，畫面保留一個輸入孔。詳見維護手冊「多族輸入 UnionSlot」。
 - Slot 可覆寫 `EvaluateUnlinked(pack)`，將未接線時的 Default 選項依當次上下文解析；配合 GraphKit 的 `DefaultEditType`／`DefaultObject` 編輯，不影響接線與停用保底。
 - Action 以 `PropertySlot<TResult, TSlot>` 寫入 Property；讀取不會觸發寫入者。
 - 資產的 Token 就是它的參數；每次呼叫資產都有獨立的 Token 作用域，可由呼叫端綁定覆蓋。

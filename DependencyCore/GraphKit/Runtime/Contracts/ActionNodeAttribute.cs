@@ -32,6 +32,10 @@ public sealed class HGNodeAttribute : Attribute
 [AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
 public sealed class HGHideAttribute : Attribute { }
 
+/// <summary>將 Slot 自帶的值欄位放入主列左側的設定 foldout；不影響常數框或接線。</summary>
+[AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
+public sealed class HGSlotSettingAttribute : Attribute { }
+
 /// <summary>
 /// 條件為 true 時才建立欄位的 Graph 參數列；conditionName 指向同類（或基底類）的 bool 欄位或無參數 bool 屬性。
 /// 例：<c>[HGShowIf(nameof(ShowAddAmount))]</c>。
@@ -179,6 +183,8 @@ public sealed class HGCatalogAttribute : Attribute
 {
     public string Library { get; }
     public string Group { get; set; }
+    /// <summary>同類的靜態版本欄位、屬性或無參數方法；以 Equals 比較。未設定表示候選固定到 Domain Reload。</summary>
+    public string RevisionMember { get; set; }
 
     public HGCatalogAttribute(string library) => Library = library;
 }

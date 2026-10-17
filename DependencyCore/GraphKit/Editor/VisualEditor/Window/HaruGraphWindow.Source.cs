@@ -356,7 +356,11 @@ public partial class HaruGraphWindow
         // 先收成清單：AttachSource 會把失去引用的載體加進候選池，邊走邊改會中斷走訪。
         var linked = new List<GraphSlotBase>(SlotsInCurrentGraph());
         foreach (var linkedSlot in linked)
-            if (ReferenceEquals(linkedSlot?.Node, carrier) && !linkedSlot.AcceptsProperty(property)) AttachSource(linkedSlot, null);
+        {
+            if (!ReferenceEquals(linkedSlot?.Node, carrier)) continue;
+            if (!linkedSlot.AcceptsProperty(property)) AttachSource(linkedSlot, null);
+            else if (linkedSlot is UnionSlotBase) linkedSlot.SetNode(carrier);
+        }
     }
 
     /// <summary>換來源後只斷不相容的線；不刪兩端節點，整次操作保持單一步復原。</summary>
@@ -383,6 +387,7 @@ public partial class HaruGraphWindow
                     _ => false,
                 };
                 if (!compatible && AttachSource(slot, null)) disconnected++;
+                else if (compatible && slot is UnionSlotBase) slot.SetNode(carrier);
             }
         }
         finally { model.TrackChanges = trackChanges; }
@@ -404,7 +409,8 @@ public partial class HaruGraphWindow
             if (family != null) return family;
         }
         if (!string.IsNullOrEmpty(node.Id) && orphanKindHints.TryGetValue(node.Id, out var hint)
-            && !typeof(PropertySlotBase).IsAssignableFrom(hint)) return hint;
+            && !typeof(PropertySlotBase).IsAssignableFrom(hint)
+            && !(typeof(UnionSlotBase).IsAssignableFrom(hint) && node.Carrier?.Kind != NodeKind.Empty)) return hint;
         if (node.IsActionNode) return ActionSlotTypeOfCurrentSystem();
         if (node.Obj is GraphNodeContent body)
             foreach (var family in model.FormulaKinds())
@@ -441,6 +447,7 @@ public partial class HaruGraphWindow
     private bool CanReplaceAssetNode(HGNodeView node, ScriptableObject asset)
     {
         Type slotType = ReplacementSlotType(node);
+        if (ReplacementFormulaSlot(node, slotType) is UnionSlotBase union) return union.AcceptsAsset(asset);
         Type acceptedType = slotType == null ? null : HGReflect.IsActionSlotType(slotType)
             ? HGReflect.ActionAssetType(slotType) : HGReflect.AssetType(slotType);
         if (slotType == null && node?.IsPropertyNode == true)
@@ -456,6 +463,8 @@ public partial class HaruGraphWindow
     private Type RepresentativeSlotType(HGNodeView node)
     {
         if (node == null) return null;
+        if (node.ParentSlot is UnionSlotBase union && node.Carrier?.Kind != NodeKind.Empty)
+            return union.SelectedSlot?.FamilyType;
         if (node.ParentSlot != null) return node.ParentSlot.GetType();
 
         if (graph?.Links != null)
@@ -463,6 +472,8 @@ public partial class HaruGraphWindow
             foreach (var link in graph.Links)
             {
                 if (!ReferenceEquals(link.OutputOwner, node) || link.ParentRow?.InputSlot == null) continue;
+                if (link.ParentRow.InputSlot is UnionSlotBase linkedUnion && node.Carrier?.Kind != NodeKind.Empty)
+                    return linkedUnion.SelectedSlot?.FamilyType;
                 return link.ParentRow.InputSlot.GetType();
             }
         }
@@ -568,14 +579,18 @@ public partial class HaruGraphWindow
     private void AssignToken(GraphSlotBase slot, GraphToken endpoint)
     {
         PreserveVisibleNodePositions();
-        SoloSource(slot).SetToken(endpoint);
+        var carrier = SoloSource(slot);
+        carrier.SetToken(endpoint);
+        if (slot is UnionSlotBase) slot.SetNode(carrier);
         Invalidate();
     }
 
     private void AssignProperty(GraphSlotBase slot, GraphProperty property)
     {
         PreserveVisibleNodePositions();
-        SoloSource(slot).SetProperty(property);
+        var carrier = SoloSource(slot);
+        carrier.SetProperty(property);
+        if (slot is UnionSlotBase) slot.SetNode(carrier);
         Invalidate();
     }
 
@@ -598,6 +613,7 @@ public partial class HaruGraphWindow
         if (carrier.Kind == NodeKind.Asset) ReconcileAssetBindings(carrier, so);
         carrier.SetAsset(so);
         model.ClearAssetParameterCache();
+        if (slot is UnionSlotBase) slot.SetNode(carrier);
         model.EnsureAssetBindings(carrier);
         Invalidate();
     }
@@ -1024,7 +1040,7 @@ public partial class HaruGraphWindow
         }
 
         CreateExtractedAsset(node.Carrier, node.ParentSlot == null, source, assetType,
-            HGReflect.TypeName(source.GetType()), node.ParentSlot?.GetType());
+            HGReflect.TypeName(source.GetType()), RepresentativeSlotType(node));
     }
 
     /// <summary>把Token的內容轉存成公式資產：Token與所有指著它的節點都不動，只是它的來源換成資產。</summary>
@@ -1273,7 +1289,8 @@ public partial class HaruGraphWindow
     {
         if (node.ParentSlot != null)
         {
-            var slotType = node.ParentSlot.GetType();
+            var slotType = node.ParentSlot is UnionSlotBase union
+                ? union.SelectedSlot?.GetType() : node.ParentSlot.GetType();
             if (HGReflect.IsActionSlotType(slotType))
                 return ConcreteAssetType(HGReflect.ActionAssetType(slotType));
             return HGReflect.AssetType(slotType);
