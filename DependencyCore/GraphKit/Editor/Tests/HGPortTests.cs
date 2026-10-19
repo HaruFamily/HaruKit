@@ -861,6 +861,142 @@ public class HGPortTests
         UnityEngine.Object.DestroyImmediate(owner);
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void WindowRootRemovalPreservesSourcesAndSlotOrphansThroughHistoryAndCommit(bool keepSharedRoot)
+    {
+        var owner = ScriptableObject.CreateInstance<RemovalDocumentOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            var child = new GraphNode(new RemovalBody()) { Pos = new Vector2(800, 120) };
+            var body = new RemovalBody();
+            body.Source.SetNode(child);
+            var unique = new GraphNode(body) { Pos = new Vector2(400, 120), Note = "keep me" };
+            var shared = new GraphNode(new RemovalBody()) { Pos = new Vector2(400, 300) };
+            var loose = new GraphNode(new RemovalBody()) { Pos = new Vector2(800, 300) };
+            string uniqueId = unique.EnsureId(), childId = child.EnsureId(), sharedId = shared.EnsureId(), looseId = loose.EnsureId();
+            var firstSlot = new RemovalSlot();
+            firstSlot.SetNode(unique);
+            firstSlot.Orphans.Add(loose);
+            var sharedSlot = new RemovalSlot();
+            sharedSlot.SetNode(shared);
+            owner.Document = new RemovalDocument();
+            owner.Document.Groups.Add(new RemovalRoot { Key = "first", Items = new() { firstSlot, sharedSlot } });
+            // 同一個 Slot 也可能被保留中的 root 共用，移除容器不能 SetNode(null) 改掉它。
+            if (keepSharedRoot) owner.Document.Groups.Add(new RemovalRoot { Key = "second", Items = new() { sharedSlot } });
+            Assert.That(window.BindDocument(owner, RemovalBinding(), HGEditorExtensionContext.Default), Is.True);
+            var commands = window.GetDocumentCommands();
+            Assert.That(commands.Query(), Is.Not.Null);
+            var model = RemovalModel(window);
+            var working = (RemovalDocument)model.Data;
+            var rootNode = window.NodeOfId(HGGraph.GroupHeadId(model, working.Groups[0]));
+
+            InvokeRemoval(window, "RemoveTimingGroup", rootNode);
+            Assert.That(commands.Query(), Is.Not.Null);
+            working = (RemovalDocument)model.Data;
+            Assert.That(working.Groups, Has.Count.EqualTo(keepSharedRoot ? 1 : 0));
+            Assert.That(working.Orphans, Has.Count.EqualTo(keepSharedRoot ? 2 : 3));
+            Assert.That(working.Orphans.Exists(node => node.Id == uniqueId), Is.True);
+            Assert.That(working.Orphans.Exists(node => node.Id == looseId), Is.True);
+            if (keepSharedRoot) Assert.That(working.Groups[0].Items[0].Node.Id, Is.EqualTo(sharedId));
+            else Assert.That(working.Orphans.Exists(node => node.Id == sharedId), Is.True);
+            Assert.That(window.NodeOfId(uniqueId).Carrier.Note, Is.EqualTo("keep me"));
+            Assert.That(window.NodeOfId(uniqueId).Carrier.Pos, Is.EqualTo(new Vector2(400, 120)));
+            Assert.That(window.NodeOfId(childId).Carrier.Pos, Is.EqualTo(new Vector2(800, 120)));
+            Assert.That(((RemovalBody)window.NodeOfId(uniqueId).Carrier.BodyObject).Source.Node,
+                Is.SameAs(window.NodeOfId(childId).Carrier));
+
+            Assert.That(commands.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Query(), Is.Not.Null);
+            Assert.That(((RemovalDocument)model.Data).Groups, Has.Count.EqualTo(keepSharedRoot ? 2 : 1));
+            Assert.That(((RemovalDocument)model.Data).Orphans, Is.Empty);
+            Assert.That(commands.Redo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(owner.Document.Groups, Has.Count.EqualTo(keepSharedRoot ? 1 : 0));
+            Assert.That(owner.Document.Orphans, Has.Count.EqualTo(keepSharedRoot ? 2 : 3));
+            Assert.That(window.BindDocument(owner, RemovalBinding(), HGEditorExtensionContext.Default), Is.True);
+            Assert.That(window.GetDocumentCommands().Query(), Is.Not.Null);
+            Assert.That(window.NodeOfId(uniqueId), Is.Not.Null);
+            Assert.That(window.NodeOfId(childId), Is.Not.Null);
+            Assert.That(window.NodeOfId(sharedId), Is.Not.Null);
+            Assert.That(window.NodeOfId(looseId), Is.Not.Null);
+        }
+        finally
+        {
+            window.GetDocumentCommands()?.Cancel();
+            UnityEngine.Object.DestroyImmediate(window);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void WindowListRemovalPreservesSourceSubtreesAndOtherUsers(bool nestedEntry)
+    {
+        var owner = ScriptableObject.CreateInstance<RemovalDocumentOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            var leaf = new GraphNode(new RemovalBody()) { Pos = new Vector2(1000, 100) };
+            var childBody = new RemovalBody();
+            childBody.Source.SetNode(leaf);
+            var unique = new GraphNode(childBody) { Pos = new Vector2(700, 100) };
+            var shared = new GraphNode(new RemovalBody()) { Pos = new Vector2(700, 300) };
+            var uniqueSlot = new RemovalSlot();
+            uniqueSlot.SetNode(unique);
+            var sharedSlot = new RemovalSlot();
+            sharedSlot.SetNode(shared);
+            var body = new RemovalListBody();
+            body.Shared.SetNode(shared);
+            if (nestedEntry) body.Entries.Add(new RemovalEntry { First = uniqueSlot, Second = sharedSlot });
+            else body.Actions.AddRange(new[] { uniqueSlot, sharedSlot });
+            var container = new GraphNode(body) { Pos = new Vector2(300, 100) };
+            string containerId = container.EnsureId(), uniqueId = unique.EnsureId(), sharedId = shared.EnsureId(), leafId = leaf.EnsureId();
+            owner.Document = new RemovalDocument();
+            owner.Document.Orphans.Add(container);
+            Assert.That(window.BindDocument(owner, RemovalBinding(), HGEditorExtensionContext.Default), Is.True);
+            var commands = window.GetDocumentCommands();
+            Assert.That(commands.Query(), Is.Not.Null);
+            var workingBody = (RemovalListBody)window.NodeOfId(containerId).Carrier.BodyObject;
+            var items = nestedEntry
+                ? new HGListItemSource(workingBody.Entries, typeof(RemovalEntry))
+                : new HGListItemSource(workingBody.Actions, typeof(RemovalSlot));
+
+            InvokeRemoval(window, "RemoveListItem", items, 0);
+            Assert.That(commands.Query(), Is.Not.Null);
+            Assert.That(items.Count, Is.EqualTo(nestedEntry ? 0 : 1));
+            Assert.That(window.NodeOfId(uniqueId), Is.Not.Null);
+            Assert.That(window.NodeOfId(leafId), Is.Not.Null);
+            Assert.That(((RemovalBody)window.NodeOfId(uniqueId).Carrier.BodyObject).Source.Node,
+                Is.SameAs(window.NodeOfId(leafId).Carrier));
+            Assert.That(workingBody.Shared.Node, Is.SameAs(window.NodeOfId(sharedId).Carrier));
+            Assert.That(((RemovalDocument)RemovalModel(window).Data).Orphans, Has.Count.EqualTo(2));
+            Assert.That(window.NodeOfId(uniqueId).Carrier.Pos, Is.EqualTo(new Vector2(700, 100)));
+            Assert.That(commands.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Query(), Is.Not.Null);
+            var restored = (RemovalListBody)window.NodeOfId(containerId).Carrier.BodyObject;
+            Assert.That(nestedEntry ? restored.Entries.Count : restored.Actions.Count, Is.EqualTo(nestedEntry ? 1 : 2));
+            Assert.That(((RemovalDocument)RemovalModel(window).Data).Orphans, Has.Count.EqualTo(1));
+        }
+        finally
+        {
+            window.GetDocumentCommands()?.Cancel();
+            UnityEngine.Object.DestroyImmediate(window);
+            UnityEngine.Object.DestroyImmediate(owner);
+        }
+    }
+
+    private static HGModel RemovalModel(HaruGraphWindow window) =>
+        (HGModel)typeof(HaruGraphWindow).GetField("model", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(window);
+
+    private static void InvokeRemoval(HaruGraphWindow window, string method, params object[] args) =>
+        typeof(HaruGraphWindow).GetMethod(method, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(window, args);
+
+    private static HGDocumentBinding<RemovalDocument> RemovalBinding() =>
+        new("Removal.Document", owner => ((RemovalDocumentOwner)owner).Document,
+            (owner, document) => ((RemovalDocumentOwner)owner).Document = document);
+
     [Test]
     public void ModelKeepsRootKeyIdentityWhenDisplayTextCollides()
     {
@@ -2589,6 +2725,78 @@ MonoBehaviour:
     private sealed class TestListOwner
     {
         public List<int> Values;
+    }
+
+    private sealed class RemovalDocumentOwner : ScriptableObject
+    {
+        public RemovalDocument Document;
+    }
+
+    [Serializable]
+    private sealed class RemovalDocument : IGraphDocument
+    {
+        public List<RemovalRoot> Groups = new();
+        [SerializeReference] private List<GraphNode> orphans = new();
+        public List<GraphNode> Orphans => orphans;
+        public IList Roots => Groups;
+        public bool IsValidated { get; private set; }
+        public Type PackType => typeof(object);
+        public Type ItemSlotType => typeof(RemovalSlot);
+        public string RootChip => "Timing";
+        public string RootNoun => "Timing";
+        public HGCapabilities Capabilities => HGCapabilities.None;
+        public string WindowTitle => "Removal Test";
+        public void InvalidateValidation() => IsValidated = false;
+        public void Verify() => IsValidated = true;
+        public object DeepCopy() => GraphDeepCopy.Copy(this);
+        public IReadOnlyList<object> RootKeys(UnityEngine.Object owner) => new object[] { "first", "second" };
+        public object KeyOf(object root) => ((RemovalRoot)root).Key;
+        public string TitleOf(object root) => ((RemovalRoot)root).Key;
+        public IList ItemsOf(object root) => ((RemovalRoot)root).Items;
+        public object AddRoot(object key)
+        {
+            var root = new RemovalRoot { Key = (string)key };
+            Groups.Add(root);
+            return root;
+        }
+    }
+
+    [Serializable]
+    private sealed class RemovalRoot
+    {
+        public string Key;
+        [SerializeReference] public List<RemovalSlot> Items = new();
+    }
+
+    [Serializable]
+    private sealed class RemovalSlot : GraphSlotBase, IOrphanPool
+    {
+        [SerializeReference] private GraphNode node;
+        [SerializeReference] private List<GraphNode> orphans = new();
+        public List<GraphNode> Orphans => orphans;
+        public override GraphNode Node => node;
+        public override void SetNode(GraphNode value) => node = value;
+    }
+
+    [Serializable]
+    private sealed class RemovalBody : GraphNodeContent
+    {
+        public RemovalSlot Source = new();
+    }
+
+    [Serializable]
+    private sealed class RemovalListBody : GraphNodeContent
+    {
+        public List<RemovalSlot> Actions = new();
+        public List<RemovalEntry> Entries = new();
+        public RemovalSlot Shared = new();
+    }
+
+    [Serializable]
+    private sealed class RemovalEntry
+    {
+        public RemovalSlot First;
+        public RemovalSlot Second;
     }
 
     private sealed class NonSlotRoot

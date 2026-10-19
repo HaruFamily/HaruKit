@@ -106,6 +106,8 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 6. **載體存取走型別契約**（`FormulaSlotBase`、`ActionSlotBase`、`IGraphHead`、`IOrphanPool`、`ITokenOwner`、`IPropertyOwner`、`IGraphAsset`），不要用成員名反射。`MethodBase.Invoke` 不會補預設參數，簽章一變就在執行期壞掉。
 7. **斷線不等於刪節點。** 節點只靠 SerializeReference 的引用路徑存活；斷線時要把失去引用的載體放回候選池（先保留可見座標），否則重建時整棵子樹會消失，存檔後資料就真的沒了。
    - 畫布刪除載體也要先拆開其直接來源，再把沒有其他引用的來源放回目前焦點候選池；來源的子樹與座標保留。多選刪除只移除選中的載體，不沿來源接線遞迴刪除。
+   - 視窗移除 root／Timing 或清單項目，只移除接收端容器與該項引用；沒有其他引用的直接來源及被移除頭端的候選節點轉存目前焦點候選池。先固定可見座標，來源的 Id、備註、內部連線與整棵子樹保持不變，最後一個 root 移除後仍可顯示候選節點。
+   - 清單的 ✕ 與右鍵移除共用 RemoveListItem；Timing 移除走 RemoveTimingGroup。兩者以 CaptureRemovedItemSources 在結構移除前擷取來源、移除後 PreserveRemovedItemSources 檢查其他使用者。走訪在 GraphNode／Slot 來源邊界停止，不能遞迴斷開來源自己的子欄位；共享 Slot 本身也不清空，以免切斷其他保留中的使用者。此規則同樣涵蓋清單元素內嵌的分支物件。
 8. **複製節點要重設 Id**（`HGModel.ResetNodeIds`），並正確帶入 `shared`（ProtoProperty 定義、目前作用域的 Token 要沿用同一顆）與 `skip` 集合。LocalProperty 定義跟著節點複製並換新 Id。
 9. **圖走訪的 visited 一律用 `ReferenceComparer.Instance`**（Editor 端 `HGRefComparer`）。裸 `HashSet<object>` 對 struct 走值相等，會無聲跳過子樹。
 10. **Core 驗證與視覺驗證要同步改。** 文件 `Verify()` 與手動 `HGValidator` 使用相同規則；視覺驗證補上可跳轉位置，診斷不阻擋保存。

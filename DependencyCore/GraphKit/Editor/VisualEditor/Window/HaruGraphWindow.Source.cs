@@ -629,6 +629,50 @@ public partial class HaruGraphWindow
         }
     }
 
+    // 移除的是接收端容器；遇到來源載體便停止，保留它內部的完整接線。
+    private static List<(GraphNode Node, Type SlotType)> CaptureRemovedItemSources(object item)
+    {
+        var sources = new List<(GraphNode, Type)>();
+        Collect(item, new HashSet<object>(HGRefComparer.Instance));
+        return sources;
+
+        void Collect(object value, HashSet<object> visited)
+        {
+            if (value == null || !visited.Add(value)) return;
+            if (value is GraphNode node)
+            {
+                sources.Add((node, null));
+                return;
+            }
+            if (value is IOrphanPool pool && pool.Orphans != null)
+                foreach (var orphan in pool.Orphans) Collect(orphan, visited);
+            if (value is GraphSlotBase slot)
+            {
+                if (slot.Node != null) sources.Add((slot.Node, slot.GetType()));
+                return;
+            }
+            var type = value.GetType();
+            if (value is UnityEngine.Object || value is string || type.IsPrimitive || type.IsEnum || type == typeof(decimal)) return;
+            if (value is IList list)
+            {
+                foreach (var element in list) Collect(element, visited);
+                return;
+            }
+            foreach (var field in HGReflect.Fields(type))
+                if (!field.IsStatic && !field.IsNotSerialized) Collect(field.GetValue(value), visited);
+        }
+    }
+
+    private void PreserveRemovedItemSources(List<(GraphNode Node, Type SlotType)> sources)
+    {
+        foreach (var source in sources)
+        {
+            if (IsCarrierUsed(source.Node)) continue;
+            model.AddOrphan(source.Node);
+            if (source.SlotType != null) RememberOrphanKind(source.Node, source.SlotType);
+        }
+    }
+
     private void DeleteNode(HGNodeView node, bool pushUndo = true)
     {
         if (node == null) return;

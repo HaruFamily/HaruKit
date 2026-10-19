@@ -881,32 +881,8 @@ public partial class HaruGraphWindow
         Repaint();
     }
 
-    /// <summary>
-    /// 刪掉一顆時機節點＝刪掉那個群組與它底下的動作。底下還有動作時先問過；
-    /// 確認框開在那顆節點的 Header 旁邊（`GraphToWindowRect`），不是螢幕中央。
-    /// </summary>
+    /// <summary>移除時機頭端及其接收欄位，來源節點與子樹保留在畫布。</summary>
     private void RemoveTimingGroup(HGNodeView node)
-    {
-        if (node?.Obj == null) return;
-
-        int count = 0;
-        foreach (var group in model.ReadRootGroups())
-            if (Equals(group.Root, node.Obj))
-            {
-                count = group.Items?.Count ?? 0;
-                break;
-            }
-        if (count > 0)
-        {
-            RequestConfirm(GraphToWindowRect(new Rect(node.Pos.x, node.Pos.y, node.Width, HGGraph.HeaderHeight)),
-                $"'{node.Title}' 底下還有 {count} 個動作，會一起刪掉。確定嗎？",
-                "刪除", () => ConfirmRemoveTimingGroup(node));
-            return;
-        }
-        ConfirmRemoveTimingGroup(node);
-    }
-
-    private void ConfirmRemoveTimingGroup(HGNodeView node)
     {
         if (node?.Obj == null) return;
 
@@ -915,7 +891,11 @@ public partial class HaruGraphWindow
         foreach (var g in model.ReadRootGroups())
         {
             if (!ReferenceEquals(g.Root, node.Obj)) continue;
+            var sources = CaptureRemovedItemSources(g.Items);
+            if (g.Root is IOrphanPool pool)
+                sources.AddRange(CaptureRemovedItemSources(pool.Orphans));
             model.RemoveRoot(g);
+            PreserveRemovedItemSources(sources);
             break;
         }
         selectedIds.Remove(node.Id);

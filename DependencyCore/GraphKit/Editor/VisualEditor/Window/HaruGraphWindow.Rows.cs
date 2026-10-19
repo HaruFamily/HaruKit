@@ -434,14 +434,12 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             bool wasEnabled = GUI.enabled;
             GUI.enabled = wasEnabled && !fixedSize;
             bool clickedRemove = GUI.Button(remove,
-                new GUIContent("✕", fixedSize ? "陣列不能刪除項目" : "刪除這一項（可用 Ctrl+Z 復原）"),
+                new GUIContent("✕", fixedSize ? "陣列不能刪除項目" : "移除此項目，保留已連接節點（可用 Ctrl+Z 復原）"),
                 HGStyles.ListAdd);
             GUI.enabled = wasEnabled;
             if (clickedRemove && !fixedSize)
             {
-                BreakUndoMerge();
-                items.RemoveAt(row.ItemIndex);
-                Invalidate();
+                RemoveListItem(items, row.ItemIndex);
                 return;
             }
             if (fixedSize || !wasEnabled) return;     // 鎖定子樹裡不給重排與右鍵增刪
@@ -501,14 +499,20 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             menu.AddItem(new GUIContent("往上移"), false, () => MoveListItem(items, index, index - 1));
             menu.AddItem(new GUIContent("往下移"), false, () => MoveListItem(items, index, index + 1));
             menu.AddSeparator("");
-            menu.AddItem(new GUIContent("刪除這一項"), false, () =>
-            {
-                BreakUndoMerge();
-                items.RemoveAt(index);
-                Invalidate();
-                Repaint();
-            });
+            menu.AddItem(new GUIContent("刪除這一項"), false, () => RemoveListItem(items, index));
             menu.ShowAsContext();
+        }
+
+        private void RemoveListItem(HGListItemSource items, int index)
+        {
+            if (items == null || !items.CanEditStructure || index < 0 || index >= items.Count) return;
+            BreakUndoMerge();
+            PreserveVisibleNodePositions();
+            var sources = CaptureRemovedItemSources(items.Get(index));
+            if (!items.RemoveAt(index)) return;
+            PreserveRemovedItemSources(sources);
+            Invalidate();
+            Repaint();
         }
 
         /// <summary>
