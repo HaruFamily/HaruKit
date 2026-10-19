@@ -1,6 +1,7 @@
 using System;
 using Cysharp.Threading.Tasks;
 using HaruFamily.DependencyCore.GraphKit;
+using UnityEngine;
 
 namespace HaruFamily.Framework.LogicGraph
 {
@@ -8,6 +9,19 @@ namespace HaruFamily.Framework.LogicGraph
     [Serializable]
     public abstract class UnionSlot<TResult, TPack> : UnionSlotBase, IFormulaSlot<TResult, TPack>
     {
+        [SerializeField] private TResult _default;
+        public TResult Default { get => _default; set => _default = value; }
+        public sealed override object DefaultObject
+        {
+            get => _default;
+            set
+            {
+                if (value is TResult typed) { _default = typed; return; }
+                if (value == null && !typeof(TResult).IsValueType) { _default = default; return; }
+                Debug.LogWarning($"[LogicGraph] Union 預設值型別不符（欄位 {typeof(TResult).Name}，傳入 {value?.GetType().Name ?? "null"}），忽略。");
+            }
+        }
+
         public sealed override Type ResultType => typeof(TResult);
         public sealed override Type PackType => typeof(TPack);
         protected sealed override bool IsBranchAllowed(FormulaSlotBase slot)
@@ -23,6 +37,7 @@ namespace HaruFamily.Framework.LogicGraph
         public async UniTask<TResult> Evaluate(TPack pack, TokenTable<TPack> tokens)
         {
             tokens?.CancellationToken.ThrowIfCancellationRequested();
+            if (Node == null || Node.Kind == NodeKind.Empty || Node.Disabled) return _default;
             string error = ConfigurationError;
             if (error != null) throw new InvalidOperationException(error);
             // 執行觀察、停用、Token／Property 與資產 scope 均由內層 Slot 負責，外層不重複 EnterNode。

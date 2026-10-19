@@ -106,7 +106,8 @@ namespace HaruFamily.Framework.LogicGraph.Editor.Tests
             graph.Properties.Add(property);
             var tokens = graph.CreateTokenTable();
             var slot = new Two();
-            slot.DefaultObject = 3;
+            slot.DefaultObject = "3";
+            Assert.That(slot.DefaultEditType, Is.EqualTo(typeof(string)));
             Assert.That(await slot.Evaluate(pack, tokens), Is.EqualTo("3"));
             var carrier = new GraphNode(new Number());
             slot.SetNode(carrier);
@@ -151,20 +152,33 @@ namespace HaruFamily.Framework.LogicGraph.Editor.Tests
         }
 
         [Test]
-        public async Task FiveBranches_ConstantsSurviveCopyAndSerialization_AndSharedSourceRemainsShared()
+        public async Task FiveBranches_ResultDefaultSurvivesSourceChangesCopyAndSerialization()
         {
             var holder = new Holder();
-            object[] values = { 17, "hello", 0.5f, true, 9000000000L };
+            holder.C.Default = "fallback";
+            FormulaSlotBase[] branches = {
+                new NumberSlot { Default = 17 }, new TextSlot { Default = "hello" },
+                new RealSlot { Default = 0.5f }, new BoolSlot { Default = true },
+                new LongSlot { Default = 9000000000L },
+            };
             string[] expected = { "17", "hello", "0.5", "True", "9000000000" };
-            for (int i = 0; i < values.Length; i++)
+            for (int i = 0; i < branches.Length; i++)
             {
-                holder.C.SelectBranch(i);
-                holder.C.DefaultObject = values[i];
+                var token = new GraphToken("source", branches[i]);
+                var tokens = new TokenTable<Pack>();
+                tokens.Register(token);
+                var node = new GraphNode();
+                node.SetToken(token);
+                holder.C.SetNode(node);
                 var copy = GraphDeepCopy.Copy(holder);
-                Assert.That(await copy.C.Evaluate(new Pack(), new TokenTable<Pack>()), Is.EqualTo(expected[i]));
+                Assert.That(await copy.C.Evaluate(new Pack(), tokens), Is.EqualTo(expected[i]));
                 var restored = JsonUtility.FromJson<Holder>(JsonUtility.ToJson(holder));
                 Assert.That(restored.C.SelectedSlot.FamilyType, Is.EqualTo(holder.C.SelectedSlot.FamilyType));
-                Assert.That(await restored.C.Evaluate(new Pack(), new TokenTable<Pack>()), Is.EqualTo(expected[i]));
+                Assert.That(await restored.C.Evaluate(new Pack(), tokens), Is.EqualTo(expected[i]));
+                restored.C.SetNode(null);
+                copy.C.SetNode(null);
+                Assert.That(await restored.C.Evaluate(new Pack(), tokens), Is.EqualTo("fallback"));
+                Assert.That(await copy.C.Evaluate(new Pack(), tokens), Is.EqualTo("fallback"));
             }
             var shared = new GraphNode(new Number());
             holder.A.SetNode(shared);
@@ -199,7 +213,7 @@ namespace HaruFamily.Framework.LogicGraph.Editor.Tests
         public async Task EditorSlotSettings_EditTheUnionAndPersistAcrossBranchChangesAndSerialization()
         {
             var slot = new Two();
-            slot.DefaultObject = 7;
+            slot.DefaultObject = "fallback";
             var view = HGGraph.Build(new HGModel(), new object[] { slot }, null, "union-settings", "Union");
             Assert.That(view.Diagnostics, Is.Empty);
             var row = view.Nodes[0].Rows[0];
@@ -208,16 +222,19 @@ namespace HaruFamily.Framework.LogicGraph.Editor.Tests
             var setting = row.SlotSettingsRow.Children[0];
             Assert.That(setting.Target, Is.SameAs(slot));
             setting.Field.SetValue(setting.Target, "value:");
+            Assert.That(await slot.Evaluate(new Pack(), new TokenTable<Pack>()), Is.EqualTo("fallback"));
+            slot.SetNode(new GraphNode(new Number()));
             Assert.That(await slot.Evaluate(new Pack(), new TokenTable<Pack>()), Is.EqualTo("value:7"));
 
-            slot.SelectBranch(1);
-            slot.DefaultObject = "text";
+            slot.SetNode(new GraphNode(new Text()));
             var restored = JsonUtility.FromJson<Two>(JsonUtility.ToJson(slot));
             var copied = GraphDeepCopy.Copy(restored);
             Assert.That(await copied.Evaluate(new Pack(), new TokenTable<Pack>()), Is.EqualTo("value:text"));
             view = HGGraph.Build(new HGModel(), new object[] { copied }, null, "union-settings", "Union");
             Assert.That(view.Nodes[0].Rows[0].SlotSettingsRow.Path, Is.EqualTo(row.SlotSettingsRow.Path));
-            Assert.That(copied.DefaultObject, Is.EqualTo("text"));
+            Assert.That(copied.DefaultObject, Is.EqualTo("fallback"));
+            copied.SetNode(null);
+            Assert.That(await copied.Evaluate(new Pack(), new TokenTable<Pack>()), Is.EqualTo("fallback"));
         }
 
         [Test]

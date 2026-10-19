@@ -45,26 +45,9 @@ namespace HaruFamily.DependencyCore.GraphKit
         public override Type CandidateBodyBaseType => typeof(GraphNodeContent);
         public override Type CandidatePackType => PackType;
         public override Type AssetBaseType => typeof(ScriptableObject);
-        public override Type DefaultEditType => selectedSlot?.DefaultEditType ?? typeof(void);
-        public override object DefaultObject
-        {
-            get => selectedSlot?.DefaultObject;
-            set
-            {
-                if (selectedSlot == null) throw new InvalidOperationException("Select a Union branch before editing its value.");
-                selectedSlot.DefaultObject = value;
-            }
-        }
+        public override Type DefaultEditType => ResultType;
 
-        /// <summary>常數模式明確選族；有來源時改接線，由 SetNode 選族。</summary>
-        public void SelectBranch(int index)
-        {
-            if (Node != null) throw new InvalidOperationException("Disconnect the source before changing the constant family.");
-            if (selectedSlot?.FamilyType == BranchType(index)) return;
-            selectedSlot = CreateBranch(index);
-        }
-
-        /// <summary>程式組圖使用；保留傳入 Slot 的常數及來源。</summary>
+        /// <summary>程式組圖使用；保存來源分支，不改變 Union 自己的 TResult 預設值。</summary>
         public void SetSelectedSlot(FormulaSlotBase slot)
         {
             if (slot == null) throw new ArgumentNullException(nameof(slot));
@@ -81,8 +64,7 @@ namespace HaruFamily.DependencyCore.GraphKit
         {
             if (node == null || node.Kind == NodeKind.Empty)
             {
-                if (selectedSlot == null) SelectBranch(0);
-                selectedSlot.SetNode(node);
+                selectedSlot?.SetNode(node);
                 return;
             }
             int branch = FindBranch(node.Kind, node.BodyObject, node.AssetObject, node.Token, node.Property);

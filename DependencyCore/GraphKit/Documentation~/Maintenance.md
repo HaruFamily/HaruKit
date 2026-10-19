@@ -70,9 +70,9 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 
 ### 多族輸入
 
-- `UnionSlotBase : FormulaSlotBase` 是多族輸入載體，只序列化一個 `selectedSlot`，來源 Node 與常數由此 Slot 持有。2～5 分支由使用端 factory 提供；非序列化候選只供相容判定。GraphKit 不求值或轉換結果。
+- `UnionSlotBase : FormulaSlotBase` 保存來源分支 `selectedSlot` 與其 Node；Union 預設值由執行層以 TResult 獨立保存，DefaultEditType 為 ResultType，不委派給分支。2～5 分支由使用端 factory 提供；非序列化候選只供相容判定。GraphKit 不求值或轉換結果。
 - 接收共用四種 `Accepts*`：優先唯一原生族配對，其次唯一相容分支；仍有歧義則拒接，不按宣告順序猜測。分支不得重複或巢狀，必須相同 Pack。
-- 一個欄位一個 Port，chip 顯示各族以 ` | ` 分隔；常數左側可選族，有來源時停用切族。選族走內容交易／Undo，過期選單不得寫入舊副本。
+- 一個欄位一個 Port，chip 顯示可接來源族以 ` | ` 分隔；主列只顯示 TResult 常數框，不提供常數選族。接線依來源自動選族，斷線不改 Union 預設值。
 - Union 不列入 FormulaKinds 或族名稱索引；來源節點的結果／chip、轉存 Token／Asset 與資產下鑽使用實際選中族，不能把 Union 的 TResult 當成來源結果。
 - 來源原地換型後，所有仍相容的 Union 接收端必須以 SetNode 重新選族，包含視窗與非視窗交易。ConfigurationError 為只讀診斷，getter 不自動修復序列化內容。
 - 執行層繼承此載體並實作求值；LogicGraph 提供非同步泛型 Union，AP 原有同步 Slot 不受影響。既有四種零欄位 Slot 基底維持零欄位。
@@ -351,7 +351,7 @@ private List<int> levelCounts;
 
 #### Slot 內建設定
 
-- Slot 的常數／預設值固定留在主列，接線後弱化顯示但仍可編輯；Union 的提示依目前分支的 ResultType 判斷是否為替代 Default，不以 Union 輸出型別判斷。
+- Slot 的常數／預設值固定留在主列，接線後弱化顯示但仍可編輯；Union 的預設值與提示依外層 ResultType，不跟隨來源分支型別。
 - Slot 自帶的序列化值欄位以 `[HGSlotSetting]` 宣告；沿用 HGLabel／HGDescription／HGShowIf、一般值控制項及欄位群組。完整 metadata descriptor 也可直接描述 Slot 設定。設定只能包含值配置，不能包含其他 Slot 接線；配置錯誤回報 `graphkit.metadata.slot-settings-input`。
 - 一般 Slot 與 Union 共用同一入口；Union 同時呈現外層與 SelectedSlot 的設定。只讀取明確標記的欄位，不把內部 Node、Default 或分支儲存欄位再次展開。有可見設定才顯示主列左側箭頭，初次預設收合，展開後不增加獨立標題列；預設值、chip 與主列 Port 保持原位。
 - 一般欄位、清單元素、HEAD 與資產參數綁定都在 Collect 階段統一掛入設定。設定繼承父欄位的群組／分頁／清單歸屬與 binding 鎖定；鎖定時仍可切換主列箭頭，設定值不可編輯。

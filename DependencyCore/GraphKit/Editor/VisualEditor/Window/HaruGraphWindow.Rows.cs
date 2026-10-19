@@ -638,31 +638,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 fieldRect = new Rect(labelRect.x, rowRect.y + 1f,
                     Mathf.Max(20f, rowRect.xMax - labelRect.x - inputPortInset), rowRect.height - 3f);
 
-            if (slot is UnionSlotBase union)
-            {
-                var branchRect = new Rect(fieldRect.x, fieldRect.y, Mathf.Min(65f, fieldRect.width * 0.45f), fieldRect.height);
-                string branchName = union.SelectedSlot == null ? "選族" : HGReflect.SlotKindName(union.SelectedSlot);
-                using (new EditorGUI.DisabledScope(union.Node != null))
-                    if (GUI.Button(branchRect, new GUIContent(branchName + " ▾", "常數輸入族；接線時依來源自動選擇。"), HGStyles.Tiny))
-                    {
-                        var menu = new GenericMenu();
-                        int generation = graphGeneration;
-                        for (int i = 0; i < union.BranchCount; i++)
-                        {
-                            int index = i;
-                            menu.AddItem(new GUIContent(HGReflect.SlotKindName(union.BranchType(i))),
-                                union.SelectedSlot?.FamilyType == union.BranchType(i), () =>
-                                {
-                                    if (generation != graphGeneration || graphDirty) return;
-                                    if (TryMutateContent(() => union.SelectBranch(index), out string error)) Invalidate();
-                                    else ShowNotification(new GUIContent(error));
-                                });
-                        }
-                        menu.ShowAsContext();
-                    }
-                fieldRect.xMin = branchRect.xMax + 3f;
-            }
-
             if (labelIsContent)
             {
                 // 標籤已經說完：右半留白，不重複寫一次型別／資產名。
@@ -710,7 +685,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
                 // 常數框永遠在。接了公式／資產／Token時它是解析失敗的保底值，只是視覺上轉灰；鎖住時整列不可編。
                 // 替代型別的常數框（editType != ResultType）語意不同：它只在沒接線時採用，不是失敗保底。
-                Type defaultResultType = slot is UnionSlotBase unionDefault ? unionDefault.SelectedSlot?.ResultType : row.ResultType;
+                Type defaultResultType = row.ResultType;
                 bool isSubstitute = editType != defaultResultType;
 
                 // 一般與替代型別的 enum 都只在明確宣告 HGEnum 時使用按鈕列。
