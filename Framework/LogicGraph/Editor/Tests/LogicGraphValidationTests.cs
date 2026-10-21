@@ -16,14 +16,16 @@ public sealed class LogicGraphValidationTests
     private enum Timing { Start, End }
     private sealed class Pack { }
     private abstract class IntFormula : FormulaBase<int, Pack> { }
-    private sealed class IntAsset : FormulaAsset<int, Pack> { }
+    [Serializable] private sealed class IntToken : FormulaToken<int, IntSlot, Pack> { }
+    [Serializable] private sealed class OtherIntToken : FormulaToken<int, OtherIntSlot, Pack> { }
+    private sealed class IntAsset : FormulaAsset<int, IntSlot, Pack> { }
     private sealed class TestActionAsset : ActionAssetBase<Pack> { }
 
     [Serializable]
-    private sealed class IntSlot : FormulaSlot<int, IntAsset, IntFormula, Pack> { }
+    private sealed class IntSlot : FormulaSlot<int, IntFormula, IntToken, IntAsset, Pack> { public IntSlot() { } }
 
     [Serializable]
-    private sealed class OtherIntSlot : FormulaSlot<int, IntAsset, IntFormula, Pack> { }
+    private sealed class OtherIntSlot : FormulaSlot<int, IntFormula, OtherIntToken, IntAsset, Pack> { public OtherIntSlot() { } }
 
     [Serializable]
     private sealed class IntPropertySlot : SetPropertySlot<int, IntSlot> { }

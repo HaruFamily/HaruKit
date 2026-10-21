@@ -23,6 +23,14 @@ public interface IActionGraphAsset : IGraphAsset
 {
 }
 
+/// <summary>公式資產保存完整根輸入，包含常數、Union 分支與輸入設定。</summary>
+public interface IFormulaGraphAsset : IGraphAsset
+{
+    FormulaSlotBase Input { get; }
+    void SetInput(FormulaSlotBase input);
+    string ConfigurationError { get; }
+}
+
 public sealed class AssetParameterDefinition
 {
     public string Name;
@@ -68,20 +76,20 @@ public static class AssetGraphSchema
         var seen = new HashSet<(Type, string)>();
         foreach (var endpoint in graph.Tokens)
         {
-            if (endpoint == null) continue;
+            if (endpoint == null || endpoint.IsObsolete || endpoint.ConfigurationError != null) continue;
             string name = endpoint.Name;
             var resultType = endpoint.ResultType;
             // 名字或 Slot 沒填完的端點對外不成立參數；Verify 會另外報，這裡直接略過。
             if (string.IsNullOrEmpty(name) || resultType == null) continue;
             // 撞號看族不看結果型別：同一個結果型別的不同族（String / Key）是兩個參數，不算重複。
-            if (!seen.Add((endpoint.Slot.FamilyType, name))) { duplicates.Add(name); continue; }
+            if (!seen.Add((endpoint.FamilyType, name))) { duplicates.Add(name); continue; }
 
             result.Add(new AssetParameterDefinition
             {
                 Name = name,
                 ResultType = resultType,
                 PackType = endpoint.PackType,
-                Slot = endpoint.Slot,
+                Slot = endpoint.OutputSlot,
                 Token = endpoint,
             });
         }

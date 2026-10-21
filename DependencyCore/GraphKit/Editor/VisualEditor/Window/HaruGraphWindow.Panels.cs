@@ -600,17 +600,23 @@ public partial class HaruGraphWindow
     /// <summary>進入這個Token自己的畫布。</summary>
     private void JumpToToken(HGToken token) => EnterToken(token?.Token);
 
-    /// <summary>新增Token：先選結果型別，因為它決定端點的取值欄位，之後不再更動。</summary>
+    /// <summary>新增 Token 優先列專案宣告的具體類別。</summary>
     private void ShowCreateTokenMenu()
     {
         var scope = CurrentTokens();
         if (scope == null) return;
 
         var menu = new GenericMenu();
-        foreach (var (slotType, path) in HGTypeIndex.FormulaKindOptions(model.FormulaKinds()))
+        var options = new List<(Type type, string path)>();
+        var tokenTypes = model.TokenTypes();
+        foreach (var type in tokenTypes)
+            options.Add((type, tokenTypes.FindAll(other => other.Name == type.Name).Count > 1 ? type.FullName : type.Name));
+        if (options.Count == 0)
+            foreach (var (slotType, path) in HGTypeIndex.FormulaKindOptions(model.FormulaKinds())) options.Add((slotType, path));
+        foreach (var (type, path) in options)
         {
-            var captured = slotType;
-            menu.AddItem(new GUIContent(path), false, () =>
+            var captured = type;
+            menu.AddItem(new GUIContent(path, captured.FullName), false, () =>
             {
                 var endpoint = model.CreateToken(scope, captured, out string error);
                 if (endpoint == null)

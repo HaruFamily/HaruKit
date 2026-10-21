@@ -87,6 +87,9 @@ public abstract class FormulaSlotBase : GraphSlotBase
 
     /// <summary>這個欄位收得下的公式資產型別（TAsset）。</summary>
     public abstract Type AssetBaseType { get; }
+
+    /// <summary>本族明確配對的 Token 型別；未宣告的通用工具回 null。</summary>
+    public virtual Type TokenType => null;
 }
 
 }

@@ -14,9 +14,11 @@ public sealed class LogicGraphExecutionTests
     private sealed class Pack { public int Count; }
 
     private abstract class NativeObject : FormulaBase<object, Pack> { }
-    private sealed class ObjectAsset : FormulaAsset<object, Pack> { }
-    private sealed class CompatibleObjectSlot : FormulaSlot<object, ObjectAsset, NativeObject, Pack>
+    [Serializable] private sealed class ObjectToken : FormulaToken<object, CompatibleObjectSlot, Pack> { }
+    private sealed class ObjectAsset : FormulaAsset<object, CompatibleObjectSlot, Pack> { }
+    private sealed class CompatibleObjectSlot : FormulaSlot<object, NativeObject, ObjectToken, ObjectAsset, Pack>
     {
+        public CompatibleObjectSlot() { }
         protected override bool AllowCompatibleResult => true;
     }
 
@@ -40,10 +42,13 @@ public sealed class LogicGraphExecutionTests
     }
 
     private abstract class NativeText : FormulaBase<string, Pack> { }
-    private sealed class TextAsset : FormulaAsset<string, Pack> { }
-    private class StrictTextSlot : FormulaSlot<string, TextAsset, NativeText, Pack> { }
-    private sealed class CompatibleTextSlot : StrictTextSlot
+    [Serializable] private sealed class TextToken : FormulaToken<string, StrictTextSlot, Pack> { }
+    [Serializable] private sealed class CompatibleTextToken : FormulaToken<string, CompatibleTextSlot, Pack> { }
+    private sealed class TextAsset : FormulaAsset<string, StrictTextSlot, Pack> { }
+    private class StrictTextSlot : FormulaSlot<string, NativeText, TextToken, TextAsset, Pack> { public StrictTextSlot() { } }
+    private sealed class CompatibleTextSlot : FormulaSlot<string, NativeText, CompatibleTextToken, TextAsset, Pack>
     {
+        public CompatibleTextSlot() { }
         private static readonly HashSet<Type> excluded = new() { typeof(KeyFamily) };
         protected override bool AllowCompatibleResult => true;
         protected override IReadOnlyCollection<Type> ExcludedFormulaFamilies => excluded;
@@ -109,18 +114,21 @@ public sealed class LogicGraphExecutionTests
         protected override UniTask<int> OnEvaluate(Pack pack, TokenTable<Pack> tokens) => UniTask.FromResult(0);
     }
 
-    private sealed class IntFormulaAsset : FormulaAsset<int, Pack> { }
+    [Serializable] private sealed class IntToken : FormulaToken<int, IntSlot, Pack> { }
+    [Serializable] private sealed class ContextualToken : FormulaToken<int, ContextualIntSlot, Pack> { }
+    private sealed class IntFormulaAsset : FormulaAsset<int, IntSlot, Pack> { }
 
     [Serializable]
-    private sealed class IntSlot : FormulaSlot<int, IntFormulaAsset, IntFormula, Pack>
+    private sealed class IntSlot : FormulaSlot<int, IntFormula, IntToken, IntFormulaAsset, Pack>
     {
         public IntSlot() { }
         public IntSlot(int value) : base(value) { }
     }
 
     [Serializable]
-    private sealed class ContextualIntSlot : FormulaSlot<int, IntFormulaAsset, IntFormula, Pack>
+    private sealed class ContextualIntSlot : FormulaSlot<int, IntFormula, ContextualToken, IntFormulaAsset, Pack>
     {
+        public ContextualIntSlot() { }
         public int Offset;
         protected override int EvaluateUnlinked(Pack pack) => pack.Count + Offset;
     }
@@ -142,7 +150,7 @@ public sealed class LogicGraphExecutionTests
         IFormulaSlot<int, Pack> typed = slot;
         Assert.That(await typed.Evaluate(pack, table), Is.EqualTo(15));
 
-        var token = new GraphToken("entity", slot);
+        var token = GraphTestTokens.Create("entity", slot);
         table.Register(token);
         var proxy = new GraphNode();
         proxy.SetToken(token);
@@ -166,7 +174,7 @@ public sealed class LogicGraphExecutionTests
         var asset = UnityEngine.ScriptableObject.CreateInstance<IntFormulaAsset>();
         try
         {
-            var parameter = new GraphToken("entity", new ContextualIntSlot { Offset = 1 });
+            var parameter = GraphTestTokens.Create("entity", new ContextualIntSlot { Offset = 1 });
             asset.Tokens.Add(parameter);
             var proxy = new GraphNode();
             proxy.SetToken(parameter);
@@ -328,7 +336,7 @@ public sealed class LogicGraphExecutionTests
     public async Task UnverifiedSavedContentExecutesAfterRuntimeValidation()
     {
         var graph = Create(new Increment(), out _);
-        graph.Tokens.Add(new GraphToken("Amount", new IntSlot(7)));
+        graph.Tokens.Add(GraphTestTokens.Create("Amount", new IntSlot(7)));
         graph.InvalidateValidation();
         var runtime = graph.DeepCopy();
         var pack = new Pack();
@@ -345,7 +353,7 @@ public sealed class LogicGraphExecutionTests
     public async Task RuntimeRejectsInvalidContentDespiteStoredFlagAndRechecksAfterRepair()
     {
         var graph = Create(new Increment(), out var node);
-        graph.Tokens.Add(new GraphToken("Amount", new IntSlot(7)));
+        graph.Tokens.Add(GraphTestTokens.Create("Amount", new IntSlot(7)));
         node.Clear();
         Assert.That(graph.IsValidated, Is.True);
         Assert.That(graph.TryValidate(out var error), Is.False);
@@ -512,7 +520,7 @@ public sealed class LogicGraphExecutionTests
         var graph = PropertyGraph(property, out _);
         var captured = new CaptureEvaluationScope();
         graph.ActionGroups[0].Actions.Add(Slot(new GraphNode(captured)));
-        var value = new GraphToken("Amount", PropertyInput(property));
+        var value = GraphTestTokens.Create("Amount", PropertyInput(property));
         graph.Tokens.Add(value);
         using var original = new CancellationTokenSource();
         await graph.TriggerAction(Timing.Run, new Pack(), original.Token, "capture");
@@ -541,7 +549,7 @@ public sealed class LogicGraphExecutionTests
         {
             var captured = new CaptureEvaluationScope();
             asset.SetRoot(new GraphNode(captured));
-            asset.Tokens.Add(new GraphToken("Amount", new IntSlot(-1)));
+            asset.Tokens.Add(GraphTestTokens.Create("Amount", new IntSlot(-1)));
             var local = new GraphProperty("Local", new IntSlot(7), true);
             asset.Properties.Add(local);
             AssetGraphSchema.InvalidateCache();
@@ -549,7 +557,7 @@ public sealed class LogicGraphExecutionTests
             Assert.That(callerProperty.InitialValue, Is.EqualTo(10));
             var graph = PropertyGraph(callerProperty, out _);
             var proxy = new GraphNode();
-            var callerToken = new GraphToken("FromCaller", PropertyInput(callerProperty));
+            var callerToken = GraphTestTokens.Create("FromCaller", PropertyInput(callerProperty));
             graph.Tokens.Add(callerToken);
             proxy.SetToken(callerToken);
             var bindingValue = new IntSlot();

@@ -81,7 +81,7 @@ namespace HaruFamily.Tools.AssetPipeline
         public override bool AcceptsAsset(ScriptableObject asset) => false;
 
         public override bool AcceptsToken(GraphToken endpoint)
-            => endpoint?.Slot is IFormulaSlot && AcceptsCompatibleSlot(endpoint.Slot);
+            => endpoint?.Slot is IFormulaSlot && !endpoint.IsObsolete && AcceptsCompatibleSlot(endpoint.OutputSlot);
 
         /// <summary>依共用相容政策讀 Property 的目前值，不執行寫入它的動作。</summary>
         public override bool AcceptsProperty(GraphProperty property) => AcceptsCompatibleSlot(property?.Slot);

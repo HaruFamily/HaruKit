@@ -883,7 +883,9 @@ public partial class HaruGraphWindow : IHasCustomMenu
         var origin = (Focus: focus, Pan: pan, Zoom: zoom);
         if (focus.Kind == HGFocusKind.Asset && !ConfirmLeaveAsset()) return;
 
-        var host = slotType != null ? HGReflect.CreateInstance(slotType) as GraphSlotBase : null;
+        var formulaAsset = asset as IFormulaGraphAsset;
+        var host = formulaAsset != null ? formulaAsset.Input
+            : slotType != null ? HGReflect.CreateInstance(slotType) as GraphSlotBase : null;
         if (host == null)
         {
             ShowNotification(new GUIContent("無法編輯：找不到這個資產對應的欄位型別"));
@@ -893,7 +895,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
         // 內容、候選、Token 與 ProtoProperty 庫同一次複製，才能保留節點對庫定義的共享引用。
         var pack = new List<object>
         {
-            HGReflect.AssetRoot(asset),
+            formulaAsset != null ? (object)host : HGReflect.AssetRoot(asset),
             HGReflect.Orphans(asset) ?? new List<GraphNode>(),
             HGReflect.Tokens(asset) ?? new List<GraphToken>(),
             HGReflect.Properties(asset) ?? new List<GraphProperty>(),
@@ -905,7 +907,10 @@ public partial class HaruGraphWindow : IHasCustomMenu
             return;
         }
         // 根節點連載體一起抄進容器槽：座標、備註、Id 都在載體上，容器槽本身是拋棄式的。
-        HGReflect.SetNode(host, packCopy?[0] as GraphNode);
+        if (formulaAsset != null) host = packCopy[0] as GraphSlotBase;
+        else HGReflect.SetNode(host, packCopy[0] as GraphNode);
+
+        int removedTokens = HGTokenCleanup.Clean(host, packCopy[2] as List<GraphToken>, packCopy[1] as List<GraphNode>);
 
         SetFocus(new HGFocus
         {
@@ -921,6 +926,12 @@ public partial class HaruGraphWindow : IHasCustomMenu
         else focusReturns.Remove(focus.Id);
         pendingFocusStart = true;
         ClearAssetDirty();
+        if (removedTokens > 0)
+        {
+            assetDirty = true;
+            assetContentDirty = true;
+            ShowNotification(new GUIContent($"已清除 {removedTokens} 個過時 Token；來源保留在候選池，請檢查後存檔。"));
+        }
         // 每個資產是一次獨立交易，復原歷程跟著交易開始；進來當下的狀態就是第一次修改要退回的地方。
         assetHistory.Reset(CaptureAssetState());
         assetVerifiedOnce = false;
@@ -946,7 +957,8 @@ public partial class HaruGraphWindow : IHasCustomMenu
         if (asset == null || host == null) return false;
 
         var rootCarrier = host.Node;
-        if (rootCarrier?.Kind is NodeKind.Asset or NodeKind.Token or NodeKind.Property)
+        var formulaAsset = asset as IFormulaGraphAsset;
+        if (formulaAsset == null && (rootCarrier?.Kind is NodeKind.Asset or NodeKind.Token or NodeKind.Property))
         {
             if (showDialog)
                 ShowNotification(new GUIContent("無法存檔：資產根內容必須是公式或動作；Property 請接到內容的輸入欄位"));
@@ -954,7 +966,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
         }
 
         var setRoot = asset.GetType().GetMethod("SetRoot");
-        if (setRoot == null)
+        if (formulaAsset == null && setRoot == null)
         {
             Debug.LogError($"[GraphKit] {asset.GetType().Name} 沒有 SetRoot，無法寫回。");
             return false;
@@ -963,7 +975,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
         // 寫回仍同一次複製四部分，節點必須引用實際寫入 Token／ProtoProperty 庫的物件。
         var pack = new List<object>
         {
-            rootCarrier?.Kind is NodeKind.Inline or NodeKind.Empty ? rootCarrier : null,
+            host,
             focus.AssetOrphans ?? new List<GraphNode>(),
             focus.AssetTokens ?? new List<GraphToken>(),
             focus.AssetProperties ?? new List<GraphProperty>(),
@@ -974,7 +986,9 @@ public partial class HaruGraphWindow : IHasCustomMenu
             ShowNotification(new GUIContent("資產複製失敗，未寫回，請保留目前工作副本。"));
             return false;
         }
-        setRoot.Invoke(asset, new object[] { packCopy?[0] as GraphNode });
+        var storedInput = packCopy[0] as GraphSlotBase;
+        if (formulaAsset != null) formulaAsset.SetInput((FormulaSlotBase)storedInput);
+        else setRoot.Invoke(asset, new object[] { storedInput?.Node });
 
         var storedOrphans = HGReflect.Orphans(asset);
         if (storedOrphans != null)

@@ -75,8 +75,15 @@ public class TokenTable<TPack>
             Properties = caller?.Properties?.Asset(asset, callerNode, (asset as IPropertyOwner)?.Properties),
         };
         if (asset is IGraphAsset graphAsset) table.Execution?.RegisterScope(table.ExecutionScope, graphAsset.Root);
+        if (asset is ITokenOwner owner && owner.Tokens != null)
+            foreach (var endpoint in owner.Tokens)
+            {
+                if (endpoint?.IsObsolete == true)
+                    throw new InvalidOperationException($"資產 Token '{endpoint.Name}' 已不符合目前公式族宣告。");
+                if (endpoint?.ConfigurationError is string error) throw new InvalidOperationException(error);
+            }
         foreach (var parameter in AssetGraphSchema.ReadCached(asset))
-            table.Register(parameter.Name, parameter.Slot);
+            table.Register(parameter.Token);
         if (bindings != null)
         {
             foreach (var binding in bindings)
@@ -93,13 +100,15 @@ public class TokenTable<TPack>
     public void Register(GraphToken endpoint)
     {
         if (endpoint == null) return;
-        Register(endpoint.Name, endpoint.Slot);
+        if (endpoint.IsObsolete) throw new InvalidOperationException($"Token '{endpoint.Name}' 已不符合目前公式族宣告。");
+        if (endpoint.ConfigurationError is string error) throw new InvalidOperationException(error);
+        Register(endpoint.FamilyType, endpoint.Name, endpoint.Slot);
     }
 
-    private void Register(string name, FormulaSlotBase slot)
+    private void Register(Type family, string name, FormulaSlotBase slot)
     {
-        if (string.IsNullOrEmpty(name) || slot == null) return;
-        var key = (slot.FamilyType, name);
+        if (family == null || string.IsNullOrEmpty(name) || slot == null) return;
+        var key = (family, name);
         if (!_slots.ContainsKey(key)) _slots[key] = slot;
     }
 

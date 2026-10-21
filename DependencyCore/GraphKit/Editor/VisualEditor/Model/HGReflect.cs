@@ -86,7 +86,7 @@ public static class HGReflect
 
     // Slot 的型別關係（結果／公式／資產／pack）住在 Slot 自己身上，但呼叫端手上多半只有 Type。
     // 所以建一顆該型別的實例去問：答案對同一個型別是常數，建完就快取。Slot 都是無參數的純資料類別，
-    // 建立沒有副作用。走這條而不是反射泛型參數，編輯器才不必認得 FormulaSlot<,,,> / ActionSlot<>。
+    // 走契約而不是反射泛型參數，編輯器不必認得 FormulaSlot<,,,,> / ActionSlot<>。
     private static readonly Dictionary<Type, object> slotProbes = new();
 
     private static object SlotProbe(Type slotType)
@@ -118,14 +118,19 @@ public static class HGReflect
     /// <summary>Slot 可接的 Formula Asset 型別（例如 IntAsset）。</summary>
     public static Type AssetType(Type slotType) => FormulaProbe(slotType)?.AssetBaseType;
 
-    /// <summary>這個資產可以接進哪一種欄位。挑第一個型別相容的族，沒有就回 null（＝這張圖用不到它）。</summary>
+    /// <summary>資產的唯一相容族；無配對或有歧義時回 null，不以掃描順序猜測。</summary>
     public static Type SlotTypeForAsset(UnityEngine.ScriptableObject asset,
         System.Collections.Generic.List<(Type acceptedAssetType, Type slotType)> slotTypes)
     {
         if (asset == null || slotTypes == null) return null;
+        Type found = null;
         foreach (var candidate in slotTypes)
-            if (candidate.acceptedAssetType.IsInstanceOfType(asset)) return candidate.slotType;
-        return null;
+        {
+            if (!candidate.acceptedAssetType.IsInstanceOfType(asset)) continue;
+            if (found != null && found != candidate.slotType) return null;
+            found = candidate.slotType;
+        }
+        return found;
     }
 
     /// <summary>動作欄位可接的 Action base 型別。</summary>

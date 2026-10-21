@@ -10,6 +10,8 @@ Editor-only 的資產處理管線框架。用 GraphKit 節點圖排出一串動�
 
 本套件**只提供框架**：管線資產、同步 Action／Formula 基底、公式族與輸入欄位、Property 寫入欄位、驗證、交易與結果檢視。碰到專案資產的具體步驟與公式寫在使用端專案，新增步驟不需要修改本套件。
 
+Token 接收型別以 GraphToken.OutputSlot 宣告判定，實際求值仍走 Token.Slot 的 AP 同步介面；一般 GraphToken 兩者相同。詳見維護手冊 §4.1。
+
 ## Requirements
 
 - Unity 2021.3 或更新版本

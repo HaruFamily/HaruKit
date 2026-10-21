@@ -32,8 +32,8 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 |---|---|
 | `Runtime/Engine/` | `LogicGraph<TTiming, TPack>`（本體、`.Compile`、`.Editor` 三個 partial）、`ActionTimingGroup`、`LogicGraphUsage`、`ILogicGraphTimingOwner`、`CompilePass` |
 | `Runtime/Action/` | `ActionBase<TPack>`、`ActionAssetBase<TPack>`、`ActionSlot<TPack>`、`PropertySlot<TResult, TSlot>`／`SetPropertySlot<TResult, TSlot>` |
-| `Runtime/Formula/` | `FormulaBase<TResult, TPack>`、`FormulaAsset<TResult, TPack>`、`FormulaSlot<TResult, TAsset, TFormula, TPack>` |
-| `Runtime/Token/` | `TokenTable<TPack>`（具名求值、資產參數 scope、取消與觀察） |
+| `Runtime/Formula/` | `FormulaBase<TResult, TPack>`、`FormulaAsset<TResult, TInput, TPack>`、`FormulaSlot<TResult, TFormula, TToken, TAsset, TPack>` |
+| `Runtime/Token/` | `FormulaToken<TResult, TInput, TPack>`、`TokenTable<TPack>`（具名求值、資產參數 scope、取消與觀察） |
 | `Runtime/Property/` | `PropertyStore`（Property 目前值的執行期儲存，internal） |
 | `Editor/` | `LogicGraphEditor`（正式入口與驗證）、`LogicGraphDrawer`（Inspector 卡片）、`LogicGraphAutoVerifySweep`、`FormulaKindScaffolder` |
 | `Editor/Tests/` | `GraphDeepCopyTests`、`LogicGraphExecutionTests`、`LogicGraphValidationTests`、`LogicGraphUsageTests` |
@@ -59,9 +59,9 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 
 ### 3.3 公式族
 
-- 一個族＝三個型別：Formula 基底（計算）、`FormulaAsset<TResult, TPack>` 子類（可重用資產）、`FormulaSlot<TResult, TAsset, TFormula, TPack>` 子類（欄位與族身分）。
+- 一個族的配對正本是 FormulaSlot<TResult, TFormula, TToken, TAsset, TPack>。Formula、Token、Asset 須符合相同 TResult／TPack；具體類別通常與 Slot 同放在 XAsset.cs。族身分仍是具體 Slot 型別。
 - **族身分是具體 Slot 型別**，不是結果型別。兩個都回 `string` 的 Slot 是兩個族，各自可以有同名 Token。
-- 新增結果種類只要新增這三個型別，編輯器掃描 `FormulaSlotBase` 子類自動列出，不需要登記。`HaruFamily/LogicGraph/Add Formula Type` 可產生樣板。同一族的新計算只要再繼承該族的 Formula 基底，**不要再產生一個族**。
+- 新增結果種類需 Formula／Token／Asset／Slot 四個型別；編輯器讀 Slot 宣告列出配對，不維護另一張 Token 清單。HaruFamily/LogicGraph/Add Formula Type 產生四件套及 Slot 的 Preserve 標記；同族的新計算只繼承 Formula 基底。
 - Slot 建構子只有 `XSlot()` 和 `XSlot(TResult defaultValue)`。有沒有接來源由 `_node` 決定。
 - 未接來源的求值走 `protected virtual TResult EvaluateUnlinked(TPack pack)`，預設回 `_default`。具體 Slot 可配合 GraphKit 的 `DefaultEditType`／`DefaultObject`，把序列化選項依當次 Pack 解析成結果。一般 Evaluate、IFormulaSlot、Token 及資產參數共用此入口，不以隱藏 Evaluate 或另一個 Resolve API 分流。此入口只處理 `Node == null`；已接但停用、空節點或來源失敗仍回原本保底值，不改取未接線選項。
 - 跨族接收：Slot 覆寫 `AllowCompatibleResult` 回 true 後，可額外接受「Pack 相同、結果型別可指派給本族」的其他族公式，並以 `ExcludedFormulaFamilies` 排除特定族（連同子類）。同族永遠優先且不受黑名單影響。不做數值轉換或向下轉型。Token、Property、Formula Asset 不受此開關放寬。
@@ -71,11 +71,17 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 - `UnionSlot<TResult, TPack, TA, TB>` 提供 2、3、4、5 個來源族的泛型版本，共用求值入口；TA～TE 是具有公開無參數建構子的具體 FormulaSlotBase，同一 Pack、不同族，且實作 `IFormulaSlot<TPack>`。不接受巢狀 Union。
 - 使用端以具體可序列化子類實作 `OnEvaluate(pack, tokens)`，對 `SelectedSlot` 分支呼叫其正式 `Evaluate` 並轉為 TResult。外層只做配置及前後取消檢查；不重複 EnterNode，不把 Slot 求值降成裸 Formula 呼叫。
 - Union 自己序列化 TResult `_default`，由 Default／DefaultObject 編輯；未接線、Empty 或來源載體停用時直接回此值，不呼叫子類轉換。分支初始化為第一族只為保存來源；SetSelectedSlot 不改 Union 預設值。接線用 SetNode 自動選族，斷線保留 Union 預設值；有效來源仍由內層 Slot 處理 Token／Property／Asset 與來源失敗保底，子類轉換其結果。
-- Union 是輸入欄位，不作為 Token／Property 的宣告族；來源的 Token／Property 使用原生族讀取。公式輸出仍由既有 FormulaBase 決定。
+- Union 是輸入欄位，不作為新的 Token／Property 宣告族。具體 Token 可宣告 Union 輸入與另一個原生輸出族；TokenTable 以 Token.FamilyType 登記，求值 Token.Slot。資產覆蓋按對外族配對，公式輸出仍由既有 FormulaBase 決定。
 - 程式原地替換來源載體內容後，須對受影響 Union 再呼叫 `SetNode(carrier)` 重新選族；編輯器換來源與非視窗 ReplaceSource 在同一交易內完成。配置不一致由 Core／Editor 驗證回報。
 - GraphKit 的載體／選族／畫面規則見其維護手冊「多族輸入」。`UnionSlotTests` 涵蓋二族求值、四種來源、五族切換與獨立 TResult 預設值、序列化／DeepCopy、取消與 Editor 換來源／Undo。
 
 ### 3.4 Token 與資產參數
+
+- FormulaToken<TResult, TInput, TPack> 與 FormulaAsset<TResult, TInput, TPack> 都由 TInput 指定根輸入，TInput 須實作相同 TResult／TPack 的 IFormulaSlot 並可建立，可為 Union。兩者不宣告 Family 參數；Token 的 OutputSlot 由 GraphKit FormulaFamily 反查 Slot 配對。
+- SetSlot 只接受宣告的 TInput；Core／Editor 驗證 ConfigurationError，防止序列化資料繞過 setter。Slot 本身沒有 Token factory，也不覆寫自身 FamilyType。
+- FormulaToken.IsObsolete 在輸入不符合 TInput 或 Token 不再被任何 Slot 宣告時成立；配對歧義仍由 ConfigurationError 報錯，不當成可刪資料。普通 GraphToken 若使用已宣告具體 Token 的 Slot，同樣過時。接線、Core 驗證、TokenTable.Register 與資產 scope 都拒絕過時 Token；編輯期由 GraphKit 的工作副本清理流程處理，不自動換成另一個 class。
+- FormulaAsset 以 SerializeReference 保存完整 TInput；Root 是 Input.Node，ContentObject 是 Input。未接線求值 Input 的常數／上下文預設，已接來源經 Input 正式 Evaluate。每次呼叫建立資產 Token／Property scope，參數覆蓋與取消沿用既有流程；Slot 負責根節點觀察，不再重複 EnterNode。根可接公式、Asset、Token、Property，仍須通過接收契約與循環驗證。
+- 公式資產編輯／Undo／儲存必須複製完整 Input 與庫資料，不能只保存 Root，否則 Union 預設值與設定會遺失。GraphKit 使用 IFormulaGraphAsset；ActionAsset 維持動作根契約。
 
 - Token 是**具名的計算**，不是快取變數：每次查詢都重新求值，隨機公式每次結果不同。不做記憶化。
 - `TokenTable` 的鍵是（族, 名稱）。外部查詢一律帶族：`await tokens.Resolve<int>(typeof(MyIntSlot), "Amount", pack)`。
@@ -96,7 +102,7 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 
 1. **序列化身分是資料契約**（類別名、命名空間、組件名）。改之前先掃使用端資產裡實際的 `{class, ns, asm}` 記錄，並取得擁有者同意。
 2. **`ActionSlot._disabled` 等反向旗標不可改名成 `_enabled`。**
-3. `FormulaSlotBase`／`ActionSlotBase` 在 GraphKit，泛型的 `FormulaSlot<,,,>`／`ActionSlot<>` 在本套件，兩者**分檔**，基底維持零欄位。
+3. `FormulaSlotBase`／`ActionSlotBase` 在 GraphKit，泛型的 `FormulaSlot<,,,,>`／`ActionSlot<>` 在本套件，兩者**分檔**，基底維持零欄位。
 4. **執行檢查實際內容，不依賴編輯器旗標。** `TriggerAction` 與 `CreateTokenTable` 首次使用每份 runtime 圖時執行 Core 結構驗證，快取當次結果。`TriggerAction` 先檢查取消；圖不合法時，每次呼叫均以 `InvalidOperationException` 使 UniTask 失敗，含時機／執行名稱與診斷，不執行動作，也不建立觀察 session。呼叫端須沿用失敗／清理路徑，不得當作動作完成；不保證回滾呼叫前的副作用。獨立 `CreateTokenTable` 失敗只記錄一次錯誤並回空表，供描述等讀值流程保底。DeepCopy 不繼承 runtime 快取。`MarkValidated()` 不可繞過 runtime 檢查。Owner 的領域配置與 Default 回退由使用端載入入口處理。
 5. 程式修改圖之後呼叫 `InvalidateValidation()`，同時撤銷編輯器旗標與 runtime 檢查快取。Inspector 與 `LogicGraphEditor.Verify(owner)` 可手動檢查 Usage；`TryValidate` 與無 Owner 的 `Verify()` 只驗 Core 規則。
 6. **驗證有兩趟**：第一趟不穿透停用節點（殘缺是錯誤），第二趟補走停用子樹（殘缺降為警告）。順序不可顛倒；只要還有一條啟用路徑指著同一個載體，殘缺仍是錯誤。GraphKit 的 `HGValidator` 要同步同一套判準。

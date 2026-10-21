@@ -205,10 +205,10 @@ public static class HGValidator
         ValidateAssetCycles(report, focus, rootSlot, focus?.AssetObject, where, new HashSet<UnityEngine.Object>());
 
         var rootCarrier = HGReflect.GetNode(rootSlot);
-        if (rootCarrier?.Kind == NodeKind.Token)
+        if (focus?.AssetObject is not IFormulaGraphAsset && rootCarrier?.Kind == NodeKind.Token)
             Err(report, "graphkit.asset.token-root", focus, where, "資產內容不能只是一個 Token 引用",
                 "資產的內容要是公式或動作；要對外開參數請用左欄的 Token 清單。", rootSlot, rootCarrier);
-        if (rootCarrier?.Kind == NodeKind.Property)
+        if (focus?.AssetObject is not IFormulaGraphAsset && rootCarrier?.Kind == NodeKind.Property)
             Err(report, "graphkit.asset.property-root", focus, where, "資產根內容不能只是一個 Property 引用",
                 "資產根內容要是公式或動作；Property 請接到內容的輸入欄位。", rootSlot, rootCarrier);
 
@@ -217,10 +217,11 @@ public static class HGValidator
         foreach (var token in tokens)
         {
             var tokenFocus = AssetTokenFocus(focus, token);
+            ValidateToken(report, model, tokenFocus, token);
+            if (token.Token.IsObsolete || token.Token.ConfigurationError != null) continue;
             if (!seen.Add((token.FamilyType, token.Key)))
                 Err(report, "graphkit.token.duplicate", tokenFocus, $"Token {token.Key}", "名稱重複",
                     "改成這個資產內同族唯一的名稱。", null, token.Token);
-            ValidateToken(report, model, tokenFocus, token);
             WalkTokenCarrier(report, model, tokenFocus, token, new HashSet<UnityEngine.Object>(), focus?.AssetObject);
         }
         return report;
@@ -269,10 +270,12 @@ public static class HGValidator
         assetHealth[asset] = false;
 
         var root = HGReflect.AssetRoot(asset);
-        if (root == null) return false;   // 空資產：資產畫布也不報，這裡跟著不報
-        var host = HGReflect.CreateInstance(hostSlotType) as GraphSlotBase;
+        var formulaAsset = asset as IFormulaGraphAsset;
+        if (formulaAsset?.ConfigurationError != null) return assetHealth[asset] = true;
+        if (root == null && formulaAsset == null) return false;
+        var host = formulaAsset != null ? formulaAsset.Input : HGReflect.CreateInstance(hostSlotType) as GraphSlotBase;
         if (host == null) return false;
-        HGReflect.SetNode(host, root);
+        if (formulaAsset == null) HGReflect.SetNode(host, root);
 
         var probeFocus = new HGFocus
         {
@@ -313,6 +316,12 @@ public static class HGValidator
     private static void ValidateToken(HGReport report, HGModel model, HGFocus focus, HGToken token)
     {
         if (token?.Token == null) return;
+        if (token.Token.IsObsolete)
+        {
+            Err(report, "graphkit.token.obsolete", focus, $"Token {token.Key}", "Token 已不符合目前宣告",
+                "重新開圖清理工作副本後存檔。", null, token.Token);
+            return;
+        }
         if (token.Token.Slot == null)
         {
             Err(report, "graphkit.token.slot-missing", focus, $"Token {token.Key ?? "（未命名）"}", "沒有取值欄位",
@@ -322,6 +331,9 @@ public static class HGValidator
         if (string.IsNullOrEmpty(token.Key))
             Err(report, "graphkit.token.name-missing", focus, $"{HGReflect.ResultTypeName(token.ResultType)} Token", "沒有名稱",
                 "取一個名字；外部是用名字查它的值。", null, token.Token);
+        if (token.Token.ConfigurationError is string tokenError)
+            Err(report, "graphkit.token.input-invalid", focus, $"Token {token.Key}", tokenError,
+                "依 Token 宣告修正輸入。", null, token.Token);
     }
 
     private static void WalkTokenCarrier(HGReport report, HGModel model, HGFocus focus, HGToken token,
@@ -590,7 +602,7 @@ public static class HGValidator
         {
             foreach (var parameter in AssetGraphSchema.Read(scriptable, out _))
             {
-                foreach (var child in DirectAssetReferences(parameter.Slot))
+                foreach (var child in DirectAssetReferences(parameter.Token.Slot))
                 {
                     cycle = FindAssetCycle(child, stack, path, completed);
                     if (cycle != null) break;
@@ -657,7 +669,7 @@ public static class HGValidator
         }
     }
 
-    private static object AssetContent(UnityEngine.Object asset) => HGReflect.AssetRoot(asset)?.BodyObject;
+    private static object AssetContent(UnityEngine.Object asset) => (asset as IGraphAsset)?.ContentObject;
 
     /// <summary>
     /// Owner 宣告「我會從圖外用字串 key 求值」的那些Token名。編輯器不認得任何專案型別，

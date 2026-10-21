@@ -20,6 +20,8 @@ GraphKit 是**沒有領域語意**的序列化節點圖框架。它提供節點�
 - **Tab 內容邊界**：作用中頁籤與內容同底色，相接處開口連成一塊，低對比細框圈住內容與短頁留白；未選頁籤較暗。內容縮排一層，Foldout 維持輕量中性標題與導引線。文字使用一般字重；裝飾都在既有 Rect 內，不增加間距或改動 Grid 高度。
 - **單一節點載體 `GraphNode`**：保存 Id、座標、備註、停用狀態，以及五種內容之一：空、內嵌內容、共用資產、具名 Token、Property。換來源時保留 Id、座標和所有連入線。
 - **具名 Token `GraphToken`**：有自己的畫布與候選池；引用它的節點存物件參照，不存名字字串。
+- **明確 Token 宣告**：新增選單列出 Slot 配對的具體 Token。開圖時自動從工作副本清除過時 Token、斷開引用並保留來源節點到候選池；標記未儲存，存檔才寫回。詳見維護手冊 §3.3。
+- **公式族配對與資產輸入**：Token 選單由 Slot.TokenType 配對產生；FormulaFamily 快取反向族索引並拒絕歧義。IFormulaGraphAsset 保存完整 Input，Union 設定／常數會隨資產保存與 Undo，不只保存根節點。
 - **Property `GraphProperty`**：圖內的可寫儲存位置。ProtoProperty 放在變數庫，LocalProperty 是節點私有定義；讀取不觸發寫入者，讀後寫回不算循環。
 - **非泛型契約**：`IGraphDocument`、`IGraphHead`、`IOrphanPool`、`ITokenOwner`、`IPropertyOwner` 等，讓編輯器不必認識使用端型別。文件以 `HGCapabilities` 宣告要啟用哪些庫。
 - **Root 顯示名稱**：文件可選提供 `IGraphRootKeyDisplay`，讓建立選單與下拉顯示友善名稱，同時保留原始識別值；enum 的 `[HGLabel]` 名稱解析可使用 `HGEnumLabels`。規則見維護手冊 §3.4、§6.4。

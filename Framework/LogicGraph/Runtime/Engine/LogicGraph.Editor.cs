@@ -228,10 +228,12 @@ where TTiming : Enum
             var endpoint = Tokens[i];
             var location = AtToken(endpoint, i);
             if (endpoint == null) { Err("token.missing", "Token 清單裡有空項目", location); continue; }
+            if (endpoint.IsObsolete) { Err("token.obsolete", $"Token '{endpoint.Name}' 已不符合目前宣告，請開圖清理後存檔。", location); continue; }
             if (endpoint.Slot == null) { Err("token.slot-missing", $"Token '{endpoint.Name ?? "(未命名)"}' 沒有指定結果型別", location); continue; }
+            if (endpoint.ConfigurationError is string tokenError) { Err("token.input-invalid", tokenError, location); continue; }
             if (string.IsNullOrEmpty(endpoint.Name)) { Err("token.name-missing", $"有一個 {endpoint.ResultType?.Name} Token 沒有名稱", location); continue; }
 
-            if (!seen.Add((endpoint.Slot.FamilyType, endpoint.Name)) && reported.Add(endpoint.Name))
+            if (!seen.Add((endpoint.FamilyType, endpoint.Name)) && reported.Add(endpoint.Name))
                 Err("token.duplicate", $"Token 名稱重複：'{endpoint.Name}'（同族內必須唯一）", location);
         }
     }
@@ -375,7 +377,7 @@ where TTiming : Enum
         {
             foreach (var parameter in AssetGraphSchema.Read(scriptable, out _))
             {
-                foreach (var child in DirectAssetReferences(parameter.Slot))
+                foreach (var child in DirectAssetReferences(parameter.Token.Slot))
                 {
                     cycle = FindAssetCycle(child, stack, path, completed);
                     if (cycle != null) break;
@@ -480,16 +482,27 @@ where TTiming : Enum
         if (node is IGraphAsset assetGraph)
         {
             if (assetGraph.Root?.Disabled == true && !_walkDisabled) return;
-            if (assetGraph.Root?.Kind == NodeKind.Property && _checkedNodes.Add(assetGraph.Root))
+            if (assetGraph is not IFormulaGraphAsset && assetGraph.Root?.Kind == NodeKind.Property && _checkedNodes.Add(assetGraph.Root))
                 Issue("asset.property-root", "資產根內容必須是公式或動作，不能直接引用 Property", location);
             if (!_walkDisabled && assetGraph is IPropertyOwner properties)
                 ValidatePropertyDefinitions(properties.Properties, At(location, location.FieldPath + ".Asset.Properties"));
-            ValidateSlotSources(assetGraph.Root, visited, At(location, location.FieldPath + ".Asset.Root"));
+            if (assetGraph is IFormulaGraphAsset formulaAsset)
+            {
+                if (formulaAsset.ConfigurationError is string assetError) Issue("asset.input-invalid", assetError, location);
+                ValidateSlotSources(formulaAsset.Input, visited, At(location, location.FieldPath + ".Asset.Input"));
+            }
+            else ValidateSlotSources(assetGraph.Root, visited, At(location, location.FieldPath + ".Asset.Root"));
             // 資產的端點就是它的參數介面，跟內容一樣是正式資料；候選池不驗。
             if (assetGraph.Tokens != null)
                 for (int i = 0; i < assetGraph.Tokens.Count; i++)
                     if (assetGraph.Tokens[i]?.Slot != null)
+                    {
+                        if (assetGraph.Tokens[i].IsObsolete)
+                            Issue("token.obsolete", $"資產 Token '{assetGraph.Tokens[i].Name}' 已不符合目前宣告，請開啟該資產清理。", location);
+                        else if (assetGraph.Tokens[i].ConfigurationError is string tokenError)
+                            Issue("token.input-invalid", tokenError, location);
                         ValidateSlotSources(assetGraph.Tokens[i].Slot, visited, At(location, location.FieldPath + $".Asset.Tokens[{i}].Slot"));
+                    }
             return;
         }
 

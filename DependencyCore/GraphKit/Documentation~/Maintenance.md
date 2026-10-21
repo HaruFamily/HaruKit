@@ -63,7 +63,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 
 - 所有欄位共用非泛型基底 `GraphSlotBase`：`Node`／`SetNode` 與 `AcceptsBody`／`AcceptsAsset`／`AcceptsToken`／`AcceptsProperty`。
 - `FormulaSlotBase`（求一個值）、`ActionSlotBase`（副作用，同時是畫布頭端）、`PropertySlotBase`（寫入目標，不求值）。**這些基底刻意是零序列化欄位**，使用端才能加泛型子類而不改變序列化格式。
-- 族（family）的身分是**具體 Slot 型別**（`FamilyType`），不是結果型別。同為 `string` 的兩個 Slot 型別是兩個族。
+- Slot 的族（family）身分是具體 Slot 型別，不是結果型別。同為 `string` 的兩個原生 Slot 型別是兩個族。Token 的對外族由 Token.OutputSlot／FamilyType 宣告，不由內部輸入 Slot 推測。
 - 公式接收：同族 `BodyBaseType` 優先。Slot 覆寫 `AllowCompatibleResult` 可額外接受結果型別可指派、Pack 相同的其他族，並以 `ExcludedFormulaFamilies` 排除；`CandidateBodyBaseType` 只描述候選搜尋範圍，最後一律以 `AcceptsBody` 判定。拉線、驗證、求值用同一套接受條件。
 - `AcceptsCompatibleBody` 與 `AcceptsCompatibleSlot` 將來源資訊交給同一個 `AcceptsSource`：同族優先，跨族才檢查開關、Pack、Result 與排除名單。Body 以實際公式型別判族／排除；Token／Property 以宣告 Slot 的 `FamilyType`／`BodyBaseType` 判定，不追入 Token 子樹、不依目前值猜型別。使用端先確認自己的求值能力，再委派相容政策；AP 的三種讀取來源共用此政策，LogicGraph 的 Token／Property 仍採同族契約。寫入端與資產接收另依原契約。
 - Formula／Token 換來源候選共用 `ReplacementFormulaSlot`，依來源自身族取 Property／Token 的宣告 Slot，或同族父欄位實例，再回退型別建立。Token 選單與 picker 都問 `AcceptsToken`；拿不到實例才沿用族／結果型別的近似判斷。多個接收端不改變已定型來源的候選，替換後逐條用 `Accepts*` 保留或斷開連線。
@@ -80,6 +80,20 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 ### 3.3 Token 與 Property
 
 - `GraphToken`：具名的公式端點，有自己的畫布、取值欄位與候選池。唯一性是「族＋名稱」。Token 節點存 `GraphToken` 物件參照，改名不斷線、刪除立刻變 null 由驗證報錯。**不要改回字串 key**。
+- GraphToken 是共同載體，也可供通用工具直接使用。具體 Token 子類宣告對外 OutputSlot、FamilyType、ResultType、PackType，Slot 保存真正求值的輸入；ConfigurationError 純讀檢查序列化輸入。輸入可為 Union，對外仍是原生族。Slot 不負責建立或替換 Token。
+- 新增 Token 選單讀取目前 Pack 的 FormulaSlotBase.TokenType 配對，排除測試組件。存在明確宣告時只列配對的 Token；沒有宣告的通用工具維持原生 Slot 的 GraphToken 建立方式。轉存依對外族找唯一宣告，重名族拒絕猜測。抬升資產參數保留具體 Token 類別。
+- FormulaFamily 只索引 IFormulaFamilyDeclaration 的 Slot 宣告；Token 反查鍵為具體 Token 型別＋Pack，重複宣告記為歧義，不能採掃描順序取第一個。第一次反查探索已載入且引用 GraphKit 的組件，後續使用型別快取；Slot 建構也可登記同一份配對。只反射配對探索與 OutputSlot 建立，不以反射執行求值。僅由序列化／探索使用的具體 Slot 應保留無參數建構子（Unity Preserve），新組件／腳本更新由 Domain Reload 重建索引。
+- 開圖／重載工作副本時，HGTokenCleanup 依 Token.IsObsolete 自動清除過時端點並斷線，來源與原候選保留到目前圖候選池，過時代理從候選池移除。來源／子樹保持共享引用及座標，只有指向過時 Token 的引用斷開；具名常數隨端點移除。
+- 清理只作用於隔離副本，成功後標記內容未儲存、撤銷驗證並輸出清除數與斷線數；存檔才寫回。Owner、非視窗 session、獨立資產均使用同一清理器，清理後才建立歷程基準，取消重讀仍會清理。引用資產不遞迴改寫，須各自開啟。
+- 通用 GraphToken 的輸入若已有不同的 TokenType 宣告，或直接以 Union 冒充族，即為過時。使用端具體 Token 可依宣告消失／輸入型別失效判定過時；族配對歧義是配置錯誤，不因此刪除具體 Token。未宣告 TokenType 的通用工具仍可使用 GraphToken。
+- Token 庫與 HEAD Header 顯示對外族，來源列顯示輸入接受族；代理換來源用 OutputSlot。AssetGraphSchema.Slot 是對外宣告，實際求值須使用 schema.Token.Slot，不能拿宣告欄位當內容。Token 內容轉存資產時依 Union 的選中來源族建立資產，保留外層轉換設定。
+
+### 公式資產根輸入
+
+- IFormulaGraphAsset 提供 Input／SetInput／ConfigurationError；公式資產的 Root 為 Input.Node。Input 可以是 Union，根來源可為相容的公式、資產、Token 或 Property，也可不接線使用常數。
+- 進入資產畫布時深複製 Input、Orphans、Tokens、Properties，存檔以 SetInput 寫回整個輸入。HGAssetSnapshot.Input 保存完整 Slot，Undo／Redo／失敗回復也整體替換它，保留 Default、Union 分支及 HGSlotSetting。
+- 一般 ActionAsset 仍用合成 ActionSlot 承載根，儲存走 SetRoot，不能把根換成 Token／Property。兩類資產的庫資料均與根輸入在同一次 DeepCopy 內，維持引用一致。
+- Core／Editor 驗證公式資產的 Input，不拿呼叫端的對外 Slot 當成內部接收端；資產參數的循環探索走 Token.Slot，不走對外宣告欄位。
 - `GraphProperty`：圖內的可寫儲存位置。ProtoProperty 住在 `IPropertyOwner.Properties`（變數庫），有初始內容；LocalProperty 是節點私有定義。讀取只取目前值、不求值寫入者；`PropertySlotBase` 是寫入目標，**不構成求值依賴**，讀後寫回同一顆不算循環。目前值由使用端的執行層保存，GraphKit 只保存定義。
 - `GraphPropertyInputSlot` 只是 Property 節點接收端的身分；寫入連線的正本是寫入端 `PropertySlot.Node`。
 - `PropertySlotBase` 欄位的型別 chip 依 `FamilyType` 顯示對應 FormulaSlot 族的 `[HGKind]` 名稱；未指定名稱時沿用結果型別短名。

@@ -1206,7 +1206,7 @@ public partial class HaruGraphWindow : EditorWindow
 
         var pack = new List<object>
         {
-            HGReflect.GetNode(focus.AssetHostSlot),
+            focus.AssetHostSlot,
             focus.AssetOrphans ?? new List<GraphNode>(),
             focus.AssetTokens ?? new List<GraphToken>(),
             focus.AssetProperties ?? new List<GraphProperty>(),
@@ -1219,7 +1219,7 @@ public partial class HaruGraphWindow : EditorWindow
         }
         return new HGAssetSnapshot
         {
-            Root = copy[0] as GraphNode,
+            Input = copy[0] as GraphSlotBase,
             Orphans = copy[1] as List<GraphNode> ?? new List<GraphNode>(),
             Tokens = copy[2] as List<GraphToken> ?? new List<GraphToken>(),
             Properties = copy[3] as List<GraphProperty> ?? new List<GraphProperty>(),
@@ -1234,7 +1234,7 @@ public partial class HaruGraphWindow : EditorWindow
     {
         if (snapshot == null || focus.AssetHostSlot == null) return;
 
-        HGReflect.SetNode(focus.AssetHostSlot, snapshot.Root);
+        focus.AssetHostSlot = snapshot.Input;
         focus.AssetOrphans = snapshot.Orphans;
         focus.AssetTokens = snapshot.Tokens;
         focus.AssetProperties = snapshot.Properties;

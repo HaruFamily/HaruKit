@@ -18,9 +18,11 @@ LogicGraph 是用來編寫與執行序列化 Action 圖的框架：依時機分�
 - Slot 可覆寫 `EvaluateUnlinked(pack)`，將未接線時的 Default 選項依當次上下文解析；配合 GraphKit 的 `DefaultEditType`／`DefaultObject` 編輯，不影響接線與停用保底。
 - Action 以 `PropertySlot<TResult, TSlot>` 寫入 Property；讀取不會觸發寫入者。
 - 資產的 Token 就是它的參數；每次呼叫資產都有獨立的 Token 作用域，可由呼叫端綁定覆蓋。
+- FormulaSlot<TResult, TFormula, TToken, TAsset, TPack> 集中配對整個族；FormulaToken<TResult, TInput, TPack> 與 FormulaAsset<TResult, TInput, TPack> 各自指定根輸入，可使用 Union，不重複宣告 Family。公式資產的常數、Union 設定與來源一起保存。
 - `TokenTable.CreateEvaluationScope(token)` 支援延後求值：保留 Token／binding／Property scope，使用新的取消與循環狀態，不沿用已結束的執行觀察。
 - `TokenTable.ScopeIdentity` 提供圖實例／資產呼叫位置的 runtime 身分，供使用端配對持續效果；不應保存為資產鍵。
 - 驗證在執行前擋下無效來源、重複時機或 Token 名稱、不相容的綁定，以及圖或資產循環。
+- 過時 Token 會使驗證失敗，直接登記或資產求值也拒絕使用。開圖時只清理工作副本並保留來源節點，檢查後存檔才更新資料。
 - `DeepCopy()` 保留多型 `SerializeReference`、共享參照、循環與 Unity 物件引用。
 - 節點編輯器來自 GraphKit，不依賴 Odin。所有時機在同一張畫布，各是一顆 root。
 
@@ -101,12 +103,15 @@ namespace LogicGraphQuickStart
 
     public abstract class DemoIntFormula : FormulaBase<int, DemoPack> { }
 
-    public sealed class DemoIntAsset : FormulaAsset<int, DemoPack> { }
+    public sealed class DemoIntAsset : FormulaAsset<int, DemoIntSlot, DemoPack> { }
+
+    [Serializable]
+    public sealed class DemoIntToken : FormulaToken<int, DemoIntSlot, DemoPack> { }
 
     [Serializable]
     [HGKind("Demo Int")]
     public sealed class DemoIntSlot
-        : FormulaSlot<int, DemoIntAsset, DemoIntFormula, DemoPack>
+        : FormulaSlot<int, DemoIntFormula, DemoIntToken, DemoIntAsset, DemoPack>
     {
         public DemoIntSlot() { }
         public DemoIntSlot(int value) : base(value) { }
@@ -116,7 +121,7 @@ namespace LogicGraphQuickStart
 
 Pack 是這次執行的上下文，由呼叫端傳入，不寫在圖裡。TokenTable 負責具名公式查詢、資產參數作用域，以及取消與執行觀察。
 
-三個族型別各有分工：Formula 是計算基底，FormulaAsset 支援可重用的圖資產，Slot 是作者看到的欄位與族身分。這個範例不需要建立 `DemoIntAsset` 實例。之後這個族要加新的計算時，繼承 `DemoIntFormula` 即可，**不要再產生一個族**。編輯器會自動找到具體的 Slot 族，不需要另外登記。
+四個族型別各有分工：Formula 是計算基底，Token 是具名公式，Asset 保存可重用的圖，Slot 集中宣告配對與接收規則。這個範例不需要建立 DemoIntAsset 實例。同族新增計算只繼承 DemoIntFormula；編輯器讀取 Slot 配對，不另維護登記清單。
 
 ### 2. 節點：`DemoNodes.cs`
 
@@ -316,8 +321,8 @@ LogicGraph 實作 GraphKit 的 `IGraphExecutionDocument`。`DeepCopy()` 共用�
 ## 圖的模型
 
 - 一個時機是一顆 `ActionTimingGroup<TTiming, TPack>` root，本體是有順序的 `ActionSlot<TPack>` 清單。
-- `FormulaSlot<TResult, TAsset, TFormula, TPack>` 求一個值，永遠有保底值。
-- 節點一次只有一種來源：內嵌（Action／Formula 實例）、資產（`ActionAssetBase<TPack>` 或 `FormulaAsset<TResult, TPack>`）、Token（`GraphToken`），或 Property。
+- `FormulaSlot<TResult, TFormula, TToken, TAsset, TPack>` 求一個值，並宣告公式族配對。
+- 節點一次只有一種來源：內嵌、資產（ActionAssetBase 或 FormulaAsset）、Token，或 Property。公式資產透過自己的 TInput 求值來源。
 - 族身分是具體 Slot 型別。兩個都回 `string` 的 Slot 是兩個族，可以各有同名 Token。Slot 可選擇開放「結果型別相容」的跨族公式接收，並用黑名單排除特定族。
 
 ## 編寫與驗證

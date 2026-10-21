@@ -29,10 +29,11 @@ public sealed class LogicGraphUsageTests
         public LogicGraph<DisplayTiming, Pack> Graph = new();
     }
     private abstract class IntFormula : FormulaBase<int, Pack> { }
-    private sealed class IntAsset : FormulaAsset<int, Pack> { }
+    [Serializable] private sealed class IntToken : FormulaToken<int, IntSlot, Pack> { }
+    private sealed class IntAsset : FormulaAsset<int, IntSlot, Pack> { }
     private sealed class TestActionAsset : ActionAssetBase<Pack> { }
     [Serializable]
-    private sealed class IntSlot : FormulaSlot<int, IntAsset, IntFormula, Pack> { }
+    private sealed class IntSlot : FormulaSlot<int, IntFormula, IntToken, IntAsset, Pack> { public IntSlot() { } }
 
     [Serializable]
     private sealed class ReadValue : ActionBase<Pack>
@@ -211,7 +212,7 @@ public sealed class LogicGraphUsageTests
             Assert.That(((IGraphDocument)working).RootKeys(owner), Is.EqualTo(new object[] { Timing.Start }));
 
             working.ActionGroups[0].Timing = Timing.Start;
-            working.Tokens.Add(new GraphToken("Required", new IntSlot()));
+            working.Tokens.Add(GraphTestTokens.Create("Required", new IntSlot()));
             Assert.That(((IGraphDocumentValidation)working).CollectDiagnostics(owner), Is.Empty);
             Assert.That(owner.Inspected, Is.SameAs(working));
             Assert.That(owner.Second.Tokens, Is.Empty);

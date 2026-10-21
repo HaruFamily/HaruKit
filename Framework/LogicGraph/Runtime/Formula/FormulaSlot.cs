@@ -8,9 +8,10 @@ using HaruFamily.DependencyCore.GraphKit;
 /// <summary>可接常數、公式、資產或 Token 的求值欄位。具體 Slot 型別是公式族的身分，同結果型別仍可分成不同族。</summary>
 /// <remarks>固定設定用一般序列化欄位；需要由圖提供數值時使用 Slot。新增族需搭配 Formula 與 FormulaAsset 型別。</remarks>
 [Serializable]
-public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlotBase, IFormulaSlot<TResult, TPack>
-    where TAsset : FormulaAsset<TResult, TPack>
+public abstract class FormulaSlot<TResult, TFormula, TToken, TAsset, TPack> : FormulaSlotBase, IFormulaSlot<TResult, TPack>, IFormulaFamilyDeclaration
+    where TAsset : FormulaAssetBase<TResult, TPack>
     where TFormula : FormulaBase<TResult, TPack>
+    where TToken : FormulaTokenBase<TResult, TPack>
 {
     [SerializeField]
     protected TResult _default = default;
@@ -22,12 +23,13 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
     // 型別不符每個 Slot 只吼一次，避免逐次求值洗版。
     [NonSerialized] private bool _loggedMismatch;
 
-    protected FormulaSlot() { }
+    protected FormulaSlot() => FormulaFamily.Register(this);
 
     /// <summary>帶初始常數值：常數模式即此值，接了來源時是解析失敗的保底值。</summary>
     protected FormulaSlot(TResult defaultValue)
     {
         _default = defaultValue;
+        FormulaFamily.Register(this);
     }
 
     public override GraphNode Node => _node;
@@ -39,6 +41,7 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
     public override Type BodyBaseType => typeof(TFormula);
     public override Type CandidateBodyBaseType => AllowCompatibleResult ? typeof(IFormula<TPack>) : BodyBaseType;
     public override Type AssetBaseType => typeof(TAsset);
+    public override Type TokenType => typeof(TToken);
 
     public override object DefaultObject
     {
@@ -57,7 +60,8 @@ public abstract class FormulaSlot<TResult, TAsset, TFormula, TPack> : FormulaSlo
     public override bool AcceptsAsset(ScriptableObject asset) => asset is TAsset;
 
     // 只認同族，不認同結果型別：string 同時有 String 與 Key 兩族，收下別族的Token等於從側門繞過那一族的規則。
-    public override bool AcceptsToken(GraphToken endpoint) => endpoint?.Slot?.FamilyType == FamilyType;
+    public override bool AcceptsToken(GraphToken endpoint)
+        => endpoint is TToken && !endpoint.IsObsolete && endpoint.PackType == PackType;
 
     public override bool AcceptsProperty(GraphProperty property) => property?.FamilyType == FamilyType;
 

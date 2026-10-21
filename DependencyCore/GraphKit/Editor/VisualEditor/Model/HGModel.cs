@@ -20,7 +20,7 @@ public class HGToken
     public Type FamilyType => Token?.FamilyType;
 
     // 走端點自己的 Slot：同結果型別的不同族（String / Key）在清單裡才分得出來。
-    public string TypeName => HGReflect.SlotKindName(Token?.Slot);
+    public string TypeName => HGReflect.SlotKindName(Token?.FamilyType);
 }
 
 /// <summary>左欄清單用的一筆 Property 視圖。資料住在 <see cref="GraphProperty"/>，這裡只是查詢結果。</summary>
@@ -219,6 +219,7 @@ public class HGModel
                 throw new InvalidOperationException("文件無法讀取或建立。");
             var copy = DeepCopy(live);
             if (copy == null) return false;
+            cleaned |= HGTokenCleanup.Clean(copy) > 0;
             var nextBaseline = DeepCopy(copy);
             if (nextBaseline == null) return false;
 
@@ -683,6 +684,39 @@ public class HGModel
     }
 
     // ===== 具名Token（端點）=====
+    /// <summary>目前 Pack 明確宣告的 Token 類別；不從 Slot 推測 Token 的輸入實作。</summary>
+    public List<Type> TokenTypes()
+    {
+        var result = new List<Type>();
+        foreach (var family in FormulaKinds())
+        {
+            var slot = HGReflect.CreateInstance(family.slotType) as FormulaSlotBase;
+            var type = slot?.TokenType;
+            if (type == null || type.IsAbstract || type.ContainsGenericParameters || result.Contains(type)) continue;
+            result.Add(type);
+        }
+        result.Sort((a, b) => string.CompareOrdinal(a.FullName, b.FullName));
+        return result;
+    }
+
+    /// <summary>轉存或更新時以明確的對外族尋找唯一 Token 宣告；同族有多個宣告時拒絕猜測。</summary>
+    public GraphToken NewTokenForFamily(Type family)
+    {
+        GraphToken result = null;
+        var types = TokenTypes();
+        foreach (var type in types)
+        {
+            var candidate = (GraphToken)HGReflect.CreateInstance(type);
+            if (candidate.FamilyType != family) continue;
+            if (result != null) throw new InvalidOperationException($"{family.Name} 有多個 Token 宣告，無法自動選擇。");
+            result = candidate;
+        }
+        if (result != null) return result;
+        if (types.Count > 0) throw new InvalidOperationException($"{family?.Name} 沒有對應的 Token 宣告。");
+        // 未宣告具體 Token 的通用工具仍使用原生 Slot 作為輸入與輸出。
+        if (HGReflect.CreateInstance(family) is FormulaSlotBase slot) return new GraphToken(null, slot);
+        throw new InvalidOperationException("無法建立 Token 的公式族。");
+    }
     // 一個Token＝一顆 GraphToken：自己的名字、自己的取值欄位、自己的畫布與候選池。
     // 圖裡引用它的是 NodeKind.Token 節點，存的是物件參照，不是名字字串。
 
@@ -748,19 +782,26 @@ public class HGModel
 
     /// <summary>
     /// 建一個新Token並加進清單。名稱唯一性是「族＋名稱」，所以同名不同族可以並存。
-    /// slotType 就是族，建立後不再更動——要換族就刪掉重建。
+    /// type 為具體 Token 類別；未宣告 Token 的通用工具可傳原生 Slot 族。
     /// </summary>
-    public GraphToken CreateToken(List<GraphToken> scope, Type slotType, out string error)
+    public GraphToken CreateToken(List<GraphToken> scope, Type type, out string error)
     {
         error = null;
         if (scope == null) { error = "這張圖沒有 Token 清單。"; return null; }
-        if (HGReflect.CreateInstance(slotType) is not FormulaSlotBase slot)
+        GraphToken endpoint;
+        try
         {
-            error = "建不出這一族的取值欄位。";
+            endpoint = typeof(GraphToken).IsAssignableFrom(type)
+                ? HGReflect.CreateInstance(type) as GraphToken : NewTokenForFamily(type);
+            if (endpoint == null || endpoint.PackType != PackType || endpoint.ConfigurationError != null)
+                throw new InvalidOperationException("Token 宣告無效或 Pack 不符。");
+        }
+        catch (Exception exception)
+        {
+            error = exception.Message;
             return null;
         }
-
-        var endpoint = new GraphToken(NextTokenName(scope, slot.FamilyType), slot);
+        endpoint.Name = NextTokenName(scope, endpoint.FamilyType);
         endpoint.EnsureId();
         scope.Add(endpoint);
         MarkContentChanged();
@@ -833,7 +874,7 @@ public class HGModel
             // 重名比對以族為準：TokenTable 的登記鍵就是（族, 名稱），
             // 所以同結果型別的不同族（String / Key）可以同名，各自查各自那格。
             if (other.Name != name || other.FamilyType != endpoint.FamilyType) continue;
-            error = $"已存在名為 '{name}' 的 {HGReflect.SlotKindName(other.Slot)} Token。";
+            error = $"已存在名為 '{name}' 的 {HGReflect.SlotKindName(other.FamilyType)} Token。";
             return false;
         }
 
@@ -1384,7 +1425,7 @@ public class HGModel
         }
     }
 
-    private static IEnumerable<GraphNode> WalkCarriers(object node, HashSet<object> visited)
+    internal static IEnumerable<GraphNode> WalkCarriers(object node, HashSet<object> visited)
     {
         if (node == null || !visited.Add(node)) yield break;
 

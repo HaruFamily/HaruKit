@@ -110,14 +110,14 @@ public class GraphDeepCopyTests
     public void Copy_WithShared_KeepsSharedObjectsUncopied()
     {
         var otherSlot = new TestSlot(5);
-        var other = new GraphToken("other", otherSlot);
+        var other = GraphTestTokens.Create("other", otherSlot);
         other.EnsureId();
 
         var reference = new GraphNode();
         reference.SetToken(other);
         var sourceSlot = new TestSlot();
         sourceSlot.SetNode(reference);
-        var source = new GraphToken("source", sourceSlot);
+        var source = GraphTestTokens.Create("source", sourceSlot);
         source.EnsureId();
 
         var copy = GraphDeepCopy.Copy(source, new object[] { other });
@@ -163,7 +163,7 @@ public class GraphDeepCopyTests
         var slot = new TestSlot();
         slot.SetNode(new GraphNode(new CountingFormula()));
         var table = new TokenTable<TestPack>();
-        table.Register(new GraphToken("value", slot));
+        table.Register(GraphTestTokens.Create("value", slot));
 
         int first = await table.Resolve<int>(typeof(TestSlot), "value", default).AsTask();
         int second = await table.Resolve<int>(typeof(TestSlot), "value", default).AsTask();
@@ -203,7 +203,7 @@ public class GraphDeepCopyTests
         var asset = ScriptableObject.CreateInstance<TestFormulaAsset>();
         var internalSlot = new TestSlot();
         internalSlot.SetNode(new GraphNode(new TestFormula()));
-        var parameter = new GraphToken("amount", internalSlot);
+        var parameter = GraphTestTokens.Create("amount", internalSlot);
         asset.Tokens.Add(parameter);
 
         var proxy = new GraphNode();
@@ -232,7 +232,7 @@ public class GraphDeepCopyTests
         asset.SetTarget(new ResolveFormula());
         var ownerSlot = new TestSlot();
         ownerSlot.SetNode(new GraphNode(new TestFormula()));
-        caller.Register(new GraphToken("owner", ownerSlot));
+        caller.Register(GraphTestTokens.Create("owner", ownerSlot));
         int leakedValue = await call.Evaluate(default, caller).AsTask();
         Assert.That(leakedValue, Is.EqualTo(0), "資產內容不可直接解析 caller token");
 
@@ -276,7 +276,7 @@ public class GraphDeepCopyTests
         formula.EnsureId();
         var tokenSlot = new TestSlot();
         tokenSlot.SetNode(formula);
-        var token = new GraphToken("value", tokenSlot);
+        var token = GraphTestTokens.Create("value", tokenSlot);
         var reference = new GraphNode();
         reference.SetToken(token);
         reference.EnsureId();
@@ -367,7 +367,8 @@ public class GraphDeepCopyTests
             => UniTask.FromResult(1);
     }
 
-    private sealed class TestFormulaAsset : FormulaAsset<int, TestPack> { }
+    [Serializable] private sealed class TestToken : FormulaToken<int, TestSlot, TestPack> { }
+    private sealed class TestFormulaAsset : FormulaAsset<int, TestSlot, TestPack> { }
 
     [Serializable]
     private sealed class CountingFormula : TestFormula
@@ -379,7 +380,7 @@ public class GraphDeepCopyTests
     }
 
     [Serializable]
-    private sealed class PassFormula : FormulaBase<int, TestPack>
+    private sealed class PassFormula : TestFormula
     {
         public TestSlot Value = new();
 
@@ -388,14 +389,14 @@ public class GraphDeepCopyTests
     }
 
     [Serializable]
-    private sealed class ResolveFormula : FormulaBase<int, TestPack>
+    private sealed class ResolveFormula : TestFormula
     {
         protected override async UniTask<int> OnEvaluate(TestPack pack, TokenTable<TestPack> tokens)
             => await tokens.Resolve<int>(typeof(TestSlot), "owner", pack);
     }
 
     [Serializable]
-    private sealed class TestSlot : FormulaSlot<int, TestFormulaAsset, TestFormula, TestPack>
+    private sealed class TestSlot : FormulaSlot<int, TestFormula, TestToken, TestFormulaAsset, TestPack>
     {
         public TestSlot() { }
         public TestSlot(int value) : base(value) { }

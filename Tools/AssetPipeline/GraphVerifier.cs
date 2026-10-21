@@ -62,8 +62,11 @@ namespace HaruFamily.Tools.AssetPipeline
                 string path = $"Token[{endpoint.Name ?? i.ToString()}]";
                 if (string.IsNullOrWhiteSpace(endpoint.Name)) errors.Add("assetpipeline.token.name-missing", $"Token[{i}]", "沒有名字。");
                 if (endpoint.Slot == null) { errors.Add("assetpipeline.token.slot-missing", path, "沒有指定型別。"); continue; }
+                if (endpoint.IsObsolete) { errors.Add("assetpipeline.token.obsolete", path, "Token 已不符合目前宣告，請開圖清理後存檔。"); continue; }
+                if (endpoint.ConfigurationError is string tokenError)
+                    errors.Add("assetpipeline.token.input-invalid", path, tokenError);
 
-                if (!string.IsNullOrWhiteSpace(endpoint.Name) && !seen.Add((endpoint.Slot.FamilyType, endpoint.Name)))
+                if (!string.IsNullOrWhiteSpace(endpoint.Name) && !seen.Add((endpoint.FamilyType, endpoint.Name)))
                     errors.Add("assetpipeline.token.duplicate", path, "與另一個同型別的Token重名。");
 
             CheckSlot(endpoint.Slot, path, errors, new ActionReads(), new HashSet<object>(ReferenceComparer.Instance));

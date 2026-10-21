@@ -480,7 +480,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 Id = HeadId(focusId),
                 // 名字由焦點提供；真的沒有名字時給預設值，不留空白 Header。
                 Title = string.IsNullOrWhiteSpace(headTitle) ? (isAction ? "（動作）" : "（頭端）") : headTitle,
-                Chip = ChipText(isAction ? null : rootSlot?.GetType(), resultType, isAction),
+                Chip = ChipText(isAction ? null : headCarrier is GraphToken token ? token.FamilyType : rootSlot?.GetType(), resultType, isAction),
                 ParentSlot = rootSlot,
                 IsRoot = true,
                 IsActionNode = isAction,

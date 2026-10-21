@@ -9,7 +9,7 @@ using UnityEditor;
 /// </summary>
 public class HGAssetSnapshot
 {
-    public GraphNode Root;
+    public GraphSlotBase Input;
     public List<GraphNode> Orphans;
     public List<GraphToken> Tokens;
     public List<GraphProperty> Properties;

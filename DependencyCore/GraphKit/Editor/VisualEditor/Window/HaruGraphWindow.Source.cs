@@ -425,7 +425,7 @@ public partial class HaruGraphWindow
     {
         if (slotType == null) return null;
         if (node?.Property?.Slot is FormulaSlotBase propertySlot && propertySlot.FamilyType == slotType) return propertySlot;
-        if (node?.Token?.Slot is FormulaSlotBase tokenSlot && tokenSlot.FamilyType == slotType) return tokenSlot;
+        if (node?.Token?.OutputSlot is FormulaSlotBase tokenSlot && tokenSlot.FamilyType == slotType) return tokenSlot;
         if (node?.ParentSlot is FormulaSlotBase parentSlot && parentSlot.FamilyType == slotType) return parentSlot;
         return HGReflect.CreateInstance(slotType) as FormulaSlotBase;
     }
@@ -1098,14 +1098,16 @@ public partial class HaruGraphWindow
             return;
         }
 
-        var assetType = HGReflect.AssetType(slot.GetType());
+        var sourceSlot = slot is UnionSlotBase union ? union.SelectedSlot : slot;
+        var assetType = HGReflect.AssetType(sourceSlot?.GetType());
         if (assetType == null)
         {
             ShowNotification(new GUIContent("找不到對應的資產型別"));
             return;
         }
 
-        CreateExtractedAsset(inner, false, source, assetType, HGReflect.TypeName(source.GetType()), slot.GetType());
+        CreateExtractedAsset(inner, false, source, assetType, HGReflect.TypeName(source.GetType()), sourceSlot.GetType());
+        if (slot is UnionSlotBase) slot.SetNode(inner);
     }
 
     /// hostSlotType：轉存後拿來驗新資產內容的欄位型別；未連接節點沒有父欄位，傳 null 就略過那次驗證。
@@ -1191,13 +1193,11 @@ public partial class HaruGraphWindow
 
             if (!map.TryGetValue(source, out var parameter))
             {
-                if (HGReflect.CreateInstance(source.Slot?.GetType()) is not FormulaSlotBase slot)
-                {
-                    Debug.LogWarning($"[GraphKit] Token '{source.Name}' 建不出資產參數欄位，"
-                        + "轉存後資產內這一格會取預設值，請手動改成常數或補上對應的 FormulaSlot 型別。");
-                    continue;
-                }
-                parameter = new GraphToken(UniqueParameterName(parameters, source.Name, slot.FamilyType), slot);
+                parameter = source.GetType() == typeof(GraphToken)
+                    ? model.NewTokenForFamily(source.FamilyType)
+                    : HGReflect.CreateInstance(source.GetType()) as GraphToken;
+                if (parameter == null) throw new InvalidOperationException($"Token '{source.Name}' 無法建立資產參數。");
+                parameter.Name = UniqueParameterName(parameters, source.Name, parameter.FamilyType);
                 parameter.EnsureId();
                 parameters.Add(parameter);
                 map[source] = parameter;

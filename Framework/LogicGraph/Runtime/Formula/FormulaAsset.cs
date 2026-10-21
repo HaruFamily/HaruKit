@@ -7,7 +7,7 @@ using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 
 // 非泛型 base：給 Editor walker 不必反射就能取根節點與候選池。
-public abstract class FormulaAssetBase : ScriptableObject, IGraphAsset, IPropertyOwner, IGraphViewStateOwner
+public abstract class FormulaAssetBase : ScriptableObject, IFormulaGraphAsset, IPropertyOwner, IGraphViewStateOwner
 {
     /// <summary>本資產的候選節點清單。僅視覺化編輯器使用。</summary>
     public abstract List<GraphNode> Orphans { get; }
@@ -20,9 +20,11 @@ public abstract class FormulaAssetBase : ScriptableObject, IGraphAsset, IPropert
 
     /// <summary>公式資產的結果型別。</summary>
     public abstract Type ResultType { get; }
+    public abstract FormulaSlotBase Input { get; }
+    public abstract void SetInput(FormulaSlotBase input);
+    public abstract string ConfigurationError { get; }
 
-    // 資產畫布 HEAD 的座標。HEAD 那個容器槽是編輯期現做的，沒有地方落腳，所以記在資產本體上，
-    // 形狀與 ActionSlot／GraphToken／ActionTimingGroup 一致（Pos／HasPos／ClearPos）。
+    // HEAD 座標屬於資產本體，與可替換的根輸入分開保存。
     [SerializeField, HideInInspector]
     private Vector2 _headPos;
 
@@ -52,18 +54,9 @@ public abstract class FormulaAssetBase : ScriptableObject, IGraphAsset, IPropert
 #endif
 }
 
-public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
+public abstract class FormulaAssetBase<T, TPack> : FormulaAssetBase
 {
-    public override Type ResultType => typeof(T);
-
-    // 根內容的載體。存 GraphNode 而不是裸公式，根節點才有地方放 Id／座標／備註／停用旗標，
-    // 跟圖上其他節點同一套規則；只存裸內容時每次開畫布都要現包一顆，位置永遠留不住。
-    [SerializeReference]
-    private GraphNode _root;
-
-    // 舊格式：只存裸內容。第一次讀 Root 時就地補上載體，存檔時清空。
-    [SerializeReference, HideInInspector]
-    private FormulaBase<T, TPack> _target;
+    public sealed override Type ResultType => typeof(T);
 
     // 候選節點池：本資產編輯區專用，不參與求值與驗證。資產是獨立交易，候選不可寫進 Owner。
     [SerializeReference, HideInInspector]
@@ -84,19 +77,13 @@ public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
     {
         var root = Root;
         if (root?.Disabled == true) return default;
-        var target = root?.GetBody<FormulaBase<T, TPack>>();
-        if (target == null) return default;
+        if (ConfigurationError is string error) throw new InvalidOperationException(error);
+        var input = (IFormulaSlot<T, TPack>)Input;
         var tokens = TokenTable<TPack>.CreateAssetScope(this, callerNode, bindings, caller);
-        using var visit = tokens.EnterNode(root);
-        try
-        {
-            if (visit != null) await visit.WaitAsync();
-            var result = await target.Evaluate(pack, tokens);
-            visit?.Complete();
-            return result;
-        }
-        catch (OperationCanceledException) { visit?.Cancel(); throw; }
-        catch (Exception exception) { visit?.Fail(exception); throw; }
+        tokens.CancellationToken.ThrowIfCancellationRequested();
+        var result = await input.Evaluate(pack, tokens);
+        tokens.CancellationToken.ThrowIfCancellationRequested();
+        return result;
     }
 
     public override List<GraphNode> Orphans
@@ -114,32 +101,32 @@ public abstract class FormulaAsset<T, TPack> : FormulaAssetBase
         get { _properties ??= new List<GraphProperty>(); return _properties; }
     }
 
-    /// <summary>根內容的載體。舊格式（裸公式）在這裡就地補上載體，呼叫端只需要認 GraphNode。</summary>
-    public override GraphNode Root
-    {
-        get
-        {
-            if (_root == null && _target != null) _root = new GraphNode(_target);
-            return _root;
-        }
-    }
-
-    public override object ContentObject => Root?.BodyObject;
+    public override GraphNode Root => Input?.Node;
+    public override object ContentObject => Input;
 
 #if UNITY_EDITOR
-    /// <summary>寫回根節點（視覺化編輯器存檔）。寫進新格式並清掉舊欄位，同一份內容不會有兩個來源。</summary>
-    public void SetRoot(GraphNode root)
-    {
-        _root = root;
-        _target = null;
-    }
-
-    public void SetTarget(FormulaBase<T, TPack> target) => SetRoot(target == null ? null : new GraphNode(target));
-    internal FormulaBase<T, TPack> EditorGetTarget() => Root?.GetBody<FormulaBase<T, TPack>>();
-    internal override object EditorGetTargetObject() => Root?.BodyObject;
+    public void SetRoot(GraphNode root) => Input.SetNode(root);
+    public void SetTarget(GraphNodeContent target) => SetRoot(target == null ? null : new GraphNode(target));
+    internal override object EditorGetTargetObject() => Input;
 
     // 「誰引用我」不存在資產身上：那是衍生資料，存了就會過期。編輯器要用時從 HGReferenceIndex 現算。
 #endif
+}
+
+/// <summary>公式資產的根輸入與結果；輸入可為一般 Slot 或 Union。</summary>
+public abstract class FormulaAsset<TResult, TInput, TPack> : FormulaAssetBase<TResult, TPack>
+    where TInput : FormulaSlotBase, IFormulaSlot<TResult, TPack>, new()
+{
+    [SerializeReference] private FormulaSlotBase input = new TInput();
+    public sealed override FormulaSlotBase Input => input;
+    public TInput RootInput => input as TInput;
+    public sealed override string ConfigurationError => input is not TInput ? $"資產根輸入必須為 {typeof(TInput).Name}。" : null;
+
+    public sealed override void SetInput(FormulaSlotBase value)
+    {
+        if (value is not TInput typed) throw new ArgumentException($"Asset input must be {typeof(TInput).Name}.", nameof(value));
+        input = typed;
+    }
 }
 
 }

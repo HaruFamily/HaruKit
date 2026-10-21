@@ -82,6 +82,7 @@ public sealed class HGDocumentSession<TDocument>
                     throw new InvalidOperationException("The cleaned document could not be cloned.");
                 document = cleanedDocument;
             }
+            cleaned |= HGTokenCleanup.Clean(document) > 0;
             session = new HGDocumentSession<TDocument>(owner, binding, document, context, commitGuard);
             session.IsDirty = cleaned;
             return true;
@@ -240,6 +241,7 @@ public sealed class HGDocumentSession<TDocument>
         if (live == null && !binding.TryCreate(out live)) return HGSessionCommandResult.Rejected;
         if (!binding.TryClone(live, out IGraphDocument copy)
             || copy is not TDocument document) return HGSessionCommandResult.Rejected;
+        cleaned |= HGTokenCleanup.Clean(document) > 0;
         Document = document;
         commitGuard = nextGuard;
         undo.Clear();

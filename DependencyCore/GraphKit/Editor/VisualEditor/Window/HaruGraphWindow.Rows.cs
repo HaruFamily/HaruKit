@@ -1075,7 +1075,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 if (assetSnapshot != null)
                 {
                     string tokenId = focus.Token?.Id;
-                    focus.AssetHostSlot.SetNode(assetSnapshot.Root);
+                    focus.AssetHostSlot = assetSnapshot.Input;
                     focus.AssetOrphans = assetSnapshot.Orphans;
                     focus.AssetTokens = assetSnapshot.Tokens;
                     focus.AssetProperties = assetSnapshot.Properties;

@@ -62,7 +62,8 @@ AP 是 **Editor-only、同步執行**的資產處理管線框架。一個 `Asset
 - 輸入欄位的來源是常數、內嵌公式、具名 Token 或 Property 之一。AP 不支援共用資產節點（`AssetBaseType` 為 null）。
 - 空槽、停用、型別不符、公式例外一律回保底值並寫公式警告，**不中斷執行**。Token 遞迴在執行期回保底值。
 - 每顆公式只有一種結果型別；`List<AudioClip>` 不會自動當成 `List<Object>`。Slot 的 `AllowCompatibleResult`／`ExcludedFormulaFamilies` 統一控制 Formula、Token、Property 三種讀取來源，透過 GraphKit 的共用相容政策判定。`ObjectSlot` 可接受宣告結果是 Unity Object 子類的三種來源；清單欄位維持同族限制。
-- Token 接收先確認來源實作 AP internal `IFormulaSlot`，再問共用相容政策；求值先問 `AcceptsToken`，同封閉泛型直接呼叫 `Evaluate()`，其餘透過顯式 `IFormulaSlot.EvaluateBoxed()` 呼叫來源 Slot。保留合法 null、來源 Slot 保底與 `TokenGuard` 的 finally 清理，不公開 object 求值入口，也不在 GraphKit 加求值方法。
+- Token 接收先確認輸入實作 AP internal `IFormulaSlot`，再以 Token.OutputSlot 問共用相容政策；求值使用 Token.Slot。先問 `AcceptsToken`，同封閉泛型直接呼叫 `Evaluate()`，其餘透過顯式 `IFormulaSlot.EvaluateBoxed()` 呼叫輸入。通用 GraphToken 的 OutputSlot 就是 Slot，AP 既有圖沿用同一套同步求值；驗證檢查 Token.ConfigurationError。保留合法 null、保底與 TokenGuard 的 finally 清理。
+- 接收與驗證拒絕 IsObsolete 的 Token。AP 未宣告 TokenType 的原生 Slot 仍可使用通用 GraphToken；共用開圖流程只在工作副本清除確定過時的端點。
 - Property 接收與求值都走 `AcceptsProperty`，以 `property.Slot` 的宣告型別判相容，再直接讀 `CurrentValue`；不求值 Property Slot。寫入仍由 `PropertySlotBase` 嚴格要求同族。
 
 ### 4.2 Action
