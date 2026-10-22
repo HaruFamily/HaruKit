@@ -95,6 +95,7 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 - Action 以 `PropertySlot<TResult, TSlot>` 宣告寫入端（例如 `PropertySlot<string, KeySlot>`），呼叫 `Write(value, tokens)` 替換目前值。欄位用一般內嵌序列化，**不要在封閉泛型欄位上加 `[SerializeReference]`**。泛型約束不會證明 TResult 與 TSlot 的結果型別一致，宣告時要自己配對。
 - 目前值存在非序列化的 `PropertyStore`：每個圖實例一個 root scope，資產呼叫依（資產 × 呼叫節點）建立子 scope。同一位置再次執行沿用舊值。
 - **只有 `InitializeProperties()` 會清空目前值。** `InvalidateValidation()` 只影響編輯與驗證狀態。`DeepCopy()` 不複製執行狀態，複本從未寫入開始。
+- 圖外要改目前值時呼叫 `LogicGraph.WriteProperty(family, name, value)`：以（族, 名稱）找變數庫定義，值須可指派給結果型別，只寫 root scope，失敗回 false。`GraphProperty.SetValue` 只改定義物件上的值，LogicGraph 執行期不讀它。
 - 讀取 Property 只取目前值，不執行寫入它的 Action；寫入端不是求值依賴。
 - `TokenTable.ScopeIdentity` 為 Property scope 的不透明 runtime 身分；同一圖跨次執行及 CreateEvaluationScope 沿用，同資產不同呼叫節點各自獨立。無 Property scope 的手建表有自身身分，延後表沿用該身分；不可序列化此值或把它當作資產 ID。
 

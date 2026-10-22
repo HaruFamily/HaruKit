@@ -876,9 +876,11 @@ public partial class HaruGraphWindow
         // 下鑽走雙擊、換引用對象走本體那列下拉、改名走左欄或Token畫布的標題，都不重複放進右鍵。
 
         // === 1. 轉存 ===
-        // 資產根載體不會被資產格式保存；Token畫布的根載體同理，轉存後那張畫布就空了。
+        // 資產根載體不會被資產格式保存，兩種轉存都不收。
+        // Token畫布的根只擋「轉存為 Token」：轉出來只是讓這個Token改指另一個Token，沒有意義；
+        // 「轉存為資產」就地把根載體換成資產引用，與在主畫布對Token節點轉存是同一件事。
         bool assetRoot = focus.Kind == HGFocusKind.Asset && ReferenceEquals(node.ParentSlot, focus.AssetHostSlot);
-        bool variableRoot = focus.Token != null && ReferenceEquals(node.ParentSlot, focus.Token.Slot);
+        bool variableRoot = IsTokenCanvasRoot(node);
         bool canExtract = !assetRoot && !variableRoot;
 
         // Token節點自己就是Token，沒有「再轉存成Token」這回事。
@@ -891,7 +893,7 @@ public partial class HaruGraphWindow
 
         // 資產要有本體才存得進 SetTarget，所以空 Node 只能轉Token：Obj 為 null 這裡就過不了。
         // 不支援共用資產的圖連這一項都不出現——點得到卻永遠失敗的選單項比沒有更糟。
-        if (canExtract && HasAssetSection && (node.Obj != null || node.IsTokenNode))
+        if (!assetRoot && HasAssetSection && (node.Obj != null || node.IsTokenNode))
             menu.AddItem(new GUIContent("轉存為資產"), false, () => ExtractAsset(node));
         Sep();
 
@@ -1061,6 +1063,11 @@ public partial class HaruGraphWindow
             "轉存", () => ExtractAssetConfirmed(node));
     }
 
+    /// <summary>目前是Token畫布，且這顆節點就是該Token取值欄位直接接的根載體（Union 族為選中分支的根）。</summary>
+    private bool IsTokenCanvasRoot(HGNodeView node)
+        => focus.Token != null && node?.Carrier != null
+           && (ReferenceEquals(node.ParentSlot, focus.Token.Slot) || ReferenceEquals(node.Carrier, focus.Token.Slot?.Node));
+
     /// <summary>轉存的子樹根：Token節點轉存的是它指向的那個Token的內容，不是節點自己。</summary>
     private static GraphNode SubtreeRootOf(HGNodeView node)
         => node == null ? null : (node.IsTokenNode ? node.Token?.Slot?.Node : node.Carrier);
@@ -1072,7 +1079,9 @@ public partial class HaruGraphWindow
         BreakUndoMerge();
 
         // Token節點自己沒有內容：轉存的對象是它指向的那個Token的算式，Token本身留著。
-        if (node.IsTokenNode) { ExtractTokenContentAsset(node); return; }
+        // Token畫布的根就是那份算式本身，走同一條路，Union 族才會重新選分支。
+        if (node.IsTokenNode) { ExtractTokenContentAsset(node.Token); return; }
+        if (IsTokenCanvasRoot(node)) { ExtractTokenContentAsset(focus.Token); return; }
 
         if (node.Obj is not GraphNodeContent source) return;
 
@@ -1088,9 +1097,9 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>把Token的內容轉存成公式資產：Token與所有指著它的節點都不動，只是它的來源換成資產。</summary>
-    private void ExtractTokenContentAsset(HGNodeView node)
+    private void ExtractTokenContentAsset(GraphToken token)
     {
-        var slot = node.Token?.Slot;
+        var slot = token?.Slot;
         var inner = slot?.Node;
         if (inner?.BodyObject is not GraphNodeContent source)
         {

@@ -625,6 +625,28 @@ public sealed class LogicGraphExecutionTests
         Assert.That(pack.Count, Is.EqualTo(1));
     }
 
+    [Test]
+    public async Task WritePropertyFromOutsideIsReadByTheNextRun()
+    {
+        var property = new GraphProperty("Count", new IntSlot(0), true);
+        var graph = new LogicGraph<Timing, Pack>();
+        graph.Properties.Add(property);
+        graph.ActionGroups.Add(new ActionTimingGroup<Timing, Pack>
+        {
+            Timing = Timing.Run,
+            Actions = new() { Slot(new GraphNode(new ReadProperty { Input = PropertyInput(property) })) },
+        });
+        graph.MarkValidated();
+
+        Assert.That(graph.WriteProperty(typeof(IntSlot), "Count", 5), Is.True);
+        Assert.That(graph.WriteProperty(typeof(IntSlot), "Count", "5"), Is.False, "值型別不符不可寫入。");
+        Assert.That(graph.WriteProperty(typeof(IntSlot), "Missing", 1), Is.False);
+
+        var pack = new Pack();
+        await graph.TriggerAction(Timing.Run, pack);
+        Assert.That(pack.Count, Is.EqualTo(5));
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public async Task SharedAssetPropertiesAreScopedByCallingNode(bool addedAfterFirstRun)

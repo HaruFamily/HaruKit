@@ -176,6 +176,26 @@ where TTiming : Enum
     // 清的是 scope 裡的值而不是 store 本身，已經拿到 scope 的 TokenTable 才會一起回到未寫入狀態。
     public void InitializeProperties() => propertyStore?.Initialize();
 
+    /// <summary>
+    /// 從圖外以（族, 名稱）替換本圖變數庫 Property 的目前值；查無同族同名定義或值型別不符時回 false。
+    /// 只寫圖實例的 root scope，Asset 呼叫位置各自的 Property 不受影響。
+    /// </summary>
+    public bool WriteProperty(Type family, string name, object value)
+    {
+        if (family == null || string.IsNullOrEmpty(name)) return false;
+        GraphProperty target = null;
+        foreach (GraphProperty property in Properties)
+        {
+            if (property == null || property.FamilyType != family || !string.Equals(property.Name, name, StringComparison.Ordinal)) continue;
+            target = property;
+            break;
+        }
+        Type type = target?.ResultType;
+        if (type == null) return false;
+        if (value == null ? type.IsValueType : !type.IsInstanceOfType(value)) return false;
+        return (propertyStore ??= new PropertyStore()).Root(Properties).Write(target, value);
+    }
+
     private bool EnsureRuntimeValidation()
     {
         if (!runtimeValidationChecked)
