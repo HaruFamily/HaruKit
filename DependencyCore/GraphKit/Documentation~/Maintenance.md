@@ -1,4 +1,4 @@
-# GraphKit 維護手冊
+﻿# GraphKit 維護手冊
 
 給 AI Agent 與維護者。修改、擴充 GraphKit，或在使用端串接它之前先讀完本檔，並遵守其中的規則。
 
@@ -360,6 +360,24 @@ private List<int> levelCounts;
 
 ### 6.3 提交安全與遺失型別
 
+#### 唯讀文件快照
+
+非視窗 Agent 使用 `TryOpenPreservingOwner`，除了 Unity missing types 也拒絕 `HGMissingTypeCleanup.HasLostContent`，完全跳過 Owner 清理；副本仍沿用 Token 清理。原本 TryOpen 不改行為。`CommitAssetPreservingOwner` 要求持久 Owner、版本檢查通過且來源／草稿沒有遺失內容，只保存 Owner 所屬資產檔案，包含同檔子資產，不呼叫全域 SaveAssets。提交前先複製撤銷驗證後的持久內容作為後續隔離草稿，成功再採納；失敗保留草稿／歷程。呼叫端仍須檢查整檔基線、Dirty、同檔視窗草稿及磁碟變動，不能將此核心方法當成完整外部交易協定。
+
+`HGDocumentSession.FindInlineBody(nodeId)` 供命令端以既有載體 ID 解析當前工作副本的 inline body；空／不存在／非 inline 回 null，重複 ID 拒絕。走序列化欄位，不補 ID、不經 lazy getter、不進外部 Unity 資產，上限 20000 物件／200000 欄位與清單元素。Undo／Redo 會更換副本，呼叫端必須檢查 generation 後重新解析，不能重用上次 body。修改仍須經 EditValue 等 session 命令，而非直接寫入找到的物件。
+
+現有視窗可用 `TryGetDocumentInspectionInfo` 取得綁定 Owner、binding DocumentId 與文件 Dirty，再用 `CaptureDocumentSnapshot` 擷取完整 `HGModel.Data`，Source 為 `window_working_copy`。不呼叫 EnsureGraph、不開啟／切換 session、不依賴可見畫布；沒有綁定文件時回 null。此入口不包含下鑽共用資產的獨立草稿，也不把 binding ID 當作資產欄位探索 ID。消費端自行限制 Editor 狀態、檢查 Owner missing types，快照不能當成可寫 handle 或提交版本。
+
+`HGDocumentInspection.Capture(document, source)` 接受 `IGraphDocument` 或 `IGraphAsset`，產生與來源脫離的 `HGDocumentSnapshot`。它透過既有 `HGReflect.Fields` 讀序列化欄位，不開 session、不呼叫文件 getter／Verify／DeepCopy、不清理型別或 Token、不補 ID、不寫回。包含隱藏欄位、候選池、全部庫、清單順序與版面資料，不受目前畫布焦點／可見性限制。
+
+Records 是正規化物件表，reference 欄位以 snapshot-local Key 指向同一表，共用與循環保留；StableId 另帶原始節點／Token／Property ID。Key 不能跨快照當成穩定識別。Action／Formula 依 GraphKit shape 分類，其他內容保留實際組件限定型別及宣告欄位名。此為序列化結構檢視，不包含 metadata provider 的衍生呈現或執行期狀態，也不是接線可編輯 handle。
+
+每筆記錄的 Label／Description 使用 HGReflect 的既有型別名稱及說明規則；它們描述該記錄的型別，不取代節點引用的 Token／Property 名稱。搜尋或分類應保留 Key 與 Type，不能只依顯示名稱定位。
+
+Unity 物件引用只回 GUID／local ID／path（非持久物件回 instance ID），不遞迴擷取外部資產。null 與空清單不同；超出物件／欄位／文字上限、不支援值或讀取失敗時 Complete=false 並附擷取診斷。呼叫端須另外檢查 Owner 的 missing managed-reference types；無法還原的內容不可稱完整。擷取診斷不代表結構驗證或玩法測試。
+
+`DocumentFields` 僅探索直接序列化的 IGraphDocument 欄位；FieldKey 使用宣告型別＋欄位名稱避免繼承遮蔽。自訂 binding 由使用端自行解析。Source 必須由呼叫端如實標示 owner memory 或 working copy，不能將 Editor 記憶體冒充磁碟版本。快照 DTO 不保留 live graph 參照，呼叫端可獨立傳輸、分頁及計算指紋。
+
 - 提交順序：遺失型別清理 → DeepCopy → 撤銷過期驗證 → 版本檢查 → 寫回。衝突、複製或寫入失敗不清除 Dirty；內容驗證錯誤不阻擋保存。
 - 文件引用被其他入口替換時回 `Conflict`，保留工作副本與歷程。
 - 遺失的 SerializeReference 型別在開圖、手動驗證、提交前自動清理，不備份、不詢問，只改記憶體並標記 Dirty。清理依 Unity 的 missing managed-reference ID 和序列化位置定位；Unity 回報 `-2` 時唯讀查詢 Owner 的 YAML `rid` 連結。**不可擴大成「刪掉所有 null」或「斷開所有不相容線」**。清理完成後可保存未完成內容；無法安全定位／清理仍拒絕提交。
@@ -442,3 +460,21 @@ private List<int> levelCounts;
 - 手勢、IMGUI 版面、資產序列化來回，自動測試涵蓋不到，要在 Unity 實際操作確認。**沒有實際執行的測試不可回報為通過。**
 
 > Trace: verified 2026-10-29 · doc `Doc/2026-10-2/DECISION_Property單一模型與資料保留.md`（原始碼靜態核對；使用者確認本輪 TestRunner 修正，驗證範圍見決策文件）
+
+### 非視窗 Session 的結構診斷
+
+`HGDocumentSession.ValidateStructure()` 複製目前文件，以不經 Bind／Reload 的 HGModel 診斷視圖執行 HGValidator，再收集 context 的文件與 provider 診斷。Owner 僅供唯讀脈絡；擴充不得改寫 Owner 或引用資產。此方法不清理、不呼叫 Verify、不保存，不改變草稿 generation／Dirty／Undo；例外轉為錯誤診斷。它不包含畫布重建的 metadata／port 診斷與玩法執行，亦不改變允許保存未完成圖的提交契約。
+
+### 非視窗 Session 的組圖命令
+
+`HGDocumentSession.Authoring` 提供 CreateNode、定義庫 CRUD／Property 設定、Slot fallback 與可變 Slot 清單、root adapter CRUD、基本版面 Group 操作。命令共用 Apply 的單步快照回復／Undo，庫命名、複製及刪除引用語意沿用 HGModel。模型的 CreateDetachedView 只接管傳入的隔離副本，不 Bind／Reload、不清理 Owner、不自己記歷程；不得把 Owner 正本傳進後再執行命令。
+
+每個命令的既有物件參數必須屬於目前草稿，成功及 mutation 回復後須重取 generation／引用。新節點放入文件候選池，由呼叫者明確 Connect。Slot 清單限 List<具體 GraphSlotBase>，不接受一般庫或任意 IList；移除保留失去使用者的來源。Group 使用 Root／Token 的合法 scope、同 scope 成員互斥，純版面 Apply 不使內容驗證失效；提交規則不變。
+
+### 獨立資產的文件轉接
+
+Editor-only `IEditableGraphAsset` 以 `GraphAssetEditState` 提供借用狀態：Input、Orphans、Tokens、Properties、ViewState、HEAD 座標。Capture 不得初始化或清理，Apply 必須先驗證再以同一組引用指派，不得保存或修改舊狀態／其他資產。一般 IGraphAsset 不自動獲得寫入能力。
+
+`HGAssetDocument` 是不寫進資產的工作文件，整包一次 DeepCopy 保留共享；`HGAssetDocumentBinding` 要求整資產 revision，保留一個來源 envelope 身分。寫入後驗證各部分是否保留傳入引用；失敗將 envelope 設為無效，讓 HGDocumentCommitGuard 必須回復舊狀態並核對，不能只憑原 envelope 未換就誤判已還原。讀回的 source envelope 僅供版本比較，不可直接編輯。
+
+資產根輸入固定，結構診斷共用 RunSubtree；群組 scope 為資產及其 Token 原有焦點 Id。Slot default 命令依 DefaultEditType，而非求值 ResultType。呼叫端仍須設計引用者驗證失效、磁碟與視窗衝突策略；這個轉接不提供跨資產原子提交。

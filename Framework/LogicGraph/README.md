@@ -1,4 +1,4 @@
-# LogicGraph
+﻿# LogicGraph
 
 目前套件版本：`2.0.0`（Unity 2021.3 以上）。
 
@@ -9,6 +9,8 @@
 LogicGraph 是用來編寫與執行序列化 Action 圖的框架：依時機分派非同步動作、型別化公式、具名 Token、可重用的圖資產、Property、驗證、深層複製，以及描述編譯。它**不定義領域型別、時機值或節點行為**，這些由使用端提供。
 
 ## 功能
+
+- Editor 提供 `IEditableGraphAsset` 隔離編輯契約，完整保留資產輸入、庫與版面；保存與跨資產影響由呼叫端管理。
 
 - `LogicGraph<TTiming, TPack>` 依使用端定義的時機 enum 與執行上下文分派非同步動作。
 - 時機 enum 可標 `[HGLabel("顯示名稱")]`，同步改變節點標題、下拉與新增選單；執行仍使用 enum 值。完整規則見維護手冊 §3.1。

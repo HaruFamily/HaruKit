@@ -96,6 +96,28 @@ public partial class HaruGraphWindow : IHasCustomMenu
     public HGWindowSession GetDocumentCommands()
         => model == null ? null : new HGWindowSession(this, model);
 
+    /// <summary>Reads the bound document identity without rebuilding the canvas or opening a session.</summary>
+    public bool TryGetDocumentInspectionInfo(out UnityEngine.Object owner, out string documentId, out bool dirty)
+    {
+        owner = model?.Owner;
+        documentId = model?.DocumentId;
+        dirty = model != null && model.Dirty;
+        return owner != null && model.Data != null;
+    }
+
+    /// <summary>Reads the independent shared-asset transaction without entering or rebuilding its focus.</summary>
+    public bool TryGetAssetInspectionInfo(out UnityEngine.Object asset, out bool dirty)
+    {
+        asset = focus?.Kind == HGFocusKind.Asset ? focus.AssetObject : null;
+        dirty = asset != null && assetDirty;
+        return asset != null;
+    }
+
+    /// <summary>Captures the entire bound document draft, not a shared-asset focus or visible canvas.</summary>
+    public HGDocumentSnapshot CaptureDocumentSnapshot()
+        => model?.Owner != null && model.Data != null
+            ? HGDocumentInspection.Capture(model.Data, "window_working_copy") : null;
+
     /// <summary>供 Tool 的結果面板沿用目前工作副本，避免定位節點時重新綁定而丟失編輯。</summary>
     public bool IsBoundToDocument(UnityEngine.Object owner, string documentId)
         => model != null && model.Owner == owner && model.DocumentId == documentId;

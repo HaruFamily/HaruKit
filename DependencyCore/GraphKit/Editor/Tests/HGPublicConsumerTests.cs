@@ -10,6 +10,49 @@ using UnityEngine;
 public sealed class HGPublicConsumerTests
 {
     [Test]
+    public void InterfaceTypedDraftClonesDocumentAndKeepsOwnerUnchanged()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            string original = JsonUtility.ToJson(owner.B);
+            bool writeCalled = false;
+            var binding = new HGDocumentBinding<IGraphDocument>("draft-test", target => ((ConsumerOwner)target).B,
+                (_, _) => { writeCalled = true; throw new InvalidOperationException("Persistence disabled."); });
+            Assert.That(HGDocumentSession<IGraphDocument>.TryOpen(owner, binding, out var session), Is.True);
+            var copy = (ConsumerDocument)session.Document;
+            Assert.That(copy, Is.Not.SameAs(owner.B));
+            Assert.That(copy.Root.Items[0], Is.Not.SameAs(owner.B.Root.Items[0]));
+            string nodeId = copy.Orphans[0].Id;
+            StringAssert.Contains(nodeId, original, "The fixture's orphan nodes must be part of Unity's serialized document.");
+            var originalDraftBody = copy.Orphans[0].BodyObject;
+            var registry = session.CreatePortRegistry();
+            var key = new HGPortKey("root", "/input", HGPortRole.Input);
+            registry.AddInput(key, copy.Root.Items[0], AcceptsSource(copy.Root.Items[0]), ConsumerPresentation());
+            Assert.That(session.ReconnectInput(registry, key, Source(copy.Orphans[0])), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(JsonUtility.ToJson(owner.B), Is.EqualTo(original));
+            Assert.That(writeCalled, Is.False);
+            Assert.That(session.Generation, Is.EqualTo(1));
+            Assert.That(session.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(((ConsumerDocument)session.Document).Root.Items[0].Node, Is.Null);
+            Assert.That(JsonUtility.ToJson(owner.B), Is.EqualTo(original));
+            var body = (ConsumerBody)session.FindInlineBody(nodeId);
+            Assert.That(body, Is.Not.Null);
+            Assert.That(body, Is.Not.SameAs(originalDraftBody), "Undo replaces the draft; lookup must resolve the new body.");
+            var field = HGFieldDescriptor.Create<ConsumerBody, ConsumerPercent>("Percent", value => value.Percent,
+                (value, next) => value.Percent = next);
+            Assert.That(session.EditValue(body, field, new ConsumerPercent(0.25f)), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(((ConsumerBody)session.FindInlineBody(nodeId)).Percent.Value, Is.EqualTo(0.25f));
+            Assert.That(JsonUtility.ToJson(owner.B), Is.EqualTo(original));
+            var current = (ConsumerDocument)session.Document;
+            current.Orphans.Add(GraphDeepCopy.Copy(current.Orphans[0]));
+            Assert.Throws<InvalidOperationException>(() => session.FindInlineBody(nodeId));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
     public void DeepCopyCanKeepPropertyDefinitionsShared()
     {
         var property = new GraphProperty("Value", new ConsumerFormulaSlot());
@@ -45,7 +88,20 @@ public sealed class HGPublicConsumerTests
             Assert.That(commands.Disconnect(before.Generation, provider.Input), Is.EqualTo(HGSessionCommandResult.StaleGeneration));
             Assert.That(commands.EditValue(connected.Generation, sourceId, "/Percent", new ConsumerPercent(0.75f)),
                 Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(window.TryGetDocumentInspectionInfo(out var inspectedOwner, out string inspectedId, out bool dirty), Is.True);
+            Assert.That(inspectedOwner, Is.SameAs(owner));
+            Assert.That(inspectedId, Is.EqualTo(Binding().DocumentId));
+            Assert.That(dirty, Is.True);
+            string ownerBeforeInspection = JsonUtility.ToJson(owner.B);
+            var draft = window.CaptureDocumentSnapshot();
+            Assert.That(draft.Source, Is.EqualTo("window_working_copy"));
+            Assert.That(draft.Complete, Is.True, string.Join("\n", draft.Diagnostics));
+            Assert.That(System.Linq.Enumerable.Any(draft.Records, record => record.StableId == sourceId), Is.True);
+            Assert.That(JsonUtility.ToJson(owner.B), Is.EqualTo(ownerBeforeInspection));
+            Assert.That(owner.B.Root.Items[0].Node, Is.Null, "Inspection must not commit the draft connection.");
+            string detachedDraft = JsonUtility.ToJson(draft);
             Assert.That(commands.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(JsonUtility.ToJson(draft), Is.EqualTo(detachedDraft), "Captured data must survive subsequent draft edits unchanged.");
             Assert.That(commands.Redo(), Is.EqualTo(HGSessionCommandResult.Changed));
             provider.Reject = true;
             var liveErrors = commands.Validate();
@@ -1201,8 +1257,8 @@ public sealed class HGPublicConsumerTests
         [SerializeField] private GraphViewState viewState = new();
         public GraphViewState ViewState => viewState;
         public ConsumerRoot Root = new ConsumerRoot();
-        private List<GraphNode> orphans = new List<GraphNode>();
-        private List<GraphToken> tokens = new List<GraphToken>();
+        [SerializeReference] private List<GraphNode> orphans = new List<GraphNode>();
+        [SerializeReference] private List<GraphToken> tokens = new List<GraphToken>();
         private bool rejectValidation;
         public List<GraphNode> Orphans => orphans;
         public List<GraphToken> Tokens => tokens;
@@ -1250,7 +1306,7 @@ public sealed class HGPublicConsumerTests
     [Serializable]
     private sealed class ConsumerSlot : GraphSlotBase
     {
-        private GraphNode node;
+        [SerializeReference] private GraphNode node;
         public override GraphNode Node => node;
         public override void SetNode(GraphNode value) => node = value;
         public override bool AcceptsBody(GraphNodeContent value) => value is ConsumerBody;
@@ -1259,7 +1315,7 @@ public sealed class HGPublicConsumerTests
     [Serializable]
     private sealed class ConsumerFormulaSlot : FormulaSlotBase
     {
-        private GraphNode node;
+        [SerializeReference] private GraphNode node;
 
         public override GraphNode Node => node;
         public override Type ResultType => typeof(object);

@@ -1,4 +1,4 @@
-# LogicGraph 維護手冊
+﻿# LogicGraph 維護手冊
 
 給 AI Agent 與維護者。修改 LogicGraph、新增 Action／Formula／公式族，或在使用端串接它之前先讀完本檔，並遵守其中的規則。
 
@@ -89,6 +89,12 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 - 資產建立自己的 child `TokenTable`，資產內容讀不到呼叫端的 Token，只有 binding 在呼叫端求值。
 - 遞迴解析由 `TokenTable` 擋下，回預設值並警告。
 - `TokenTable.CreateEvaluationScope(cancellationToken)` 用於延後求值：複製 Token／資產 binding 對照與 caller scope 鏈，沿用相同 PropertyScope，目前值保持即時。每次建立獨立的循環集合與取消 token，不沿用原執行的 observer session／Hold／取消狀態。此入口不延長使用端物件的生命週期；使用端須管理登記、回收、操作取消及等待後的身分檢查，不能直接重用已結束時機的 TokenTable 執行狀態。
+
+### 資產的隔離編輯契約
+
+Editor 編譯時，ActionAssetBase 與 FormulaAssetBase 提供 GraphKit 的 IEditableGraphAsset。CaptureEditorState 僅回傳既有狀態引用，呼叫者一次深複製整包；ApplyEditorState 先檢查輸入契約，再指派 Input／根載體、三個庫、ViewState 與 HEAD 位置，不自行保存或執行。Formula 的 TInput 限制照常生效；Action 只接受空根或本 Pack 的 inline Action。Action Capture 不使用會補載體的 Root getter，舊 _action 尚有內容時拒絕，不自動轉換。
+
+這些方法不更動序列化欄位名稱，也不處理引用者的跨資產交易。新 Provider 須遵守 GraphKit 維護手冊的完整狀態與失敗回復契約；既有視窗存檔入口維持原流程。
 
 ### 3.5 Property
 

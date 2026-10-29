@@ -1,4 +1,4 @@
-namespace HaruFamily.DependencyCore.GraphKit.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -172,6 +172,17 @@ public class HGModel
         AvailableRootKeys = this.rootAdapter.RootKeys(Doc, owner);
         return true;
     }
+
+    /// <summary>Builds a view over an already isolated copy without binding, cleanup, tracking, or Owner writes.</summary>
+    internal static HGModel CreateDetachedView(UnityEngine.Object owner, IGraphDocument copy, IHGRootAdapter adapter)
+        => new HGModel
+        {
+            Owner = owner,
+            Data = copy ?? throw new ArgumentNullException(nameof(copy)),
+            PackType = copy.PackType,
+            rootAdapter = adapter ?? HGDocumentRootAdapter.Instance,
+            TrackChanges = false,
+        };
 
     /// <summary>Switches the session root contract after its Tool context has been resolved.</summary>
     public void SetRootAdapter(IHGRootAdapter adapter)

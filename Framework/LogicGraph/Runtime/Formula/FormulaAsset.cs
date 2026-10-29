@@ -8,6 +8,9 @@ using HaruFamily.DependencyCore.GraphKit;
 
 // 非泛型 base：給 Editor walker 不必反射就能取根節點與候選池。
 public abstract class FormulaAssetBase : ScriptableObject, IFormulaGraphAsset, IPropertyOwner, IGraphViewStateOwner
+#if UNITY_EDITOR
+    , IEditableGraphAsset
+#endif
 {
     /// <summary>本資產的候選節點清單。僅視覺化編輯器使用。</summary>
     public abstract List<GraphNode> Orphans { get; }
@@ -50,6 +53,20 @@ public abstract class FormulaAssetBase : ScriptableObject, IFormulaGraphAsset, I
     GraphViewState IGraphViewStateOwner.ViewState => _viewState ??= new GraphViewState();
 
 #if UNITY_EDITOR
+    public virtual GraphAssetEditState CaptureEditorState() => throw new NotSupportedException("This Formula asset has no isolated editing implementation.");
+    public virtual void ApplyEditorState(GraphAssetEditState state) => throw new NotSupportedException("This Formula asset has no isolated editing implementation.");
+    protected void CaptureEditorLayout(GraphAssetEditState state)
+    {
+        state.ViewState = _viewState;
+        state.HeadPosition = _headPos;
+        state.HasHeadPosition = _hasHeadPos;
+    }
+    protected void ApplyEditorLayout(GraphAssetEditState state)
+    {
+        _viewState = state.ViewState;
+        _headPos = state.HeadPosition;
+        _hasHeadPos = state.HasHeadPosition;
+    }
     internal abstract object EditorGetTargetObject();
 #endif
 }
@@ -105,6 +122,25 @@ public abstract class FormulaAssetBase<T, TPack> : FormulaAssetBase
     public override object ContentObject => Input;
 
 #if UNITY_EDITOR
+    public sealed override GraphAssetEditState CaptureEditorState()
+    {
+        var state = new GraphAssetEditState { Input = Input, Orphans = _orphans, Tokens = _endpoints, Properties = _properties };
+        CaptureEditorLayout(state);
+        return state;
+    }
+
+    public sealed override void ApplyEditorState(GraphAssetEditState state)
+    {
+        state.RequireComplete();
+        if (state.Input is not FormulaSlotBase input) throw new ArgumentException("Formula asset requires a Formula input.");
+        // The declared TInput contract validates before assigning; all following assignments are non-throwing.
+        SetInput(input);
+        _orphans = state.Orphans;
+        _endpoints = state.Tokens;
+        _properties = state.Properties;
+        ApplyEditorLayout(state);
+    }
+
     public void SetRoot(GraphNode root) => Input.SetNode(root);
     public void SetTarget(GraphNodeContent target) => SetRoot(target == null ? null : new GraphNode(target));
     internal override object EditorGetTargetObject() => Input;

@@ -11,6 +11,61 @@ using HaruFamily.DependencyCore.GraphKit;
 public class GraphDeepCopyTests
 {
     [Test]
+    public void FormulaAssetEditorStateClonesInputLibrariesAndLayoutTogether()
+    {
+        var asset = ScriptableObject.CreateInstance<TestFormulaAsset>();
+        try
+        {
+            var property = new GraphProperty("P", new TestSlot(7));
+            asset.Properties.Add(property);
+            var node = new GraphNode(); node.SetProperty(property); node.EnsureId();
+            asset.RootInput.SetNode(node);
+            asset.Pos = new Vector2(5, 9);
+            var state = asset.CaptureEditorState();
+            var copy = GraphDeepCopy.Copy(state);
+            Assert.That(copy.Input.Node.Property, Is.SameAs(copy.Properties[0]));
+            Assert.That(copy.Input.Node.Property, Is.Not.SameAs(property));
+            copy.Properties[0].Name = "Edited";
+            copy.ViewState.AddNodeGroup(new GraphNodeGroup("asset-test", "", new Rect(1, 2, 3, 4), 0));
+            Assert.That(asset.Properties[0].Name, Is.EqualTo("P"));
+            asset.ApplyEditorState(copy);
+            Assert.That(asset.Input, Is.SameAs(copy.Input));
+            Assert.That(asset.Root.Property, Is.SameAs(asset.Properties[0]));
+            Assert.That(((IGraphViewStateOwner)asset).ViewState, Is.SameAs(copy.ViewState));
+            Assert.That(asset.Pos, Is.EqualTo(new Vector2(5, 9)));
+            var invalid = GraphDeepCopy.Copy(copy);
+            invalid.Input = new ActionSlot<TestPack>();
+            Assert.Throws<ArgumentException>(() => asset.ApplyEditorState(invalid));
+            Assert.That(asset.Input, Is.SameAs(copy.Input));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(asset); }
+    }
+
+    [Test]
+    public void ActionAssetEditorStateRejectsInvalidRootBeforeChangingAnyFields()
+    {
+        var asset = ScriptableObject.CreateInstance<TestActionAsset>();
+        try
+        {
+            asset.SetRoot(new GraphNode(new EvaluateTwice { Value = new TestSlot(3) }));
+            var before = asset.CaptureEditorState();
+            var copy = GraphDeepCopy.Copy(before);
+            asset.ApplyEditorState(copy);
+            Assert.That(asset.Root, Is.SameAs(copy.Input.Node));
+            Assert.That(asset.Orphans, Is.SameAs(copy.Orphans));
+            Assert.That(asset.Root, Is.Not.SameAs(before.Input.Node));
+            var invalid = GraphDeepCopy.Copy(copy);
+            var property = new GraphProperty("P", new TestSlot());
+            var node = new GraphNode(); node.SetProperty(property);
+            invalid.Input.SetNode(node);
+            Assert.Throws<ArgumentException>(() => asset.ApplyEditorState(invalid));
+            Assert.That(asset.Root, Is.SameAs(copy.Input.Node));
+            Assert.That(asset.Properties, Is.SameAs(copy.Properties));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(asset); }
+    }
+
+    [Test]
     public void Copy_ClonesGraphAndPreservesReferences()
     {
         var asset = ScriptableObject.CreateInstance<CloneAsset>();
@@ -369,6 +424,7 @@ public class GraphDeepCopyTests
 
     [Serializable] private sealed class TestToken : FormulaToken<int, TestSlot, TestPack> { }
     private sealed class TestFormulaAsset : FormulaAsset<int, TestSlot, TestPack> { }
+    private sealed class TestActionAsset : ActionAssetBase<TestPack> { }
 
     [Serializable]
     private sealed class CountingFormula : TestFormula

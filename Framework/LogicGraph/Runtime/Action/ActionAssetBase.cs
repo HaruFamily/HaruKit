@@ -7,6 +7,9 @@ using UnityEngine;
 using HaruFamily.DependencyCore.GraphKit;
 
 public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAsset, IPropertyOwner, IGraphViewStateOwner
+#if UNITY_EDITOR
+    , IEditableGraphAsset
+#endif
 {
     // 根內容的載體。存 GraphNode 而不是裸 Action，根節點才有地方放 Id／座標／備註／停用旗標，
     // 跟圖上其他節點同一套規則；只存裸內容時每次開畫布都要現包一顆，位置永遠留不住。
@@ -112,6 +115,32 @@ public abstract class ActionAssetBase<TPack> : ScriptableObject, IActionGraphAss
     public void ClearPos() { _hasHeadPos = false; _headPos = Vector2.zero; }
 
 #if UNITY_EDITOR
+    public GraphAssetEditState CaptureEditorState()
+    {
+        // Do not call Root: its legacy fallback changes the source while reading.
+        if (_action != null) throw new InvalidOperationException("Legacy Action content must be resolved before opening an isolated asset draft.");
+        var input = new ActionSlot<TPack>();
+        input.SetNode(_root);
+        return new GraphAssetEditState { Input = input, Orphans = _orphans, Tokens = _endpoints,
+            Properties = _properties, ViewState = _viewState, HeadPosition = _headPos, HasHeadPosition = _hasHeadPos };
+    }
+
+    public void ApplyEditorState(GraphAssetEditState state)
+    {
+        state.RequireComplete();
+        if (state.Input is not ActionSlot<TPack>) throw new ArgumentException("Action asset input type does not match.");
+        var root = state.Input.Node;
+        if (root != null && root.Kind != NodeKind.Empty && (root.Kind != NodeKind.Inline || root.BodyObject is not ActionBase<TPack>))
+            throw new ArgumentException("Action asset root must be an inline Action of the declared pack.");
+        _root = root;
+        _orphans = state.Orphans;
+        _endpoints = state.Tokens;
+        _properties = state.Properties;
+        _viewState = state.ViewState;
+        _headPos = state.HeadPosition;
+        _hasHeadPos = state.HasHeadPosition;
+    }
+
     /// <summary>寫回根節點（視覺化編輯器存檔）。寫進新格式並清掉舊欄位，同一份內容不會有兩個來源。</summary>
     public void SetRoot(GraphNode root)
     {

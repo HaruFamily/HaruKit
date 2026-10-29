@@ -1,4 +1,4 @@
-namespace HaruFamily.DependencyCore.GraphKit.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -26,7 +26,7 @@ public enum HGSessionCommandResult
 /// A session edits a cloned document. Missing-type cleanup may sanitize Owner memory; only <see cref="Commit"/> persists edits.
 /// Failed setters are compensated by restoring the selected document reference; uncertain recovery blocks further commits.
 /// </summary>
-public sealed class HGDocumentSession<TDocument>
+public sealed partial class HGDocumentSession<TDocument>
     where TDocument : class, IGraphDocument
 {
     private readonly HGDocumentBinding<TDocument> binding;
@@ -60,6 +60,15 @@ public sealed class HGDocumentSession<TDocument>
 
     public static bool TryOpen(Object owner, HGDocumentBinding<TDocument> binding, HGEditorExtensionContext context,
         out HGDocumentSession<TDocument> session, out GraphDiagnostic diagnostic)
+        => TryOpenCore(owner, binding, context, false, out session, out diagnostic);
+
+    /// <summary>Opens an isolated copy but refuses any missing-content cleanup on Owner.</summary>
+    public static bool TryOpenPreservingOwner(Object owner, HGDocumentBinding<TDocument> binding,
+        out HGDocumentSession<TDocument> session, out GraphDiagnostic diagnostic)
+        => TryOpenCore(owner, binding, HGEditorExtensionContext.Default, true, out session, out diagnostic);
+
+    private static bool TryOpenCore(Object owner, HGDocumentBinding<TDocument> binding, HGEditorExtensionContext context,
+        bool preserveOwner, out HGDocumentSession<TDocument> session, out GraphDiagnostic diagnostic)
     {
         session = null;
         diagnostic = null;
@@ -67,6 +76,8 @@ public sealed class HGDocumentSession<TDocument>
         {
             if (owner == null || binding == null) throw new InvalidOperationException("Owner and binding are required.");
             binding.TryRead(owner, out IGraphDocument live);
+            if (preserveOwner && (SerializationUtility.HasManagedReferencesWithMissingTypes(owner) || HGMissingTypeCleanup.HasLostContent(live)))
+                throw new InvalidOperationException("Owner has missing graph content; opening without cleanup was requested.");
             var commitGuard = new HGDocumentCommitGuard(owner, binding, live);
             if (live == null && !binding.TryCreate(out live))
                 throw new InvalidOperationException("The document could not be read or created.");
@@ -74,7 +85,8 @@ public sealed class HGDocumentSession<TDocument>
                 throw new InvalidOperationException("Clone must return an isolated document of the bound type.");
             context ??= HGEditorExtensionContext.Default;
             if (!context.Supports(owner, document)) throw new InvalidOperationException("The provider does not support this document.");
-            if (!commitGuard.TryCleanMissingTypes(null, out bool cleaned, out diagnostic)) return false;
+            bool cleaned = false;
+            if (!preserveOwner && !commitGuard.TryCleanMissingTypes(null, out cleaned, out diagnostic)) return false;
             if (cleaned)
             {
                 if (binding.TryRead(owner, out var cleanedLive) && cleanedLive != null) live = cleanedLive;
@@ -187,11 +199,25 @@ public sealed class HGDocumentSession<TDocument>
     }
 
     public HGSessionCommandResult Commit()
-        => Guard(CommitCore, HGSessionCommandResult.WriteFailed);
+        => Guard(() => CommitCore(false), HGSessionCommandResult.WriteFailed);
 
-    private HGSessionCommandResult CommitCore()
+    /// <summary>Persists only this Owner asset file and refuses automatic missing-content cleanup.</summary>
+    public HGSessionCommandResult CommitAssetPreservingOwner()
+        => Guard(() => CommitCore(true), HGSessionCommandResult.WriteFailed);
+
+    private HGSessionCommandResult CommitCore(bool assetOnly)
     {
-        if (!commitGuard.TryCleanMissingTypes(Document, out bool cleaned, out var cleanupFailure))
+        if (assetOnly)
+        {
+            if (Owner == null || !AssetDatabase.Contains(Owner)) return HGSessionCommandResult.Rejected;
+            LastDiagnostic = commitGuard.Check();
+            if (LastDiagnostic != null) return HGDocumentCommitGuard.ResultOf(LastDiagnostic);
+            binding.TryRead(Owner, out var live);
+            if (HGMissingTypeCleanup.HasLostContent(live) || HGMissingTypeCleanup.HasLostContent(Document))
+                return HGSessionCommandResult.ValidationFailed;
+        }
+        bool cleaned = false;
+        if (!assetOnly && !commitGuard.TryCleanMissingTypes(Document, out cleaned, out var cleanupFailure))
         {
             LastDiagnostic = cleanupFailure;
             return HGDocumentCommitGuard.ResultOf(cleanupFailure);
@@ -207,6 +233,8 @@ public sealed class HGDocumentSession<TDocument>
         if (LastDiagnostic != null) return HGDocumentCommitGuard.ResultOf(LastDiagnostic);
         if (!TryClone(Document, out TDocument toStore)) return HGSessionCommandResult.WriteFailed;
         toStore.InvalidateValidation();
+        TDocument continued = Document;
+        if (assetOnly && !TryClone(toStore, out continued)) return HGSessionCommandResult.WriteFailed;
         if (!commitGuard.TryWrite(toStore, out var failure))
         {
             LastDiagnostic = failure;
@@ -215,7 +243,9 @@ public sealed class HGDocumentSession<TDocument>
         EditorUtility.SetDirty(Owner);
         if (Owner is Component component && component.gameObject.scene.IsValid())
             EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
-        AssetDatabase.SaveAssets();
+        if (assetOnly) AssetDatabase.SaveAssetIfDirty(Owner);
+        else AssetDatabase.SaveAssets();
+        if (assetOnly) Document = continued;
         // Keep the editing copy isolated from the instance passed to the Owner setter.
         undo.Clear();
         redo.Clear();
@@ -315,6 +345,54 @@ public sealed class HGDocumentSession<TDocument>
             RemoveFromOrphanPools(next);
             ReturnUnreferenced(previous, orphanPool);
         });
+    }
+
+    /// <summary>Resolves a unique inline carrier ID through serialized draft data without lazy getters or external assets.</summary>
+    public GraphNodeContent FindInlineBody(string nodeId)
+    {
+        if (string.IsNullOrEmpty(nodeId)) return null;
+        GraphNode match = null;
+        foreach (object current in InspectObjects())
+            if (current is GraphNode node && node.Id == nodeId)
+            {
+                if (match != null) throw new InvalidOperationException("Duplicate node IDs; the target is ambiguous.");
+                match = node;
+            }
+        return match != null && match.Kind == NodeKind.Inline ? match.BodyObject : null;
+    }
+
+    /// <summary>Generation-local objects for command adapters. No lazy getters or external asset traversal.</summary>
+    public IReadOnlyList<object> InspectObjects()
+    {
+        var result = new List<object>();
+        var visited = new HashSet<object>(ReferenceComparer.Instance);
+        var pending = new Queue<object>();
+        pending.Enqueue(Document);
+        int edges = 0;
+        while (pending.Count > 0)
+        {
+            object current = pending.Dequeue();
+            if (current == null || current is UnityEngine.Object || current is string) continue;
+            Type type = current.GetType();
+            if (type.IsPrimitive || type.IsEnum || type == typeof(decimal) || !visited.Add(current)) continue;
+            if (visited.Count > 20000) throw new InvalidOperationException("Draft node lookup exceeded its object limit.");
+            result.Add(current);
+            if (current is IList list)
+            {
+                foreach (object item in list)
+                {
+                    if (++edges > 200000) throw new InvalidOperationException("Draft node lookup exceeded its field limit.");
+                    pending.Enqueue(item);
+                }
+            }
+            else foreach (var field in HGReflect.Fields(type))
+            {
+                if (!HGDocumentInspection.Serialized(field)) continue;
+                if (++edges > 200000) throw new InvalidOperationException("Draft node lookup exceeded its field limit.");
+                pending.Enqueue(field.GetValue(current));
+            }
+        }
+        return result.AsReadOnly();
     }
 
     /// <summary>Edits a descriptor field in the current working document as one undoable command.</summary>
@@ -424,14 +502,14 @@ public sealed class HGDocumentSession<TDocument>
             if (!ReferenceEquals(child, node)) ReturnUnreferenced(child, orphanPool);
     }
 
-    private HGSessionCommandResult Apply(Action mutation)
+    private HGSessionCommandResult Apply(Action mutation, bool content = true)
     {
         if (!TryClone(Document, out TDocument snapshot)) return HGSessionCommandResult.Rejected;
         bool dirty = IsDirty;
         try
         {
             mutation();
-            Document.InvalidateValidation();
+            if (content) Document.InvalidateValidation();
             undo.Add(snapshot);
             if (undo.Count > UndoLimit) undo.RemoveAt(0);
             redo.Clear();
@@ -632,6 +710,32 @@ public sealed class HGDocumentSession<TDocument>
         foreach (var pool in OrphanPools())
             if (ReferencesObject(pool, value, visited)) return true;
         return false;
+    }
+
+    /// <summary>Structural and domain diagnostics on a disposable copy; does not Verify, clean, save or record Undo.</summary>
+    public IReadOnlyList<GraphDiagnostic> ValidateStructure()
+    {
+        var diagnostics = new List<GraphDiagnostic>();
+        try
+        {
+            if (!TryClone(Document, out TDocument copy))
+                throw new InvalidOperationException("Could not clone the draft for validation.");
+            var model = HGModel.CreateDetachedView(Owner, copy, context.Profile?.RootAdapter);
+            var report = copy is HGAssetDocument assetDocument
+                ? HGValidator.RunSubtree(model, new HGFocus { Kind = HGFocusKind.Asset, AssetObject = Owner,
+                    AssetHostSlot = assetDocument.State.Input, AssetOrphans = assetDocument.Orphans,
+                    AssetTokens = assetDocument.Tokens, AssetProperties = assetDocument.Properties }, assetDocument.State.Input, "Asset")
+                : HGValidator.Run(model, includeMissingTypes: true);
+            if (copy is HGAssetDocument && SerializationUtility.HasManagedReferencesWithMissingTypes(Owner))
+                diagnostics.Add(Failure("validation", DocumentId, "Asset contains missing managed-reference types."));
+            foreach (var issue in report.Issues) diagnostics.Add(issue.Diagnostic);
+            context.CollectDiagnostics(Owner, copy, diagnostics);
+        }
+        catch (Exception exception)
+        {
+            diagnostics.Add(Failure("validation", DocumentId, exception.Message));
+        }
+        return diagnostics.AsReadOnly();
     }
 
     public IReadOnlyList<GraphDiagnostic> CollectDiagnostics() => CollectDiagnostics(Document).AsReadOnly();
