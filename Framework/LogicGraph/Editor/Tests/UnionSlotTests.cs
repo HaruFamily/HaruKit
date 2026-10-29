@@ -243,10 +243,10 @@ namespace HaruFamily.Framework.LogicGraph.Editor.Tests
                 };
                 Assert.That(await asset.Evaluate(new Pack(), caller, bindings), Is.EqualTo(21));
 
-                var property = new GraphProperty("initial", new NumberSlot { Default = 23 }, true);
+                var property = new GraphProperty("initial", new NumberSlot { Default = 23 });
                 asset.Properties.Add(property);
                 var propertyNode = new GraphNode();
-                propertyNode.SetProtoProperty(property);
+                propertyNode.SetProperty(property);
                 asset.SetRoot(propertyNode);
                 var graph = new LogicGraph<Timing, Pack>();
                 var assetNode = new GraphNode();
@@ -275,7 +275,8 @@ namespace HaruFamily.Framework.LogicGraph.Editor.Tests
                 asset.SetRoot(new GraphNode(new Real()));
                 var binding = LogicGraphEditor.CreateBinding(typeof(Owner).GetField(nameof(Owner.Graph)));
                 Assert.That(window.BindDocument(owner, binding, LogicGraphEditor.Context), Is.True);
-                typeof(HaruGraphWindow).GetMethod("EnterAsset", flags).Invoke(window,
+                typeof(HaruGraphWindow).GetMethod("EnterAsset", flags, null,
+                    new[] { typeof(UnityEngine.Object), typeof(Type), typeof(bool) }, null).Invoke(window,
                     new object[] { asset, typeof(NumberSlot), false });
                 HGFocus Focus() => (HGFocus)typeof(HaruGraphWindow).GetField("focus", flags).GetValue(window);
                 var working = (NumericInput)Focus().AssetHostSlot;
@@ -306,7 +307,7 @@ namespace HaruFamily.Framework.LogicGraph.Editor.Tests
         {
             var pack = new Pack();
             var graph = new LogicGraph<Timing, Pack>();
-            var property = new GraphProperty("value", new NumberSlot { Default = 23 }, true);
+            var property = new GraphProperty("value", new NumberSlot { Default = 23 });
             graph.Properties.Add(property);
             var tokens = graph.CreateTokenTable();
             var slot = new Two();
@@ -351,7 +352,7 @@ namespace HaruFamily.Framework.LogicGraph.Editor.Tests
 
             using var cancellation = new CancellationTokenSource();
             cancellation.Cancel();
-            Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            Assert.CatchAsync<OperationCanceledException>(async () =>
                 await slot.Evaluate(pack, tokens.CreateEvaluationScope(cancellation.Token)));
         }
 
@@ -509,7 +510,8 @@ namespace HaruFamily.Framework.LogicGraph.Editor.Tests
                 asset.RootInput.SelectedSlot.SetNode(proxy);
                 var binding = LogicGraphEditor.CreateBinding(typeof(Owner).GetField(nameof(Owner.Graph)));
                 Assert.That(window.BindDocument(owner, binding, LogicGraphEditor.Context), Is.True);
-                typeof(HaruGraphWindow).GetMethod("EnterAsset", flags).Invoke(window,
+                typeof(HaruGraphWindow).GetMethod("EnterAsset", flags, null,
+                    new[] { typeof(UnityEngine.Object), typeof(Type), typeof(bool) }, null).Invoke(window,
                     new object[] { asset, typeof(NumberSlot), false });
                 var focus = (HGFocus)typeof(HaruGraphWindow).GetField("focus", flags).GetValue(window);
                 Assert.That(focus.AssetTokens, Is.Empty);

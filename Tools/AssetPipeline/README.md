@@ -49,7 +49,7 @@ https://github.com/HaruFamily/HaruKit.git?path=/Tools/AssetPipeline
 
 1. 選取 AP 資產，在 Inspector 的圖卡片按「開啟節點圖編輯器」。
 2. 在管線的動作清單加入動作，並替各欄位指定來源：常數、內嵌公式、具名 Token，或 Property。
-3. 產出資產的動作把結果寫進 Property；後面的動作欄位接同一顆 Property 讀取。
+3. 在 Property 庫建立型別化定義；產出資產的動作與後續讀取節點選同一定義。新定義預設執行後清除，展開可開啟保留；收合標記為唯讀。
 4. 存檔後回到 Inspector，在圖卡片按「驗證」。**改過圖或欄位都要重新驗證**，否則執行按鈕會鎖住。
 5. 按「執行管線」並確認。執行使用已儲存的圖，執行前會再驗證一次，依動作清單順序同步執行。
 6. 結果面板逐步列出狀態、耗時、訊息與資產；「定位」跳回對應節點，最後列出每顆 Property 的值快照。
@@ -61,7 +61,7 @@ Slot 的 `AllowCompatibleResult` 與 `ExcludedFormulaFamilies` 同時控制 Form
 - 每步的狀態是成功、跳過、部分完成、失敗或未執行。失敗或部分完成時停止後續步驟，並回復這次執行的所有資產修改與 Property 值。
 - 執行中出現的 Error／Exception／Assert log 也會讓該步失敗。
 - 回復失敗時會保留 `Library/AssetPipelineTransactions/` 裡的日誌並在 Inspector 顯示重試按鈕；未處理的日誌會擋住下一次執行。
-- Property 的目前值不存檔：同一次 Editor session 內跨次執行保留，Domain Reload 後回到未寫入狀態。
+- Property 的目前值不存檔：開啟「保留」時於同一次 Editor session 內跨次保留；關閉時執行完清除，結果面板仍保有文字快照。Domain Reload 後回到未寫入狀態。
 
 ### 遺失的節點型別
 

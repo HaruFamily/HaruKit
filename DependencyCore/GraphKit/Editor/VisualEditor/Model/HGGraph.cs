@@ -123,7 +123,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             Pos.y + HGGraph.HeaderHeight * 0.5f);
 
         public Vector2 PropertyInputPortPosition => new Vector2(Pos.x + HGGraph.PortRadius,
-            Pos.y + HGGraph.HeaderHeight + (Carrier?.IsProtoProperty == true ? HGGraph.RowHeight : 0f) + HGGraph.RowHeight * 0.5f);
+            Pos.y + HGGraph.HeaderHeight + HGGraph.RowHeight * 1.5f);
 
     }
 
@@ -550,7 +550,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                             PropertyInput = carrier.PropertyInput,
                             IsPropertyNode = true,
                             ResultType = propertyResult,
-                            Title = carrier.IsProtoProperty ? "ProtoProperty" : "LocalProperty",
+                            Title = "Property",
                             Chip = property?.FamilyType == null ? "未定型" : ChipText(property.FamilyType, propertyResult, false),
                         };
                         break;
@@ -1642,10 +1642,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 node.Height = leafY + NodeBottomPad;
                 return;
             }
-            // 資產、Token 與 ProtoProperty 的本體第一列是「選哪一個」的下拉。
-            // 一般 Property 直接代表自身，沒有可選名稱，故不預留空白列。
+            // 資產、Token 與 Property 的本體第一列是「選哪一個」的下拉。
+            // Property 另有一列寫入端點，定義選擇與寫入分開。
             float refRows = node.IsPropertyNode
-                ? RowHeight + (node.Carrier?.IsProtoProperty == true ? RowHeight : 0f)
+                ? RowHeight * 2f
                 : node.IsAssetNode || node.IsTokenNode || node.Obj is IGraphNodeOwner ? RowHeight : 0f;
             float y = MeasureRows(node.Rows, HeaderHeight + refRows, node.Width);
             if (node.TipsHeight > 0f) y += node.TipsHeight + 10f;

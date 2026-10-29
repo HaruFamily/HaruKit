@@ -489,7 +489,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         public void FailureRestoresPropertyValueAndSharedListContents(bool previouslyWritten)
         {
             var initial = new List<Object> { pipeline };
-            var property = new GraphProperty("Objects", new ObjectListSlot(), true);
+            var property = new GraphProperty("Objects", new ObjectListSlot()) { RetainValue = true };
             ((ObjectListSlot)property.Slot).Default = initial;
             pipeline.graph.Properties.Add(property);
             var node = new GraphNode();
@@ -512,7 +512,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void RunCapturesPropertySnapshotWithoutKeepingTheLiveList()
         {
-            var property = new GraphProperty("Objects", new ObjectListSlot(), true);
+            var property = new GraphProperty("Objects", new ObjectListSlot()) { RetainValue = true };
             ((ObjectListSlot)property.Slot).Default = new List<Object>();
             pipeline.graph.Properties.Add(property);
             var node = new GraphNode();
@@ -532,7 +532,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void SequentialChildrenReadTheValueWrittenEarlierInTheSameRun()
         {
-            var property = new GraphProperty(null, new ObjectListSlot());
+            var property = new GraphProperty("Objects", new ObjectListSlot()) { RetainValue = true, InitialValueIsNull = true };
             pipeline.graph.Properties.Add(property);
             var node = new GraphNode();
             node.SetProperty(property);
@@ -556,7 +556,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void LaterRunKeepsPropertyValueWhenNoActionWritesAgain()
         {
-            var property = new GraphProperty(null, new ObjectListSlot());
+            var property = new GraphProperty("Objects", new ObjectListSlot()) { RetainValue = true, InitialValueIsNull = true };
             pipeline.graph.Properties.Add(property);
             var node = new GraphNode();
             node.SetProperty(property);
@@ -573,18 +573,19 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         }
 
         [Test]
-        public void NodePrivateLocalPropertyIsRestoredOnFailureAndAppearsInTheSnapshot()
+        public void LibraryPropertyIsRestoredOnFailureAndAppearsInTheSnapshot()
         {
-            // LocalProperty 住在 GraphNode 上，不在 graph.Properties 裡；備份與快照必須走整張圖的走訪才找得到。
-            var property = new GraphProperty(null, new ObjectListSlot());
+            // 備份與結果只取圖層庫；節點沿用庫中的同一份定義。
+            var property = new GraphProperty("Objects", new ObjectListSlot()) { RetainValue = true, InitialValueIsNull = true };
+            pipeline.graph.Properties.Add(property);
             var node = new GraphNode();
-            node.SetLocalProperty(property);
+            node.SetProperty(property);
             var written = new List<Object> { pipeline };
             Add(new WritePropertyAction(node, written));
 
             var committed = pipeline.RunPipeline();
 
-            Assert.That(pipeline.graph.Properties, Is.Empty);
+            Assert.That(pipeline.graph.Properties, Has.Count.EqualTo(1));
             Assert.That(committed.Transaction, Is.EqualTo(PipelineTransactionStatus.Committed));
             Assert.That(committed.Properties, Has.Count.EqualTo(1));
             Assert.That(committed.Properties[0].HasValue, Is.True);

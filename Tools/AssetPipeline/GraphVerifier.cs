@@ -20,7 +20,7 @@ namespace HaruFamily.Tools.AssetPipeline
         {
             var diagnostics = new List<GraphDiagnostic>();
             if (graph == null) return diagnostics;
-            var errors = new DiagnosticCollector(diagnostics);
+            var errors = new DiagnosticCollector(graph.Properties, diagnostics);
 
             CheckTokens(graph, errors);
             CheckProperties(graph, errors);
@@ -77,7 +77,7 @@ namespace HaruFamily.Tools.AssetPipeline
         // 未接時 Slot 提供常數初始值；接上時它是 Property 節點的型別化輸入來源。
         private static void CheckProperties(Graph graph, DiagnosticCollector errors)
         {
-            // ProtoProperty 的 Key 是圖內全域名稱；不同族也不可同名。
+            // Property 的 Key 是圖內全域名稱；不同族也不可同名。
             var seen = new HashSet<string>();
 
             for (int i = 0; i < graph.Properties.Count; i++)
@@ -86,13 +86,12 @@ namespace HaruFamily.Tools.AssetPipeline
                 if (property == null) { errors.Add("assetpipeline.property.missing", $"Property[{i}]", "是空的。"); continue; }
 
                 string path = $"Property[{property.Name ?? i.ToString()}]";
-                if (!property.Proto) continue; // LocalProperty 不屬於圖層清單；保留舊資料但不把它當 Proto 定義驗證。
                 if (string.IsNullOrWhiteSpace(property.Name))
-                    errors.Add("assetpipeline.property.name-missing", $"Property[{i}]", "ProtoProperty 沒有名字。");
+                    errors.Add("assetpipeline.property.name-missing", $"Property[{i}]", "Property 沒有名字。");
                 if (property.Slot == null) { errors.Add("assetpipeline.property.slot-missing", path, "沒有指定型別。"); continue; }
 
                 if (!string.IsNullOrWhiteSpace(property.Name) && !seen.Add(property.Name))
-                    errors.Add("assetpipeline.property.duplicate", path, "與另一個 ProtoProperty 重名。");
+                    errors.Add("assetpipeline.property.duplicate", path, "與另一個 Property 重名。");
 
                 // 接了來源代表這顆該是Token而不是 Property：Property 的值由動作寫入，不由公式算出來。
                 if (property.Slot.Node != null)
@@ -168,6 +167,11 @@ namespace HaruFamily.Tools.AssetPipeline
                 {
                     GraphProperty property = node.Property;
                     if (property == null) { errors.Add("assetpipeline.property.target-missing", path, "指向的 Property 已不存在。"); return; }
+                    if (!errors.Properties.Contains(property))
+                    {
+                        errors.Add("assetpipeline.property.out-of-scope", path, "Property 不屬於目前圖的變數庫。");
+                        return;
+                    }
                     if (!slot.AcceptsProperty(property))
                     {
                         errors.Add("assetpipeline.property.target-incompatible", path, $"指向的 Property [{property.Name}] 型別不相容。");
@@ -269,10 +273,12 @@ namespace HaruFamily.Tools.AssetPipeline
         private sealed class DiagnosticCollector
         {
             private readonly List<GraphDiagnostic> diagnostics;
+            public readonly ICollection<GraphProperty> Properties;
 
-            public DiagnosticCollector(List<GraphDiagnostic> diagnostics = null)
+            public DiagnosticCollector(ICollection<GraphProperty> properties, List<GraphDiagnostic> diagnostics = null)
             {
                 this.diagnostics = diagnostics ?? new List<GraphDiagnostic>();
+                Properties = properties;
             }
 
             public void Add(string code, string path, string detail)

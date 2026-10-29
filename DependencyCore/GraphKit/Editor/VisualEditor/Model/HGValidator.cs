@@ -238,15 +238,14 @@ public static class HGValidator
                     "移除空項目。", null, null);
                 continue;
             }
-            if (!property.Proto) continue;
             if (string.IsNullOrWhiteSpace(property.Name))
-                Err(report, "graphkit.property.key-missing", focus, "ProtoProperty", "ProtoProperty 沒有 Key",
+                Err(report, "graphkit.property.key-missing", focus, "Property", "Property 沒有 Key",
                     "在左欄變數庫設定全域唯一的 Key。", null, property);
             else if (!keys.Add(property.Name))
-                Err(report, "graphkit.property.key-duplicate", focus, "ProtoProperty", $"ProtoProperty Key '{property.Name}' 重複",
+                Err(report, "graphkit.property.key-duplicate", focus, "Property", $"Property Key '{property.Name}' 重複",
                     "改成圖內全域唯一的 Key。", null, property);
             if (property.Slot == null)
-                Err(report, "graphkit.property.slot-missing", focus, "ProtoProperty", $"ProtoProperty '{property.Name}' 沒有型別",
+                Err(report, "graphkit.property.slot-missing", focus, "Property", $"Property '{property.Name}' 沒有型別",
                     "在變數庫移除遺失型別的定義並重建。", null, property);
         }
     }
@@ -427,12 +426,8 @@ public static class HGValidator
             var property = carrier.Property;
             if (property == null)
             {
-                if (carrier.IsProtoProperty)
-                    Warn(report, "graphkit.property.key-missing", focus, where, "ProtoProperty 尚未選擇 Key",
-                        "在節點的 Key 列選擇一顆 ProtoProperty。", slot, carrier);
-                else
-                    Issue(report, "graphkit.slot.property-missing", disabled, focus, where, "欄位設為 Property，但沒有指定 Property",
-                        "選一顆 Property，或把模式改回常數。", slot, carrier);
+                Warn(report, "graphkit.property.key-missing", focus, where, "Property 尚未選擇定義",
+                    "在節點的 Key 列選擇一顆 Property。", slot, carrier);
             }
             else if (!slot.AcceptsProperty(property))
                 Issue(report, "graphkit.property.type-incompatible", disabled, focus, where, $"接的 Property '{property.Name}' 型別不相容",
@@ -451,7 +446,7 @@ public static class HGValidator
     private static bool InScope(HGModel model, HGFocus focus, GraphToken endpoint)
     {
         var scope = focus != null && focus.Kind == HGFocusKind.Asset ? focus.AssetTokens : model?.OwnerTokens;
-        if (scope == null) return true;   // 讀不到清單就不判，寧可不報也不要誤報
+        if (scope == null) return false;  // 沒有庫的圖不能擁有 Property 引用
         foreach (var other in scope)
             if (ReferenceEquals(other, endpoint)) return true;
         return false;
@@ -461,9 +456,8 @@ public static class HGValidator
     // 與Token同一個理由：儲存位置是「這張圖的這一顆定義」，指向別張圖的定義物件不會共用儲存位置。
     private static bool InScope(HGModel model, HGFocus focus, GraphProperty property)
     {
-        if (!property.Proto) return true; // LocalProperty 住在引用它的 GraphNode，不在圖層清單。
         var scope = focus?.Kind == HGFocusKind.Asset ? focus.AssetProperties : HGReflect.Properties(model?.Data);
-        if (scope == null) return true;   // 讀不到清單就不判，寧可不報也不要誤報
+        if (scope == null) return false;  // 沒有庫的圖不能擁有 Property 引用
         foreach (var other in scope)
             if (ReferenceEquals(other, property)) return true;
         return false;

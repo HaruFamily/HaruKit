@@ -77,16 +77,9 @@ public class GraphNode
     [SerializeReference]
     private GraphToken _endpoint;
 
-    // LocalProperty 的私有定義。舊資料也使用這個欄位；_protoProperty 為 null 時一律視為 LocalProperty。
+    // 唯一 Property 定義引用；定義由所屬圖的 Properties 清單持有。
     [SerializeReference]
     private GraphProperty _property;
-
-    // ProtoProperty 的圖層定義。Proto 模式可尚未選 Key，因此要和模式旗標分開保存。
-    [SerializeReference]
-    private GraphProperty _protoProperty;
-
-    [SerializeField]
-    private bool _isProtoProperty;
 
     // Property 的下方 Input 必須有自己的持久綁定，不能借用指向這顆節點的 ParentSlot。
     [SerializeReference]
@@ -134,12 +127,9 @@ public class GraphNode
     public GraphToken Token => _kind == NodeKind.Token ? _endpoint : null;
 
     /// <summary>Property 模式指向的定義；其他模式為 null。</summary>
-    public GraphProperty Property => _kind != NodeKind.Property ? null : _isProtoProperty ? _protoProperty : _property;
+    public GraphProperty Property => _kind == NodeKind.Property ? _property : null;
 
-    /// <summary>Property 節點目前是否為 ProtoProperty 模式。Proto 模式可以尚未選擇 Key。</summary>
-    public bool IsProtoProperty => _kind == NodeKind.Property && _isProtoProperty;
-
-    /// <summary>Property 節點下方輸入的持久綁定；Proto 尚未選 Key 時也存在。</summary>
+    /// <summary>Property 節點下方輸入的持久綁定；尚未選擇定義時也存在。</summary>
     public GraphPropertyInputSlot PropertyInput => _propertyInput ??= new GraphPropertyInputSlot();
 
     /// <summary>保留來源資料的相容入口；不寫入共享定義，也不參與 Property 求值。</summary>
@@ -183,8 +173,6 @@ public class GraphNode
         _asset = null;
         _endpoint = null;
         _property = null;
-        _protoProperty = null;
-        _isProtoProperty = false;
         Bindings.Clear();
         _kind = body != null ? NodeKind.Inline : NodeKind.Empty;
     }
@@ -201,8 +189,6 @@ public class GraphNode
         _body = null;
         _asset = null;
         _property = null;
-        _protoProperty = null;
-        _isProtoProperty = false;
         Bindings.Clear();
         _kind = NodeKind.Token;
     }
@@ -217,41 +203,13 @@ public class GraphNode
         _body = null;
         _endpoint = null;
         _property = null;
-        _protoProperty = null;
-        _isProtoProperty = false;
         _kind = NodeKind.Asset;
     }
 
-    /// <summary>換成 Property 引用。定義住圖層清單，這裡只存引用。</summary>
-    // 定義為 null 時退成空節點，理由與 SetToken 相同：畫得出來也存得下去，卻永遠沒有內容。
+    /// <summary>引用圖層 Property；null 表示待選擇定義，保留節點與連線。</summary>
     public void SetProperty(GraphProperty property)
     {
-        if (property == null) { Clear(); return; }
-
-        if (property.Proto) SetProtoProperty(property);
-        else SetLocalProperty(property);
-    }
-
-    /// <summary>換成節點私有的 LocalProperty。</summary>
-    public void SetLocalProperty(GraphProperty property)
-    {
-        if (property == null) { Clear(); return; }
         _property = property;
-        _protoProperty = null;
-        _isProtoProperty = false;
-        _body = null;
-        _asset = null;
-        _endpoint = null;
-        Bindings.Clear();
-        _kind = NodeKind.Property;
-    }
-
-    /// <summary>換成 ProtoProperty 模式。null 代表尚未選擇 Key，仍保留節點與連線。</summary>
-    public void SetProtoProperty(GraphProperty property)
-    {
-        _protoProperty = property;
-        _property = null;
-        _isProtoProperty = true;
         _body = null;
         _asset = null;
         _endpoint = null;
@@ -267,8 +225,6 @@ public class GraphNode
         _asset = null;
         _endpoint = null;
         _property = null;
-        _protoProperty = null;
-        _isProtoProperty = false;
         Bindings.Clear();
         _kind = NodeKind.Empty;
     }

@@ -92,10 +92,14 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 
 ### 3.5 Property
 
+- 外部寫入不受保留設定限制。未保留的外部值暫存在圖實例，下一次 TriggerAction 在開始時接收並消耗；執行途中再收到的寫入留給下一次，當前執行不受影響。CreateTokenTable 的獨立查詢取得當時快照，不消耗待執行輸入；明確 InitializeProperties 一併清除待執行值。觸發前已取消或驗證失敗不消耗；已開始的執行在成功、失敗、取消後均清除自己的暫存值。
+
+- 所有定義只在圖／Asset 的 `Properties` 庫，節點只引用。scope 不為未登記引用隱式建值；驗證檢查庫歸屬。新定義 `RetainValue=false`，初始值可明確為 null；此旗標與保存時間獨立。
+
 - Action 以 `PropertySlot<TResult, TSlot>` 宣告寫入端（例如 `PropertySlot<string, KeySlot>`），呼叫 `Write(value, tokens)` 替換目前值。欄位用一般內嵌序列化，**不要在封閉泛型欄位上加 `[SerializeReference]`**。泛型約束不會證明 TResult 與 TSlot 的結果型別一致，宣告時要自己配對。
-- 目前值存在非序列化的 `PropertyStore`：每個圖實例一個 root scope，資產呼叫依（資產 × 呼叫節點）建立子 scope。同一位置再次執行沿用舊值。
-- **只有 `InitializeProperties()` 會清空目前值。** `InvalidateValidation()` 只影響編輯與驗證狀態。`DeepCopy()` 不複製執行狀態，複本從未寫入開始。
-- 圖外要改目前值時呼叫 `LogicGraph.WriteProperty(family, name, value)`：以（族, 名稱）找變數庫定義，值須可指派給結果型別，只寫 root scope，失敗回 false。`GraphProperty.SetValue` 只改定義物件上的值，LogicGraph 執行期不讀它。
+- 目前值存在非序列化的 `PropertyStore`：每個圖實例一個 root scope，資產呼叫依（資產 × 呼叫節點）建立子 scope。同一位置的保留值跨次沿用。RetainValue=false 時，每次 TriggerAction 使用獨立的暫存 scope；finally 在成功、失敗及取消時清空。CreateEvaluationScope 不延長暫存生命週期，結束後讀回初始值、寫入拒絕；獨立 CreateTokenTable 的暫存值隨表存活。
+- `InitializeProperties()` 主動清空保留值與活動表的暫存值。 `InvalidateValidation()` 只影響編輯與驗證狀態。`DeepCopy()` 不複製執行狀態，複本從未寫入開始。
+- 圖外要改目前值時呼叫 `LogicGraph.WriteProperty(family, name, value)`：以（族, 名稱）找變數庫定義，RetainValue 不限制寫入，值須可指派給結果型別，只寫 root scope，失敗回 false。`GraphProperty.SetValue` 只改定義物件上的值，LogicGraph 執行期不讀它。
 - 讀取 Property 只取目前值，不執行寫入它的 Action；寫入端不是求值依賴。
 - `TokenTable.ScopeIdentity` 為 Property scope 的不透明 runtime 身分；同一圖跨次執行及 CreateEvaluationScope 沿用，同資產不同呼叫節點各自獨立。無 Property scope 的手建表有自身身分，延後表沿用該身分；不可序列化此值或把它當作資產 ID。
 
@@ -179,3 +183,5 @@ public sealed class LogAmountAction : ActionBase<MyPack>
 - `LogicGraphValidationTests`：結構化診斷、legacy Owner 整合、Property 讀寫與變數庫驗證。
 - `LogicGraphUsageTests`：零介面 Owner、Usage 規則、指定欄位與批次驗證、預設 context 提交、共用資產重驗。
 - 在 Unity Test Runner 以 EditMode 執行；從 UPM 安裝時，要把 `com.harufamily.framework.logicgraph` 加進 `manifest.json` 的 `testables`。**沒有實際執行的測試不可回報為通過。**
+
+> Trace: verified 2026-10-29 · doc `Doc/2026-10-2/DECISION_Property單一模型與資料保留.md`（原始碼靜態核對；使用者確認本輪 TestRunner 修正，驗證範圍見決策文件）

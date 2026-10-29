@@ -81,7 +81,6 @@ internal sealed class HGPropertyWriteSource : IHGPortSource
     internal HGPortConnectionResult CheckTarget(GraphNode target)
     {
         if (target?.Kind != NodeKind.Property) return HGPortConnectionResult.IncompatibleType;
-        if (!target.IsProtoProperty) return HGPortConnectionResult.Allowed;
         if (target.Property == null) return HGPortConnectionResult.MissingBinding;
         return Slot.AcceptsProperty(target.Property)
             ? HGPortConnectionResult.Allowed : HGPortConnectionResult.IncompatibleFamily;

@@ -660,7 +660,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             else if (row.IsProducedValue)
             {
                 string text = contentKind == NodeKind.Property
-                    ? "→ " + (slot.Node.IsProtoProperty ? slot.Node.Property?.Name ?? "未選 Key" : "LocalProperty")
+                    ? "→ " + (slot.Node.Property?.Name ?? "Property")
                     : (contentKind is NodeKind.Inline or NodeKind.Empty) && HGReflect.GetFormula(slot) is object target
                     ? $"→ {HGReflect.TypeName(target.GetType())}"
                     : "";

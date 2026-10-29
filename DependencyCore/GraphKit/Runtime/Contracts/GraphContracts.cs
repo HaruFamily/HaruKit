@@ -408,13 +408,13 @@ public interface ITokenOwner
 }
 
 /// <summary>
-/// 擁有 ProtoProperty 定義清單的圖主人。定義是圖的內容，跟著工作副本與存檔交易走。
+/// 擁有 Property 定義清單的圖主人。定義是圖的內容，跟著工作副本與存檔交易走。
 /// </summary>
 // 與 ITokenOwner 分開而不是合併成一個「具名清單」介面：Token 是取值來源（有自己的畫布與候選池），
 // Property 是可寫的儲存位置（沒有畫布），兩者的 CRUD、驗證與刪除連帶處理都不同。
 public interface IPropertyOwner
 {
-    /// <summary>本圖的 ProtoProperty 定義。LocalProperty 住在 GraphNode，不在這份清單。</summary>
+    /// <summary>本圖唯一的 Property 定義庫；GraphNode 只保存對庫定義的引用。</summary>
     List<GraphProperty> Properties { get; }
 }
 

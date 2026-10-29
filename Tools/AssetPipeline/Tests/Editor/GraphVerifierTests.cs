@@ -50,25 +50,25 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
 
         [TestCase(false)]
         [TestCase(true)]
-        public void ObjectSlot_ReadsGameObjectProperty_ButObjectWriterCannotWriteIt(bool proto)
+        public void ObjectSlot_ReadsGameObjectProperty_ButObjectWriterCannotWriteIt(bool hasInitialValue)
         {
             var value = new GameObject("Property result");
             try
             {
-                var property = new GraphProperty("Object", new GameObjectSlot(value), proto);
+                var property = new GraphProperty("Object", new GameObjectSlot(value)) { InitialValueIsNull = !hasInitialValue, RetainValue = true };
                 var node = new GraphNode();
                 node.SetProperty(property);
                 var action = new ReadObject();
                 action.Input.Default = value;
                 action.Input.SetNode(node);
                 var graph = new Graph();
-                if (proto) graph.Properties.Add(property);
+                graph.Properties.Add(property);
                 var root = (ActionGroup)((IGraphDocument)graph).AddRoot(Graph.PipelineKey);
                 root.Actions.Add(new ActionSlot(action));
 
                 Assert.That(action.Input.AcceptsProperty(property), Is.True);
                 Assert.That(GraphVerifier.Collect(graph), Is.Empty);
-                if (proto) Assert.That(action.Input.Evaluate(), Is.SameAs(value));
+                if (hasInitialValue) Assert.That(action.Input.Evaluate(), Is.SameAs(value));
                 else Assert.That(action.Input.Evaluate(), Is.Null);
                 var writer = new PropertySlot<GameObject, GameObjectSlot>();
                 writer.SetNode(node);
@@ -113,7 +113,12 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(Accepts(open, new OtherPackTextSlot()), Is.False);
             Assert.That(Accepts(open, new IntSlot()), Is.False);
 
-            if (propertySource) node.SetProperty(new GraphProperty("Value", foreign, true));
+            if (propertySource)
+            {
+                var property = new GraphProperty("Value", foreign);
+                graph.Properties.Add(property);
+                node.SetProperty(property);
+            }
             else
             {
                 var token = new GraphToken("Value", foreign);
@@ -123,7 +128,12 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(GraphVerifier.Collect(graph), Is.Empty);
             Assert.That(open.Evaluate(), Is.EqualTo("text"));
 
-            if (propertySource) node.SetProperty(new GraphProperty("Blocked", blocked));
+            if (propertySource)
+            {
+                var property = new GraphProperty("Blocked", blocked);
+                graph.Properties.Add(property);
+                node.SetProperty(property);
+            }
             else
             {
                 var token = new GraphToken("Blocked", blocked);

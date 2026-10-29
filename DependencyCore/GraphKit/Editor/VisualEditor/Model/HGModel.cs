@@ -34,8 +34,6 @@ public class HGProperty
     /// <summary>族身份（＝型別宣告用的 Slot 型別）。撞名判定與讀寫相容都用它。</summary>
     public Type FamilyType => Property?.FamilyType;
 
-    /// <summary>有沒有可編輯的初始內容。清單上靠它區分 Property 與 ProtoProperty。</summary>
-    public bool Proto => Property?.Proto == true;
 
     /// <summary>族名。沒有型別欄位時顯示「未定型」，與畫布上的 chip 一致。</summary>
     // 不可直接丟給 SlotKindName：它對 null 回「動作」，那是給動作欄位用的保底值，
@@ -822,10 +820,9 @@ public class HGModel
         var shared = new List<object>();
         foreach (var other in scope)
             if (other != null && !ReferenceEquals(other, source)) shared.Add(other);
-        // 子樹讀到的 ProtoProperty 是庫定義，理由與其他Token相同：抄一份就變成不在庫裡的孤兒定義。
-        // LocalProperty 不列入——它是節點私有的，本來就該跟著複製。
+        // 子樹讀到的 Property 是庫定義，理由與其他Token相同：抄一份就變成不在庫裡的孤兒定義。
         foreach (var slot in WalkSlots(source, new HashSet<object>(HGRefComparer.Instance)))
-            if (slot?.Node?.Property is GraphProperty property && property.Proto) shared.Add(property);
+            if (slot?.Node?.Property is GraphProperty property) shared.Add(property);
 
         var copy = GraphDeepCopy.Copy(source, shared);
         if (copy == null) { error = "複製這個 Token 失敗，詳見 Console。"; return null; }
@@ -923,7 +920,7 @@ public class HGModel
     }
 
     // ===== Property =====
-    // 一個 Property＝一顆 GraphProperty：名字、型別宣告欄位，以及 Proto 的初始常數。
+    // 一個 Property＝一顆 GraphProperty：名字、型別宣告欄位，以及初始內容。
     // 它沒有自己的畫布與候選池——值由動作寫入，不是算出來的，所以沒有取值子樹可編。
     // 圖裡引用它的是 NodeKind.Property 節點，存的是物件參照，不是名字字串。
 
@@ -933,69 +930,47 @@ public class HGModel
 
     /// <summary>
     /// 把一份定義清單讀成顯示用的視圖，保留清單順序。
-    /// <paramref name="proto"/> 為 true 時只取有初始內容的那些（左欄庫用）。
     /// </summary>
-    public static List<HGProperty> ReadProperties(IEnumerable<GraphProperty> properties, bool proto = false)
+    public static List<HGProperty> ReadProperties(IEnumerable<GraphProperty> properties)
     {
         var result = new List<HGProperty>();
         if (properties == null) return result;
         foreach (var property in properties)
         {
             if (property == null) continue;
-            if (proto && !property.Proto) continue;
             result.Add(new HGProperty { Property = property });
         }
         return result;
     }
 
     /// <summary>
-    /// 建一個新 Property 並加進清單。ProtoProperty 需要名稱供庫管理；一般 Property 可保持未命名。
+    /// 建立具名 Property 並登記到所屬圖的庫。
     /// slotType 就是族，建立後不再更動——要換族就刪掉重建。
     /// </summary>
-    public GraphProperty CreateProperty(List<GraphProperty> scope, Type slotType, bool proto, out string error)
+    public GraphProperty CreateProperty(List<GraphProperty> scope, Type slotType, out string error)
     {
         error = null;
         if (scope == null) { error = "這張圖沒有 Property 清單。"; return null; }
+        if (slotType == null || !typeof(FormulaSlotBase).IsAssignableFrom(slotType)
+            || slotType.IsAbstract || slotType.ContainsGenericParameters)
+        {
+            error = "請選擇可建立的公式欄位型別。";
+            return null;
+        }
         if (HGReflect.CreateInstance(slotType) is not FormulaSlotBase slot)
         {
             error = "建不出這一族的型別欄位。";
             return null;
         }
 
-        var property = new GraphProperty(proto ? NextPropertyName(scope, slot.FamilyType) : null, slot, proto);
+        var property = new GraphProperty(NextPropertyName(scope, slot.FamilyType), slot);
         property.EnsureId();
         scope.Add(property);
         MarkContentChanged();
         return property;
     }
 
-    /// <summary>
-    /// 建一顆只屬於單一 GraphNode 的 LocalProperty，不登記到圖層清單。
-    /// <paramref name="slotType"/> 為 null 時建未定型的 Local，由第一條寫入線決定型別。
-    /// </summary>
-    // 未定型是合法狀態而不是失敗：沒有 Key 的 ProtoProperty 換成 Local 時手上還沒有族，
-    // 這時回 null 會讓節點留在 Proto 卻被當成已切換。未定型的 Property 接不了任何線（AcceptsProperty 一律 false），
-    // 畫布顯示「未定型」，接上寫入端才定型。
-    public GraphProperty CreateLocalProperty(Type slotType, out string error)
-    {
-        error = null;
-        FormulaSlotBase slot = null;
-        if (slotType != null)
-        {
-            slot = HGReflect.CreateInstance(slotType) as FormulaSlotBase;
-            if (slot == null)
-            {
-                error = "建不出這一族的型別欄位。";
-                return null;
-            }
-        }
-
-        var property = new GraphProperty(null, slot);
-        property.EnsureId();
-        return property;
-    }
-
-    /// <summary>替 ProtoProperty 改名。名稱在整張圖內不可重複；空名稱不允許。</summary>
+    /// <summary>替 Property 改名。名稱在整張圖內不可重複；空名稱不允許。</summary>
     public bool RenameProperty(GraphProperty property, string name, List<GraphProperty> scope, out string error)
     {
         error = null;
@@ -1006,7 +981,7 @@ public class HGModel
 
         foreach (var other in scope ?? new List<GraphProperty>())
         {
-            if (other == null || !other.Proto || ReferenceEquals(other, property)) continue;
+            if (other == null || ReferenceEquals(other, property)) continue;
             if (other.Name != name) continue;
             error = $"已存在名為 '{name}' 的 Property。";
             return false;
@@ -1018,13 +993,13 @@ public class HGModel
     }
 
     /// <summary>
-    /// 複製一顆 ProtoProperty：新識別碼、新名字，型別與初始內容深拷貝，加在清單尾端。
+    /// 複製一顆 Property：新識別碼、新名字，型別與初始內容深拷貝，加在清單尾端。
     /// 沒有任何節點指向複本——它是第二個儲存位置，不是原件的引用。清單裡的資產只抄參考。
     /// </summary>
     public GraphProperty DuplicateProperty(GraphProperty source, List<GraphProperty> scope, out string error)
     {
         error = null;
-        if (source == null || !source.Proto) { error = "沒有可複製的 ProtoProperty。"; return null; }
+        if (source?.Slot == null) { error = "沒有可複製的 Property 型別。"; return null; }
         if (scope == null) { error = "這張圖沒有 Property 清單。"; return null; }
 
         var copy = GraphDeepCopy.Copy(source);
@@ -1032,10 +1007,10 @@ public class HGModel
 
         copy.ResetId();
         copy.EnsureId();
-        // ProtoProperty 名稱跨族唯一（見 NextPropertyName），所以不分族收集已用名字。
+        // Property 名稱跨族唯一（見 NextPropertyName），所以不分族收集已用名字。
         var used = new HashSet<string>();
         foreach (var other in scope)
-            if (other?.Proto == true && !string.IsNullOrEmpty(other.Name)) used.Add(other.Name);
+            if (other != null && !string.IsNullOrEmpty(other.Name)) used.Add(other.Name);
         copy.Name = NextCopyName(used, string.IsNullOrEmpty(source.Name) ? "Property" : source.Name);
 
         scope.Add(copy);
@@ -1049,7 +1024,7 @@ public class HGModel
         string prefix = HGReflect.SlotKindName(kind);
         var used = new HashSet<string>();
         foreach (var other in scope ?? new List<GraphProperty>())
-            if (other?.Proto == true && !string.IsNullOrEmpty(other.Name))
+            if (other != null && !string.IsNullOrEmpty(other.Name))
                 used.Add(other.Name);
 
         for (int i = 1; ; i++)
@@ -1305,8 +1280,7 @@ public class HGModel
     {
         if (node == null || !visited.Add(node)) return;
         if (node is GraphNode carrier) carrier.ResetId();
-        // LocalProperty 是節點私有定義，複本要有自己的識別碼；ProtoProperty 是共用的庫定義，動它會改到原件。
-        else if (node is GraphProperty property && !property.Proto) { property.ResetId(); property.EnsureId(); }
+        // Property 定義不換識別碼；節點複製沿用庫中的儲存位置。
         else if (HGReflect.IsActionSlotType(node.GetType())) HGReflect.ResetSlotEditorId(node);
 
         foreach (var f in HGReflect.Fields(node.GetType()))

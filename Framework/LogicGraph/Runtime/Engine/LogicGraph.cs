@@ -172,12 +172,13 @@ where TTiming : Enum
     }
 
     /// <summary>明確捨棄此圖實例及其 Asset 呼叫 scope 的所有 Property 目前值。</summary>
-    // 只有這個入口重設。改圖的 InvalidateValidation() 不清目前值：那是編輯與驗證狀態，不是「作者要求初始化」。
+    // 主動重設包含保留值；本次執行的暫存值另由 TriggerAction 的 finally 清除。
     // 清的是 scope 裡的值而不是 store 本身，已經拿到 scope 的 TokenTable 才會一起回到未寫入狀態。
     public void InitializeProperties() => propertyStore?.Initialize();
 
     /// <summary>
-    /// 從圖外以（族, 名稱）替換本圖變數庫 Property 的目前值；查無同族同名定義或值型別不符時回 false。
+    /// 從圖外以（族, 名稱）寫入本圖變數庫；查無或值型別不符時回 false。
+    /// 未保留的值交給下一次 TriggerAction，該次結束後清除；不修改正在執行的暫存值。
     /// 只寫圖實例的 root scope，Asset 呼叫位置各自的 Property 不受影響。
     /// </summary>
     public bool WriteProperty(Type family, string name, object value)
@@ -207,7 +208,9 @@ where TTiming : Enum
     }
 
     /// <summary>建立本圖的具名求值表。首次使用檢查實際圖內容，失敗回空表；獨立查詢不建立時機執行觀察 session。</summary>
-    public TokenTable<TPack> CreateTokenTable()
+    public TokenTable<TPack> CreateTokenTable() => CreateTokenTable(false);
+
+    private TokenTable<TPack> CreateTokenTable(bool consumeExternalWrites)
     {
         if (!EnsureRuntimeValidation())
         {
@@ -219,7 +222,7 @@ where TTiming : Enum
             return new TokenTable<TPack>();
         }
 
-        var table = new TokenTable<TPack> { Properties = (propertyStore ??= new PropertyStore()).Root(Properties) };
+        var table = new TokenTable<TPack> { Properties = (propertyStore ??= new PropertyStore()).Root(Properties).BeginExecution(consumeExternalWrites) };
         foreach (var endpoint in Tokens) table.Register(endpoint);
         return table;
     }
@@ -261,9 +264,8 @@ where TTiming : Enum
         cancellationToken.ThrowIfCancellationRequested();
         if (!EnsureRuntimeValidation())
             throw new InvalidOperationException($"[LogicGraph] {executionName ?? timing.ToString()} 圖內容不合法，拒絕執行：{runtimeValidationError}");
-        var tokens = CreateTokenTable();
+        var tokens = CreateTokenTable(true);
         var actions = GetActions(timing);
-        cancellationToken.ThrowIfCancellationRequested();
         tokens.ExecutionCancellation = cancellationToken;
         GraphExecutionSession execution = null;
         if (ExecutionSource.IsObserved)
@@ -288,6 +290,7 @@ where TTiming : Enum
         catch (Exception) { execution?.Fail(); throw; }
         finally
         {
+            tokens.Properties?.EndExecution();
             if (execution != null)
             {
                 execution.Dispose();

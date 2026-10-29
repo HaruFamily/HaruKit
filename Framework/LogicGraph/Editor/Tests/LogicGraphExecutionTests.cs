@@ -483,7 +483,7 @@ public sealed class LogicGraphExecutionTests
     [Test]
     public async Task PropertiesPersistPerRuntimeGraphUntilExplicitlyInitialized()
     {
-        var property = new GraphProperty("Count", new IntSlot(0));
+        var property = new GraphProperty("Count", new IntSlot(0)) { RetainValue = true };
         var graph = PropertyGraph(property, out _);
         var copy = graph.DeepCopy();
 
@@ -513,10 +513,117 @@ public sealed class LogicGraphExecutionTests
         }
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ExecutionLocalPropertiesResetAndExpireWithTheRun(bool fail)
+    {
+        var property = new GraphProperty("Count", new IntSlot(0)) { RetainValue = false };
+        var graph = PropertyGraph(property, out _);
+        var capture = new CaptureEvaluationScope();
+        graph.ActionGroups[0].Actions.Add(Slot(new GraphNode(capture)));
+        if (fail) graph.ActionGroups[0].Actions.Add(Slot(new GraphNode(new Failing())));
+        Assert.That(graph.WriteProperty(typeof(IntSlot), "Count", 10), Is.True);
+
+        for (int i = 0; i < 2; i++)
+        {
+            var pack = new Pack();
+            if (fail) Assert.ThrowsAsync<InvalidOperationException>(async () => await graph.TriggerAction(Timing.Run, pack));
+            else await graph.TriggerAction(Timing.Run, pack);
+            Assert.That(pack.Count, Is.EqualTo(i == 0 ? 11 : 1));
+            Assert.That(await PropertyInput(property).Evaluate(pack, capture.Captured), Is.Zero);
+            Assert.That(capture.Captured.ScopeIdentity, Is.SameAs(graph.CreateTokenTable().ScopeIdentity));
+        }
+    }
+
+    [Test]
+    public async Task ExternalTemporaryWritesSurviveQueriesAndAreConsumedByOneRun()
+    {
+        var property = new GraphProperty("Count", new IntSlot(0));
+        var graph = PropertyGraph(property, out _);
+        Assert.That(graph.WriteProperty(typeof(IntSlot), "Count", "wrong"), Is.False);
+        Assert.That(graph.WriteProperty(typeof(IntSlot), "Missing", 7), Is.False);
+        Assert.That(graph.WriteProperty(typeof(IntSlot), "Count", null), Is.False);
+        Assert.That(graph.WriteProperty(typeof(IntSlot), "Count", 7), Is.True);
+        Assert.That(await PropertyInput(property).Evaluate(new Pack(), graph.CreateTokenTable()), Is.EqualTo(7));
+        Assert.That(await PropertyInput(property).Evaluate(new Pack(), graph.CreateTokenTable()), Is.EqualTo(7));
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Assert.CatchAsync<OperationCanceledException>(async () =>
+            await graph.TriggerAction(Timing.Run, new Pack(), cancelled.Token));
+        var first = new Pack();
+        await graph.TriggerAction(Timing.Run, first);
+        Assert.That(first.Count, Is.EqualTo(8));
+        var second = new Pack();
+        await graph.TriggerAction(Timing.Run, second);
+        Assert.That(second.Count, Is.EqualTo(1));
+        Assert.That(graph.WriteProperty(typeof(IntSlot), "Count", 9), Is.True);
+        graph.InitializeProperties();
+        Assert.That(await PropertyInput(property).Evaluate(new Pack(), graph.CreateTokenTable()), Is.Zero);
+    }
+
+    [Test]
+    public async Task ExternalWriteDuringRunRemainsAvailableForTheNextRun()
+    {
+        var property = new GraphProperty("Count", new IntSlot(0));
+        var graph = PropertyGraph(property, out _);
+        var pause = new PauseFirstRun();
+        graph.ActionGroups[0].Actions.Insert(1, Slot(new GraphNode(pause)));
+        Assert.That(graph.WriteProperty(typeof(IntSlot), "Count", 4), Is.True);
+        var first = new Pack();
+        var running = graph.TriggerAction(Timing.Run, first).AsTask();
+        await pause.Started.Task;
+        try { Assert.That(graph.WriteProperty(typeof(IntSlot), "Count", 20), Is.True); }
+        finally { pause.Resume.TrySetResult(true); }
+        await running;
+        Assert.That(first.Count, Is.EqualTo(5));
+        var second = new Pack();
+        await graph.TriggerAction(Timing.Run, second);
+        Assert.That(second.Count, Is.EqualTo(21));
+        var third = new Pack();
+        await graph.TriggerAction(Timing.Run, third);
+        Assert.That(third.Count, Is.EqualTo(1));
+    }
+
+    [Serializable]
+    private sealed class PauseFirstRun : ActionBase<Pack>
+    {
+        [NonSerialized] public readonly TaskCompletionSource<bool> Started = new();
+        [NonSerialized] public readonly TaskCompletionSource<bool> Resume = new();
+        [NonSerialized] private bool entered;
+        protected override async UniTask OnExecute(Pack pack, TokenTable<Pack> tokens)
+        {
+            if (entered) return;
+            entered = true;
+            Started.TrySetResult(true);
+            await Resume.Task;
+        }
+    }
+
+    [Test]
+    public async Task CompletingAnotherRunDoesNotClearAnActiveRunsTemporaryProperty()
+    {
+        var property = new GraphProperty("Count", new IntSlot(0)) { RetainValue = false };
+        var graph = PropertyGraph(property, out _);
+        var pause = new PauseFirstRun();
+        graph.ActionGroups[0].Actions.Insert(1, Slot(new GraphNode(pause)));
+        var first = new Pack();
+        var running = graph.TriggerAction(Timing.Run, first).AsTask();
+        await pause.Started.Task;
+        try
+        {
+            var second = new Pack();
+            await graph.TriggerAction(Timing.Run, second);
+            Assert.That(second.Count, Is.EqualTo(1));
+        }
+        finally { pause.Resume.TrySetResult(true); }
+        await running;
+        Assert.That(first.Count, Is.EqualTo(1));
+    }
+
     [Test]
     public async Task DeferredScopeKeepsLivePropertiesButUsesTheNewCancellationToken()
     {
-        var property = new GraphProperty("Count", new IntSlot(0));
+        var property = new GraphProperty("Count", new IntSlot(0)) { RetainValue = true };
         var graph = PropertyGraph(property, out _);
         var captured = new CaptureEvaluationScope();
         graph.ActionGroups[0].Actions.Add(Slot(new GraphNode(captured)));
@@ -550,10 +657,10 @@ public sealed class LogicGraphExecutionTests
             var captured = new CaptureEvaluationScope();
             asset.SetRoot(new GraphNode(captured));
             asset.Tokens.Add(GraphTestTokens.Create("Amount", new IntSlot(-1)));
-            var local = new GraphProperty("Local", new IntSlot(7), true);
+            var local = new GraphProperty("Local", new IntSlot(7)) { RetainValue = true };
             asset.Properties.Add(local);
             AssetGraphSchema.InvalidateCache();
-            var callerProperty = new GraphProperty("Caller", new IntSlot(10), true);
+            var callerProperty = new GraphProperty("Caller", new IntSlot(10)) { RetainValue = true };
             Assert.That(callerProperty.InitialValue, Is.EqualTo(10));
             var graph = PropertyGraph(callerProperty, out _);
             var proxy = new GraphNode();
@@ -574,10 +681,13 @@ public sealed class LogicGraphExecutionTests
             Assert.That(captured.Captured.ScopeIdentity, Is.SameAs(saved.ScopeIdentity));
             Assert.That(await saved.CreateEvaluationScope().Resolve<int>(typeof(IntSlot), "Amount", new Pack()), Is.EqualTo(12));
             Assert.That(await PropertyInput(local).Evaluate(new Pack(), saved.CreateEvaluationScope()), Is.EqualTo(42));
-            Assert.That(await PropertyInput(local).Evaluate(new Pack(), graph.CreateTokenTable()), Is.EqualTo(7));
+            Assert.That(await PropertyInput(local).Evaluate(new Pack(), graph.CreateTokenTable()), Is.Zero,
+                "資產庫定義不屬於呼叫端圖庫，不可在 root scope 隱式登記或讀取其初始值。");
             graph.ActionGroups[0].Actions.Add(AssetSlot(asset));
             await graph.TriggerAction(Timing.Run, new Pack());
             Assert.That(captured.Captured.ScopeIdentity, Is.Not.SameAs(saved.ScopeIdentity), "同一資產的不同呼叫位置必須有獨立身分。");
+            Assert.That(await PropertyInput(local).Evaluate(new Pack(), captured.Captured), Is.EqualTo(7),
+                "新的資產呼叫位置仍能讀取自己庫定義的初始值。");
         }
         finally
         {
@@ -589,7 +699,7 @@ public sealed class LogicGraphExecutionTests
     [Test]
     public async Task EditingTheGraphDoesNotResetPropertiesThatOnlyExplicitInitializationClears()
     {
-        var property = new GraphProperty("Count", new IntSlot(0));
+        var property = new GraphProperty("Count", new IntSlot(0)) { RetainValue = true };
         var graph = PropertyGraph(property, out _);
 
         var first = new Pack();
@@ -607,11 +717,11 @@ public sealed class LogicGraphExecutionTests
     [Test]
     public async Task PropertiesAddedAfterTheFirstRunGetTheirOwnStorageInsteadOfDroppingWrites()
     {
-        var graph = PropertyGraph(new GraphProperty("Count", new IntSlot(0)), out _);
+        var graph = PropertyGraph(new GraphProperty("Count", new IntSlot(0)) { RetainValue = true }, out _);
         await graph.TriggerAction(Timing.Run, new Pack());
 
         // root scope 在第一次執行時就建好了；之後才加進圖的定義仍然要有儲存位置，否則寫入會無聲失敗。
-        var added = new GraphProperty("Added", new IntSlot(0), true);
+        var added = new GraphProperty("Added", new IntSlot(0)) { RetainValue = true };
         graph.Properties.Add(added);
         var group = graph.ActionGroups[0];
         group.Actions.Clear();
@@ -628,7 +738,7 @@ public sealed class LogicGraphExecutionTests
     [Test]
     public async Task WritePropertyFromOutsideIsReadByTheNextRun()
     {
-        var property = new GraphProperty("Count", new IntSlot(0), true);
+        var property = new GraphProperty("Count", new IntSlot(0)) { RetainValue = true };
         var graph = new LogicGraph<Timing, Pack>();
         graph.Properties.Add(property);
         graph.ActionGroups.Add(new ActionTimingGroup<Timing, Pack>
@@ -647,11 +757,13 @@ public sealed class LogicGraphExecutionTests
         Assert.That(pack.Count, Is.EqualTo(5));
     }
 
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task SharedAssetPropertiesAreScopedByCallingNode(bool addedAfterFirstRun)
+    [TestCase(false, true)]
+    [TestCase(true, true)]
+    [TestCase(false, false)]
+    [TestCase(true, false)]
+    public async Task SharedAssetPropertiesAreScopedByCallingNode(bool addedAfterFirstRun, bool retain)
     {
-        var property = new GraphProperty("Count", new IntSlot(0), true);
+        var property = new GraphProperty("Count", new IntSlot(0)) { RetainValue = retain };
         var asset = UnityEngine.ScriptableObject.CreateInstance<TestActionAsset>();
         asset.Properties.Add(property);
         asset.SetRoot(new GraphNode(new IncrementAndReadProperty
@@ -674,7 +786,7 @@ public sealed class LogicGraphExecutionTests
             Assert.That(first.Count, Is.EqualTo(2));
             if (addedAfterFirstRun)
             {
-                var added = new GraphProperty("Added", new IntSlot(1), true);
+                var added = new GraphProperty("Added", new IntSlot(1)) { RetainValue = retain };
                 asset.Properties.Add(added);
                 asset.SetRoot(new GraphNode(new IncrementAndReadProperty
                 {
@@ -683,7 +795,7 @@ public sealed class LogicGraphExecutionTests
             }
             var second = new Pack();
             await graph.TriggerAction(Timing.Run, second);
-            Assert.That(second.Count, Is.EqualTo(4));
+            Assert.That(second.Count, Is.EqualTo(retain || addedAfterFirstRun ? 4 : 2));
         }
         finally { UnityEngine.Object.DestroyImmediate(asset); }
     }

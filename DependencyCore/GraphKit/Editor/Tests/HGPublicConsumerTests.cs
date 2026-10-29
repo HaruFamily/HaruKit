@@ -235,7 +235,7 @@ public sealed class HGPublicConsumerTests
             Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, Binding(), out var session), Is.True);
             // 寫入關係的正本是 Action 的 PropertySlot；Property 節點下方的 Input 只是接收端身分。
             GraphNode property = session.Document.Orphans[0];
-            property.SetLocalProperty(new GraphProperty());
+            property.SetProperty(new GraphProperty());
             GraphNode source = session.Document.Orphans[1];
             var key = new HGPortKey(property.Id, "/property/input", HGPortRole.Input);
             var registry = session.CreatePortRegistry();

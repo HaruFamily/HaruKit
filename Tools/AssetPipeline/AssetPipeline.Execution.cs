@@ -76,10 +76,11 @@ namespace HaruFamily.Tools.AssetPipeline
                 foreach (GraphProperty property in GraphPropertyWalk.Collect(graph))
                 {
                     (object value, bool written) = property.CaptureValue();
-                    // Set 後目前值與 Proto 初始內容可指向不同清單，兩者都可能被本次執行修改。
+                    // Set 後目前值與 Property 初始內容可指向不同清單，兩者都可能被本次執行修改。
                     CaptureList(property.CurrentValue);
                     CaptureList(property.InitialValue);
                     propertiesBefore.Add((property, value, written));
+                    if (!property.RetainValue) property.Initialize();
                 }
                 began = true;
                 run.RestoreProperties = () =>
@@ -172,6 +173,8 @@ namespace HaruFamily.Tools.AssetPipeline
                 executing = false;
                 if (run.Transaction != PipelineTransactionStatus.RecoveryRequired) run.RestoreProperties = null;
                 run.CaptureProperties(GraphPropertyWalk.Collect(graph));
+                foreach (var before in propertiesBefore)
+                    if (!before.Property.RetainValue) before.Property.Initialize();
                 pipelineLog = run.Summary;
                 foreach (string error in run.Errors) pipelineLog += "\n" + error;
             }

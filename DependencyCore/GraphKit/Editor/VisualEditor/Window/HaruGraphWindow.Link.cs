@@ -520,20 +520,57 @@ public partial class HaruGraphWindow
             ShowNotification(new GUIContent("請連到 Action 的寫入 OutputSlot"));
             return;
         }
+        if (slot is PropertySlotBase output)
+        {
+            int generation = graphGeneration;
+            void Choose(GraphProperty property)
+            {
+                if (generation != graphGeneration) return;
+                ConnectPropertyOutput(output, property, graphMouse);
+            }
+            var menu = new GenericMenu();
+            foreach (var property in VisibleProperties())
+            {
+                if (property == null || !output.AcceptsProperty(property)) continue;
+                var captured = property;
+                menu.AddItem(new GUIContent(property.Name ?? "（未命名）"), false,
+                    () => Choose(captured));
+            }
+            menu.AddSeparator("");
+            menu.AddItem(new GUIContent("新增 Property…"), false,
+                () => Choose(null));
+            menu.ShowAsContext();
+            return;
+        }
         if (!TryMutateContent(() =>
         {
             PreserveVisibleNodePositions();
             GraphNode carrier = NewSource(slot);
-            if (slot is PropertySlotBase propertySlot)
-            {
-                // 從寫入 Slot 拉到空白處就是建立新的普通 Property：定義一建立，
-                // 這顆 Property 節點的 Header Output 便可立即作為後續讀取來源。
-                GraphProperty property = model.CreateLocalProperty(propertySlot.FamilyType, out string propertyError);
-                if (property == null) throw new InvalidOperationException(propertyError ?? "無法建立一般 Property。");
-                carrier.SetLocalProperty(property);
-            }
-            else if ((slot as FormulaSlotBase)?.CreateDefaultBody() is GraphNodeContent body) carrier.SetBody(body);
+            if ((slot as FormulaSlotBase)?.CreateDefaultBody() is GraphNodeContent body) carrier.SetBody(body);
             carrier.Pos = SnapToGrid(graphMouse);
+            carrier.EnsureId();
+        }, out var error))
+        {
+            ShowNotification(new GUIContent(error));
+            return;
+        }
+        Invalidate();
+        Repaint();
+    }
+
+    private void ConnectPropertyOutput(PropertySlotBase output, GraphProperty property, Vector2 position)
+    {
+        if (!TryMutateContent(() =>
+        {
+            PreserveVisibleNodePositions();
+            if (property == null)
+            {
+                property = model.CreateProperty(CurrentProperties(), output.FamilyType, out string creationError);
+                if (property == null) throw new InvalidOperationException(creationError);
+            }
+            GraphNode carrier = NewSource(output);
+            carrier.SetProperty(property);
+            carrier.Pos = SnapToGrid(position);
             carrier.EnsureId();
         }, out var error))
         {
@@ -563,13 +600,6 @@ public partial class HaruGraphWindow
             if (!TryMutateContent(() =>
             {
                 PreserveVisibleNodePositions();
-                if (!target.Carrier.IsProtoProperty && target.Property?.FamilyType != writer.Slot.FamilyType)
-                {
-                    var local = model.CreateLocalProperty(writer.Slot.FamilyType, out string typeError);
-                    if (local == null) throw new InvalidOperationException(typeError);
-                    target.Carrier.SetLocalProperty(local);
-                    BreakIncompatiblePropertyLinks(target.Carrier, local);
-                }
                 AttachSource(writer.Slot, target.Carrier);
             }, out string writeError))
             {

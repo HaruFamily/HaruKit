@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using UnityEditor;
 
 /// <summary>
-/// 資產工作副本的一份快照。內容、候選、Token 與 ProtoProperty 庫須同一次深複製，
+/// 資產工作副本的一份快照。內容、候選、Token 與 Property 庫須同一次深複製，
 /// 保留節點與庫定義之間的共享引用。
 /// </summary>
 public class HGAssetSnapshot

@@ -394,10 +394,9 @@ public partial class HaruGraphWindow
         foreach (var c in carriers) if (!selection.Contains(c)) boundary.Add(c);
 
         var shared = new List<object>(tokens);
-        // ProtoProperty 是庫定義的引用：必須沿用同一顆，否則會抄出一份不在庫裡的定義。
-        // LocalProperty 相反，它是節點私有的——跟著節點複製才不會讓複本與原件共用同一個儲存位置與型別宣告。
+        // Property 是庫定義的引用：必須沿用同一顆，否則會抄出一份不在庫裡的定義。
         foreach (var item in properties)
-            if (item is GraphProperty property && property.Proto) shared.Add(property);
+            if (item is GraphProperty property) shared.Add(property);
         shared.AddRange(boundary);
 
         var copies = GraphDeepCopy.Copy(new List<GraphNode>(sources), shared);
@@ -409,6 +408,7 @@ public partial class HaruGraphWindow
         var children = new HashSet<object>(HGRefComparer.Instance);
         var walked = new HashSet<object>(HGRefComparer.Instance);
         foreach (var t in tokens) walked.Add(t);
+        foreach (var p in properties) walked.Add(p);
         foreach (var b in boundary) walked.Add(b);
         foreach (var copy in copies)
             foreach (var slot in HGModel.WalkSlots(copy, walked))
@@ -419,7 +419,7 @@ public partial class HaruGraphWindow
             }
 
         // 這時複本已經不指著任何組外載體，走訪跑不回原圖；Token 仍是沿用的，所以要當成走過了。
-        foreach (var copy in copies) HGModel.ResetNodeIds(copy, tokens);
+        foreach (var copy in copies) HGModel.ResetNodeIds(copy, shared);
         foreach (var copy in copies) if (!children.Contains(copy)) roots.Add(copy);
         return copies;
     }
@@ -439,7 +439,7 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>剪貼簿裡有沒有指向目前作用域以外的 Token。</summary>
-    private bool HasForeignToken(IReadOnlyList<GraphNode> nodes)
+    private bool HasForeignToken(IReadOnlyList<GraphNode> nodes, out bool foreignProperty)
     {
         var known = new HashSet<object>(HGRefComparer.Instance);
         foreach (var t in CurrentTokens() ?? new List<GraphToken>()) if (t != null) known.Add(t);
@@ -450,6 +450,11 @@ public partial class HaruGraphWindow
         var visited = new HashSet<object>(HGRefComparer.Instance);
         foreach (var n in nodes) ScanSubgraph(n, visited, carriers, tokens, properties);
 
+        var knownProperties = CurrentProperties();
+        foreignProperty = false;
+        foreach (var p in properties)
+            if (p is GraphProperty property && (knownProperties == null || !knownProperties.Contains(property)))
+                foreignProperty = true;
         foreach (var t in tokens) if (!known.Contains(t)) return true;
         return false;
     }
@@ -487,7 +492,12 @@ public partial class HaruGraphWindow
 
         // 剪貼簿是 static，可能來自別張圖或別個資產：那裡的 Token 在這個作用域查不到值。
         // 不擋（跨圖搬節點是合理的需求），但提示要換掉，否則只會在存檔時看到一條 InScope 錯誤。
-        bool foreign = HasForeignToken(copies);
+        bool foreign = HasForeignToken(copies, out bool foreignProperty);
+        if (foreignProperty)
+        {
+            ShowNotification(new GUIContent("無法貼上：Property 屬於另一張圖，請先在本圖建立定義並重新指定"));
+            return;
+        }
         PlaceCopies(copies, roots, "已貼上");
         if (foreign)
             ShowNotification(new GUIContent("貼上的節點引用了這張圖沒有的 Token，請重新指定"));

@@ -48,7 +48,7 @@ public class HGFocus : IOrphanPool
     // 資產的Token工作副本。與 AssetOrphans 同一次 DeepCopy 出來，兩邊指向同一批端點物件。
     public List<GraphToken> AssetTokens;
 
-    // 與資產根、Token 同一次深複製，保留節點對 ProtoProperty 庫定義的共享引用。
+    // 與資產根、Token 同一次深複製，保留節點對 Property 庫定義的共享引用。
     public List<GraphProperty> AssetProperties;
 
     /// <summary>

@@ -3,18 +3,7 @@ namespace HaruFamily.DependencyCore.GraphKit
 using System;
 using UnityEngine;
 
-/// <summary>
-/// 圖內的具名型別化變數：Action 透過 <see cref="PropertySlotBase"/> 寫入，一般輸入欄位直接讀它的目前值。
-///
-/// LocalProperty 住在單一 GraphNode，ProtoProperty 定義住圖層清單（<see cref="IPropertyOwner"/>）。
-/// 讀寫節點都只存同一份定義引用，因此改 ProtoProperty Key 不會斷線。
-/// </summary>
-// 型別宣告借用 FormulaSlotBase：族身分、結果型別、常數編輯型別與 Project asset 相容判定全部已經住在那裡，
-// ProtoProperty 的初始內容就是它的常數值。**這顆 Slot 只宣告型別與初始值，不接節點**——
-// 接了節點就變成「有來源公式的具名取值」，那是 GraphToken 的職責，由驗證擋下。
-//
-// 目前值是執行期資料，所以不序列化。它存 object 而不是泛型 T：載體非泛型才能讓候選池、
-// 複製貼上與編輯器走訪走同一條路，型別安全收斂在寫入端的相容判定與編輯期選單。
+/// <summary>圖層的具名型別化儲存定義；節點只引用，執行期值由各執行層管理。</summary>
 [Serializable]
 public class GraphProperty
 {
@@ -27,9 +16,29 @@ public class GraphProperty
     [SerializeReference]
     private FormulaSlotBase _slot;
 
-    // true＝ProtoProperty：初始內容由 _slot 的常數提供，可直接讀取，不必先 Set。
+    // null 是參考型別合法的初始值，與庫歸屬或保留時間無關。
     [SerializeField]
-    private bool _proto;
+    private bool _nullInitialValue;
+
+    public bool InitialValueIsNull
+    {
+        get => _nullInitialValue;
+        set => _nullInitialValue = value && ResultType != null && !ResultType.IsValueType;
+    }
+
+    public void SetInitialValue(object value)
+    {
+        if (_slot == null) return;
+        InitialValueIsNull = value == null;
+        _slot.DefaultObject = value;
+    }
+
+    // 執行生命週期；新定義預設只在本次執行有效。
+    [SerializeField]
+    private bool _executionLocal = true;
+
+    /// <summary>保留到圖實例結束；關閉時只在本次執行鏈內有效。</summary>
+    public bool RetainValue { get => !_executionLocal; set => _executionLocal = !value; }
 
     [NonSerialized]
     private object _current;
@@ -40,30 +49,36 @@ public class GraphProperty
     [NonSerialized]
     private bool _resolvingInput;
 
+    [NonSerialized]
+    private object _executionInitial;
+
+    [NonSerialized]
+    private bool _hasExecutionInitial;
+
     public GraphProperty() { }
 
-    public GraphProperty(string name, FormulaSlotBase slot, bool proto = false)
+    public GraphProperty(string name, FormulaSlotBase slot)
     {
         _name = name;
         _slot = slot;
-        _proto = proto;
     }
 
-    /// <summary>顯示名稱。ProtoProperty 在同一變數庫內跨族唯一；LocalProperty 不要求名稱。</summary>
+    /// <summary>顯示名稱，在同一變數庫內跨族唯一。</summary>
     public string Name
     {
         get => string.IsNullOrEmpty(_name) ? null : _name;
         set => _name = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
-    /// <summary>型別宣告用的欄位，同時保存 ProtoProperty 的初始內容。</summary>
+    /// <summary>型別宣告用的欄位，同時保存 Property 的初始內容。</summary>
     public FormulaSlotBase Slot => _slot;
 
     /// <summary>換值型別＝換整個 Slot。Id、名稱與目前值狀態不動。</summary>
-    public void SetSlot(FormulaSlotBase slot) => _slot = slot;
-
-    /// <summary>有沒有可編輯的初始內容。false＝一般 Property，初始化後為值型別預設值或 null。</summary>
-    public bool Proto { get => _proto; set => _proto = value; }
+    public void SetSlot(FormulaSlotBase slot)
+    {
+        _slot = slot;
+        InitialValueIsNull = _nullInitialValue;
+    }
 
     /// <summary>值型別。Slot 未指定時為 null。</summary>
     public Type ResultType => _slot?.ResultType;
@@ -84,13 +99,24 @@ public class GraphProperty
     /// <summary>複製定義後必須換新識別碼，否則兩份定義共用同一筆焦點與引用。</summary>
     public void ResetId() => _id = null;
 
-    /// <summary>初始內容：ProtoProperty 取 Slot 的常數，一般 Property 取值型別預設值。</summary>
-    // 一般 Property 不讀 Slot 常數：那一格在編輯器上沒有入口，但舊資料或族切換仍可能留著值，
-    // 讀了就會變成「沒有初始內容的 Property 卻拿得到清單」。
-    public object InitialValue => _proto ? _slot?.DefaultObject : DefaultOf(ResultType);
+    /// <summary>初始內容，可明確指定 null；定義的型別 Slot 不參與求值。</summary>
+    public object InitialValue => _nullInitialValue ? null : _slot?.DefaultObject;
 
     /// <summary>目前值。尚未寫入時回初始內容；參考型別取得的是同一份引用，不做複製隔離。</summary>
-    public object CurrentValue => _written ? _current : InitialValue;
+    public object CurrentValue
+    {
+        get
+        {
+            if (_written) return _current;
+            if (RetainValue) return InitialValue;
+            if (!_hasExecutionInitial)
+            {
+                _executionInitial = GraphDeepCopy.Copy(InitialValue);
+                _hasExecutionInitial = true;
+            }
+            return _executionInitial;
+        }
+    }
 
     /// <summary>是否已被寫入過。未寫入不是錯誤，讀取一律回初始內容。</summary>
     public bool HasValue => _written;
@@ -107,6 +133,8 @@ public class GraphProperty
     {
         _current = null;
         _written = false;
+        _executionInitial = null;
+        _hasExecutionInitial = false;
     }
 
     /// <summary>取回目前值的備份，交給呼叫端保管。</summary>
@@ -130,11 +158,7 @@ public class GraphProperty
 
     public void ExitInputEvaluation() => _resolvingInput = false;
 
-    private static object DefaultOf(Type type)
-    {
-        if (type == null) return null;
-        return type.IsValueType ? Activator.CreateInstance(type) : null;
-    }
+
 }
 
 }

@@ -336,7 +336,7 @@ public sealed class HGDocumentSession<TDocument>
         {
             if (!IsDocumentOwned(carrier) || source == null || !source.IsValid) return HGSessionCommandResult.Rejected;
             if (source.Token != null && !Owns(source.Token)) return HGSessionCommandResult.Rejected;
-            if (source.Property?.Proto == true
+            if (source.Property != null
                 && (Document is not IPropertyOwner propertyOwner || !propertyOwner.Properties.Contains(source.Property)))
                 return HGSessionCommandResult.Rejected;
             if (source.Matches(carrier)) return HGSessionCommandResult.NoChange;
@@ -354,7 +354,7 @@ public sealed class HGDocumentSession<TDocument>
             foreach (var token in DocumentTokens()) shared.Add(token);
             if (Document is IPropertyOwner properties)
                 foreach (var property in properties.Properties)
-                    if (property?.Proto == true) shared.Add(property);
+                    if (property != null) shared.Add(property);
             foreach (var pool in OrphanPools())
                 foreach (var node in pool) shared.Add(node);
             var pending = new Queue<GraphNode>();
@@ -759,15 +759,7 @@ public sealed class HGCarrierSource
         if (kind == NodeKind.Token) { carrier.SetToken(Token); return; }
         if (kind == NodeKind.Property)
         {
-            if (Property.Proto) carrier.SetProtoProperty(Property);
-            else
-            {
-                var local = GraphDeepCopy.Copy(Property);
-                if (local == null || ReferenceEquals(local, Property)) throw new InvalidOperationException("Property clone failed.");
-                local.ResetId();
-                local.EnsureId();
-                carrier.SetLocalProperty(local);
-            }
+            carrier.SetProperty(Property);
             return;
         }
         if (kind == NodeKind.Asset)

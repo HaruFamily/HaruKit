@@ -128,7 +128,7 @@ namespace HaruFamily.Tools.AssetPipeline
                     GraphProperty property = _node.Property;
                     if (!AcceptsProperty(property)) return Mismatch("Property");
 
-                    // 未寫入不是錯誤：一般 Property 回值型別預設值（清單是 null），Proto 回它設定的初始內容。
+                    // 未寫入不是錯誤：回定義的初始內容，參考型別可明確指定 null。
                     // 參考型別取得同一份引用，不做複製隔離。
                     object value = property.CurrentValue;
                     if (value == null && default(TResult) is null) return default;

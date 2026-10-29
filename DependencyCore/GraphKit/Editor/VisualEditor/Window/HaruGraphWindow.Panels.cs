@@ -297,12 +297,14 @@ public partial class HaruGraphWindow
     // 定義住圖的工作副本，所以每個命令都走 MarkGraphChanged，跟著存檔交易與圖的 Undo 堆疊；
     // 這和目錄庫（內容住 Owner、立即寫檔）不同，不要照抄那一邊的收尾。
 
-    // 庫只列 ProtoProperty：庫的用途是編「作者填的初始內容」，一般 Property 沒有那種內容，
-    // 列在這裡只會是一排點不出東西的格子。一般 Property 在畫布上就地建立與選取。
+    // 庫是定義的唯一擁有者；畫布只引用這份清單。
     private HGPropertyLibraryView PropertyLibraryView() => new()
     {
-        Properties = HGModel.ReadProperties(CurrentProperties(), proto: true),
+        Properties = HGModel.ReadProperties(VisibleProperties()),
     };
+
+    private List<GraphProperty> VisibleProperties()
+        => CurrentProperties() ?? new List<GraphProperty>();
 
     private HGPropertyLibraryCommands PropertyLibraryCommands() => new()
     {
@@ -313,12 +315,31 @@ public partial class HaruGraphWindow
         IssueOf = PropertyIssue,
         Move = MoveProperty,
         SetInitialValue = SetPropertyInitialValue,
+        UseSlotInitialValue = UsePropertySlotInitialValue,
         AddInitialItems = AddPropertyInitialItems,
         RemoveInitialItem = RemovePropertyInitialItem,
         MoveInitialItem = MovePropertyInitialItem,
         AddInitialValue = AddPropertyInitialValue,
         SetInitialItem = SetPropertyInitialItem,
+        SetRetainValue = SetPropertyRetainValue,
     };
+
+    private void UsePropertySlotInitialValue(GraphProperty property)
+    {
+        if (property == null || !property.InitialValueIsNull) return;
+        BreakUndoMerge();
+        property.InitialValueIsNull = false;
+        MarkGraphChanged();
+    }
+
+    private void SetPropertyRetainValue(GraphProperty property, bool retain)
+    {
+        if (property == null || property.RetainValue == retain) return;
+        BreakUndoMerge();
+        property.RetainValue = retain;
+        MarkGraphChanged();
+        BreakUndoMerge();
+    }
 
     /// <summary>目前這張圖的 Property 定義。沒有這個能力的文件回 null，面板不會被畫出來。</summary>
     private List<GraphProperty> CurrentProperties()
@@ -326,7 +347,7 @@ public partial class HaruGraphWindow
 
     private bool RenamePropertyFromLibrary(GraphProperty property, string name)
     {
-        if (model.RenameProperty(property, name, CurrentProperties(), out string error))
+        if (model.RenameProperty(property, name, VisibleProperties(), out string error))
         {
             MarkGraphChanged();
             return true;
@@ -349,7 +370,7 @@ public partial class HaruGraphWindow
         BreakUndoMerge();
     }
 
-    /// <summary>複製一顆 ProtoProperty：複本是新的儲存位置，圖上沒有節點指向它。</summary>
+    /// <summary>複製一顆 Property：複本是新的儲存位置，圖上沒有節點指向它。</summary>
     private void DuplicateProperty(GraphProperty source)
     {
         var scope = CurrentProperties();
@@ -381,8 +402,7 @@ public partial class HaruGraphWindow
             : $"已移除 '{property.Name}'；Ctrl+Z 可復原"));
     }
 
-    /// <summary>庫的「＋ 新增」只建 ProtoProperty：型別決定族，建立後不再更動。</summary>
-    // 一般 Property 不從這裡建——它沒有可編的初始內容，建在庫裡等於在庫裡放一格點不開的東西。
+    /// <summary>庫的「＋ 新增」只建 Property：型別決定族，建立後不再更動。</summary>
     private void ShowCreatePropertyMenu()
     {
         var scope = CurrentProperties();
@@ -393,14 +413,14 @@ public partial class HaruGraphWindow
         {
             var captured = slotType;
             menu.AddItem(new GUIContent(path), false,
-                () => CreateProperty(scope, captured, true));
+                () => CreateProperty(scope, captured));
         }
         menu.ShowAsContext();
     }
 
-    private GraphProperty CreateProperty(List<GraphProperty> scope, Type slotType, bool proto)
+    private GraphProperty CreateProperty(List<GraphProperty> scope, Type slotType)
     {
-        var property = model.CreateProperty(scope, slotType, proto, out string error);
+        var property = model.CreateProperty(scope, slotType, out string error);
         if (property == null)
         {
             ShowNotification(new GUIContent(error));
@@ -410,26 +430,29 @@ public partial class HaruGraphWindow
         return property;
     }
 
-    /// <summary>從畫布建一顆節點私有的 LocalProperty 並讓這個節點指向它。</summary>
+    /// <summary>從畫布建立庫定義並換接，沿用來源替換的連線相容檢查。</summary>
     private void CreatePropertyForNode(HGNodeView node, Type slotType)
     {
         if (node?.Carrier == null) return;
 
         BreakUndoMerge();
-        GraphProperty property = model.CreateLocalProperty(slotType, out string error);
+        bool tracking = model.TrackChanges;
+        GraphProperty property;
+        string error;
+        model.TrackChanges = false;
+        try { property = model.CreateProperty(CurrentProperties(), slotType, out error); }
+        finally { model.TrackChanges = tracking; }
         if (property == null) { ShowNotification(new GUIContent(error)); return; }
 
-        node.Carrier.SetLocalProperty(property);
-        Invalidate();
-        MarkGraphChanged();
+        ChangeNodeToProperty(node, property);
         BreakUndoMerge();
     }
 
-    /// <summary>改 ProtoProperty 的初始內容。寫的是型別宣告欄位的常數，不是任何執行期的目前值。</summary>
+    /// <summary>改 Property 的初始內容。寫的是型別宣告欄位的常數，不是任何執行期的目前值。</summary>
     private void SetPropertyInitialValue(GraphProperty property, object value)
     {
         if (property?.Slot == null) return;
-        property.Slot.DefaultObject = value;
+        property.SetInitialValue(value);
         MarkGraphChanged();
     }
 
@@ -440,14 +463,14 @@ public partial class HaruGraphWindow
     {
         FormulaSlotBase slot = property?.Slot;
         if (slot == null) return null;
-        if (slot.DefaultObject is IList existing) return existing;
+        if (property.InitialValue is IList existing) return existing;
         if (!create) return null;
 
         Type resultType = slot.ResultType;
         if (resultType == null || !HGReflect.IsList(resultType, out _)) return null;
         if (HGReflect.CreateInstance(resultType) is not IList created) return null;
 
-        slot.DefaultObject = created;
+        property.SetInitialValue(created);
         return created;
     }
 

@@ -36,7 +36,7 @@ AP 是 **Editor-only、同步執行**的資產處理管線框架。一個 `Asset
 | `Graph.cs` | `Graph`（實作 `IGraphDocument`、`ITokenOwner`、`IPropertyOwner`、`IGraphViewStateOwner`；`_viewState` 是節點圖收合版面，只給編輯器用）與 `ActionGroup` |
 | `GraphDrawer.cs` | Inspector 上的圖卡片（開圖、驗證）、結果定位 |
 | `GraphVerifier.cs` | 結構與型別驗證，產生 `GraphDiagnostic` |
-| `GraphPropertyWalk.cs` | 收集整張圖用到的 Property 定義（ProtoProperty＋LocalProperty） |
+| `GraphPropertyWalk.cs` | 收集整張圖用到的 Property 定義（唯一的圖層庫） |
 | `Node.cs` | `FormulaBase<TResult, TPack>`、`ActionBase`、internal `IFormula` |
 | `Slot.cs` | `FormulaSlot<TResult, TFormula>`（輸入欄位）、`ActionSlot`（動作欄位） |
 | `PropertySlot.cs` | `PropertySlot<TResult, TSlot>`（Property 寫入欄位） |
@@ -74,10 +74,10 @@ AP 是 **Editor-only、同步執行**的資產處理管線框架。一個 `Asset
 
 ### 4.3 Property
 
-- `Graph` 實作 `IPropertyOwner`，ProtoProperty 定義存在圖裡，跟著工作副本、存檔與 Undo 走。
+- `Graph` 實作 `IPropertyOwner`，所有 Property 定義只存在圖層庫中，跟著工作副本、存檔與 Undo 走。
 - 寫入端宣告 `PropertySlot<TResult, TSlot>`（例如 `PropertySlot<List<Object>, ObjectListSlot>`），呼叫 `Write(value)` **只替換目前值**，不追加、不合併、不複製。沒接、停用或族不符時回 false 且不寫入。
-- 讀取端的一般輸入 Slot 直接接 Property 節點。未寫入的一般 Property 回 `default(T)`（清單是 null），ProtoProperty 回初始內容。參考型別拿到同一份引用，不做複製隔離。
-- **目前值不序列化**：同一個 Editor session 內跨次執行保留，沒有動作再寫入就沿用上次的值；Domain Reload 或重新載入圖之後回到未寫入狀態。
+- 一般輸入 Slot 直接讀 Property 目前值；未寫入回定義初始內容，參考型別可明確指定 null。讀取不執行 Action；寫入按引用保存，未保留的初始內容取執行期副本。
+- **目前值不序列化**：RetainValue 開啟時於同一個 Editor session 內跨次保留；關閉時執行前初始化、執行結束取得結果快照後清除，初始內容按次深複製；Domain Reload 或重新載入圖之後回到未寫入狀態。
 
 ### 4.4 交易與結果
 
@@ -94,7 +94,7 @@ AP 是 **Editor-only、同步執行**的資產處理管線框架。一個 `Asset
 1. **資產修改只能經由 `context.Assets`。** 直接呼叫 `AssetDatabase`／`File` 寫入的變更不在交易內，失敗時回復不了。
 2. **不要在 Action 裡呼叫全專案 `AssetDatabase.SaveAssets()`**；writer 只儲存相關資產。
 3. **交易型別是 internal**，使用端不自行建立、提交或回復交易；`AssetPipeline.current` 與 `CurrentAction` 對使用端唯讀。
-4. **Property 的備份、快照、回復一律用 `GraphPropertyWalk.Collect(graph)`**。只讀 `graph.Properties` 會漏掉節點私有的 LocalProperty。
+- 備份、快照與回復使用 `GraphPropertyWalk.Collect(graph)`，只從唯一的 `graph.Properties` 庫收集並依引用去重；不存在節點私有定義。
 5. **驗證不檢查「先寫後讀」**：未寫入的 Property 是合法狀態。不要為此加回時序檢查。
 6. **執行一律使用已儲存的圖並重新驗證**；不可為了方便讀取編輯器的工作副本或跳過驗證。
 7. 公式要在「預覽」（沒有 `AssetPipeline.CurrentAction`）時不產生資產副作用；需要建立資產的公式只能在 AP 執行中、經 `CurrentAction.Assets.CreateAssetSet` 建立。
@@ -163,10 +163,12 @@ public class CollectAssets : ActionBase
 
 測試在 `Tests/Editor/`，測試組件同時引用 LogicGraph 與 UniTask，**執行 AP 測試需要專案也安裝這兩者**：
 
-- `PipelineExecutionTests`：建立、覆寫、重複修改的提交與回復；GUID、檔案內容、記憶體狀態保留；子動作共用交易；部分失敗；LogError；缺備份；未儲存資料；多檔產出；Property 值與共用清單回復；Property 快照；循序子動作讀取；跨次保留；LocalProperty 回復；遺失型別清理。
-- `PropertyGraphTests`：Property 讀寫、未寫入預設值、ProtoProperty 初始內容、DeepCopy、讀後寫回不算循環、族相容與命名驗證。
+- `PipelineExecutionTests`：建立、覆寫、重複修改的提交與回復；GUID、檔案內容、記憶體狀態保留；子動作共用交易；部分失敗；LogError；缺備份；未儲存資料；多檔產出；Property 值與共用清單回復；Property 快照；循序子動作讀取；跨次保留；庫定義值回復；遺失型別清理。
+- `PropertyGraphTests`：Property 讀寫、未寫入預設值、Property 初始內容、DeepCopy、讀後寫回不算循環、族相容與命名驗證。
 - `GraphVerifierTests`：Formula／Token／Property 共用跨族政策、`ObjectSlot` 上轉與合法 null、Slot／引用停用保底、跨 Pack／結果拒絕、衍生族黑名單、寫入端同族限制、跨族 Token 遞迴與 Guard 清理、空動作、節點循環。
 - `GraphKitCrossToolSessionTests`：共用驗證器、結果定位不改動文件與 Dirty 狀態、視窗命令、跨工具 session 隔離。
 - `LibraryOrderTests`：Token 視圖保序、資產重掃與改名保序。
 
 測試會建立自己專用的暫存資料夾；已有未完成的 AP 交易時先拒絕執行，不清除別人的日誌。在 Unity Test Runner 以 EditMode 執行；從 UPM 安裝時，要把 `com.harufamily.tools.assetpipeline` 加進 `manifest.json` 的 `testables`。**沒有實際執行的測試不可回報為通過。**
+
+> Trace: verified 2026-10-29 · doc `Doc/2026-10-2/DECISION_Property單一模型與資料保留.md`（原始碼靜態核對；使用者確認本輪 TestRunner 修正，驗證範圍見決策文件）

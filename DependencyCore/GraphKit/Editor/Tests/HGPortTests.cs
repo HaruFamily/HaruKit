@@ -45,14 +45,14 @@ public class HGPortTests
         private GraphNode node;
         public override GraphNode Node => node;
         public override void SetNode(GraphNode value) => node = value;
-        public override Type FamilyType => typeof(TestSlot);
+        public override Type FamilyType => typeof(TestFormulaSlot);
     }
 
     [Test]
     public void PropertyWriterConnectsToLowerInputAndRebuildsWithoutUsingHeader()
     {
         var property = new GraphNode();
-        property.SetLocalProperty(new GraphProperty());
+        property.SetProperty(new GraphProperty("Value", new TestFormulaSlot()));
         var writer = new WriteTargetSlot();
         writer.SetNode(property);
         var source = new HGPropertyWriteSource(writer, new GraphNode());
@@ -82,50 +82,53 @@ public class HGPortTests
             Is.EqualTo(HGLinkPortResolution.Resolved));
         Assert.That(link.InputPort, Is.SameAs(input));
         Assert.That(link.OutputPort, Is.SameAs(output));
-        property.SetProtoProperty(null);
+        property.SetProperty(null);
         Assert.That(input.Presentation.Visible, Is.True);
         Assert.That(HGPortConnection.Check(output, input, 4), Is.EqualTo(HGPortConnectionResult.MissingBinding));
     }
 
     [Test]
-    public void UntypedLocalPropertyIsCreatedAndRefusesLinksUntilAWriterTypesIt()
+    public void CreatingAPropertyRequiresATypeAndRegistersOneLibraryDefinition()
     {
-        // 無 Key 的 ProtoProperty 切成 Local 時手上還沒有族；建立失敗會讓節點留在 Proto 卻回報切換成功。
-        GraphProperty property = new HGModel().CreateLocalProperty(null, out string error);
-
+        var model = new HGModel();
+        var library = new List<GraphProperty>();
+        Assert.That(model.CreateProperty(library, typeof(string), out var invalidTypeError), Is.Null);
+        Assert.That(invalidTypeError, Is.Not.Null.And.Not.Empty);
+        Assert.That(model.CreateProperty(library, null, out _), Is.Null);
+        Assert.That(model.CreateProperty(library, typeof(FormulaSlotBase), out _), Is.Null);
+        Assert.That(library, Is.Empty);
+        var property = model.CreateProperty(library, typeof(TestFormulaSlot), out var error);
         Assert.That(error, Is.Null);
-        Assert.That(property, Is.Not.Null);
-        Assert.That(property.FamilyType, Is.Null);
-        Assert.That(property.Id, Is.Not.Empty);
-        Assert.That(new WriteTargetSlot().AcceptsProperty(property), Is.False);
+        Assert.That(library, Is.EqualTo(new[] { property }));
+        Assert.That(property.RetainValue, Is.False);
     }
 
     [Test]
-    public void CopiedLocalPropertyTakesANewIdWhileTheProtoDefinitionKeepsIts()
+    public void ResettingNodeIdsDoesNotChangePropertyDefinitionIds()
     {
         var local = new GraphProperty(null, new TestFormulaSlot());
-        var proto = new GraphProperty("Shared", new TestFormulaSlot(), true);
+        var proto = new GraphProperty("Shared", new TestFormulaSlot());
         string localId = local.EnsureId();
         string protoId = proto.EnsureId();
         var localNode = new GraphNode();
-        localNode.SetLocalProperty(local);
+        localNode.SetProperty(local);
         var protoNode = new GraphNode();
-        protoNode.SetProtoProperty(proto);
+        protoNode.SetProperty(proto);
 
         HGModel.ResetNodeIds(localNode);
         HGModel.ResetNodeIds(protoNode);
 
-        Assert.That(local.Id, Is.Not.Null.And.Not.EqualTo(localId), "Local 是節點私有定義，複本要有自己的識別碼。");
-        Assert.That(proto.Id, Is.EqualTo(protoId), "Proto 是共用的庫定義，複製節點不可改到它。");
+        Assert.That(local.Id, Is.EqualTo(localId), "庫定義的識別碼不隨節點重設。");
+        Assert.That(proto.Id, Is.EqualTo(protoId), "Property 是共用的庫定義，複製節點不可改到它。");
     }
 
     [Test]
-    public void DuplicatingATokenKeepsTheProtoPropertyDefinitionShared()
+    public void DuplicatingATokenKeepsThePropertyDefinitionShared()
     {
-        var proto = new GraphProperty("Shared", new TestFormulaSlot(), true);
+        var proto = new GraphProperty("Shared", new TestFormulaSlot());
         proto.EnsureId();
         var propertyNode = new GraphNode();
-        propertyNode.SetProtoProperty(proto);
+        propertyNode.SetProperty(proto);
         var reader = new TestFormulaSlot();
         reader.SetNode(propertyNode);
         var token = new GraphToken("Source", reader);
@@ -140,9 +143,33 @@ public class HGPortTests
     }
 
     [Test]
-    public void DuplicatingAProtoPropertyCreatesANewStorageWithAFreshIdAndName()
+    public void ExtractedAssetCopiesDefinitionsOnceAndPreservesInputAndOriginalLibrary()
     {
-        var source = new GraphProperty("Shared", new TestFormulaSlot(), true);
+        var original = new GraphProperty("Shared", new TestFormulaSlot()) { RetainValue = true };
+        original.EnsureId();
+        var first = new GraphNode();
+        var second = new GraphNode();
+        first.SetProperty(original);
+        second.SetProperty(original);
+        var input = new GraphNode();
+        first.SetPropertyInput(input);
+        var library = new List<GraphProperty>();
+
+        HaruGraphWindow.CopyPropertyDefinitions(new[] { first, second }, library);
+
+        Assert.That(library, Has.Count.EqualTo(1));
+        Assert.That(first.Property, Is.SameAs(library[0]).And.SameAs(second.Property));
+        Assert.That(first.Property, Is.Not.SameAs(original));
+        Assert.That(first.Property.Id, Is.Not.EqualTo(original.Id));
+        Assert.That(first.Property.RetainValue, Is.True);
+        Assert.That(first.PropertyInput.Node, Is.SameAs(input));
+        Assert.That(original.Name, Is.EqualTo("Shared"));
+    }
+
+    [Test]
+    public void DuplicatingAPropertyCreatesANewStorageWithAFreshIdAndName()
+    {
+        var source = new GraphProperty("Shared", new TestFormulaSlot());
         source.EnsureId();
         var scope = new List<GraphProperty> { source };
 
@@ -150,7 +177,6 @@ public class HGPortTests
 
         Assert.That(error, Is.Null);
         Assert.That(copy, Is.Not.Null.And.Not.SameAs(source));
-        Assert.That(copy.Proto, Is.True);
         Assert.That(copy.Id, Is.Not.Null.And.Not.EqualTo(source.Id));
         Assert.That(copy.Slot, Is.Not.SameAs(source.Slot), "初始內容要是獨立的一份，改複本不能動到原件。");
         Assert.That(copy.Name, Is.EqualTo("Shared 複本"));
@@ -158,26 +184,26 @@ public class HGPortTests
     }
 
     [Test]
-    public void CopyingPropertyNodesClonesTheLocalDefinitionAndSharesTheProtoOne()
+    public void CopyingPropertyNodesSharesEveryLibraryDefinition()
     {
         var local = new GraphProperty(null, new TestFormulaSlot());
         string localId = local.EnsureId();
         var localNode = new GraphNode();
         localNode.EnsureId();
-        localNode.SetLocalProperty(local);
+        localNode.SetProperty(local);
 
-        var proto = new GraphProperty("Shared", new TestFormulaSlot(), true);
+        var proto = new GraphProperty("Shared", new TestFormulaSlot());
         proto.EnsureId();
         var protoNode = new GraphNode();
         protoNode.EnsureId();
-        protoNode.SetProtoProperty(proto);
+        protoNode.SetProperty(proto);
 
         List<GraphNode> copies = HaruGraphWindow.CloneSubgraph(new List<GraphNode> { localNode, protoNode }, out _);
 
         Assert.That(copies, Has.Count.EqualTo(2));
-        Assert.That(copies[0].Property, Is.Not.SameAs(local), "LocalProperty 是節點私有定義，複本必須有自己的一份。");
-        Assert.That(copies[0].Property.Id, Is.Not.Null.And.Not.EqualTo(localId));
-        Assert.That(copies[1].Property, Is.SameAs(proto), "ProtoProperty 是庫定義，複本必須沿用同一顆。");
+        Assert.That(copies[0].Property, Is.SameAs(local));
+        Assert.That(copies[0].Property.Id, Is.EqualTo(localId));
+        Assert.That(copies[1].Property, Is.SameAs(proto), "Property 是庫定義，複本必須沿用同一顆。");
     }
 
     [Test]
@@ -188,16 +214,22 @@ public class HGPortTests
         try
         {
             var document = new PropertyDocument();
-            // 庫裡只有另一族的 ProtoProperty：切成 Proto 之後寫入線必然不相容，一定會走斷線那條路。
-            var proto = new GraphProperty("Other", new TestFormulaSlotB(), true);
+            // 庫裡只有另一族的 Property：切換定義之後寫入線必然不相容，一定會走斷線那條路。
+            var proto = new GraphProperty("Other", new TestFormulaSlotB());
             proto.EnsureId();
             document.Properties.Add(proto);
+            var targetReference = new GraphNode();
+            targetReference.SetProperty(proto);
+            string targetId = targetReference.EnsureId();
+            document.Orphans.Add(targetReference);
 
             var local = new GraphProperty(null, new TestFormulaSlot());
             local.EnsureId();
+            local.Name = "Original";
+            document.Properties.Add(local);
             var propertyNode = new GraphNode();
             string propertyId = propertyNode.EnsureId();
-            propertyNode.SetLocalProperty(local);
+            propertyNode.SetProperty(local);
 
             // Property 節點刻意不放候選池：它只被寫入欄位牽著，斷線後若沒有回收就會從整張圖失聯。
             var writer = new PropertyWriterBody();
@@ -212,7 +244,7 @@ public class HGPortTests
             HGNodeView view = window.NodeOfId(propertyId);
             Assert.That(view?.Carrier, Is.Not.Null, "綁定後應該找得到 Property 節點。");
 
-            window.ChangePropertyMode(view, true);
+            window.ChangeNodeToProperty(view, window.NodeOfId(targetId).Property);
             Assert.That(window.GetDocumentCommands().Query(), Is.Not.Null);
 
             Assert.That(window.NodeOfId(propertyId)?.Carrier, Is.Not.Null, "換模式只斷線，節點必須留在圖上。");
@@ -229,52 +261,30 @@ public class HGPortTests
     }
 
     [Test]
-    public void SwitchingAKeylessProtoPropertyToLocalProducesAnUntypedLocal()
+    public void UnboundPropertyNodeKeepsItsIdentityAndRejectsWriters()
     {
-        var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
-        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
-        try
-        {
-            var document = new PropertyDocument();
-            var propertyNode = new GraphNode();
-            string propertyId = propertyNode.EnsureId();
-            propertyNode.SetProtoProperty(null);   // Proto 模式但尚未選 Key：合法的編輯狀態
-            document.Orphans.Add(propertyNode);
-            owner.Document = document;
-
-            Assert.That(window.BindDocument(owner, PropertyBinding(), PropertyContext()), Is.True);
-            Assert.That(window.GetDocumentCommands().Query(), Is.Not.Null);
-            HGNodeView view = window.NodeOfId(propertyId);
-            Assert.That(view?.Carrier, Is.Not.Null);
-
-            window.ChangePropertyMode(view, false);
-            Assert.That(window.GetDocumentCommands().Query(), Is.Not.Null);
-
-            GraphNode carrier = window.NodeOfId(propertyId)?.Carrier;
-            Assert.That(carrier, Is.Not.Null);
-            Assert.That(carrier.IsProtoProperty, Is.False, "沒有 Key 也要切得成 Local，不能留在 Proto。");
-            Assert.That(carrier.Property, Is.Not.Null, "Local 要有自己的私有定義。");
-            Assert.That(carrier.Property.FamilyType, Is.Null, "還沒有寫入線，維持未定型。");
-        }
-        finally
-        {
-            window.GetDocumentCommands()?.Cancel();
-            UnityEngine.Object.DestroyImmediate(window);
-            UnityEngine.Object.DestroyImmediate(owner);
-        }
+        var node = new GraphNode();
+        string id = node.EnsureId();
+        node.SetProperty(null);
+        Assert.That(node.Kind, Is.EqualTo(NodeKind.Property));
+        Assert.That(node.Id, Is.EqualTo(id));
+        Assert.That(new HGPropertyWriteSource(new WriteTargetSlot(), new GraphNode()).CheckTarget(node),
+            Is.EqualTo(HGPortConnectionResult.MissingBinding));
     }
 
     [Test]
-    public void ProtoPropertyNamesUseChipAndRejectCrossFamilyDuplicates()
+    public void PropertyNamesUseChipAndRejectCrossFamilyDuplicates()
     {
         var model = new HGModel();
         var scope = new List<GraphProperty>();
 
-        GraphProperty first = model.CreateProperty(scope, typeof(TestFormulaSlot), true, out string firstError);
-        GraphProperty second = model.CreateProperty(scope, typeof(TestFormulaSlotB), true, out string secondError);
+        GraphProperty first = model.CreateProperty(scope, typeof(TestFormulaSlot), out string firstError);
+        GraphProperty second = model.CreateProperty(scope, typeof(TestFormulaSlotB), out string secondError);
 
         Assert.That(firstError, Is.Null);
         Assert.That(secondError, Is.Null);
+        Assert.That(first.RetainValue, Is.False, "編輯器新建 Property 預設只在本次執行使用。");
+        Assert.That(new GraphProperty().RetainValue, Is.False);
         string chip = HGReflect.SlotKindName(typeof(TestFormulaSlot));
         Assert.That(first.Name, Is.EqualTo(chip + "1"));
         Assert.That(second.Name, Is.EqualTo(chip + "2"), "不同族若 chip 名稱相同，仍須避開庫內重名。");
@@ -284,20 +294,20 @@ public class HGPortTests
     }
 
     [Test]
-    public void DeletingAProtoDefinitionClearsItsNodesWhileClearingALocalNodeLeavesTheLibraryAlone()
+    public void DeletingADefinitionClearsItsNodesWhileClearingANodeLeavesTheLibraryAlone()
     {
         var model = new HGModel();
         var scope = new List<GraphProperty>();
-        GraphProperty proto = model.CreateProperty(scope, typeof(TestFormulaSlot), true, out _);
+        GraphProperty proto = model.CreateProperty(scope, typeof(TestFormulaSlot), out _);
         var protoNode = new GraphNode();
-        protoNode.SetProtoProperty(proto);
-        GraphProperty local = model.CreateLocalProperty(typeof(TestFormulaSlot), out _);
+        protoNode.SetProperty(proto);
+        GraphProperty local = proto;
         var localNode = new GraphNode();
-        localNode.SetLocalProperty(local);
+        localNode.SetProperty(local);
 
         localNode.Clear();
 
-        Assert.That(scope, Has.Count.EqualTo(1), "Local 是節點私有的，刪掉節點不影響庫。");
+        Assert.That(scope, Has.Count.EqualTo(1), "刪掉引用節點不影響庫定義。");
         Assert.That(localNode.Kind, Is.EqualTo(NodeKind.Empty));
 
         model.DeleteProperty(proto, scope, new[] { protoNode });
@@ -306,137 +316,7 @@ public class HGPortTests
         Assert.That(protoNode.Kind, Is.EqualTo(NodeKind.Empty), "刪庫定義時所有引用節點一併清空。");
     }
 
-    [Test]
-    public void SwitchingToProtoPrefersTheFamilyOfTheWriterOverTheFirstLibraryEntry()
-    {
-        var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
-        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
-        try
-        {
-            var document = new PropertyDocument();
-            // 庫的第一筆刻意是不相容的那一族：挑對的話代表優先序看的是寫入端，不是清單順序。
-            var other = new GraphProperty("Other", new TestFormulaSlotB(), true);
-            other.EnsureId();
-            var match = new GraphProperty("Match", new TestFormulaSlot(), true);
-            match.EnsureId();
-            document.Properties.Add(other);
-            document.Properties.Add(match);
 
-            var local = new GraphProperty(null, new TestFormulaSlot());
-            local.EnsureId();
-            var propertyNode = new GraphNode();
-            string propertyId = propertyNode.EnsureId();
-            propertyNode.SetLocalProperty(local);
-
-            var writer = new PropertyWriterBody();
-            writer.Target.SetNode(propertyNode);
-            var writerNode = new GraphNode(writer);
-            writerNode.EnsureId();
-            document.Orphans.Add(writerNode);
-            owner.Document = document;
-
-            Assert.That(window.BindDocument(owner, PropertyBinding(), PropertyContext()), Is.True);
-            Assert.That(window.GetDocumentCommands().Query(), Is.Not.Null);
-
-            window.ChangePropertyMode(window.NodeOfId(propertyId), true);
-            Assert.That(window.GetDocumentCommands().Query(), Is.Not.Null);
-
-            GraphNode carrier = window.NodeOfId(propertyId)?.Carrier;
-            Assert.That(carrier, Is.Not.Null);
-            Assert.That(carrier.IsProtoProperty, Is.True);
-            Assert.That(carrier.Property?.Name, Is.EqualTo("Match"), "應依寫入端的族挑第一個相容 Key，而不是庫的第一筆。");
-        }
-        finally
-        {
-            window.GetDocumentCommands()?.Cancel();
-            UnityEngine.Object.DestroyImmediate(window);
-            UnityEngine.Object.DestroyImmediate(owner);
-        }
-    }
-
-    [TestCase(true)]
-    [TestCase(false)]
-    public void SwitchingToProtoFallsBackToItsOutputFamilyWhenNothingWritesTheProperty(bool connectedReader)
-    {
-        var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
-        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
-        try
-        {
-            var document = new PropertyDocument();
-            var other = new GraphProperty("Other", new TestFormulaSlotB(), true);
-            other.EnsureId();
-            var match = new GraphProperty("Match", new TestFormulaSlot(), true);
-            match.EnsureId();
-            document.Properties.Add(other);
-            document.Properties.Add(match);
-
-            var local = new GraphProperty(null, new TestFormulaSlot());
-            local.EnsureId();
-            var propertyNode = new GraphNode();
-            string propertyId = propertyNode.EnsureId();
-            propertyNode.SetLocalProperty(local);
-
-            // 只有讀取端，沒有任何寫入端：優先序要退到自身 Output 的族，而不是庫的第一筆。
-            var reader = new PropertyReaderBody();
-            reader.Source.SetNode(propertyNode);
-            var readerNode = new GraphNode(reader);
-            readerNode.EnsureId();
-            document.Orphans.Add(connectedReader ? readerNode : propertyNode);
-            owner.Document = document;
-
-            Assert.That(window.BindDocument(owner, PropertyBinding(), PropertyContext()), Is.True);
-            Assert.That(window.GetDocumentCommands().Query(), Is.Not.Null);
-
-            window.ChangePropertyMode(window.NodeOfId(propertyId), true);
-            Assert.That(window.GetDocumentCommands().Query(), Is.Not.Null);
-
-            GraphNode carrier = window.NodeOfId(propertyId)?.Carrier;
-            Assert.That(carrier?.Property?.Name, Is.EqualTo("Match"));
-        }
-        finally
-        {
-            window.GetDocumentCommands()?.Cancel();
-            UnityEngine.Object.DestroyImmediate(window);
-            UnityEngine.Object.DestroyImmediate(owner);
-        }
-    }
-
-    [Test]
-    public void SwitchingAKeyedProtoPropertyToLocalKeepsItsFamily()
-    {
-        var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
-        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
-        try
-        {
-            var document = new PropertyDocument();
-            var proto = new GraphProperty("Match", new TestFormulaSlot(), true);
-            proto.EnsureId();
-            document.Properties.Add(proto);
-
-            var propertyNode = new GraphNode();
-            string propertyId = propertyNode.EnsureId();
-            propertyNode.SetProtoProperty(proto);
-            document.Orphans.Add(propertyNode);
-            owner.Document = document;
-
-            Assert.That(window.BindDocument(owner, PropertyBinding(), PropertyContext()), Is.True);
-            Assert.That(window.GetDocumentCommands().Query(), Is.Not.Null);
-
-            window.ChangePropertyMode(window.NodeOfId(propertyId), false);
-            Assert.That(window.GetDocumentCommands().Query(), Is.Not.Null);
-
-            GraphNode carrier = window.NodeOfId(propertyId)?.Carrier;
-            Assert.That(carrier, Is.Not.Null);
-            Assert.That(carrier.IsProtoProperty, Is.False);
-            Assert.That(carrier.Property?.FamilyType, Is.EqualTo(typeof(TestFormulaSlot)), "Proto→Local 要保留當前型別。");
-        }
-        finally
-        {
-            window.GetDocumentCommands()?.Cancel();
-            UnityEngine.Object.DestroyImmediate(window);
-            UnityEngine.Object.DestroyImmediate(owner);
-        }
-    }
 
     private static HGDocumentBinding<PropertyDocument> PropertyBinding()
         => new("Property.Document", target => ((PropertyDocumentOwner)target).Document,
@@ -578,7 +458,8 @@ public class HGPortTests
             var document = new PropertyDocument();
             var property = new GraphNode();
             string id = property.EnsureId();
-            property.SetLocalProperty(new GraphProperty(null, new TestFormulaSlot()));
+            property.SetProperty(new GraphProperty("Value", new TestFormulaSlot()));
+            document.Properties.Add(property.Property);
             property.Pos = new Vector2(120, 160);
             property.Note = "keep";
             var reader = new PropertyReaderBody();
@@ -604,7 +485,7 @@ public class HGPortTests
             Assert.That(changed.Note, Is.EqualTo("keep"));
             Assert.That(((PropertyReaderBody)window.NodeOfId(readerId).Obj).Source.Node, Is.SameAs(changed));
             Assert.That(((PropertyWriterBody)window.NodeOfId(writerId).Obj).Target.Node, Is.Null);
-            Assert.That(window.NodeSourceOptions(window.NodeOfId(id)).Exists(option => option.Name == "LocalProperty"), Is.True);
+            Assert.That(window.NodeSourceOptions(window.NodeOfId(id)).Exists(option => option.Name == "Property"), Is.True);
 
             Assert.That(commands.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
             commands.Query();
@@ -617,7 +498,7 @@ public class HGPortTests
 
             Assert.That(commands.Redo(), Is.EqualTo(HGSessionCommandResult.Changed));
             commands.Query();
-            window.NodeSourceOptions(window.NodeOfId(id)).Find(option => option.Name == "LocalProperty").Apply();
+            window.NodeSourceOptions(window.NodeOfId(id)).Find(option => option.Name == "Property").Apply();
             commands.Query();
             Assert.That(window.NodeOfId(id).Carrier.Kind, Is.EqualTo(NodeKind.Property));
             Assert.That(((PropertyReaderBody)window.NodeOfId(readerId).Obj).Source.Node,
@@ -632,13 +513,13 @@ public class HGPortTests
     }
 
     [Test]
-    public void PublicReplacementRejectsForeignProtoAndCopiesPrivateLocalDefinitions()
+    public void PublicReplacementOnlyAcceptsDefinitionsOwnedByTheWorkingLibrary()
     {
         var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
         try
         {
             owner.Document = new PropertyDocument();
-            owner.Document.Properties.Add(new GraphProperty("Shared", new TestFormulaSlot(), true));
+            owner.Document.Properties.Add(new GraphProperty("Shared", new TestFormulaSlot()));
             owner.Document.Orphans.Add(new GraphNode());
             Assert.That(HGDocumentSession<PropertyDocument>.TryOpen(owner, PropertyBinding(), out var session), Is.True);
             var carrier = session.Document.Orphans[0];
@@ -651,12 +532,12 @@ public class HGPortTests
 
             var local = new GraphProperty(null, new TestFormulaSlot());
             string id = local.EnsureId();
-            Assert.That(session.ReplaceSource(carrier, HGCarrierSource.NamedProperty(local)), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(session.ReplaceSource(carrier, HGCarrierSource.NamedProperty(local)), Is.EqualTo(HGSessionCommandResult.Rejected));
             Assert.That(carrier.Property, Is.Not.SameAs(local));
-            Assert.That(carrier.Property.Id, Is.Not.EqualTo(id));
+            Assert.That(carrier.Property, Is.SameAs(proto));
             Assert.That(session.Document.Properties[0], Is.SameAs(proto));
             Assert.That(session.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
-            Assert.That(session.Document.Orphans[0].Property, Is.SameAs(session.Document.Properties[0]));
+            Assert.That(session.Document.Orphans[0].Property, Is.Null);
         }
         finally { UnityEngine.Object.DestroyImmediate(owner); }
     }
@@ -2831,7 +2712,7 @@ MonoBehaviour:
         }
     }
 
-    /// <summary>另一個族：用來製造「切成 Proto 之後寫入線必然不相容」的情境。</summary>
+    /// <summary>另一個族：用來製造「切換定義之後寫入線必然不相容」的情境。</summary>
     private sealed class TestFormulaSlotB : FormulaSlotBase
     {
         private GraphNode node;

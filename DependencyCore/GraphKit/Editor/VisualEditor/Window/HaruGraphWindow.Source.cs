@@ -3,6 +3,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
 
@@ -303,49 +304,26 @@ public partial class HaruGraphWindow
             options.Add(new HGSourceOption
             {
                 Group = "Property",
-                Name = "LocalProperty",
-                IsCurrent = node.IsPropertyNode && node.Carrier?.IsProtoProperty == false,
-                Apply = () => ChangePropertyMode(node, false),
-            });
-            options.Add(new HGSourceOption
-            {
-                Group = "Property",
-                Name = "ProtoProperty",
-                IsCurrent = node.IsPropertyNode && node.Carrier?.IsProtoProperty == true,
-                Apply = () => ChangePropertyMode(node, true),
+                Name = "Property",
+                IsCurrent = node.IsPropertyNode,
+                Apply = () => { if (!node.IsPropertyNode) ChangeNodeToPropertyReference(node); },
             });
         }
         return options;
     }
 
-    internal void ChangePropertyMode(HGNodeView node, bool proto)
+    internal void ChangeNodeToPropertyReference(HGNodeView node)
     {
-        if (node?.Carrier == null || (node.IsPropertyNode && node.Carrier.IsProtoProperty == proto)) return;
-
+        if (node?.Carrier == null || node.IsPropertyNode) return;
         Type family = ReplacementSlotType(node);
-        GraphProperty next = proto ? FirstCompatibleProtoProperty(node) : model.CreateLocalProperty(family, out _);
-        if (!proto && next == null) return;
-
+        GraphProperty next = null;
+        foreach (var property in CurrentProperties() ?? new List<GraphProperty>())
+            if (property?.FamilyType == family) { next = property; break; }
         ReplaceNodeSource(node, family, () =>
         {
             DetachChildSourcesForReplacement(node);
-            if (proto) node.Carrier.SetProtoProperty(next);
-            else node.Carrier.SetLocalProperty(next);
+            node.Carrier.SetProperty(next);
         });
-    }
-
-    private GraphProperty FirstCompatibleProtoProperty(HGNodeView node)
-    {
-        var properties = CurrentProperties();
-        if (properties == null) return null;
-
-        Type family = ReplacementSlotType(node);
-        foreach (var property in properties)
-            if (property?.Proto == true && property.FamilyType == family) return property;
-
-        foreach (var property in properties)
-            if (property?.Proto == true) return property;
-        return null;
     }
 
     /// <summary>斷開接不上新定義的讀寫連線。載體留在畫布上，沒有任何欄位再接它時才回到候選池。</summary>
@@ -694,7 +672,6 @@ public partial class HaruGraphWindow
     private void DeleteCarrier(GraphNode carrier, string nodeId = null, bool pushUndo = true)
     {
         if (carrier == null) return;
-        GraphProperty property = carrier.Property;
         if (pushUndo) BreakUndoMerge();
         PreserveVisibleNodePositions();
 
@@ -722,18 +699,8 @@ public partial class HaruGraphWindow
             if (!ReferenceEquals(child, carrier) && CountCarrierUsers(child) == 0)
                 model.AddOrphan(child);
 
-        // ProtoProperty 是庫定義，刪掉畫布引用不可連帶刪庫；一般 Property 才跟最後一個引用一起回收。
-        if (property != null && !property.Proto && !HasPropertyCarrier(property)) CurrentProperties()?.Remove(property);
-
         if (!string.IsNullOrEmpty(nodeId)) selectedIds.Remove(nodeId);
         Invalidate();
-    }
-
-    private bool HasPropertyCarrier(GraphProperty property)
-    {
-        foreach (GraphNode other in model.AllCarriers())
-            if (ReferenceEquals(other?.Property, property)) return true;
-        return false;
     }
 
     /// <summary>把載體從任何「帶子節點」的擁有者身上摘掉。</summary>
@@ -1055,11 +1022,12 @@ public partial class HaruGraphWindow
 
         // 複製共用節點是語意改變（從此兩份各自獨立），不能默默做。
         int shared = FindBoundaryShared(SubtreeRootOf(node)).Count;
-        if (shared == 0) { ExtractAssetConfirmed(node); return; }
+        int properties = PropertyCarriersIn(SubtreeRootOf(node)).Select(n => n.Property).Distinct().Count();
+        if (shared == 0 && properties == 0) { ExtractAssetConfirmed(node); return; }
 
         RequestConfirm(GraphToWindowRect(new Rect(node.Pos.x, node.Pos.y, node.Width, HGGraph.HeaderHeight)),
             $"這棵子樹裡有 {shared} 個節點還被子樹外的欄位使用，轉存時會各複製一份留給它們。"
-            + "轉存後兩份各自獨立，改一邊不會影響另一邊。",
+            + $"另有 {properties} 個 Property 將複製到新資產的庫。轉存後的 Property 與原圖各自獨立，改一邊不會影響另一邊。",
             "轉存", () => ExtractAssetConfirmed(node));
     }
 
@@ -1142,12 +1110,21 @@ public partial class HaruGraphWindow
             Debug.LogError($"[GraphKit] {assetType.Name} 沒有 SetTarget。");
             return;
         }
+        var propertyCarriers = PropertyCarriersIn(source);
+        if (propertyCarriers.Count > 0 && asset is not IPropertyOwner)
+        {
+            DestroyImmediate(asset);
+            ShowNotification(new GUIContent("此資產不支援 Property 庫，無法轉存包含 Property 的內容"));
+            return;
+        }
         setTarget.Invoke(asset, new object[] { source });
 
         // 這兩步都要在「原件還完整、且資產已確定會建出來」之間做：
         // 使用者在檔名對話框按取消時上面就 return 了，圖不會被動到。
         // 先複製共用點給外部（此時子樹裡的Token節點還指著本圖的Token，複本才會接對）。
         DetachBoundaryShared(carrier);
+        if (asset is IPropertyOwner propertyOwner)
+            CopyPropertyDefinitions(propertyCarriers, propertyOwner.Properties);
         // 抬參數要在寫檔之前：資產的Token清單就是它的參數介面，晚了就存不進 .asset。
         var lifted = LiftTokensToParameters(asset);
 
@@ -1237,6 +1214,39 @@ public partial class HaruGraphWindow
         return result;
     }
 
+    private List<GraphNode> PropertyCarriersIn(object root)
+    {
+        var visited = new HashSet<object>(HGRefComparer.Instance);
+        foreach (var token in CurrentTokens() ?? new List<GraphToken>())
+            if (token != null) visited.Add(token);
+        foreach (var property in CurrentProperties() ?? new List<GraphProperty>())
+            if (property != null) visited.Add(property);
+        var result = new HashSet<GraphNode>();
+        foreach (var slot in HGModel.WalkSlots(root, visited))
+            if (slot.Node?.Property != null) result.Add(slot.Node);
+        return result.ToList();
+    }
+
+    // 新資產是獨立作用域；同一定義的所有引用一起改指同一份副本。
+    internal static void CopyPropertyDefinitions(IEnumerable<GraphNode> carriers, ICollection<GraphProperty> library)
+    {
+        var copies = new Dictionary<GraphProperty, GraphProperty>();
+        foreach (var carrier in carriers)
+        {
+            var original = carrier.Property;
+            if (original == null) continue;
+            if (!copies.TryGetValue(original, out var copy))
+            {
+                copy = GraphDeepCopy.Copy(original);
+                copy.ResetId();
+                copy.EnsureId();
+                copies.Add(original, copy);
+                library.Add(copy);
+            }
+            carrier.SetProperty(copy);
+        }
+    }
+
     /// <summary>資產參數名：沿用原Token名，同族撞名才加號碼。名稱是呼叫點綁定用的 key。</summary>
     private static string UniqueParameterName(List<GraphToken> scope, string preferred, Type kind)
     {
@@ -1322,6 +1332,9 @@ public partial class HaruGraphWindow
         var shared = new List<object>();
         foreach (var endpoint in CurrentTokens() ?? new List<GraphToken>())
             if (endpoint != null) shared.Add(endpoint);
+
+        foreach (var property in CurrentProperties() ?? new List<GraphProperty>())
+            if (property != null) shared.Add(property);
 
         foreach (var pair in boundary)
         {

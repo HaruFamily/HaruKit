@@ -1075,14 +1075,14 @@ public partial class HaruGraphWindow
             titleTip = $"{node.Obj.GetType().FullName}\n{HGReflect.TypeDescription(node.Obj.GetType())}\n{titleTip}".TrimEnd();
         GUI.Label(titleRect, HGStyles.Elide(node.Title, HGStyles.NodeTitle, textWidth, titleTip), HGStyles.NodeTitle);
 
-        // 資產、Token 與 ProtoProperty 的本體是一列「選哪一個」的下拉。
-        // 一般 Property 是在這顆節點建立的私有暫存位置，沒有可重指向的名稱清單。
+        // 資產、Token 與 Property 的本體是一列「選哪一個」的下拉。
+        // 所有 Property 節點都引用目前圖庫中的定義。
         // 掛在未勾覆蓋的參數底下＝這一段不會被採用，整顆節點鎖住：控制項灰掉、拉線與清單編輯都擋掉。
         using (new EditorGUI.DisabledScope(node.InLockedSubtree))
         {
             if (node.IsPropertyNode)
             {
-                if (node.Carrier?.IsProtoProperty == true) DrawReferencePickerRow(node, rect);
+                DrawReferencePickerRow(node, rect);
                 DrawPropertyValueRow(node, rect);
                 DrawRows(node, node.Rows, rect);
             }
@@ -1197,8 +1197,6 @@ public partial class HaruGraphWindow
 
     private void DrawReferencePickerRow(HGNodeView node, Rect nodeRect)
     {
-        if (node.IsPropertyNode && node.Carrier?.IsProtoProperty != true) return;
-
         var row = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight, nodeRect.width, HGGraph.RowHeight);
         float labelWidth = row.width * 0.34f;
 
@@ -1229,21 +1227,20 @@ public partial class HaruGraphWindow
     /// <summary>Property 寫入 Input 固定在這列左側；讀取 Output 仍在 Header。</summary>
     private static void DrawPropertyValueRow(HGNodeView node, Rect nodeRect)
     {
-        float offset = node.Carrier?.IsProtoProperty == true ? HGGraph.RowHeight : 0f;
+        float offset = HGGraph.RowHeight;
         var row = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight + offset, nodeRect.width, HGGraph.RowHeight);
         GUI.Label(new Rect(row.x + HGGraph.PortDiameter + 6f, row.y + 1f,
                 row.width - HGGraph.PortDiameter - 12f, row.height - 2f),
             new GUIContent("寫入", "由左側 Input 指定寫入這顆 Property 的目標"), HGStyles.RowLabel);
     }
 
-    /// <summary>列出目前變數庫的全部 ProtoProperty；換族時由交易中斷不相容的讀寫線。</summary>
+    /// <summary>列出目前變數庫的全部 Property；換族時由交易中斷不相容的讀寫線。</summary>
     private void ShowPropertyPicker(HGNodeView node, Rect anchor)
     {
         var options = new List<HGSourceOption>();
-        foreach (var property in CurrentProperties() ?? new List<GraphProperty>())
+        foreach (var property in VisibleProperties())
         {
             if (property == null) continue;
-            if (!property.Proto) continue;
             var captured = property;
             options.Add(new HGSourceOption
             {
@@ -1253,22 +1250,27 @@ public partial class HaruGraphWindow
             });
         }
 
-        if (options.Count == 0)
+        foreach (var (slotType, path) in HGTypeIndex.FormulaKindOptions(model.FormulaKinds()))
         {
-            ShowNotification(new GUIContent("變數庫尚無 ProtoProperty；先到左欄變數庫新增一顆"));
-            return;
+            var captured = slotType;
+            options.Add(new HGSourceOption
+            {
+                Group = "新增 Property",
+                Name = path,
+                Apply = () => CreatePropertyForNode(node, captured),
+            });
         }
         HGTypeIndex.ShowSourcePicker(anchor, options, "選擇 Property");
     }
 
     /// <summary>換這顆節點指到的 Property，保留載體與相容連線。</summary>
-    private void ChangeNodeToProperty(HGNodeView node, GraphProperty property)
+    internal void ChangeNodeToProperty(HGNodeView node, GraphProperty property)
     {
-        if (node?.Carrier == null || property == null) return;
+        if (node?.Carrier == null || property == null || ReferenceEquals(node.Property, property)) return;
         ReplaceNodeSource(node, property.FamilyType, () =>
         {
             DetachChildSourcesForReplacement(node);
-            node.Carrier.SetProtoProperty(property);
+            node.Carrier.SetProperty(property);
         });
     }
 

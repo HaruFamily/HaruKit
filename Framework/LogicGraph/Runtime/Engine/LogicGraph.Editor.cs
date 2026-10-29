@@ -20,6 +20,7 @@ where TTiming : Enum
 
     // 節點內容檢查跑兩趟：第一趟只走啟用路徑，第二趟才穿透停用節點。見 ValidateSlotSources。
     [NonSerialized] private bool _walkDisabled;
+    [NonSerialized] private ICollection<GraphProperty> _validationProperties;
     [NonSerialized] private HashSet<GraphNode> _checkedNodes = new();
     [NonSerialized] private HashSet<UnionSlotBase> _checkedUnions = new();
 
@@ -102,6 +103,7 @@ where TTiming : Enum
         _diagnostics ??= new List<GraphDiagnostic>();
 
         _diagnostics.Clear();
+        _validationProperties = Properties;
         _walkDisabled = false;
 
         ReportDuplicateTokenNames();
@@ -246,13 +248,12 @@ where TTiming : Enum
         {
             var at = At(location, location.FieldPath + $"[{index++}]");
             if (property == null) { Issue("property.missing", "變數庫有空項目", at); continue; }
-            if (!property.Proto) continue;
             if (string.IsNullOrWhiteSpace(property.Name))
-                Issue("property.name-missing", "ProtoProperty 沒有名稱", at);
+                Issue("property.name-missing", "Property 沒有名稱", at);
             else if (!names.Add(property.Name))
-                Issue("property.duplicate", $"ProtoProperty 名稱重複：'{property.Name}'", at);
+                Issue("property.duplicate", $"Property 名稱重複：'{property.Name}'", at);
             if (property.Slot == null)
-                Issue("property.slot-missing", $"ProtoProperty '{property.Name}' 沒有指定型別", at);
+                Issue("property.slot-missing", $"Property '{property.Name}' 沒有指定型別", at);
         }
     }
 
@@ -486,23 +487,29 @@ where TTiming : Enum
                 Issue("asset.property-root", "資產根內容必須是公式或動作，不能直接引用 Property", location);
             if (!_walkDisabled && assetGraph is IPropertyOwner properties)
                 ValidatePropertyDefinitions(properties.Properties, At(location, location.FieldPath + ".Asset.Properties"));
-            if (assetGraph is IFormulaGraphAsset formulaAsset)
+            var parentProperties = _validationProperties;
+            _validationProperties = (assetGraph as IPropertyOwner)?.Properties;
+            try
             {
-                if (formulaAsset.ConfigurationError is string assetError) Issue("asset.input-invalid", assetError, location);
-                ValidateSlotSources(formulaAsset.Input, visited, At(location, location.FieldPath + ".Asset.Input"));
+                if (assetGraph is IFormulaGraphAsset formulaAsset)
+                {
+                    if (formulaAsset.ConfigurationError is string assetError) Issue("asset.input-invalid", assetError, location);
+                    ValidateSlotSources(formulaAsset.Input, visited, At(location, location.FieldPath + ".Asset.Input"));
+                }
+                else ValidateSlotSources(assetGraph.Root, visited, At(location, location.FieldPath + ".Asset.Root"));
+                // 資產的端點就是它的參數介面，跟內容一樣是正式資料；候選池不驗。
+                if (assetGraph.Tokens != null)
+                    for (int i = 0; i < assetGraph.Tokens.Count; i++)
+                        if (assetGraph.Tokens[i]?.Slot != null)
+                        {
+                            if (assetGraph.Tokens[i].IsObsolete)
+                                Issue("token.obsolete", $"資產 Token '{assetGraph.Tokens[i].Name}' 已不符合目前宣告，請開啟該資產清理。", location);
+                            else if (assetGraph.Tokens[i].ConfigurationError is string tokenError)
+                                Issue("token.input-invalid", tokenError, location);
+                            ValidateSlotSources(assetGraph.Tokens[i].Slot, visited, At(location, location.FieldPath + $".Asset.Tokens[{i}].Slot"));
+                        }
             }
-            else ValidateSlotSources(assetGraph.Root, visited, At(location, location.FieldPath + ".Asset.Root"));
-            // 資產的端點就是它的參數介面，跟內容一樣是正式資料；候選池不驗。
-            if (assetGraph.Tokens != null)
-                for (int i = 0; i < assetGraph.Tokens.Count; i++)
-                    if (assetGraph.Tokens[i]?.Slot != null)
-                    {
-                        if (assetGraph.Tokens[i].IsObsolete)
-                            Issue("token.obsolete", $"資產 Token '{assetGraph.Tokens[i].Name}' 已不符合目前宣告，請開啟該資產清理。", location);
-                        else if (assetGraph.Tokens[i].ConfigurationError is string tokenError)
-                            Issue("token.input-invalid", tokenError, location);
-                        ValidateSlotSources(assetGraph.Tokens[i].Slot, visited, At(location, location.FieldPath + $".Asset.Tokens[{i}].Slot"));
-                    }
+            finally { _validationProperties = parentProperties; }
             return;
         }
 
@@ -720,6 +727,8 @@ where TTiming : Enum
 
             case NodeKind.Property:
                 if (node.Property == null) { if (first) Issue("node.property-missing", $"{where} 沒有指定 Property", location); return; }
+                if (_validationProperties == null || !_validationProperties.Contains(node.Property))
+                    Issue("node.property-out-of-scope", $"{where} 的 Property 不屬於目前圖的變數庫", location);
                 if (node.Property.Slot == null) { if (first) Issue("node.property-slot-missing", $"{where} 的 Property 尚未定型", location); return; }
                 if (!acceptsProperty(node.Property))
                     Issue("node.property-incompatible", $"{where} 接的 Property 型別不相容", location);

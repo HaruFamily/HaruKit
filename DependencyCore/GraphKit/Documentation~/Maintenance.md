@@ -53,7 +53,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 | `Inline` | 1 | 內嵌的具體節點內容（`GraphNodeContent`） |
 | `Asset` | 2 | 共用資產 ScriptableObject |
 | `Token` | 4 | 具名 Token 的引用（存物件參照，不存名字字串） |
-| `Property` | 6 | Property 定義的引用（LocalProperty 或 ProtoProperty） |
+| `Property` | 6 | 目前圖 Property 庫定義的單一引用 |
 
 - **換來源＝換載體內容**：`SetBody`／`SetAsset`／`SetToken`／`SetProperty`／`Clear` 只換內容，`Id`、座標、備註和所有指向它的欄位都保留。不要用「新建一顆節點」來做換來源。
 - **共用是結構性的**：多個 Slot 用 `[SerializeReference]` 指向同一個 `GraphNode` 就是共用；DeepCopy 保留共享與循環。
@@ -94,7 +94,8 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - 進入資產畫布時深複製 Input、Orphans、Tokens、Properties，存檔以 SetInput 寫回整個輸入。HGAssetSnapshot.Input 保存完整 Slot，Undo／Redo／失敗回復也整體替換它，保留 Default、Union 分支及 HGSlotSetting。
 - 一般 ActionAsset 仍用合成 ActionSlot 承載根，儲存走 SetRoot，不能把根換成 Token／Property。兩類資產的庫資料均與根輸入在同一次 DeepCopy 內，維持引用一致。
 - Core／Editor 驗證公式資產的 Input，不拿呼叫端的對外 Slot 當成內部接收端；資產參數的循環探索走 Token.Slot，不走對外宣告欄位。
-- `GraphProperty`：圖內的可寫儲存位置。ProtoProperty 住在 `IPropertyOwner.Properties`（變數庫），有初始內容；LocalProperty 是節點私有定義。讀取只取目前值、不求值寫入者；`PropertySlotBase` 是寫入目標，**不構成求值依賴**，讀後寫回同一顆不算循環。目前值由使用端的執行層保存，GraphKit 只保存定義。
+- `GraphProperty`：圖內具名、型別化儲存定義，唯一歸屬為 `IPropertyOwner.Properties`。所有節點以單一引用指向庫；驗證拒絕未登記定義。新定義預設不保留，初始內容可明確為 null。讀取不求值寫入者，寫入邊不構成求值循環。
+- 側邊庫直接呈現圖層定義。RetainValue 只由展開核取方塊調整，標題列「保留 ○／●」唯讀；所有新定義預設關閉。序列化欄位 `_executionLocal` 與 RetainValue 反向，生命週期由各執行層負責。
 - `GraphPropertyInputSlot` 只是 Property 節點接收端的身分；寫入連線的正本是寫入端 `PropertySlot.Node`。
 - `PropertySlotBase` 欄位的型別 chip 依 `FamilyType` 顯示對應 FormulaSlot 族的 `[HGKind]` 名稱；未指定名稱時沿用結果型別短名。
 
@@ -122,7 +123,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
    - 畫布刪除載體也要先拆開其直接來源，再把沒有其他引用的來源放回目前焦點候選池；來源的子樹與座標保留。多選刪除只移除選中的載體，不沿來源接線遞迴刪除。
    - 視窗移除 root／Timing 或清單項目，只移除接收端容器與該項引用；沒有其他引用的直接來源及被移除頭端的候選節點轉存目前焦點候選池。先固定可見座標，來源的 Id、備註、內部連線與整棵子樹保持不變，最後一個 root 移除後仍可顯示候選節點。
    - 清單的 ✕ 與右鍵移除共用 RemoveListItem；Timing 移除走 RemoveTimingGroup。兩者以 CaptureRemovedItemSources 在結構移除前擷取來源、移除後 PreserveRemovedItemSources 檢查其他使用者。走訪在 GraphNode／Slot 來源邊界停止，不能遞迴斷開來源自己的子欄位；共享 Slot 本身也不清空，以免切斷其他保留中的使用者。此規則同樣涵蓋清單元素內嵌的分支物件。
-8. **複製節點要重設 Id**（`HGModel.ResetNodeIds`），並正確帶入 `shared`（ProtoProperty 定義、目前作用域的 Token 要沿用同一顆）與 `skip` 集合。LocalProperty 定義跟著節點複製並換新 Id。
+8. **複製節點只重設載體 Id**（`HGModel.ResetNodeIds`），`shared` 包含所有引用的庫 Property 與目前作用域 Token。複製庫定義才換定義 Id；整圖複製時根與庫必須在同一次複製中保持引用一致。
 9. **圖走訪的 visited 一律用 `ReferenceComparer.Instance`**（Editor 端 `HGRefComparer`）。裸 `HashSet<object>` 對 struct 走值相等，會無聲跳過子樹。
 10. **Core 驗證與視覺驗證要同步改。** 文件 `Verify()` 與手動 `HGValidator` 使用相同規則；視覺驗證補上可跳轉位置，診斷不阻擋保存。
 11. **診斷是純資料。** `GraphDiagnostic` 只存穩定 `Code` 和字串位置（document／focus／node／token／field path），不可持有 `HGRow`、`FieldInfo` 或視窗物件。Code 用穩定機器識別，不用本地化文字或方法名。
@@ -172,7 +173,7 @@ Console 只有一個驗證結果，另以中性文字顯示「有未儲存變更
 - Editor Profiler 標記 `GraphKit.BuildGraph` 涵蓋 dirty 建圖處理，`GraphKit.DrawCanvas` 涵蓋畫布單次 GUI 事件；量測須區分初次開啟、局部平移／縮放、全圖可見及編輯重建，不能把載體減量比例當成耗時改善比例。
 - 節點內容控制項（Tab、Foldout、enum／bool 按鈕、數值與文字輸入等）吃掉左鍵 MouseDown 後，由 `DrawCanvas` 統一同步節點選取：不在選取集合的節點改為單選，已選節點保留多選，清掉畫布群組選取；不移動視角、不碰鍵盤／hotControl、不另加 Dirty。控制項上的 Ctrl／Shift 不切換節點選取。未被控制項消耗的點擊仍交 `HandleCanvasInput`；標題、Port、拉線／放置模式、被浮層遮蔽及既有 hotControl 的事件不走此同步。
 - 變數庫各 Property 獨立展開，不限制同時展開數量；拖入資產只展開目標項。展開狀態由面板按 Id 保存，Reset 時清除，不進 Dirty／Undo。多個清單展開時，項目重排只收集正在拖曳之 Property 的目標位置。
-- Token 庫與變數庫的格子是同一組操作：雙擊改名、拖到「＋」上放開＝複製、拖到「－」上放開＝移除，右鍵選單（改名／複製／移除）是同一組的可見入口。複製 ProtoProperty（`HGModel.DuplicateProperty`）是建立新的儲存位置：定義與初始內容深拷貝（資產只抄參考）、換新 Id、名字「原名 複本」，圖上沒有節點指向它；拖到畫布才是引用。右鍵改名走 `HGInlineRename.Begin`：選單回呼在 OnGUI 之外執行，只記狀態不碰鍵盤焦點，焦點由下一次 `Draw` 搶。
+- Token 庫與變數庫的格子是同一組操作：雙擊改名、拖到「＋」上放開＝複製、拖到「－」上放開＝移除，右鍵選單（改名／複製／移除）是同一組的可見入口。複製 Property（`HGModel.DuplicateProperty`）是建立新的儲存位置：定義與初始內容深拷貝（資產只抄參考）、換新 Id、名字「原名 複本」，圖上沒有節點指向它；拖到畫布才是引用。右鍵改名走 `HGInlineRename.Begin`：選單回呼在 OnGUI 之外執行，只記狀態不碰鍵盤焦點，焦點由下一次 `Draw` 搶。
 - 座標：graph → clip 是 `(graphPos + pan) × zoom`；自訂命中測試（節點、連線、框選）一律在 graph space 計算。
 - **先畫節點、再處理畫布互動**，控制項才會先吃掉事件。畫布平移前仍要確認 `GUIUtility.hotControl == 0`。
 - **畫布快捷鍵要讓給文字輸入**：左右庫與焦點列畫在畫布之後，游標停在畫布上時按鍵會先到 `HandleCanvasInput`。它的 `KeyDown` 分支在 `inlineName.IsEditing` 或 `EditorGUIUtility.editingTextField` 時一律不處理（A、Space、Delete、Ctrl 系列都不攔），只有 F3（搜尋跳下一筆）排在這個判斷之前。新增畫布快捷鍵要放在判斷之後；改名框只看 `IsEditing`，因為它重新搶焦點的那一幀並未握著焦點。
@@ -408,7 +409,7 @@ private List<int> levelCounts;
 - `[HGEnum]` 也可標在 Slot 類別上（子類沿用）：該族的 enum 常數框在一般欄位、descriptor 欄位、清單元素、Token／資產 HEAD、資產參數綁定與變數庫都畫按鈕列。入口是 `HGGraph.SlotRow` 與變數庫面板，兩者都問 `HGReflect.HasEnumButtons(slotType)`。欄位與類別是 OR：欄位只能再開啟，不能關掉類別的宣告；後續設定 `ForceEnumButtons` 一律用 `|=`，不可覆蓋。清單欄位標 `[HGEnum]` 時，`BuildListChildren` 把旗標帶給純值元素列，元素繪製讀 `row.ForceEnumButtons`。
 - 常數是清單的 FormulaSlot（`DefaultEditType` 本身是 `List<T>`／`T[]`，且元素 `HGValueField.CanDraw`）會在 Slot 列下方多一段常數清單，資料來源就是 `DefaultObject`，沿用清單欄位的增刪、重排與元素繪製；null 時就地補空清單。這段清單不畫自己的標題列（`HGRow.HeaderRow` 指向代畫標題的 Slot 列，底帶與外框從那一列算起），由 Slot 列的標籤畫成「`▾` 名稱 (N)」兼任折疊開關（`HGRow.DefaultListRow`）；Slot 列標籤隱藏時才保留清單自己的標題列。一般欄位、descriptor 欄位與 HEAD 來源列都會掛，資產參數綁定列與「元素本身是 Slot 的清單」不掛。變數庫裡元素畫得出輸入框的清單（純值與資產皆是）逐項用 `HGValueField` 編輯，走 `AddInitialValue`／`SetInitialItem` 命令，一律就地改容器；資產清單另外保留從 Project 拖到標題列的加入方式。
 - 新增清單元素一律走 `HGListItemSource.TryCreateElement`：資產元素是空引用，**不可用 `Activator` 建立 `UnityEngine.Object`**（`GameObject` 會直接生進目前場景）。
-- Slot 族：`[HGKind(name, group, priority)]`。建立公式、新增 ProtoProperty、新增 Token 三個選單共用 `HGTypeIndex.FormulaKindOptions`；group 用 `/` 分多層，priority 越小越前面。同路徑同名的族附完整型別與組件名稱消歧義。Group／Priority 不影響族身分或相容性。
+- Slot 族：`[HGKind(name, group, priority)]`。建立公式、新增 Property、新增 Token 三個選單共用 `HGTypeIndex.FormulaKindOptions`；group 用 `/` 分多層，priority 越小越前面。同路徑同名的族附完整型別與組件名稱消歧義。Group／Priority 不影響族身分或相容性。
 - 參考 `nunit.framework` 的測試組件不會出現在建立選單。
 
 ### 6.5 執行觀察
@@ -439,3 +440,5 @@ private List<int> levelCounts;
 - AssetPipeline 的 `GraphKitCrossToolSessionTests` 也只透過公開 API 使用 GraphKit，可用來確認沒有破壞使用端。
 - 在 Unity Test Runner 以 EditMode 執行。從 UPM 安裝時，要把套件名稱加進使用端 `Packages/manifest.json` 的 `testables` 才看得到測試。
 - 手勢、IMGUI 版面、資產序列化來回，自動測試涵蓋不到，要在 Unity 實際操作確認。**沒有實際執行的測試不可回報為通過。**
+
+> Trace: verified 2026-10-29 · doc `Doc/2026-10-2/DECISION_Property單一模型與資料保留.md`（原始碼靜態核對；使用者確認本輪 TestRunner 修正，驗證範圍見決策文件）

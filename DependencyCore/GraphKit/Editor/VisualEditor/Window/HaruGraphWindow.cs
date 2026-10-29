@@ -1,4 +1,4 @@
-﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -180,7 +180,7 @@ public partial class HaruGraphWindow : EditorWindow
     /// <summary>左欄資產庫。搜尋字與捲動在面板裡，拖曳與改名向框架借。</summary>
     private readonly HGAssetLibraryPanel assetLibrary = new();
 
-    /// <summary>左欄變數庫。ProtoProperty 定義跟隨目前圖的工作副本、存檔交易與 Undo 堆疊。</summary>
+    /// <summary>左欄變數庫。Property 定義跟隨目前圖的工作副本、存檔交易與 Undo 堆疊。</summary>
     private readonly HGPropertyLibraryPanel propertyLibrary = new();
 
     // 互動
@@ -1197,7 +1197,7 @@ public partial class HaruGraphWindow : EditorWindow
     }
 
     /// <summary>
-    /// 目前資產工作副本的快照。內容、候選、Token 與 ProtoProperty 庫同一次深複製，
+    /// 目前資產工作副本的快照。內容、候選、Token 與 Property 庫同一次深複製，
     /// 保留節點與庫定義的共享引用（進出資產的交易也是同一條規則）。
     /// </summary>
     private HGAssetSnapshot CaptureAssetState()

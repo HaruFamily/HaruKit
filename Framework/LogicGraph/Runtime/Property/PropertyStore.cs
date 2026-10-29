@@ -28,6 +28,8 @@ internal sealed class PropertyScope
     {
         public object Current;
         public bool Written;
+        public object Initial;
+        public bool HasInitial;
     }
 
     private sealed class PropertyReferenceComparer : IEqualityComparer<GraphProperty>
@@ -40,6 +42,42 @@ internal sealed class PropertyScope
     private readonly Dictionary<GraphProperty, Value> values = new(PropertyReferenceComparer.Instance);
     private readonly Dictionary<(ScriptableObject asset, GraphNode caller), PropertyScope> assets = new();
     private readonly PropertyScope parent;
+    private readonly PropertyScope persistent;
+    private bool ended;
+    private int generation;
+
+    internal object Identity => persistent ?? this;
+
+    private PropertyScope(PropertyScope persistent, PropertyScope parent)
+    {
+        this.persistent = persistent;
+        this.parent = parent;
+        generation = persistent.generation;
+    }
+
+    // 圖外寫入的暫存值交給下一次執行；獨立求值只看快照，不消耗待執行的輸入。
+    internal PropertyScope BeginExecution(bool consumeExternalWrites = false)
+    {
+        var scope = new PropertyScope(this, null);
+        foreach (var pair in values)
+        {
+            if (pair.Key.RetainValue || !pair.Value.Written) continue;
+            scope.values.Add(pair.Key, new Value { Current = pair.Value.Current, Written = true });
+            if (!consumeExternalWrites) continue;
+            pair.Value.Current = null;
+            pair.Value.Written = false;
+            pair.Value.Initial = null;
+            pair.Value.HasInitial = false;
+        }
+        return scope;
+    }
+
+    internal void EndExecution()
+    {
+        ended = true;
+        values.Clear();
+        foreach (PropertyScope scope in assets.Values) scope.EndExecution();
+    }
 
     internal PropertyScope(IEnumerable<GraphProperty> properties, PropertyScope parent)
     {
@@ -58,23 +96,31 @@ internal sealed class PropertyScope
         var key = (asset, caller);
         if (!assets.TryGetValue(key, out PropertyScope scope))
         {
-            scope = new PropertyScope(properties, this);
+            scope = persistent == null
+                ? new PropertyScope(properties, this)
+                : new PropertyScope(persistent.Asset(asset, caller, properties), this);
             assets.Add(key, scope);
         }
         // 共用資產可在 scope 建立後新增定義；必須先在該呼叫位置登記，不能落到父層而合併不同呼叫者。
-        scope.RegisterDefinitions(properties);
+        (scope.persistent ?? scope).RegisterDefinitions(properties);
         return scope;
     }
 
     internal T Read<T>(GraphProperty property)
     {
         if (!TryFind(property, out Value value)) return default;
-        object current = value.Written ? value.Current : property.InitialValue;
+        if (!property.RetainValue && !value.Written && !value.HasInitial)
+        {
+            value.Initial = GraphDeepCopy.Copy(property.InitialValue);
+            value.HasInitial = true;
+        }
+        object current = value.Written ? value.Current : property.RetainValue ? property.InitialValue : value.Initial;
         return current is T typed ? typed : default;
     }
 
     internal bool Write<T>(GraphProperty property, T value)
     {
+        if (property != null && !property.RetainValue && IsEnded) return false;
         if (!TryFind(property, out Value entry)) return false;
         entry.Current = value;
         entry.Written = true;
@@ -86,10 +132,13 @@ internal sealed class PropertyScope
 
     internal void Initialize()
     {
+        generation++;
         foreach (Value value in values.Values)
         {
             value.Current = null;
             value.Written = false;
+            value.Initial = null;
+            value.HasInitial = false;
         }
         foreach (PropertyScope scope in assets.Values) scope.Initialize();
     }
@@ -98,14 +147,28 @@ internal sealed class PropertyScope
     {
         value = null;
         if (property == null) return false;
+        if (persistent != null)
+        {
+            if (property.RetainValue) return persistent.TryFind(property, out value);
+            // 已結束的執行表可能仍被延後求值持有；不讓暫存值延長生命週期。
+            if (IsEnded)
+            {
+                if (!persistent.TryFind(property, out _)) return false;
+                value = new Value();
+                return true;
+            }
+            if (generation != persistent.generation)
+            {
+                values.Clear();
+                generation = persistent.generation;
+            }
+            if (!persistent.values.ContainsKey(property))
+                return parent != null && parent.TryFind(property, out value);
+            if (!values.TryGetValue(property, out value)) value = Register(property);
+            return true;
+        }
         if (values.TryGetValue(property, out value)) return true;
-        // LocalProperty 住在 GraphNode，不在文件層的 ProtoProperty 清單裡；第一次執行時登記進當前 scope，
-        // 之後的讀寫便會共用同一份 runtime 值。
-        if (!property.Proto) { value = Register(property); return true; }
-        if (parent != null) return parent.TryFind(property, out value);
-        // root 建立之後才加進圖層清單的 ProtoProperty：就地登記，否則寫入會無聲失敗而讀取永遠只拿得到初始內容。
-        value = Register(property);
-        return true;
+        return parent != null && parent.TryFind(property, out value);
     }
 
     private Value Register(GraphProperty property)
@@ -114,5 +177,7 @@ internal sealed class PropertyScope
         values.Add(property, value);
         return value;
     }
+
+    private bool IsEnded => ended || (parent?.IsEnded ?? false);
 }
 }

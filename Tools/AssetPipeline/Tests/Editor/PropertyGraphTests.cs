@@ -23,11 +23,11 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         }
 
         /// <summary>建一顆 Property 定義與指著它的節點。節點先放候選池，由呼叫端決定接到哪個欄位。</summary>
-        private GraphNode PropertyNode(out GraphProperty property, bool proto = false, string name = "Objects")
+        private GraphNode PropertyNode(out GraphProperty property, bool hasInitialValue = false, string name = "Objects")
         {
-            property = new GraphProperty(name, new ObjectListSlot(), proto);
+            property = new GraphProperty(name, new ObjectListSlot()) { InitialValueIsNull = !hasInitialValue, RetainValue = true };
             property.EnsureId();
-            if (proto) graph.Properties.Add(property);
+            graph.Properties.Add(property);
 
             var node = new GraphNode();
             node.EnsureId();
@@ -67,35 +67,50 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         }
 
         [Test]
-        public void GenericPropertySlot_DeepCopyPreservesConnectionAndIsolatesLocalProperty()
+        public void ExecutionLocalInitialListDoesNotMutateTheDefinition()
+        {
+            GraphNode node = PropertyNode(out GraphProperty property, hasInitialValue: true);
+            property.RetainValue = false;
+            var initial = new List<Object>();
+            property.SetInitialValue(initial);
+            var reader = new ReadAction(node);
+            reader.objects.Evaluate().Add(null);
+            Assert.That(initial, Is.Empty);
+            Assert.That(reader.objects.Evaluate(), Has.Count.EqualTo(1));
+            property.Initialize();
+            Assert.That(reader.objects.Evaluate(), Is.Empty);
+        }
+
+        [Test]
+        public void GenericPropertySlot_CopySharesItsLibraryDefinition()
         {
             GraphNode node = PropertyNode(out GraphProperty property);
             var writer = new WriteAction(node);
-            var copy = GraphDeepCopy.Copy(writer);
+            var copy = GraphDeepCopy.Copy(writer, new object[] { property });
 
             Assert.That(copy, Is.Not.Null);
             Assert.That(copy.output, Is.TypeOf<PropertySlot<List<Object>, ObjectListSlot>>());
             Assert.That(copy.output.Target, Is.Not.Null);
-            Assert.That(copy.output.Target, Is.Not.SameAs(property));
+            Assert.That(copy.output.Target, Is.SameAs(property));
             Assert.That(copy.output.FamilyType, Is.EqualTo(typeof(ObjectListSlot)));
             var value = new List<Object>();
             Assert.That(copy.output.Write(value), Is.True);
             Assert.That(copy.output.Target.CurrentValue, Is.SameAs(value));
-            Assert.That(property.HasValue, Is.False);
+            Assert.That(property.HasValue, Is.True);
             AddAction(copy);
             Assert.That(GraphVerifier.Collect(graph), Is.Empty);
         }
 
         [Test]
-        public void ProtoProperty_WithoutWrite_ReadsInitialContent()
+        public void Property_WithoutWrite_ReadsInitialContent()
         {
             var initial = new List<Object>();
-            GraphNode node = PropertyNode(out GraphProperty property, proto: true);
+            GraphNode node = PropertyNode(out GraphProperty property, hasInitialValue: true);
             ((ObjectListSlot)property.Slot).Default = initial;
 
             var reader = new ReadAction(node);
 
-            Assert.AreSame(initial, reader.objects.Evaluate(), "ProtoProperty 不必先 Set 就讀得到初始內容。");
+            Assert.AreSame(initial, reader.objects.Evaluate(), "Property 不必先 Set 就讀得到初始內容。");
 
             // Set 之後回到目前值，且不回寫初始設定。
             var written = new List<Object>();
@@ -140,20 +155,20 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         {
             var sourceValue = new List<Object>();
             GraphNode source = new GraphNode(new ListFormula(sourceValue));
-            GraphNode propertyNode = PropertyNode(out GraphProperty property, proto: true);
+            GraphNode propertyNode = PropertyNode(out GraphProperty property, hasInitialValue: true);
             propertyNode.SetPropertyInput(source);
 
             List<GraphDiagnostic> diagnostics = GraphVerifier.CollectDiagnostics(graph);
 
             CollectionAssert.DoesNotContain(Codes(diagnostics), "assetpipeline.property.slot-linked");
             Assert.IsNull(property.Slot.Node);
-            // ProtoProperty 未寫入時回它自己的初始內容；來源公式不求值，所以拿到的不會是來源那一份。
-            // 不可斷言 null：Proto 的初始內容就是型別欄位的常數，ObjectListSlot 的常數是一個空清單。
+            // Property 未寫入時回它自己的初始內容；來源公式不求值，所以拿到的不會是來源那一份。
+            // 不可斷言 null：Property 的初始內容就是型別欄位的常數，ObjectListSlot 的常數是一個空清單。
             List<Object> read = new ReadAction(propertyNode).objects.Evaluate();
             Assert.AreSame(property.InitialValue, read);
             Assert.AreNotSame(sourceValue, read);
             var second = new GraphNode();
-            second.SetProtoProperty(property);
+            second.SetProperty(property);
             second.Clear();
             Assert.IsNull(property.Slot.Node);
         }
@@ -172,8 +187,8 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         [Test]
         public void DuplicateNameInSameFamily_IsRejected()
         {
-            PropertyNode(out _, proto: true, name: "Objects");
-            PropertyNode(out _, proto: true, name: "Objects");
+            PropertyNode(out _, hasInitialValue: true, name: "Objects");
+            PropertyNode(out _, hasInitialValue: true, name: "Objects");
 
             List<GraphDiagnostic> diagnostics = GraphVerifier.CollectDiagnostics(graph);
 
@@ -181,33 +196,31 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         }
 
         [Test]
-        public void PlainProperty_WithoutName_IsValid()
+        public void Property_WithoutName_IsInvalid()
         {
             PropertyNode(out GraphProperty property, name: null);
 
             List<GraphDiagnostic> diagnostics = GraphVerifier.CollectDiagnostics(graph);
 
-            CollectionAssert.DoesNotContain(Codes(diagnostics), "assetpipeline.property.name-missing");
+            CollectionAssert.Contains(Codes(diagnostics), "assetpipeline.property.name-missing");
         }
 
         [Test]
-        public void LocalProperty_IsNotAddedToTheDocumentDefinitions()
+        public void Property_IsRegisteredInTheDocumentLibrary()
         {
             PropertyNode(out GraphProperty property);
 
-            Assert.IsEmpty(graph.Properties);
-            Assert.IsFalse(property.Proto);
+            Assert.That(graph.Properties, Is.EqualTo(new[] { property }));
         }
 
         [Test]
-        public void ProtoProperty_WithoutKey_PreservesThePropertyNode()
+        public void Property_WithoutKey_PreservesThePropertyNode()
         {
             var node = new GraphNode();
 
-            node.SetProtoProperty(null);
+            node.SetProperty(null);
 
             Assert.AreEqual(NodeKind.Property, node.Kind);
-            Assert.IsTrue(node.IsProtoProperty);
             Assert.IsNull(node.Property);
         }
 

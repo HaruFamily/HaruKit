@@ -61,14 +61,15 @@ public sealed class LogicGraphValidationTests
     [Test]
     public void PropertyReadWriteValidationRejectsMissingAndIncompatibleTargetsWithoutRejectingWriteBack()
     {
-        var property = new GraphProperty(null, new IntSlot());
+        var property = new GraphProperty("Value", new IntSlot());
         var target = new GraphNode();
-        target.SetLocalProperty(property);
+        target.SetProperty(property);
         var body = new ReadWriteValue();
         body.Input.SetNode(target);
         body.Output.SetNode(target);
         var action = new ActionSlot<Pack>(body);
         var graph = Graph(action);
+        graph.Properties.Add(property);
 
         Assert.That(graph.CollectDiagnostics(), Is.Empty, "合法讀取後寫回不是求值循環。");
         property.SetSlot(new OtherIntSlot());
@@ -76,7 +77,7 @@ public sealed class LogicGraphValidationTests
         Assert.That(errors, Has.Count.EqualTo(2), "讀取端與寫入端都必須逐 Slot 驗族。");
         Assert.That(errors.All(d => d.Severity == GraphDiagnosticSeverity.Error), Is.True);
 
-        target.SetProtoProperty(null);
+        target.SetProperty(null);
         Assert.That(graph.CollectDiagnostics().Single(d => d.Code == "logicgraph.node.property-missing").Severity,
             Is.EqualTo(GraphDiagnosticSeverity.Error));
         action.Disabled = true;
@@ -91,20 +92,51 @@ public sealed class LogicGraphValidationTests
     }
 
     [Test]
+    public void PropertyReferencesMustBelongToTheirOwnGraphOrAssetLibrary()
+    {
+        var property = new GraphProperty("Value", new IntSlot());
+        var carrier = new GraphNode();
+        carrier.SetProperty(property);
+        var action = new ReadValue();
+        action.Input.SetNode(carrier);
+        var graph = Graph(new ActionSlot<Pack>(action));
+        Assert.That(graph.CollectDiagnostics().Any(d => d.Code == "logicgraph.node.property-out-of-scope"), Is.True);
+        graph.Properties.Add(property);
+        Assert.That(graph.CollectDiagnostics(), Is.Empty);
+
+        var asset = ScriptableObject.CreateInstance<TestActionAsset>();
+        try
+        {
+            asset.SetTarget(action);
+            var assetNode = new GraphNode();
+            assetNode.SetAsset(asset);
+            var call = new ActionSlot<Pack>();
+            call.SetNode(assetNode);
+            var caller = Graph(call);
+            caller.Properties.Add(property);
+            Assert.That(caller.CollectDiagnostics().Any(d => d.Code == "logicgraph.node.property-out-of-scope"), Is.True);
+            asset.Properties.Add(property);
+            caller.Properties.Clear();
+            Assert.That(caller.CollectDiagnostics(), Is.Empty);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(asset); }
+    }
+
+    [Test]
     public void PropertyLibrariesValidateNamesAndTypesInTheGraphAndReferencedAssets()
     {
         var asset = ScriptableObject.CreateInstance<TestActionAsset>();
         try
         {
             asset.SetTarget(new ReadValue());
-            asset.Properties.Add(new GraphProperty("Same", new IntSlot(), true));
-            asset.Properties.Add(new GraphProperty("Same", new OtherIntSlot(), true));
+            asset.Properties.Add(new GraphProperty("Same", new IntSlot()));
+            asset.Properties.Add(new GraphProperty("Same", new OtherIntSlot()));
             var node = new GraphNode();
             node.SetAsset(asset);
             var slot = new ActionSlot<Pack>();
             slot.SetNode(node);
             var graph = Graph(slot);
-            graph.Properties.Add(new GraphProperty(null, null, true));
+            graph.Properties.Add(new GraphProperty(null, null));
 
             var errors = graph.CollectDiagnostics();
             Assert.That(errors.Count(d => d.Code == "logicgraph.property.name-missing"), Is.EqualTo(1));
@@ -112,7 +144,7 @@ public sealed class LogicGraphValidationTests
             Assert.That(errors.Single(d => d.Code == "logicgraph.property.duplicate").Location.FieldPath,
                 Does.Contain(".Asset.Properties[1]"));
             var propertyRoot = new GraphNode();
-            propertyRoot.SetProtoProperty(asset.Properties[0]);
+            propertyRoot.SetProperty(asset.Properties[0]);
             asset.SetRoot(propertyRoot);
             Assert.That(graph.CollectDiagnostics().Any(d => d.Code == "logicgraph.asset.property-root"), Is.True);
         }
@@ -129,16 +161,16 @@ public sealed class LogicGraphValidationTests
         const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
         try
         {
-            var property = new GraphProperty("AssetValue", new IntSlot(), true);
+            var property = new GraphProperty("AssetValue", new IntSlot());
             property.Slot.DefaultObject = 7;
             property.EnsureId();
             asset.Properties.Add(property);
             var target = new GraphNode();
-            target.SetProtoProperty(property);
+            target.SetProperty(property);
             var body = new ReadValue();
             body.Input.SetNode(target);
             asset.SetTarget(body);
-            owner.Second.Properties.Add(new GraphProperty("OwnerValue", new IntSlot(), true));
+            owner.Second.Properties.Add(new GraphProperty("OwnerValue", new IntSlot()));
 
             var binding = LogicGraphEditor.CreateBinding(typeof(Owner).GetField(nameof(Owner.Second)));
             Assert.That(window.BindDocument(owner, binding, LogicGraphEditor.Context), Is.True);
@@ -158,7 +190,7 @@ public sealed class LogicGraphValidationTests
 
             var originalRoot = focus.AssetHostSlot.Node;
             var propertyRoot = new GraphNode();
-            propertyRoot.SetProtoProperty(working);
+            propertyRoot.SetProperty(working);
             focus.AssetHostSlot.SetNode(propertyRoot);
             var model = (HGModel)typeof(HaruGraphWindow).GetField("model", flags).GetValue(window);
             Assert.That(HGValidator.RunSubtree(model, focus, focus.AssetHostSlot, "Asset").Issues

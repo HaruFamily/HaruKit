@@ -6,22 +6,22 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
-/// <summary>畫一次 ProtoProperty 庫需要的全部資料。面板不認識 model 或 focus，只認這份快照。</summary>
+/// <summary>畫一次 Property 庫需要的全部資料。面板不認識 model 或 focus，只認這份快照。</summary>
 public struct HGPropertyLibraryView
 {
-    /// <summary>這張圖有初始內容的 Property 定義，依清單順序。</summary>
+    /// <summary>這張圖的所有 Property 定義，依庫清單順序。</summary>
     public List<HGProperty> Properties;
 }
 
 /// <summary>
-/// ProtoProperty 庫對外的命令。面板只回報使用者做了什麼，怎麼改圖由視窗決定。
+/// Property 庫對外的命令。面板只回報使用者做了什麼，怎麼改圖由視窗決定。
 /// </summary>
 public struct HGPropertyLibraryCommands
 {
     /// <summary>改名。回傳 false＝名稱不合法，就地改名會維持編輯狀態。</summary>
     public Func<GraphProperty, string, bool> Rename;
 
-    /// <summary>拖到「＋」上放開，或右鍵「複製」：複製定義與初始內容成一顆新的 ProtoProperty。</summary>
+    /// <summary>拖到「＋」上放開，或右鍵「複製」：複製定義與初始內容成一顆新的 Property。</summary>
     public Action<GraphProperty> Duplicate;
 
     /// <summary>拖到「－」上放開，或右鍵「移除」。</summary>
@@ -39,6 +39,8 @@ public struct HGPropertyLibraryCommands
     /// <summary>改初始內容（純值型別）。</summary>
     public Action<GraphProperty, object> SetInitialValue;
 
+    public Action<GraphProperty> UseSlotInitialValue;
+
     /// <summary>把 Project 資產加進清單型的初始內容。重複與型別不符由實作跳過。</summary>
     public Action<GraphProperty, IReadOnlyList<UnityEngine.Object>> AddInitialItems;
 
@@ -53,10 +55,12 @@ public struct HGPropertyLibraryCommands
 
     /// <summary>可逐項編輯的清單：就地改寫第 index 項。</summary>
     public Action<GraphProperty, int, object> SetInitialItem;
+
+    public Action<GraphProperty, bool> SetRetainValue;
 }
 
 /// <summary>
-/// 左欄 ProtoProperty 庫：這張圖有哪些帶初始內容的具名變數，以及每一顆裝了什麼。
+/// 左欄 Property 庫：這張圖有哪些帶初始內容的具名變數，以及每一顆裝了什麼。
 /// </summary>
 // 版面與互動照目錄庫做：**展開就在原地攤開內容**，不另開一塊底部編輯區。
 // 理由是內容與它的擁有者要看起來是同一塊，而且落點就是那一列本身——
@@ -85,7 +89,7 @@ public sealed class HGPropertyLibraryPanel
     private readonly HGLibraryReorder rowOrder = new();
     private readonly HGLibraryReorder itemOrder = new();
 
-    /// <summary>正在重排項目的是哪一顆 ProtoProperty。展開的可能不只一顆，要記得是誰的項目。</summary>
+    /// <summary>正在重排項目的是哪一顆 Property。展開的可能不只一顆，要記得是誰的項目。</summary>
     private string itemOrderOwnerId;
 
     /// <summary>這一輪從 Project 來的拖曳還在進行中。</summary>
@@ -123,7 +127,7 @@ public sealed class HGPropertyLibraryPanel
 
         var searchRect = new Rect(r.x + 4f, top + 46f, r.width - 8f, 20f);
         GUI.Label(new Rect(searchRect.x + 4f, searchRect.y + 2f, 16f, 16f),
-            EditorGUIUtility.IconContent("Search Icon", "搜尋 ProtoProperty"));
+            EditorGUIUtility.IconContent("Search Icon", "搜尋 Property"));
         search = EditorGUI.TextField(
             new Rect(searchRect.x + 20f, searchRect.y, searchRect.width - 20f, searchRect.height), search);
 
@@ -244,14 +248,15 @@ public sealed class HGPropertyLibraryPanel
     private float BlockHeight(GraphProperty property)
     {
         if (!IsExpanded(property)) return RowHeight;
+        if (property.InitialValueIsNull) return RowHeight + 2 * ItemHeight + 4f;
 
         // 純值只攤開一列輸入框；清單攤開全部項目，空的時候仍留一列放提示。
-        if (!IsItemList(property, out _)) return RowHeight + ItemHeight + 4f;
+        if (!IsItemList(property, out _)) return RowHeight + 2 * ItemHeight + 4f;
 
         int count = (property.Slot?.DefaultObject as IList)?.Count ?? 0;
         // 可逐項編輯的清單尾端多一列「＋ 新增」；元素畫不出輸入框的清單，空的時候留一列放提示。
-        if (IsEditableList(property)) return RowHeight + (count + 1) * ItemHeight + 4f;
-        return RowHeight + Mathf.Max(1, count) * ItemHeight + 4f;
+        if (IsEditableList(property)) return RowHeight + (count + 2) * ItemHeight + 4f;
+        return RowHeight + (Mathf.Max(1, count) + 1) * ItemHeight + 4f;
     }
 
     /// <summary>元素畫得出輸入框的清單（純值與資產皆是）：逐項編輯，資產清單另外保留從 Project 拖入。</summary>
@@ -286,7 +291,11 @@ public sealed class HGPropertyLibraryPanel
         // 14px 的小鈕要用無內距、置中的樣式；Chip 的左右內距會把符號裁掉一半。
         if (GUI.Button(foldRect, open ? "▾" : "▸", HGStyles.ListAdd)) SetExpanded(property.Id, !open);
 
-        var typeRect = new Rect(row.xMax - 58f, row.y + 4f, 42f, 15f);
+        var retainRect = new Rect(row.xMax - 66f, row.y + 2f, 52f, 19f);
+        GUI.Label(retainRect, new GUIContent(property.RetainValue ? "保留 ●" : "保留 ○",
+            (property.RetainValue ? "值跨次執行保留，直到明確重設" : "本次執行結束即清除；保留設定不限制外部寫入")
+            + "。展開後可調整"), HGStyles.NodeChip);
+        var typeRect = new Rect(retainRect.x - 46f, row.y + 4f, 42f, 15f);
         HGStyles.RoundedFill(typeRect, HGStyles.HeaderFormula, Corner);
         GUI.Label(typeRect, HGStyles.Elide(item.TypeName, HGStyles.NodeChip, typeRect.width), HGStyles.NodeChip);
 
@@ -318,7 +327,7 @@ public sealed class HGPropertyLibraryPanel
 
         // 拖到「－ 移除」上要能從這一列起拖。名字那一格不起拖，雙擊改名才不會被當成拖曳。
         if (e.type == EventType.MouseDown && e.button == 0 && row.Contains(e.mousePosition)
-            && !nameRect.Contains(e.mousePosition) && !foldRect.Contains(e.mousePosition))
+            && !nameRect.Contains(e.mousePosition) && !foldRect.Contains(e.mousePosition) && !retainRect.Contains(e.mousePosition))
         {
             drag.BeginProperty(property);
             e.Use();
@@ -335,6 +344,9 @@ public sealed class HGPropertyLibraryPanel
         menu.AddItem(new GUIContent("改名"), false,
             () => inlineName.Begin(property, HGInlineRename.SitePropertyLib, key ?? ""));
         if (cmd.Duplicate != null) menu.AddItem(new GUIContent("複製"), false, () => cmd.Duplicate(property));
+        if (property.ResultType != null && !property.ResultType.IsValueType)
+            menu.AddItem(new GUIContent("初始值設為 null"), property.InitialValueIsNull,
+                () => cmd.SetInitialValue?.Invoke(property, null));
         menu.AddSeparator("");
         menu.AddItem(new GUIContent("移除"), false, () => cmd.Remove(property));
         menu.ShowAsContext();
@@ -363,10 +375,27 @@ public sealed class HGPropertyLibraryPanel
     private Action DrawExpandedContent(float contentWidth, float itemTop, GraphProperty property,
         HGPropertyLibraryCommands cmd)
     {
+        float width = contentWidth - ItemIndent - 6f;
+        var retainRow = new Rect(ItemIndent, itemTop, width, ItemHeight - 2f);
+        var toggleRect = HGSkin.ToggleRect(retainRow);
+        bool retain = EditorGUI.Toggle(toggleRect, property.RetainValue);
+        var labelRect = new Rect(toggleRect.xMax + 5f, retainRow.y,
+            Mathf.Max(0f, retainRow.xMax - toggleRect.xMax - 5f), retainRow.height);
+        // 主題 Toggle 貼圖只供固定大小方框使用；文字另畫，避免原生 ToggleLeft 的樣式不一致。
+        if (GUI.Button(labelRect, HGStyles.Elide("執行結束後保留值", HGStyles.RowLabel, labelRect.width,
+                "需要跨次執行保存的值請開啟保留；外部寫入不受此設定限制"), HGStyles.RowLabel)) retain = !retain;
+        if (retain != property.RetainValue) return () => cmd.SetRetainValue?.Invoke(property, retain);
+        itemTop += ItemHeight;
+        if (property.InitialValueIsNull)
+        {
+            GUI.Label(new Rect(ItemIndent, itemTop, width - 76f, ItemHeight - 2f), "初始值：null", HGStyles.RowLabel);
+            if (GUI.Button(new Rect(contentWidth - 78f, itemTop, 72f, ItemHeight - 2f), "設定初始值", EditorStyles.miniButton))
+                return () => cmd.UseSlotInitialValue?.Invoke(property);
+            return null;
+        }
         FormulaSlotBase slot = property?.Slot;
         if (slot == null) return null;
 
-        float width = contentWidth - ItemIndent - 6f;
         if (!IsItemList(property, out Type elementType))
         {
             var fieldRect = new Rect(ItemIndent, itemTop, width, ItemHeight - 2f);
@@ -485,7 +514,7 @@ public sealed class HGPropertyLibraryPanel
     }
 
     /// <summary>
-    /// 「＋ 新增 ProtoProperty」：單擊開型別選單；把格子**拖到這顆按鈕上放開＝複製那一顆**（初始內容一起複製）。
+    /// 「＋ 新增 Property」：單擊開型別選單；把格子**拖到這顆按鈕上放開＝複製那一顆**（初始內容一起複製）。
     /// 拖到畫布是建立引用，拖到這裡是建立新的儲存位置——落點本身就是「新增」，兩者不會混淆。
     /// </summary>
     private static void DrawCreateButton(Rect rect, HGPropertyLibraryCommands cmd, HGLibraryDrag drag)
@@ -497,7 +526,7 @@ public sealed class HGPropertyLibraryPanel
         if (dropping && hover) HGStyles.Fill(rect, HGStyles.DropCreate);
 
         bool clicked = GUI.Button(rect, new GUIContent(
-            dropping ? "複製 ProtoProperty" : "＋ 新增 ProtoProperty",
+            dropping ? "複製 Property" : "＋ 新增 Property",
             "新增一顆有初始內容的具名變數；把左邊的格子拖到這裡＝複製它"));
 
         // 拖曳放開不會讓 GUI.Button 回 true（它沒在自己身上收到 MouseDown），所以自己判。
@@ -512,7 +541,7 @@ public sealed class HGPropertyLibraryPanel
     }
 
     /// <summary>
-    /// 「－ 移除 ProtoProperty」：把格子**拖到這顆按鈕上放開**刪掉被拖的那一個。
+    /// 「－ 移除 Property」：把格子**拖到這顆按鈕上放開**刪掉被拖的那一個。
     /// 沒有「單擊移除選取項」那條路——這個庫沒有焦點可以當表態。
     /// </summary>
     private static void DrawRemoveButton(Rect rect, HGPropertyLibraryCommands cmd, HGLibraryDrag drag)
@@ -526,7 +555,7 @@ public sealed class HGPropertyLibraryPanel
         bool wasEnabled = GUI.enabled;
         GUI.enabled = wasEnabled && dropping;
         GUI.Button(rect, new GUIContent(
-            dropping ? "移除 ProtoProperty" : "－ 移除 ProtoProperty",
+            dropping ? "移除 Property" : "－ 移除 Property",
             "把左邊的格子拖到這裡移除；圖上指著它的讀寫節點會一起清空"));
         GUI.enabled = wasEnabled;
 

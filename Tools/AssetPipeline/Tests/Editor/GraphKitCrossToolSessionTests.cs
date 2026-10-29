@@ -83,7 +83,8 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 ((IGraphDocument)owner.graph).AddRoot(Graph.PipelineKey);
                 var carrier = new GraphNode();
                 carrier.EnsureId();
-                carrier.SetProperty(new GraphProperty("Property", new ObjectListSlot(), false));
+                carrier.SetProperty(new GraphProperty("Property", new ObjectListSlot()) { InitialValueIsNull = true });
+                owner.graph.Properties.Add(carrier.Property);
                 owner.graph.Orphans.Add(carrier);
                 Graph original = owner.graph;
                 var binding = new HGDocumentBinding<Graph>("AssetPipeline.Graph",

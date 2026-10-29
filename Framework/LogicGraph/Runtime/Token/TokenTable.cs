@@ -25,7 +25,7 @@ public class TokenTable<TPack>
     public CancellationToken CancellationToken => ExecutionCancellation;
     private object scopeIdentity = new();
     /// <summary>圖實例／資產呼叫位置的執行期身分；跨次執行沿用 Property scope，不作為持久化鍵。</summary>
-    public object ScopeIdentity => (object)Properties ?? scopeIdentity;
+    public object ScopeIdentity => Properties?.Identity ?? scopeIdentity;
 
     /// <summary>建立獨立求值表，保留 Token／binding 與目前 Property scope；不沿用執行觀察、取消或循環中的狀態。</summary>
     public TokenTable<TPack> CreateEvaluationScope(CancellationToken cancellationToken = default)

@@ -1,4 +1,4 @@
-﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
+namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections.Generic;
@@ -892,7 +892,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
             return;
         }
 
-        // 內容、候選、Token 與 ProtoProperty 庫同一次複製，才能保留節點對庫定義的共享引用。
+        // 內容、候選、Token 與 Property 庫同一次複製，才能保留節點對庫定義的共享引用。
         var pack = new List<object>
         {
             formulaAsset != null ? (object)host : HGReflect.AssetRoot(asset),
@@ -972,7 +972,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
             return false;
         }
 
-        // 寫回仍同一次複製四部分，節點必須引用實際寫入 Token／ProtoProperty 庫的物件。
+        // 寫回仍同一次複製四部分，節點必須引用實際寫入 Token／Property 庫的物件。
         var pack = new List<object>
         {
             host,
