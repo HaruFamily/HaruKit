@@ -60,6 +60,12 @@ public static class AssetGraphSchema
     /// <summary>清掉求值快取。編輯器每次重建圖都會呼叫；runtime 資產不會變，不必呼叫。</summary>
     public static void InvalidateCache() => Cache.Clear();
 
+    /// <summary>Forget one asset's schema before replacing its content or destroying a temporary asset; other entries are retained.</summary>
+    public static void InvalidateCache(ScriptableObject asset)
+    {
+        if (asset != null) Cache.Remove(asset);
+    }
+
 #if UNITY_EDITOR
     // 關掉 Domain Reload 時 static 會跨 Play 存活，進 Play 一定要丟掉編輯期留下的舊 schema。
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]

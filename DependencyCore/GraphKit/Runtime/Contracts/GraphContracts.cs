@@ -169,6 +169,14 @@ public sealed class GraphNodeGroup
 
     public string Id => _id;
     public string Scope => _scope;
+    /// <summary>Retarget a copied group's canvas without changing its identity, members or tabs.</summary>
+    public bool SetScope(string scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope)) throw new ArgumentException("Group scope is required.", nameof(scope));
+        if (_scope == scope) return false;
+        _scope = scope;
+        return true;
+    }
     public string Title => _title;
     public Rect Rect => _rect;
     public int ColorIndex => _color;

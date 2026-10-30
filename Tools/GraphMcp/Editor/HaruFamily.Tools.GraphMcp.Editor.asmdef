@@ -1,0 +1,9 @@
+{
+  "name": "HaruFamily.Tools.GraphMcp.Editor",
+  "rootNamespace": "HaruFamily.Tools.GraphMcp.Editor",
+  "references": ["HaruFamily.DependencyCore.GraphKit", "HaruFamily.DependencyCore.GraphKit.Editor", "MCPForUnity.Editor"],
+  "includePlatforms": ["Editor"],
+  "overrideReferences": true,
+  "precompiledReferences": ["Newtonsoft.Json.dll"],
+  "autoReferenced": true
+}

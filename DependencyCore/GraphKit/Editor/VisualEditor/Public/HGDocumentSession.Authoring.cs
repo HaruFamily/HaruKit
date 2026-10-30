@@ -9,6 +9,76 @@ using System.Linq;
 public sealed partial class HGDocumentSession<TDocument> where TDocument : class, IGraphDocument
 {
     private HGModel AuthoringModel() => HGModel.CreateDetachedView(Owner, Document, context.Profile?.RootAdapter);
+
+    /// <summary>Creates or configures one caller-owned binding, matching the current asset's family and name.</summary>
+    public HGSessionCommandResult ConfigureAssetParameter(GraphNode carrier, Type family, string name,
+        bool enabled, bool setDefault, object value) => Guard(() =>
+    {
+        if (!IsDocumentOwned(carrier) || carrier.Kind != NodeKind.Asset || carrier.AssetObject == null)
+            return HGSessionCommandResult.Rejected;
+        var parameters = AssetGraphSchema.Read(carrier.AssetObject, out var duplicates);
+        if (duplicates.Count != 0) return HGSessionCommandResult.Rejected;
+        var parameter = parameters.SingleOrDefault(item => item.Name == name && item.Slot?.FamilyType == family);
+        if (parameter?.Slot == null || parameter.PackType != Document.PackType) return HGSessionCommandResult.Rejected;
+        var matches = carrier.Bindings.Where(item => item?.Name == name && item.Slot?.FamilyType == family).ToArray();
+        if (matches.Length > 1) return HGSessionCommandResult.Rejected;
+        var binding = matches.SingleOrDefault();
+        if (binding != null && binding.Slot.GetType() != parameter.Slot.GetType()) return HGSessionCommandResult.Rejected;
+        if (setDefault && !enabled) return HGSessionCommandResult.Rejected;
+        if (setDefault && (value == null ? parameter.Slot.DefaultEditType.IsValueType : !parameter.Slot.DefaultEditType.IsInstanceOfType(value)))
+            return HGSessionCommandResult.Rejected;
+        if (binding == null && !enabled && !setDefault) return HGSessionCommandResult.NoChange;
+        if (binding != null && binding.OverrideEnabled == enabled && (!setDefault || Equals(binding.Slot.DefaultObject, value)))
+            return HGSessionCommandResult.NoChange;
+        return Apply(() =>
+        {
+            if (binding == null)
+            {
+                // Match the canvas: a fresh declared slot, never a clone of the asset's internal expression.
+                if (HGReflect.CreateInstance(parameter.Slot.GetType()) is not FormulaSlotBase slot || slot.FamilyType != family)
+                    throw new InvalidOperationException("Could not create the asset parameter's declared slot.");
+                binding = new NamedFormulaSlot(name, slot);
+                carrier.Bindings.Add(binding);
+            }
+            binding.OverrideEnabled = enabled;
+            if (setDefault) binding.Slot.DefaultObject = value;
+        });
+    });
+    /// <summary>Edits carrier state and layout without replacing its identity or connections.</summary>
+    public HGSessionCommandResult ConfigureNode(GraphNode node, bool? disabled, bool setNote, string note,
+        UnityEngine.Vector2? position, bool clearPosition) => Guard(() =>
+    {
+        if (!IsDocumentOwned(node) || position.HasValue && clearPosition || setNote && note?.Length > 16384)
+            return HGSessionCommandResult.Rejected;
+        if (position.HasValue && (!FiniteCoordinate(position.Value.x) || !FiniteCoordinate(position.Value.y)))
+            return HGSessionCommandResult.Rejected;
+        bool contentChanged = disabled.HasValue && node.Disabled != disabled.Value;
+        bool noteChanged = setNote && node.Note != note;
+        bool positionChanged = position.HasValue && (!node.HasPos || !node.Pos.Equals(position.Value))
+            || clearPosition && (node.HasPos || !node.Pos.Equals(UnityEngine.Vector2.zero));
+        if (!contentChanged && !noteChanged && !positionChanged) return HGSessionCommandResult.NoChange;
+        return Apply(() =>
+        {
+            if (disabled.HasValue) node.Disabled = disabled.Value;
+            if (setNote) node.Note = note;
+            if (position.HasValue) node.Pos = position.Value;
+            else if (clearPosition) node.ClearPos();
+        }, content: contentChanged);
+    });
+
+    private static bool FiniteCoordinate(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+
+    /// <summary>Changes only the group's rectangle; members and node positions are unchanged.</summary>
+    public HGSessionCommandResult SetGroupRect(GraphNodeGroup group, UnityEngine.Rect rect) => Guard(() =>
+    {
+        if (Document is not IGraphViewStateOwner owner || group == null || !owner.ViewState.NodeGroups.Contains(group)
+            || !FiniteCoordinate(rect.x) || !FiniteCoordinate(rect.y) || !FiniteCoordinate(rect.width) || !FiniteCoordinate(rect.height)
+            || !FiniteCoordinate(rect.xMax) || !FiniteCoordinate(rect.yMax) || rect.width < 0 || rect.height < 0)
+            return HGSessionCommandResult.Rejected;
+        if (group.Rect.Equals(rect)) return HGSessionCommandResult.NoChange;
+        return Apply(() => group.SetRect(rect), content: false);
+    });
+
     private string RootGroupScope => Document is HGAssetDocument asset ? asset.Scope : new HGFocus { Kind = HGFocusKind.Root }.Id;
     private string TokenGroupScope(GraphToken token) => (Document is HGAssetDocument ? RootGroupScope + "/" : "") + "var:" + token.Id;
 
@@ -87,7 +157,7 @@ public sealed partial class HGDocumentSession<TDocument> where TDocument : class
 
     public HGSessionCommandResult SetSlotDefault(FormulaSlotBase slot, object value) => Guard(() =>
     {
-        if (slot == null || slot is UnionSlotBase || !InspectObjects().Any(item => ReferenceEquals(item, slot))
+        if (slot == null || !InspectObjects().Any(item => ReferenceEquals(item, slot))
             || Document is IPropertyOwner properties && properties.Properties.Any(item => ReferenceEquals(item?.Slot, slot)))
             return HGSessionCommandResult.Rejected;
         Type type = slot.DefaultEditType;
@@ -116,6 +186,51 @@ public sealed partial class HGDocumentSession<TDocument> where TDocument : class
         });
         nodeId = result == HGSessionCommandResult.Changed ? created : null;
         return result;
+    }
+
+    /// <summary>Copies only selected carriers; internal edges survive, boundary slots clear, definitions stay shared.</summary>
+    public HGSessionCommandResult DuplicateNodes(IReadOnlyList<GraphNode> sources, string scope,
+        UnityEngine.Vector2 offset, out IReadOnlyList<string> nodeIds)
+    {
+        var created = new List<string>();
+        var result = Guard(() =>
+        {
+            if (sources == null || sources.Count < 1 || sources.Count > 64 || !GroupScopes().ContainsKey(scope)
+                || !FiniteCoordinate(offset.x) || !FiniteCoordinate(offset.y)) return HGSessionCommandResult.Rejected;
+            var selection = new HashSet<GraphNode>(sources);
+            if (selection.Count != sources.Count || sources.Any(node => node == null || string.IsNullOrEmpty(node.Id) || !IsDocumentOwned(node))
+                || sources.Select(node => node.Id).Distinct().Count() != sources.Count) return HGSessionCommandResult.Rejected;
+            var ownedNodes = InspectObjects().OfType<GraphNode>().ToArray();
+            if (sources.Any(node => ownedNodes.Count(other => other.Id == node.Id) != 1)) return HGSessionCommandResult.Rejected;
+            foreach (var node in sources)
+                if (node.HasPos && (!FiniteCoordinate(node.Pos.x + offset.x) || !FiniteCoordinate(node.Pos.y + offset.y)))
+                    return HGSessionCommandResult.Rejected;
+            var pool = scope == RootGroupScope ? Document.Orphans
+                : DocumentTokens().Single(token => token != null && TokenGroupScope(token) == scope).Orphans;
+            return Apply(() =>
+            {
+                foreach (var copy in CloneNodesIntoPool(sources, pool, offset)) created.Add(copy.Id);
+            });
+        });
+        nodeIds = result == HGSessionCommandResult.Changed ? created.AsReadOnly() : Array.Empty<string>();
+        return result;
+    }
+
+    private List<GraphNode> CloneNodesIntoPool(IReadOnlyList<GraphNode> sources, List<GraphNode> pool, UnityEngine.Vector2 offset)
+    {
+        if (sources.Count == 0) return new List<GraphNode>();
+        var copies = HGModel.CloneSubgraph(sources, out var roots);
+        if (copies == null || copies.Count != sources.Count) throw new InvalidOperationException("Selected node cloning failed.");
+        foreach (var copy in copies)
+        {
+            copy.EnsureId();
+            if (copy.HasPos) copy.Pos += offset;
+        }
+        foreach (var root in roots) pool.Add(root);
+        // Cycles have no parentless root; keep one reachable entry per otherwise detached component.
+        foreach (var copy in copies)
+            if (!IsDocumentOwned(copy)) pool.Add(copy);
+        return copies;
     }
 
     public HGSessionCommandResult CreateDefinition(bool property, Type type, string name, out string definitionId)

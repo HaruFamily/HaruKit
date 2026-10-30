@@ -90,6 +90,8 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 
 ### 公式資產根輸入
 
+- AssetGraphSchema.ReadCached 僅用於求值；編輯器檢視使用 Read。InvalidateCache() 清除全部，InvalidateCache(asset) 僅移除指定資產且保留其他項目。建立短命資產的消費端須在銷毀前移除其快取，避免 static dictionary 保留已銷毀物件及定義。
+
 - IFormulaGraphAsset 提供 Input／SetInput／ConfigurationError；公式資產的 Root 為 Input.Node。Input 可以是 Union，根來源可為相容的公式、資產、Token 或 Property，也可不接線使用常數。
 - 進入資產畫布時深複製 Input、Orphans、Tokens、Properties，存檔以 SetInput 寫回整個輸入。HGAssetSnapshot.Input 保存完整 Slot，Undo／Redo／失敗回復也整體替換它，保留 Default、Union 分支及 HGSlotSetting。
 - 一般 ActionAsset 仍用合成 ActionSlot 承載根，儲存走 SetRoot，不能把根換成 Token／Property。兩類資產的庫資料均與根輸入在同一次 DeepCopy 內，維持引用一致。
@@ -362,6 +364,18 @@ private List<int> levelCounts;
 
 #### 唯讀文件快照
 
+非視窗 `HGDocumentSession.RunAtomic(Func<bool>)` 在隔離工作副本上組合多個公開命令。callback 必須在任一命令拒絕時回傳 false；例外或 false 會回復文件、Dirty 與原有 Undo／Redo，generation 單調遞增而不回復。成功修改只保留一筆 Undo，NoChange 不新增歷程。執行中禁止 Commit／CommitAssetPreservingOwner／Cancel／Undo／Redo／巢狀 RunAtomic；即使 callback 忽略這些拒絕，整批仍拒絕。呼叫端不得跨 generation 快取副本物件或接點。此保證不涵蓋 callback 對外部 Owner、引用資產、場景或檔案的副作用；不得視為跨資產或磁碟交易。
+
+非視窗 `HGDocumentSession.ConfigureNode` 僅接受文件所持有的 GraphNode，更新 disabled、備註與手動座標／ClearPos，保留身分與接線。disabled 實際變化才撤銷內容驗證，純備註／位置為 layout-only；相同值 NoChange。位置須有限，設定與清除位置互斥，備註上限 16384 字元。`SetGroupRect` 僅改文件所有群組的矩形，不移動成員；尺寸非負且所有分量／邊界有限，純版面修改保留內容驗證。兩者沿用 Guard／Apply 與批次、Undo／Redo，不寫 Owner 正本。
+
+非視窗 `HGDocumentSession.DuplicateNodes` 複製 1..64 個文件所有、ID 唯一的載體到明確 Root／Token scope。與畫布共用 `HGModel.CloneSubgraph`，選取內部 Slot 線保留，組外 Slot 線清除；Token／Property 定義與 Unity Asset 引用共用，內嵌內容與 caller bindings 深複製。新載體 ID 依輸入順序回傳，手動位置加有限 offset，無手動位置者維持原狀。只放根至目標候選池，session 為無根循環補可達入口，不複製群組或改寫原件接線。整段沿用 Apply 的 Undo／失敗回復與內容驗證失效。
+
+`HGDocumentSession.Layout` 提供群組註解／自訂色（ConfigureGroup）、分頁增刪改名／作用頁／成員換頁（EditGroupTab）、多節點錨點排列（LayoutNodes）與整組複製（DuplicateGroup）。分頁沿用 GraphNodeGroup 契約，最多 32 頁，最後一頁不可刪；刪頁成員回第一頁，顏色 alpha 存成 1。排列限 1..64 個文件所有節點，模式為 translate、align_x/y、distribute_x/y、grid、clear；非 grid／clear 需有限手動位置，網格間距為正、欄數 1..64，溢位拒絕，純版面不撤銷內容驗證。整組複製限 64 明確成員，保留群組頁／成員歸屬／外觀，拒絕缺失或歧義成員；與 DuplicateNodes 共用非交易內部 CloneNodesIntoPool，在一次 Apply 中完成，適用外層 RunAtomic。含節點的複製撤銷內容驗證，空群組外觀複製為 layout-only。不測量畫布節點尺寸、不自動更新群組框、不跨文件。
+
+非視窗 `HGDocumentSession.ConfigureAssetParameter` 僅修改 session 所有的 Asset 載體，以現行 schema 的族＋名稱建立或設定呼叫端 binding。新 Slot 使用宣告型別實例，不複製來源資產運算；關閉覆蓋保留內容，設定 fallback 須同時啟用，交易沿用 Apply／Guard 與 Undo。來源資產版本與保存衝突由外部消費端檢查，核心命令不提供跨資產原子性。
+
+Unity `Rect`／`RectInt` 以明確的 x／y／width／height 欄位輸出 native-json，Vector2Int／Vector3Int 以明確的整數座標輸出，保留有正負號的尺寸；不可將 boxed Rect 的空 JSON 當成完整矩形，也不可用正規化 bounds 取代原始值。群組矩形參與完整快照與指紋，其他無法表示的 native 值仍須標記 incomplete。
+
 非視窗 Agent 使用 `TryOpenPreservingOwner`，除了 Unity missing types 也拒絕 `HGMissingTypeCleanup.HasLostContent`，完全跳過 Owner 清理；副本仍沿用 Token 清理。原本 TryOpen 不改行為。`CommitAssetPreservingOwner` 要求持久 Owner、版本檢查通過且來源／草稿沒有遺失內容，只保存 Owner 所屬資產檔案，包含同檔子資產，不呼叫全域 SaveAssets。提交前先複製撤銷驗證後的持久內容作為後續隔離草稿，成功再採納；失敗保留草稿／歷程。呼叫端仍須檢查整檔基線、Dirty、同檔視窗草稿及磁碟變動，不能將此核心方法當成完整外部交易協定。
 
 `HGDocumentSession.FindInlineBody(nodeId)` 供命令端以既有載體 ID 解析當前工作副本的 inline body；空／不存在／非 inline 回 null，重複 ID 拒絕。走序列化欄位，不補 ID、不經 lazy getter、不進外部 Unity 資產，上限 20000 物件／200000 欄位與清單元素。Undo／Redo 會更換副本，呼叫端必須檢查 generation 後重新解析，不能重用上次 body。修改仍須經 EditValue 等 session 命令，而非直接寫入找到的物件。
@@ -452,6 +466,12 @@ Unity 物件引用只回 GUID／local ID／path（非持久物件回 instance ID
 - [ ] 新增或改名的 `.cs` 都有 `.meta`（見 HaruKit 根目錄 `CONVENTIONS.md`）
 - [ ] 本手冊與 README 已同步
 
+### 文件快照的 Unity 空引用
+
+`HGDocumentSnapshot` 將 Unity 比較為 null 且 InstanceID 為 0 的 Object 包裝編碼為 null；Instantiate 可產生這種 CLR 非 null 的空包裝。已銷毀且非零 ID 的引用仍編碼為 missing。這讓空引用在副本／保存來回有一致指紋，不改序列化格式，也不把真正遺失引用當成正常空值。
+
+> Trace: verified 2026-10-30 · 使用端 `Doc/2026-10-2/REPORT_HaruGraph_MCP候選欄位與數值限制.md`（空引用回歸、另存與重匯入；集中 215 項通過）
+
 ## 8. 驗證
 
 - `Editor/Tests/`：`HGPortTests`（Port 模型與相容）、`HGPublicConsumerTests`（只用公開 API 的非視窗與視窗命令、別名、descriptor 編輯、Undo／Redo、未完成內容保存與診斷、commit／rebind／cancel）、`GraphExecutionTests`（執行觀察與 Hold）。
@@ -471,6 +491,10 @@ Unity 物件引用只回 GUID／local ID／path（非持久物件回 instance ID
 
 每個命令的既有物件參數必須屬於目前草稿，成功及 mutation 回復後須重取 generation／引用。新節點放入文件候選池，由呼叫者明確 Connect。Slot 清單限 List<具體 GraphSlotBase>，不接受一般庫或任意 IList；移除保留失去使用者的來源。Group 使用 Root／Token 的合法 scope、同 scope 成員互斥，純版面 Apply 不使內容驗證失效；提交規則不變。
 
+`SetSlotDefault` 也接受文件所屬的 UnionSlotBase：型別依 DefaultEditType，僅修改外層 DefaultObject，不切換 SelectedSlot 或改分支設定。沿用 Apply／Undo／Redo；Property 的宣告 Slot 仍拒絕，改用 Property 設定命令。
+
+> Trace: verified 2026-10-30 · 使用端 `Doc/2026-10-2/REPORT_HaruGraph_MCP隔離公式測試.md`（Union 預設值、Undo／Redo、保存重開；253 項回歸通過）
+
 ### 獨立資產的文件轉接
 
 Editor-only `IEditableGraphAsset` 以 `GraphAssetEditState` 提供借用狀態：Input、Orphans、Tokens、Properties、ViewState、HEAD 座標。Capture 不得初始化或清理，Apply 必須先驗證再以同一組引用指派，不得保存或修改舊狀態／其他資產。一般 IGraphAsset 不自動獲得寫入能力。
@@ -478,3 +502,15 @@ Editor-only `IEditableGraphAsset` 以 `GraphAssetEditState` 提供借用狀態�
 `HGAssetDocument` 是不寫進資產的工作文件，整包一次 DeepCopy 保留共享；`HGAssetDocumentBinding` 要求整資產 revision，保留一個來源 envelope 身分。寫入後驗證各部分是否保留傳入引用；失敗將 envelope 設為無效，讓 HGDocumentCommitGuard 必須回復舊狀態並核對，不能只憑原 envelope 未換就誤判已還原。讀回的 source envelope 僅供版本比較，不可直接編輯。
 
 資產根輸入固定，結構診斷共用 RunSubtree；群組 scope 為資產及其 Token 原有焦點 Id。Slot default 命令依 DefaultEditType，而非求值 ResultType。呼叫端仍須設計引用者驗證失效、磁碟與視窗衝突策略；這個轉接不提供跨資產原子提交。
+
+複製完整資產至不同身分時，呼叫端可在隔離副本上以 `GraphNodeGroup.SetScope` 調整畫布歸屬。此方法只接受非空白 scope，保留群組 Id、成員、分頁與外觀，不自行保存或管理 Undo；新 scope 的合法性與整份文件的交易由呼叫端負責。不可用它直接改 Owner 正本。
+
+### 無視窗建圖的樣式依賴
+
+公開文件查詢與批次測試可以在 Inspector／OnGUI 尚未初始化時建立圖。註解高度量測使用 EditorGUIUtility.GetBuiltinSkin(EditorSkin.Inspector).textArea，不依賴 EditorStyles 的靜態初始化；不能要求 Agent 先開視窗，也不能把樣式例外造成的空圖當成合法結果。2026-10-30 獨立套件安裝測試涵蓋帶註解的 Property 替換、Root 移除與回復。
+
+### 多文件資產交易與 metadata 接入
+
+HGDocumentSession.TryOpenPreservingOwner 可接收既有 HGEditorExtensionContext，保持 Owner 不清理並沿用 root／metadata／diagnostics。HGFieldDescriptor.Create 的 managedReference（預設 false）由使用端明確宣告欄位或清單元素的持久化語意，不從目前實例猜測。
+
+CommitAssetsPreservingOwners 對 1..16 個不同持久文件先核對全部 guard、複製並撤銷驗證狀態，再暫存全部 Owner、驗證 staged references，最後保存選定檔案。32 MiB／檔、備份合計 128 MiB；錯誤逐項回復磁碟與記憶體並驗證，結果回報 recovery directory。所有寫入後的 session 均須重新開啟。Library/GraphKitAssetRecovery 保存路徑／狀態與原始檔案備份；此機制不保證程序崩潰跨檔原子性。相依閉包與用途權限由呼叫端規劃，GraphKit 不反向引用 MCP。

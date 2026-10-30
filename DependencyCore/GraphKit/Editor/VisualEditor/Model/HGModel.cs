@@ -1270,6 +1270,95 @@ public class HGModel
         }
     }
 
+    /// <summary>
+    /// 從一組載體往下掃出走得到的所有載體，以及被指到的所有 Token。
+    /// Token 是葉：它的內容住在自己的畫布，跟進去會把整張圖都算成這棵子樹。
+    /// </summary>
+    // 形狀刻意比照 HGModel.ResetNodeIdsInternal——同一種走訪規則散成兩套遲早會不一致。
+    internal static void ScanSubgraph(object node, HashSet<object> visited, HashSet<object> carriers,
+        HashSet<object> tokens, HashSet<object> properties)
+    {
+        if (node == null || !visited.Add(node)) return;
+        if (node is GraphToken token) { tokens.Add(token); return; }
+        if (node is GraphProperty property) { properties.Add(property); return; }
+        if (node is GraphNode carrier) carriers.Add(carrier);
+
+        foreach (var f in HGReflect.Fields(node.GetType()))
+        {
+            if (f.IsStatic || f.IsNotSerialized) continue;
+            var val = f.GetValue(node);
+            if (val == null) continue;
+            var t = val.GetType();
+            if (t.IsPrimitive || t.IsEnum || val is string || val is UnityEngine.Object) continue;
+
+            if (val is IList list)
+            {
+                foreach (var item in list) ScanSubgraph(item, visited, carriers, tokens, properties);
+                continue;
+            }
+            ScanSubgraph(val, visited, carriers, tokens, properties);
+        }
+    }
+
+    /// <summary>
+    /// 把一組載體複製成一片獨立的子圖：這組節點**彼此之間**的線保留成共用，指到組外的線一律清成空槽。
+    /// 所以單顆複製＝所有子邊都是組外邊＝完全沒有連線；多顆複製＝只有這些節點之間的線活下來。
+    /// </summary>
+    // shared 同時擋兩件事，理由不同：
+    //   組外載體——跟著抄會憑空多出一份沒有人看得到的分身，使用者以為只複製了選取的那幾顆。
+    //   GraphToken——跟著抄會變成不在清單裡的孤兒端點，參照得到卻永遠查不到值，只有存檔時
+    //   HGValidator.InScope 那一關才看得出來。
+    // 兩者都先原樣沿用（shared 的語意就是「不複製、沿用同一個」），抄完再把指向**組外載體**的槽清掉；
+    // Token 刻意留著不清，那才是「複本引用同一個 Token」該有的結果。
+    // copies 與 sources 依索引對齊：GraphDeepCopy 複製 IList 時逐項 Add，順序不變，呼叫端靠它配對座標。
+    internal static List<GraphNode> CloneSubgraph(IReadOnlyList<GraphNode> sources, out List<GraphNode> roots)
+    {
+        roots = new List<GraphNode>();
+        if (sources == null || sources.Count == 0) return null;
+
+        var selection = new HashSet<object>(HGRefComparer.Instance);
+        foreach (var c in sources) if (c != null) selection.Add(c);
+
+        var carriers = new HashSet<object>(HGRefComparer.Instance);
+        var tokens = new HashSet<object>(HGRefComparer.Instance);
+        var properties = new HashSet<object>(HGRefComparer.Instance);
+        var scanned = new HashSet<object>(HGRefComparer.Instance);
+        foreach (var c in sources) ScanSubgraph(c, scanned, carriers, tokens, properties);
+
+        var boundary = new HashSet<object>(HGRefComparer.Instance);
+        foreach (var c in carriers) if (!selection.Contains(c)) boundary.Add(c);
+
+        var shared = new List<object>(tokens);
+        // Property 是庫定義的引用：必須沿用同一顆，否則會抄出一份不在庫裡的定義。
+        foreach (var item in properties)
+            if (item is GraphProperty property) shared.Add(property);
+        shared.AddRange(boundary);
+
+        var copies = GraphDeepCopy.Copy(new List<GraphNode>(sources), shared);
+        if (copies == null) return null;
+
+        // 走複本一遍做兩件事：指到組外載體的槽清成空槽，順便記下誰是別人的子節點。
+        // 清成空槽不是錯誤狀態——公式欄位退回 _default、動作欄位變空槽，驗證不會有話說。
+        // walked 先塞 Token 與組外載體：它們是**原件**，走進去等於在原圖上亂剪線。
+        var children = new HashSet<object>(HGRefComparer.Instance);
+        var walked = new HashSet<object>(HGRefComparer.Instance);
+        foreach (var t in tokens) walked.Add(t);
+        foreach (var p in properties) walked.Add(p);
+        foreach (var b in boundary) walked.Add(b);
+        foreach (var copy in copies)
+            foreach (var slot in HGModel.WalkSlots(copy, walked))
+            {
+                if (HGReflect.GetNode(slot) is not GraphNode child) continue;
+                if (boundary.Contains(child)) HGReflect.ClearNode(slot);
+                else children.Add(child);
+            }
+
+        // 這時複本已經不指著任何組外載體，走訪跑不回原圖；Token 仍是沿用的，所以要當成走過了。
+        foreach (var copy in copies) HGModel.ResetNodeIds(copy, shared);
+        foreach (var copy in copies) if (!children.Contains(copy)) roots.Add(copy);
+        return copies;
+    }
+
     /// <summary>複製節點後清掉整棵樹的識別碼，避免新舊節點共用座標記錄。</summary>
     public static void ResetNodeIds(object root) => ResetNodeIds(root, null);
 

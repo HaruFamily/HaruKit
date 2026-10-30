@@ -50,6 +50,35 @@ public sealed class HGSnapshotField
 /// </summary>
 public static class HGDocumentInspection
 {
+    // JsonUtility on a boxed Rect can produce {}. Preserve signed width/height, not normalized bounds.
+    [Serializable]
+    private struct RectValue
+    {
+        public float x, y, width, height;
+        public RectValue(Rect rect) { x = rect.x; y = rect.y; width = rect.width; height = rect.height; }
+    }
+
+    [Serializable]
+    private struct Vector2IntValue
+    {
+        public int x, y;
+        public Vector2IntValue(Vector2Int value) { x = value.x; y = value.y; }
+    }
+
+    [Serializable]
+    private struct Vector3IntValue
+    {
+        public int x, y, z;
+        public Vector3IntValue(Vector3Int value) { x = value.x; y = value.y; z = value.z; }
+    }
+
+    [Serializable]
+    private struct RectIntValue
+    {
+        public int x, y, width, height;
+        public RectIntValue(RectInt value) { x = value.x; y = value.y; width = value.width; height = value.height; }
+    }
+
     public static HGDocumentSnapshot Capture(object document, string source, int maxRecords = 20000)
     {
         if (document is not IGraphDocument && document is not IGraphAsset)
@@ -157,7 +186,14 @@ public static class HGDocumentInspection
             if (value is Object unityObject)
             {
                 field.Kind = "unity-object";
-                if (unityObject == null) { field.Value = "missing"; return field; }
+                if (unityObject == null)
+                {
+                    // Unity Instantiate can materialize an empty serialized reference as a managed shell with ID 0.
+                    // Destroyed/missing references with a nonzero instance ID must remain distinguishable from empty.
+                    if (unityObject.GetInstanceID() == 0) field.Kind = "null";
+                    else field.Value = "missing";
+                    return field;
+                }
                 if (AssetDatabase.TryGetGUIDAndLocalFileIdentifier(unityObject, out string guid, out long localId))
                     field.Value = guid + ":" + localId.ToString(CultureInfo.InvariantCulture) + ":" + AssetDatabase.GetAssetPath(unityObject);
                 else field.Value = "instance:" + unityObject.GetInstanceID().ToString(CultureInfo.InvariantCulture);
@@ -180,7 +216,14 @@ public static class HGDocumentInspection
             if (type.Namespace == "UnityEngine" || (type.Namespace?.StartsWith("UnityEngine.", StringComparison.Ordinal) ?? false))
             {
                 field.Kind = "native-json";
-                field.Value = JsonUtility.ToJson(value);
+                field.Value = value switch
+                {
+                    Rect rect => JsonUtility.ToJson(new RectValue(rect)),
+                    Vector2Int vector => JsonUtility.ToJson(new Vector2IntValue(vector)),
+                    Vector3Int vector => JsonUtility.ToJson(new Vector3IntValue(vector)),
+                    RectInt rect => JsonUtility.ToJson(new RectIntValue(rect)),
+                    _ => JsonUtility.ToJson(value),
+                };
                 if (field.Value == "{}") Incomplete(name + ": native value could not be represented: " + type.FullName);
                 if (field.Value.Length > 16384)
                 {

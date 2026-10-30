@@ -35,6 +35,8 @@ public sealed partial class HGDocumentSession<TDocument>
     private const int UndoLimit = 40;
     private readonly List<TDocument> undo = new List<TDocument>();
     private readonly List<TDocument> redo = new List<TDocument>();
+    private bool atomicActive;
+    private bool atomicRejected;
 
     public Object Owner { get; }
     public string DocumentId => binding.DocumentId;
@@ -66,6 +68,11 @@ public sealed partial class HGDocumentSession<TDocument>
     public static bool TryOpenPreservingOwner(Object owner, HGDocumentBinding<TDocument> binding,
         out HGDocumentSession<TDocument> session, out GraphDiagnostic diagnostic)
         => TryOpenCore(owner, binding, HGEditorExtensionContext.Default, true, out session, out diagnostic);
+
+    /// <summary>Opens an explicit consumer context without cleaning the source Owner.</summary>
+    public static bool TryOpenPreservingOwner(Object owner, HGDocumentBinding<TDocument> binding, HGEditorExtensionContext context,
+        out HGDocumentSession<TDocument> session, out GraphDiagnostic diagnostic)
+        => TryOpenCore(owner, binding, context, true, out session, out diagnostic);
 
     private static bool TryOpenCore(Object owner, HGDocumentBinding<TDocument> binding, HGEditorExtensionContext context,
         bool preserveOwner, out HGDocumentSession<TDocument> session, out GraphDiagnostic diagnostic)
@@ -176,6 +183,7 @@ public sealed partial class HGDocumentSession<TDocument>
 
     public HGSessionCommandResult Undo()
     {
+        if (atomicActive) return RejectAtomicControl();
         if (undo.Count == 0) return HGSessionCommandResult.NoChange;
         if (!TryClone(Document, out TDocument current)) return HGSessionCommandResult.Rejected;
         redo.Add(current);
@@ -188,6 +196,7 @@ public sealed partial class HGDocumentSession<TDocument>
 
     public HGSessionCommandResult Redo()
     {
+        if (atomicActive) return RejectAtomicControl();
         if (redo.Count == 0) return HGSessionCommandResult.NoChange;
         if (!TryClone(Document, out TDocument current)) return HGSessionCommandResult.Rejected;
         undo.Add(current);
@@ -207,6 +216,7 @@ public sealed partial class HGDocumentSession<TDocument>
 
     private HGSessionCommandResult CommitCore(bool assetOnly)
     {
+        if (atomicActive) return RejectAtomicControl();
         if (assetOnly)
         {
             if (Owner == null || !AssetDatabase.Contains(Owner)) return HGSessionCommandResult.Rejected;
@@ -259,6 +269,7 @@ public sealed partial class HGDocumentSession<TDocument>
 
     private HGSessionCommandResult CancelCore()
     {
+        if (atomicActive) return RejectAtomicControl();
         if (Owner == null) return HGSessionCommandResult.Rejected;
         binding.TryRead(Owner, out IGraphDocument live);
         var nextGuard = new HGDocumentCommitGuard(Owner, binding, live);
@@ -500,6 +511,55 @@ public sealed partial class HGDocumentSession<TDocument>
 
         foreach (GraphNode child in children)
             if (!ReferenceEquals(child, node)) ReturnUnreferenced(child, orphanPool);
+    }
+
+    /// <summary>
+    /// Groups working-copy commands into one Undo entry. The callback must return false on a rejected command.
+    /// Restores document, dirty state and history on rejection/exception; generations never rewind.
+    /// Commit, Cancel, Undo, Redo and nested batches are forbidden. External callback side effects are not rolled back.
+    /// </summary>
+    public HGSessionCommandResult RunAtomic(Func<bool> commands)
+    {
+        if (atomicActive) return RejectAtomicControl();
+        if (commands == null || !TryClone(Document, out TDocument snapshot)) return HGSessionCommandResult.Rejected;
+        var previousUndo = undo.ToArray();
+        var previousRedo = redo.ToArray();
+        bool dirty = IsDirty;
+        int generation = Generation;
+        bool accepted = false;
+        atomicActive = true;
+        atomicRejected = false;
+        LastDiagnostic = null;
+        try { accepted = commands() && !atomicRejected; }
+        catch (Exception exception) { LastDiagnostic = Failure("batch", DocumentId, exception.Message); }
+        finally
+        {
+            atomicActive = false;
+            undo.Clear(); undo.AddRange(previousUndo);
+            redo.Clear(); redo.AddRange(previousRedo);
+            if (!accepted)
+            {
+                Document = snapshot;
+                IsDirty = dirty;
+                Generation++;
+                LastDiagnostic ??= Failure("batch", DocumentId, "Batch rejected; working copy and history restored.");
+            }
+            else if (Generation != generation)
+            {
+                undo.Add(snapshot);
+                if (undo.Count > UndoLimit) undo.RemoveAt(0);
+                redo.Clear();
+            }
+        }
+        return !accepted ? HGSessionCommandResult.Rejected
+            : Generation == generation ? HGSessionCommandResult.NoChange : HGSessionCommandResult.Changed;
+    }
+
+    private HGSessionCommandResult RejectAtomicControl()
+    {
+        atomicRejected = true;
+        LastDiagnostic = Failure("batch", DocumentId, "Persistence, history controls and nested batches are not allowed inside an atomic batch.");
+        return HGSessionCommandResult.Rejected;
     }
 
     private HGSessionCommandResult Apply(Action mutation, bool content = true)
@@ -750,6 +810,11 @@ public sealed partial class HGDocumentSession<TDocument>
     private HGSessionCommandResult Guard(Func<HGSessionCommandResult> command,
         HGSessionCommandResult failure = HGSessionCommandResult.Rejected)
     {
+        if (assetGroupActive || assetGroupClosed)
+        {
+            LastDiagnostic = Failure("asset-group", DocumentId, "Asset-group sessions must be reopened after commit or rollback.");
+            return HGSessionCommandResult.Rejected;
+        }
         LastDiagnostic = null;
         try
         {

@@ -117,6 +117,8 @@ if (HGDocumentSession<MyDocument>.TryOpen(owner, binding, out var session))
 
 registry 只對所屬 session 的目前版次有效；每次成功的命令、Undo、Redo、Commit、Cancel 之後都要重建。操作實際視窗時改用 `window.GetDocumentCommands()` 取得的 `HGWindowSession`。
 
+`SetSlotDefault` 依 `DefaultEditType` 編輯一般 Formula 或 Union 的外層預設值，支援 Undo／Redo；不切換 Union 分支。Property 宣告使用專屬設定命令，詳見維護手冊「非視窗 Session 的組圖命令」。
+
 清單新增：`ports.AddListAppend(key, list, elementType, ownerNode, presentation)` 在清單標題登記新增接點，`session.Connect(ports, outputKey, key)` 會在清單尾端新增一項並接上來源（一步 Undo）。只收元素是 Slot（PropertySlot 除外）的可增刪清單；`ownerNode` 是清單所在節點的載體，用來擋循環，根上的清單傳 `null`。視窗中這顆接點自動出現在 `Query()` 快照，同樣以 `Connect` 使用。
 
 ### 擴充點
@@ -130,6 +132,10 @@ registry 只對所屬 session 的目前版次有效；每次成功的命令、Un
 | 執行觀察與 Hold | `IGraphExecutionDocument`、`GraphExecutionSession` |
 
 各擴充點的規則與限制見[維護手冊](Documentation~/Maintenance.md) §6。
+
+完整資產副本換身分時，可用 `GraphNodeGroup.SetScope` 調整副本的畫布歸屬並保留群組內容；保存、合法 scope 與交易由呼叫端管理。
+
+唯讀快照明確保存群組 Rect 的位置及有正負號的尺寸，供版面預覽與內容指紋使用。
 
 ### 節點屬性
 

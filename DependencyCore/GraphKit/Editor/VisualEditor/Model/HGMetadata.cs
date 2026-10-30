@@ -34,6 +34,8 @@ public sealed class HGFieldDescriptor
     public TextAnchor TabAlignment { get; }
     public int TabWidthUnits { get; }
     public bool ReadOnly { get; }
+    /// <summary>The consumer persists this value (or its list elements) with managed-reference semantics.</summary>
+    public bool ManagedReference { get; }
     public Func<object, object> Read { get; }
     public Action<object, object> Write { get; }
     public Func<object, bool> IsVisible { get; }
@@ -43,7 +45,7 @@ public sealed class HGFieldDescriptor
         int labelWidthUnits, float labelWidthRatio, bool forceEnumButtons, bool readOnly, Func<object, object> read,
         Action<object, object> write, Func<object, bool> isVisible, Func<object, object> createMissing = null,
         HGBoolAttribute boolButtons = null, string foldout = null, string tab = null,
-        TextAnchor tabAlignment = TextAnchor.MiddleCenter, int tabWidthUnits = 0)
+        TextAnchor tabAlignment = TextAnchor.MiddleCenter, int tabWidthUnits = 0, bool managedReference = false)
     {
         if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("Field id is required.", nameof(id));
         Id = id;
@@ -63,6 +65,9 @@ public sealed class HGFieldDescriptor
         TabAlignment = tabAlignment;
         TabWidthUnits = tabWidthUnits;
         ReadOnly = readOnly;
+        if (managedReference && (valueType.IsValueType || valueType == typeof(string) || typeof(UnityEngine.Object).IsAssignableFrom(valueType)))
+            throw new ArgumentException("Managed-reference descriptors require a data reference type.", nameof(managedReference));
+        ManagedReference = managedReference;
         Read = read ?? throw new ArgumentNullException(nameof(read));
         Write = write;
         IsVisible = isVisible;
@@ -75,7 +80,7 @@ public sealed class HGFieldDescriptor
         Action<TTarget, TValue> write = null, string label = null, string description = null, bool hideLabel = false,
         int labelWidthUnits = 0, float labelWidthRatio = 0f, bool forceEnumButtons = false,
         Func<TTarget, bool> isVisible = null, HGBoolAttribute boolButtons = null, string foldout = null, string tab = null,
-        TextAnchor tabAlignment = TextAnchor.MiddleCenter, int tabWidthUnits = 0)
+        TextAnchor tabAlignment = TextAnchor.MiddleCenter, int tabWidthUnits = 0, bool managedReference = false)
         where TTarget : class
     {
         if (read == null) throw new ArgumentNullException(nameof(read));
@@ -84,7 +89,7 @@ public sealed class HGFieldDescriptor
         return new HGFieldDescriptor(id, typeof(TValue), HGFieldRole.Value, label, description, hideLabel, labelWidthUnits,
             labelWidthRatio, forceEnumButtons, write == null, target => read((TTarget)target), typedWrite,
             isVisible == null ? null : target => isVisible((TTarget)target), boolButtons: boolButtons, foldout: foldout, tab: tab,
-            tabAlignment: tabAlignment, tabWidthUnits: tabWidthUnits);
+            tabAlignment: tabAlignment, tabWidthUnits: tabWidthUnits, managedReference: managedReference);
     }
 
     /// <summary>Creates a slot descriptor. Linking edits the referenced slot, never replaces the field instance.</summary>

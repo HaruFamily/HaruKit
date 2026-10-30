@@ -1,0 +1,8 @@
+{
+  "name": "com.harufamily.tools.graphmcp",
+  "version": "0.1.0",
+  "displayName": "HaruGraph MCP",
+  "description": "Optional domain-independent GraphKit authoring integration for MCP for Unity. Install GraphKit, MCP for Unity and Newtonsoft JSON in the consuming project.",
+  "unity": "2021.3",
+  "author": { "name": "HaruFamily" }
+}

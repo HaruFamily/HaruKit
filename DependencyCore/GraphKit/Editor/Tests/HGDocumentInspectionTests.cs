@@ -74,6 +74,7 @@ public sealed class HGDocumentInspectionTests
         public List<GraphToken> Tokens = new();
         public List<GraphProperty> Properties = new();
         public List<int> NullList;
+        public GraphViewState Layout = new();
         [SerializeField, HideInInspector] private string hidden = "included";
         [NonSerialized] public string RuntimeOnly = "excluded";
         public List<GraphNode> Orphans => throw new InvalidOperationException("Do not invoke lazy getters.");
@@ -93,6 +94,32 @@ public sealed class HGDocumentInspectionTests
         public string TitleOf(object root) => throw new InvalidOperationException();
         public IList ItemsOf(object root) => throw new InvalidOperationException();
         public object AddRoot(object key) => throw new InvalidOperationException();
+    }
+
+    [Serializable]
+    private struct RectFields { public float x, y, width, height; }
+
+    [Test]
+    public void CaptureGroupRectPreservesSignedDimensionsAndDetectsLayoutChanges()
+    {
+        var document = new InspectionDocument();
+        var group = new GraphNodeGroup("root", "Group", new Rect(12.5f, -7, -320, 220), 0);
+        document.Layout.AddNodeGroup(group);
+        var before = HGDocumentInspection.Capture(document, "test");
+        Assert.That(before.Complete, Is.True, string.Join("\n", before.Diagnostics));
+        var field = before.Records.Single(record => record.Kind == "group").Fields.Single(item => item.Name.EndsWith("/_rect", StringComparison.Ordinal));
+        Assert.That(field.Kind, Is.EqualTo("native-json"));
+        var value = JsonUtility.FromJson<RectFields>(field.Value);
+        Assert.That(value.x, Is.EqualTo(12.5f));
+        Assert.That(value.y, Is.EqualTo(-7));
+        Assert.That(value.width, Is.EqualTo(-320));
+        Assert.That(value.height, Is.EqualTo(220));
+        string original = JsonUtility.ToJson(before);
+        group.SetRect(new Rect(12.5f, -7, -321, 220));
+        var after = HGDocumentInspection.Capture(document, "test");
+        Assert.That(after.Complete, Is.True, string.Join("\n", after.Diagnostics));
+        Assert.That(JsonUtility.ToJson(after), Is.Not.EqualTo(original));
+        Assert.That(JsonUtility.ToJson(before), Is.EqualTo(original));
     }
 
     [Serializable]

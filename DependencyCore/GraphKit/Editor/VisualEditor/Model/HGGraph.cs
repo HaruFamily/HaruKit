@@ -1630,7 +1630,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             node.TipsHeight = !node.NoteOpen
                 ? 0f
                 // 起手一行，換行或折行才長高：註解多半是一句話，預留三行等於每顆節點都被墊高。
-                : Mathf.Clamp(EditorStyles.textArea.CalcHeight(new GUIContent(node.Tips ?? ""), node.Width - 16f),
+                // Public document queries also build graphs before any Inspector/OnGUI initializes EditorStyles.
+                : Mathf.Clamp(EditorGUIUtility.GetBuiltinSkin(EditorSkin.Inspector).textArea.CalcHeight(new GUIContent(node.Tips ?? ""), node.Width - 16f),
                     EditorGUIUtility.singleLineHeight, 160f);
 
             // 空節點還沒決定身分，沒有東西可選，維持單行。

@@ -10,6 +10,32 @@ using UnityEngine;
 public sealed class HGPublicConsumerTests
 {
     [Test]
+    public void AtomicCommandsRejectPersistenceAndHistoryControlsEvenWhenCallbackIgnoresFailure()
+    {
+        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
+        try
+        {
+            owner.B = ConsumerDocument.Create();
+            bool wrote = false;
+            var binding = new HGDocumentBinding<IGraphDocument>("atomic-test", target => ((ConsumerOwner)target).B,
+                (_, _) => wrote = true);
+            Assert.That(HGDocumentSession<IGraphDocument>.TryOpen(owner, binding, out var session), Is.True);
+            string before = JsonUtility.ToJson(session.Document);
+            foreach (Func<HGSessionCommandResult> forbidden in new Func<HGSessionCommandResult>[]
+                { session.Commit, session.CommitAssetPreservingOwner, session.Cancel, session.Undo, session.Redo, () => session.RunAtomic(() => true) })
+            {
+                int generation = session.Generation;
+                Assert.That(session.RunAtomic(() => { forbidden(); return true; }), Is.EqualTo(HGSessionCommandResult.Rejected));
+                Assert.That(wrote, Is.False);
+                Assert.That(JsonUtility.ToJson(session.Document), Is.EqualTo(before));
+                Assert.That(session.Generation, Is.GreaterThan(generation));
+                Assert.That(session.CanUndo, Is.False);
+            }
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
     public void InterfaceTypedDraftClonesDocumentAndKeepsOwnerUnchanged()
     {
         var owner = ScriptableObject.CreateInstance<ConsumerOwner>();

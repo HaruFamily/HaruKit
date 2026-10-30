@@ -198,7 +198,7 @@ public class HGPortTests
         protoNode.EnsureId();
         protoNode.SetProperty(proto);
 
-        List<GraphNode> copies = HaruGraphWindow.CloneSubgraph(new List<GraphNode> { localNode, protoNode }, out _);
+        List<GraphNode> copies = HGModel.CloneSubgraph(new List<GraphNode> { localNode, protoNode }, out _);
 
         Assert.That(copies, Has.Count.EqualTo(2));
         Assert.That(copies[0].Property, Is.SameAs(local));
@@ -477,8 +477,11 @@ public class HGPortTests
             var commands = window.GetDocumentCommands();
             commands.Query();
 
+            AssertGraphBuilt(window);
+            Assert.That(window.NodeOfId(id), Is.Not.Null, "Property carrier must be addressable before replacement.");
             window.ReplaceNodeType(window.NodeOfId(id), typeof(PropertyReaderBody));
             commands.Query();
+            Assert.That(window.NodeOfId(id), Is.Not.Null, "Replacement must preserve the carrier ID.");
             var changed = window.NodeOfId(id).Carrier;
             Assert.That(changed.Kind, Is.EqualTo(NodeKind.Inline));
             Assert.That(changed.Pos, Is.EqualTo(new Vector2(120, 160)));
@@ -540,6 +543,14 @@ public class HGPortTests
             Assert.That(session.Document.Orphans[0].Property, Is.Null);
         }
         finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    private static void AssertGraphBuilt(HaruGraphWindow window)
+    {
+        var graph = (HGGraphView)typeof(HaruGraphWindow).GetField("graph",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(window);
+        foreach (var diagnostic in graph.Diagnostics)
+            Assert.That(diagnostic.Code, Is.Not.EqualTo("graphkit.build.failed"), diagnostic.Message);
     }
 
     private static HGEditorExtensionContext PropertyContext()
@@ -772,6 +783,8 @@ public class HGPortTests
             var model = RemovalModel(window);
             var working = (RemovalDocument)model.Data;
             var rootNode = window.NodeOfId(HGGraph.GroupHeadId(model, working.Groups[0]));
+            AssertGraphBuilt(window);
+            Assert.That(rootNode, Is.Not.Null, "Root must be addressable before removal.");
 
             InvokeRemoval(window, "RemoveTimingGroup", rootNode);
             Assert.That(commands.Query(), Is.Not.Null);
