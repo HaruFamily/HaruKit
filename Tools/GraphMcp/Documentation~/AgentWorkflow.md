@@ -4,8 +4,8 @@ No graph window is required. Treat IDs, generation numbers and capability descri
 
 ## Discover and edit
 
-1. Call `haru_graph_inspect.search_documents`, paging candidate files until `next_offset` is null. `list_documents` gives every document in an exact asset path, including explicitly registered nested bindings.
-2. Open the chosen document with `haru_graph_draft.open`. Read `status`, `nodes`, `endpoints`, root/library queries and type candidates. Action, Formula, Token, Asset and Property use their declared contracts.
+1. Call `haru_graph_inspect` with `action: "search_documents"`, paging candidate files until `next_offset` is null, even when a page has no entries. Check failures separately. Search matches asset paths under Assets, not scene contents. `list_documents` pages documents in an exact asset path, including explicitly registered nested bindings; follow its next_offset too, especially when search reports documents_truncated.
+2. Open the chosen document with `haru_graph_draft` action `open`, supplying both the returned asset_path and document_id. Read `status`, `nodes`, `endpoints`, root/library queries and type candidates. Action, Formula, Token, Asset and Property use their declared contracts. Ordinary open reads Owner memory; use inspect's list_windows/capture_window to inspect unsaved window drafts.
 3. Query `value_fields` or `structured_fields` before writing. Metadata descriptor IDs replace reflected IDs when a binding supplies descriptors. Read-only or invisible fields cannot be bypassed through the reflected value/structured routes.
 4. For `[SerializeReference]` data, query `structured_types` at the returned value_path. Choose an exact type with `replace_structured_value`; initialize ordinary records/lists with `initialize_structured_value`. A list of managed references requires a type for insertion. Disconnect embedded graph links before removing/replacing their containing record.
 5. Requery generation and endpoint keys after every change. `apply_batch` groups commands within one draft and rolls back a failed batch as one Undo operation. `check` expresses query assertions; `validate` checks graph structure and document diagnostics. Neither executes the graph.
@@ -19,6 +19,8 @@ Call `run` with a provider-defined input object and optional cooperative timeout
 ## Save one or several files
 
 For an independent file use `preview` then `commit`. For a new Owner/asset use `preview_save_as` then `save_as`. Inspect before/after snapshots and token/generation before writing. A shared asset with dependents remains blocked in the single-file path.
+
+Save As leaves the original draft targeting its original source. Open the returned asset_path/document_id to verify or continue editing the new asset. A normal single-file commit retains its draft; a successful multi-document transaction consumes its drafts. Check nested command results, validation passed/errors and provider assertions; a successful transport batch is not proof that its contents passed.
 
 For several documents or a shared asset:
 
