@@ -514,3 +514,7 @@ Editor-only `IEditableGraphAsset` 以 `GraphAssetEditState` 提供借用狀態�
 HGDocumentSession.TryOpenPreservingOwner 可接收既有 HGEditorExtensionContext，保持 Owner 不清理並沿用 root／metadata／diagnostics。HGFieldDescriptor.Create 的 managedReference（預設 false）由使用端明確宣告欄位或清單元素的持久化語意，不從目前實例猜測。
 
 CommitAssetsPreservingOwners 對 1..16 個不同持久文件先核對全部 guard、複製並撤銷驗證狀態，再暫存全部 Owner、驗證 staged references，最後保存選定檔案。32 MiB／檔、備份合計 128 MiB；錯誤逐項回復磁碟與記憶體並驗證，結果回報 recovery directory。所有寫入後的 session 均須重新開啟。Library/GraphKitAssetRecovery 保存路徑／狀態與原始檔案備份；此機制不保證程序崩潰跨檔原子性。相依閉包與用途權限由呼叫端規劃，GraphKit 不反向引用 MCP。
+
+## Optional AI/MCP access
+
+GraphKit 1.2.0 includes optional MCP assemblies under Mcp/, a portable AgentSkill~/harugraph-mcp skill, and Window/HaruGraph/AI and MCP Setup. The core assemblies and package remain independent of MCP/JSON. Conditional assembly constraints enable integration only with the supported bridge/JSON/Unity versions. See [MCP installation](Mcp/Installation.md) and [MCP maintenance](Mcp/Maintenance.md). Register only GraphKit in testables; optional MCP tests become available when the bridge is installed.

@@ -1,9 +1,0 @@
-{
-  "name": "HaruFamily.Tools.GraphMcp.Editor.Tests",
-  "rootNamespace": "HaruFamily.Tools.GraphMcp.Editor.Tests",
-  "references": ["HaruFamily.Tools.GraphMcp.Editor", "HaruFamily.DependencyCore.GraphKit", "HaruFamily.DependencyCore.GraphKit.Editor"],
-  "includePlatforms": ["Editor"],
-  "overrideReferences": true,
-  "precompiledReferences": ["nunit.framework.dll", "Newtonsoft.Json.dll"],
-  "optionalUnityReferences": ["TestAssemblies"]
-}

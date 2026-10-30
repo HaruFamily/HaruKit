@@ -1,8 +1,8 @@
 {
   "name": "com.harufamily.dependencycore.graphkit",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "displayName": "GraphKit",
-  "description": "Domain-agnostic serialized node-graph carrier, contracts, and IMGUI node editor. No external dependencies.",
+  "description": "Graph data and Editor with optional MCP for Unity integration and a bundled agent skill. Core has no external dependencies.",
   "unity": "2021.3",
   "author": {
     "name": "HaruFamily"

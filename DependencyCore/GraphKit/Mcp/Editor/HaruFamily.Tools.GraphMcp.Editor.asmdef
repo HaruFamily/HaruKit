@@ -1,0 +1,34 @@
+{
+  "name": "HaruFamily.Tools.GraphMcp.Editor",
+  "rootNamespace": "HaruFamily.Tools.GraphMcp.Editor",
+  "references": [
+    "HaruFamily.DependencyCore.GraphKit",
+    "HaruFamily.DependencyCore.GraphKit.Editor",
+    "MCPForUnity.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "Newtonsoft.Json.dll"
+  ],
+  "autoReferenced": true,
+  "versionDefines": [
+    {
+      "name": "com.coplaydev.unity-mcp",
+      "expression": "[10.3.0,11.0.0)",
+      "define": "HARUGRAPH_MCP_AVAILABLE"
+    },
+    {
+      "name": "com.unity.nuget.newtonsoft-json",
+      "expression": "[3.0.2,4.0.0)",
+      "define": "HARUGRAPH_JSON_AVAILABLE"
+    }
+  ],
+  "defineConstraints": [
+    "HARUGRAPH_MCP_AVAILABLE",
+    "HARUGRAPH_JSON_AVAILABLE",
+    "UNITY_6000_3_OR_NEWER"
+  ]
+}

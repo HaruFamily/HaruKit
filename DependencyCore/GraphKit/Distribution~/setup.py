@@ -10,8 +10,7 @@ import re
 import tempfile
 
 MCP = 'https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#81542a7e86292b5c4c21b1782c5af23b567f45ce'
-NAMES = {'com.harufamily.dependencycore.graphkit': 'DependencyCore/GraphKit',
-         'com.harufamily.tools.graphmcp': 'Tools/GraphMcp'}
+NAMES = {'com.harufamily.dependencycore.graphkit': 'DependencyCore/GraphKit'}
 
 
 def encode(data):
@@ -35,7 +34,7 @@ def write_new(path, data):
         stream.write(data)
 
 
-def install(project, location, revision=None, skill_root='.agents/skills', skill_only=False, apply=False):
+def install(project, location, revision=None, skill_root='.agents/skills', skill_only=False, apply=False, with_mcp=False):
     project, location = Path(project).resolve(), Path(location).resolve()
     manifest = contained(project, project / 'Packages/manifest.json')
     if not (project / 'Assets').is_dir() or not (project / 'ProjectSettings/ProjectVersion.txt').is_file():
@@ -48,10 +47,12 @@ def install(project, location, revision=None, skill_root='.agents/skills', skill
     package = location.parent
     skill_source = location / 'skill' if bundle else package / 'AgentSkill~/harugraph-mcp'
     if not skill_only:
-        expected = {'com.coplaydev.unity-mcp': MCP, 'com.unity.nuget.newtonsoft-json': '3.2.2'}
+        if 'com.harufamily.tools.graphmcp' in data.get('dependencies', {}):
+            raise ValueError('Remove the retired com.harufamily.tools.graphmcp dependency when upgrading to integrated GraphKit; see Installation.md.')
+        expected = {'com.coplaydev.unity-mcp': MCP, 'com.unity.nuget.newtonsoft-json': '3.2.2'} if with_mcp else {}
         if bundle:
             if set(bundle['packages']) != set(NAMES):
-                raise ValueError('Release must contain exactly GraphKit and GraphMcp.')
+                raise ValueError('Release must contain exactly GraphKit.')
             for name, item in bundle['packages'].items():
                 filename = item['file']
                 if Path(filename).name != filename or not filename.endswith('.tgz'):
@@ -121,9 +122,10 @@ def main():
     parser.add_argument('--skill-root', choices=['.agents/skills', '.claude/skills'], default='.agents/skills')
     parser.add_argument('--skill-only', action='store_true')
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--with-mcp', action='store_true', help='Also prepare the optional pinned Unity MCP bridge and JSON dependency.')
     args = parser.parse_args()
     try:
-        result = install(args.project, Path(__file__).parent, args.harukit_revision, args.skill_root, args.skill_only, args.apply)
+        result = install(args.project, Path(__file__).parent, args.harukit_revision, args.skill_root, args.skill_only, args.apply, args.with_mcp)
     except (ValueError, OSError, KeyError) as error:
         parser.exit(1, 'Installation stopped: ' + str(error) + '\n')
     print(json.dumps(result, indent=2, ensure_ascii=False))

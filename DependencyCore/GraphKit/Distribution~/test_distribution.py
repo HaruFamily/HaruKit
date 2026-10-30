@@ -36,13 +36,13 @@ class InstallationTests(unittest.TestCase):
             setup.install(project, bundle)
             self.assertEqual(original, manifest.read_bytes())
             self.assertFalse((project / '.agents').exists())
-            result = setup.install(project, bundle, apply=True)
+            result = setup.install(project, bundle, apply=True, with_mcp=True)
             self.assertEqual(original, Path(result['backup']).read_bytes())
             current = json.loads(manifest.read_text())
             self.assertEqual('1.0.0', current['dependencies']['example.keep'])
             self.assertEqual(['example.keep'], current['testables'])
             self.assertTrue((project / '.agents/skills/harugraph-mcp/SKILL.md').is_file())
-            repeat = setup.install(project, bundle, apply=True)
+            repeat = setup.install(project, bundle, apply=True, with_mcp=True)
             self.assertFalse(repeat['manifest_changed'])
             self.assertEqual([], repeat['create'])
 
@@ -61,9 +61,25 @@ class InstallationTests(unittest.TestCase):
                     next(bundle.glob('*.tgz')).write_bytes(b'corrupt')
                 before = {p.relative_to(project): p.read_bytes() for p in project.rglob('*') if p.is_file()}
                 with self.assertRaises(ValueError):
-                    setup.install(project, bundle, apply=True)
+                    setup.install(project, bundle, apply=True, with_mcp=True)
                 after = {p.relative_to(project): p.read_bytes() for p in project.rglob('*') if p.is_file()}
                 self.assertEqual(before, after)
+
+    def test_default_is_graphkit_only_and_retired_package_blocks_upgrade(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project, bundle = self.fixture(Path(directory))
+            setup.install(project, bundle, apply=True)
+            manifest = project / 'Packages/manifest.json'
+            data = json.loads(manifest.read_text())
+            self.assertIn('com.harufamily.dependencycore.graphkit', data['dependencies'])
+            self.assertNotIn('com.coplaydev.unity-mcp', data['dependencies'])
+            self.assertNotIn('com.unity.nuget.newtonsoft-json', data['dependencies'])
+            data['dependencies']['com.harufamily.tools.graphmcp'] = 'legacy'
+            manifest.write_text(json.dumps(data))
+            before = manifest.read_bytes()
+            with self.assertRaisesRegex(ValueError, 'retired'):
+                setup.install(project, bundle, apply=True)
+            self.assertEqual(before, manifest.read_bytes())
 
 
 if __name__ == '__main__':

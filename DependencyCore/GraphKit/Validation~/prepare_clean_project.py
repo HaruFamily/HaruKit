@@ -14,6 +14,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-project', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--without-mcp', action='store_true')
     args = parser.parse_args()
     source, output = args.source_project.resolve(), args.output.resolve()
     if output.exists() or output == source or source in output.parents:
@@ -25,9 +26,8 @@ def main():
     lock = json.loads((source / 'Packages/packages-lock.json').read_text())['dependencies']
     roots = {
         'com.harufamily.dependencycore.graphkit': source / 'HaruKit/DependencyCore/GraphKit',
-        'com.harufamily.tools.graphmcp': source / 'HaruKit/Tools/GraphMcp',
     }
-    for name in ('com.coplaydev.unity-mcp', 'com.unity.test-framework', 'com.unity.nuget.newtonsoft-json'):
+    for name in (('com.unity.test-framework',) if args.without_mcp else ('com.coplaydev.unity-mcp', 'com.unity.test-framework', 'com.unity.nuget.newtonsoft-json')):
         candidates = [path for (package, version), path in cache.items() if package == name]
         if len(candidates) != 1:
             raise RuntimeError('Need exactly one resolved cache entry for ' + name)
@@ -64,7 +64,7 @@ def main():
                 digest.update(item.read_bytes())
         evidence.append({'name': name, 'version': data['version'], 'source': str(path), 'sha256': digest.hexdigest()})
     manifest = {'dependencies': {**builtins, **{name: 'file:' + name for name in sorted(packages)}},
-                'testables': ['com.harufamily.tools.graphmcp', 'com.harufamily.dependencycore.graphkit']}
+                'testables': ['com.harufamily.dependencycore.graphkit']}
     (output / 'Packages/manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     (output / 'installation-sources.json').write_text(json.dumps(evidence, indent=2) + '\n')
     print(json.dumps({'project': str(output), 'copied_packages': list(sorted(packages)),

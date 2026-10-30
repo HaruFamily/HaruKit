@@ -4,18 +4,13 @@ This optional Editor package exposes `haru_graph_inspect`, `haru_graph_draft`, `
 
 ## Installation and dependencies
 
-The package declares GraphKit 1.1.1, MCP for Unity 10.3.0 and Newtonsoft JSON 3.2.2 dependencies. Git sources must still be supplied in the consuming project's manifest because UPM does not support Git-to-Git package dependencies. Use the release bundle or pinned Git helper in [Installation.md](Installation.md); it merges explicit sources and installs the portable project skill without changing client connection settings. Add `com.harufamily.tools.graphmcp` from the repository path `Tools/GraphMcp`. The integration assembly is `HaruFamily.Tools.GraphMcp.Editor`. Package 0.2.0 targets Unity 6000.3 (verified 6000.3.12f1).
+MCP is bundled in com.harufamily.dependencycore.graphkit 1.2.0 under Mcp/Editor and Mcp/Tests/Editor. There is no separate GraphMcp package to install. GraphKit's package manifest has no external dependencies; its core runtime/editor assemblies do not reference MCP or Newtonsoft JSON. The existing optional assembly names HaruFamily.Tools.GraphMcp.Editor and HaruFamily.Tools.GraphMcp.Editor.Tests are retained for consumer compatibility.
 
-Assembly dependencies are GraphKit runtime/editor, MCP for Unity, Newtonsoft JSON and Unity/system assemblies. Do not reference LogicGraph, AssetPipeline, UniTask, Assembly-CSharp or a game's definitions. GraphKit itself must remain independent of this optional integration.
+Both optional assemblies use versionDefines AND defineConstraints: MCP for Unity [10.3.0,11.0.0), Newtonsoft JSON [3.0.2,4.0.0), and UNITY_6000_3_OR_NEWER. Without these prerequisites Unity excludes the integration and its tests, including their unavailable assembly references. Do not add a mandatory MCP/JSON dependency to GraphKit. Core support metadata stays at its existing Unity floor; optional MCP is verified on 6000.3.12f1 only.
 
-For a checkout named `HaruKit` beside the project's `Assets` directory, use these two manifest entries:
+Window/HaruGraph/AI and MCP Setup lives in the ordinary GraphKit Editor assembly, works without the bridge, and offers explicit bridge installation, project-local skill export and documentation. Existing bridge installations are not overwritten. Setup does not edit AI client settings; AgentDock or MCP for Unity owns the connection. See [Installation.md](Installation.md).
 
-```json
-"com.harufamily.dependencycore.graphkit": "file:../HaruKit/DependencyCore/GraphKit",
-"com.harufamily.tools.graphmcp": "file:../HaruKit/Tools/GraphMcp"
-```
-
-When using those local development entries, also supply the MCP for Unity source; the assisted installer instead supplies pinned Git or release-tarball entries. Enable package tests with `com.harufamily.tools.graphmcp` (and optionally `com.harufamily.dependencycore.graphkit`) in `testables`. `AgentSkill~/harugraph-mcp` is the portable usage skill; `Distribution~/setup.py --skill-only` exports it after UPM installation. Release creation and publication boundaries are documented in [Publishing.md](Publishing.md).
+The portable skill is at AgentSkill~/harugraph-mcp. Distribution~/setup.py installs GraphKit alone by default; --with-mcp opts into pinned bridge/JSON sources, --skill-only exports without changing dependencies. GraphKit testables enables core tests and, when its prerequisites exist, optional MCP tests. Release creation is described in [Publishing.md](Publishing.md).
 
 ## Authoring contracts
 
@@ -43,7 +38,7 @@ Unity object references remain shared: a detached graph is not a sandbox for ext
 
 Verify the assembly reference boundary and run protocol-level transactions with multiple consumers, including a custom document. Do not infer portability from one game's execution tests. Record separately compilation in the host, consumer protocol coverage, and testing in a separate clean project.
 
-The package includes `HaruFamily.Tools.GraphMcp.Editor.Tests` under `Tests/Editor`. Add `com.harufamily.tools.graphmcp` to the consuming manifest's `testables` to run it. These tests check the compiled integration and test assembly reference allowlist, reject consumer execution actions through the public command entry, and verify invalid snapshot requests cannot invoke a consumer. They need no game definitions, LogicGraph or AssetPipeline. The allowlist covers direct references, not a transitive dependency audit.
+The package includes `HaruFamily.Tools.GraphMcp.Editor.Tests` under `Mcp/Tests/Editor`. Add `com.harufamily.dependencycore.graphkit` to the consuming manifest's `testables` to run it. These tests check the compiled integration and test assembly reference allowlist, reject consumer execution actions through the public command entry, and verify invalid snapshot requests cannot invoke a consumer. They need no game definitions, LogicGraph or AssetPipeline. The allowlist covers direct references, not a transitive dependency audit.
 
 Consumer transaction and persistence tests remain in the host integration suite because they intentionally depend on consumer document types. Package boundary tests do not replace those workflows or constitute a clean-project installation test.
 
@@ -53,7 +48,7 @@ Changes here affect static Editor tools, not the serialized GraphKit carrier nam
 
 The package includes a minimal custom `IGraphDocument` protocol test. It discovers a temporary Owner without a window, edits a field on a detached draft, checks stale generation rejection and Undo/Redo, validates, commits with a preview token, unloads/reimports the asset, and reopens it. It cleans its temporary assets and snapshots and requires no consumer framework.
 
-`Validation~/prepare_clean_project.py --source-project <resolved-host> --output <new-directory>` creates an independent installation probe. The output must not exist and must be outside the host. It copies only GraphKit, GraphMcp, resolved MCP/JSON/test packages and their dependency closure; it never copies host Assets, settings (except the Editor version), or Library. Package source versions and SHA-256 digests are recorded in `installation-sources.json`. Built-in packages are supplied by the Editor. Run the printed Unity CLI test command with the installed Editor, optionally passing `-- -nographics -logFile <log-path>`.
+`Validation~/prepare_clean_project.py --source-project <resolved-host> --output <new-directory>` creates an independent installation probe. The output must not exist and must be outside the host. It copies only GraphKit and resolved MCP/JSON/test packages and their dependency closure (--without-mcp omits the bridge and JSON); it never copies host Assets, settings (except the Editor version), or Library. Package source versions and SHA-256 digests are recorded in `installation-sources.json`. Built-in packages are supplied by the Editor. Run the printed Unity CLI test command with the installed Editor, optionally passing `-- -nographics -logFile <log-path>`.
 
 This is a local/offline package installation check. It does not verify registry publication, Git download, a new MCP client connection, or every Unity version advertised by package metadata. Keep those claims separate from protocol entry-point tests. On 2026-10-30 this procedure was verified with Unity 6000.3.12f1; see the project handoff report for results and artifact paths.
 

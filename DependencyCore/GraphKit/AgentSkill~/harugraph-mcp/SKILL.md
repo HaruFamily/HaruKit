@@ -7,6 +7,8 @@ description: Use HaruGraph MCP to discover, inspect, edit, test and save GraphKi
 
 Confirm the connected Unity project path and idle Edit Mode before operating. Discover the current tool schemas. No graph window is required. This skill grants no additional permission to change assets, install services, commit or publish.
 
+The integration and this skill ship inside GraphKit. If graph tools are absent, check Window/HaruGraph/AI and MCP Setup: the optional integration requires Unity 6000.3+, MCP for Unity 10.3.x through 10.x, and Newtonsoft JSON 3.0.2 through 3.x. GraphKit works without the bridge. Do not install the retired separate GraphMcp package alongside integrated GraphKit. The setup window can export this skill; client connection settings remain managed by AgentDock or MCP for Unity.
+
 ## Discover and edit
 
 Use `haru_graph_inspect` with action `search_documents`. Search matches asset paths under Assets; scenes and Packages are not searched. Pages count candidate files, not matched documents: follow next_offset even for empty entries. Inspect failures separately. When documents_truncated is true, use list_documents with the exact asset_path and follow all pages.

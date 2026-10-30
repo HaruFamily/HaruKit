@@ -169,3 +169,7 @@ public class IntIf : MyIntFormula
 - AssetPipeline：`Library/PackageCache/com.harufamily.tools.assetpipeline@*/Documentation~/Maintenance.md`
 （以 `file:` 或 submodule 引用時，改成實際的套件資料夾路徑。）
 ```
+
+## AI / MCP
+
+GraphKit includes optional AI graph tools and a portable skill. Install GraphKit once, then use **Window → HaruGraph → AI and MCP Setup** to install the bridge if needed and export the skill. Without MCP for Unity the graph editor still works. Do not install the retired separate GraphMcp package alongside this version. See [installation and upgrade](Documentation~/Mcp/Installation.md).

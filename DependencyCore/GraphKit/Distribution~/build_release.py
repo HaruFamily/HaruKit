@@ -31,7 +31,7 @@ def build(output):
     output = Path(output).resolve()
     if output.exists() or output == repository or repository in output.parents:
         raise ValueError('Output must be new and outside the HaruKit repository.')
-    sources = [repository / 'DependencyCore/GraphKit', package]
+    sources = [package]
     files, packages = {}, {}
     for source in sources:
         data = json.loads((source / 'package.json').read_text(encoding='utf-8-sig'))
@@ -42,14 +42,14 @@ def build(output):
     revision = subprocess.check_output(['git', '-C', str(repository), 'rev-parse', 'HEAD'], text=True).strip()
     dirty = bool(subprocess.check_output(['git', '-C', str(repository), 'status', '--porcelain'], text=True).strip())
     release = {'format': 1, 'source_revision': revision, 'source_dirty': dirty, 'packages': packages,
-               'tested_editor': '6000.3.12f1', 'transport': 'MCP for Unity 10.3.0; pinned by setup.py'}
+               'tested_editor': '6000.3.12f1', 'transport': 'Optional MCP for Unity 10.3.0; --with-mcp opts in'}
     output.mkdir(parents=True)
     for name, content in files.items():
         (output / name).write_bytes(content)
     (output / 'release.json').write_text(json.dumps(release, indent=2) + '\n', encoding='utf-8')
     shutil.copy2(package / 'Distribution~/setup.py', output / 'setup.py')
     shutil.copytree(package / 'AgentSkill~/harugraph-mcp', output / 'skill')
-    shutil.copy2(package / 'Documentation~/Installation.md', output / 'INSTALL.md')
+    shutil.copy2(package / 'Documentation~/Mcp/Installation.md', output / 'INSTALL.md')
     print(json.dumps({'bundle': str(output), **release}, indent=2))
 
 
