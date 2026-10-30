@@ -4,7 +4,7 @@ This optional Editor package exposes `haru_graph_inspect`, `haru_graph_draft`, `
 
 ## Installation and dependencies
 
-The consuming Unity project must install GraphKit, MCP for Unity (`MCPForUnity.Editor`) and Newtonsoft JSON. This package follows HaruKit's explicit consumer-manifest dependency convention; it does not install or change the MCP transport automatically. Add `com.harufamily.tools.graphmcp` from the repository path `Tools/GraphMcp`. The integration assembly is `HaruFamily.Tools.GraphMcp.Editor`.
+The package declares GraphKit 1.1.1, MCP for Unity 10.3.0 and Newtonsoft JSON 3.2.2 dependencies. Git sources must still be supplied in the consuming project's manifest because UPM does not support Git-to-Git package dependencies. Use the release bundle or pinned Git helper in [Installation.md](Installation.md); it merges explicit sources and installs the portable project skill without changing client connection settings. Add `com.harufamily.tools.graphmcp` from the repository path `Tools/GraphMcp`. The integration assembly is `HaruFamily.Tools.GraphMcp.Editor`. Package 0.2.0 targets Unity 6000.3 (verified 6000.3.12f1).
 
 Assembly dependencies are GraphKit runtime/editor, MCP for Unity, Newtonsoft JSON and Unity/system assemblies. Do not reference LogicGraph, AssetPipeline, UniTask, Assembly-CSharp or a game's definitions. GraphKit itself must remain independent of this optional integration.
 
@@ -15,7 +15,7 @@ For a checkout named `HaruKit` beside the project's `Assets` directory, use thes
 "com.harufamily.tools.graphmcp": "file:../HaruKit/Tools/GraphMcp"
 ```
 
-Install MCP for Unity and its declared dependencies separately. Enable package tests with `com.harufamily.tools.graphmcp` (and optionally `com.harufamily.dependencycore.graphkit`) in `testables`.
+When using those local development entries, also supply the MCP for Unity source; the assisted installer instead supplies pinned Git or release-tarball entries. Enable package tests with `com.harufamily.tools.graphmcp` (and optionally `com.harufamily.dependencycore.graphkit`) in `testables`. `AgentSkill~/harugraph-mcp` is the portable usage skill; `Distribution~/setup.py --skill-only` exports it after UPM installation. Release creation and publication boundaries are documented in [Publishing.md](Publishing.md).
 
 ## Authoring contracts
 
