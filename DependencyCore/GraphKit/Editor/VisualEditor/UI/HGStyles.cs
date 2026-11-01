@@ -1,4 +1,4 @@
-namespace HaruFamily.DependencyCore.GraphKit.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System.Collections.Generic;
 using UnityEditor;
@@ -157,7 +157,7 @@ public static class HGStyles
     public static void ResetCache()
     {
         nodeTitle = nodeDesc = focusTitle = rowLabel = rowLabelError = chip = nodeChip = slotChip = null;
-        inputPortGlyph = headerButton = headerButtonDim = overlayTitle = panelHeader = consoleRow = tiny = listIndex = listAdd = null;
+        inputPortGlyph = headerButton = headerButtonDim = overlayTitle = panelHeader = consoleRow = tiny = listIndex = listAdd = listFooter = null;
         foreach (var tex in gradientCache.Values) if (tex != null) UnityEngine.Object.DestroyImmediate(tex);
         gradientCache.Clear();
         elideCache.Clear();
@@ -176,7 +176,7 @@ public static class HGStyles
         return style;
     }
 
-    private static GUIStyle nodeTitle, nodeDesc, focusTitle, rowLabel, rowLabelError, chip, nodeChip, slotChip, inputPortGlyph, headerButton, headerButtonDim, overlayTitle, panelHeader, consoleRow, tiny, listIndex, listAdd;
+    private static GUIStyle nodeTitle, nodeDesc, focusTitle, rowLabel, rowLabelError, chip, nodeChip, slotChip, inputPortGlyph, headerButton, headerButtonDim, overlayTitle, panelHeader, consoleRow, tiny, listIndex, listAdd, listFooter;
 
     public static GUIStyle NodeTitle => nodeTitle ??= Ink(new GUIStyle(EditorStyles.boldLabel)
     {
@@ -201,6 +201,7 @@ public static class HGStyles
     public static GUIStyle RowLabel => rowLabel ??= Ink(new GUIStyle(EditorStyles.label)
     {
         fontSize = 11,
+        alignment = TextAnchor.MiddleLeft,
         padding = new RectOffset(4, 2, 0, 0),
     }, Text);
 
@@ -331,6 +332,8 @@ public static class HGStyles
         fontSize = 10,
         alignment = TextAnchor.MiddleCenter,
     }, Muted);
+
+    public static GUIStyle ListFooter => listFooter ??= Ink(new GUIStyle(ListAdd), Text);
 
     // 節點同寬後，過長的文字沒有把節點撐開的機會，必須自己截字；截掉的部分靠 tooltip 補回來。
     private static readonly Dictionary<string, string> elideCache = new();

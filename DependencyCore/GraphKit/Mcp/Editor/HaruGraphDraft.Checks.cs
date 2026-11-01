@@ -9,7 +9,7 @@ using Newtonsoft.Json.Linq;
 
 public static partial class HaruGraphDraft
 {
-    private static readonly string[] checkQueries = { "metadata_fields", "structured_types", "structured_fields", "catalog_fields", "field_options", "group_tabs", "nodes", "endpoints", "check_connection", "value_fields", "slot_value",
+    private static readonly string[] checkQueries = { "flow", "flow_candidates", "geometry", "layout_diff", "metadata_fields", "structured_types", "structured_fields", "catalog_fields", "field_options", "group_tabs", "nodes", "endpoints", "check_connection", "value_fields", "slot_value",
         "library", "slot_lists", "slot_items", "roots", "root_options", "group_scopes", "groups", "group_members", "validate", "slot_asset_reference", "slot_asset_choices" };
 
     private static string CheckInputError(JToken token)

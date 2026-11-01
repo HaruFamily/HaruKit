@@ -13,6 +13,7 @@ public sealed class HGDocumentInspectionTests
     public void CapturePreservesSharedCyclesLibrariesHiddenFieldsAndDoesNotInvokeDocumentGetters()
     {
         var document = new InspectionDocument();
+        Assert.That(document.HiddenForAssertion, Is.EqualTo("included"));
         var action = new InspectionAction();
         var node = new GraphNode(action);
         action.Input.SetNode(node);
@@ -76,6 +77,7 @@ public sealed class HGDocumentInspectionTests
         public List<int> NullList;
         public GraphViewState Layout = new();
         [SerializeField, HideInInspector] private string hidden = "included";
+        public string HiddenForAssertion => hidden;
         [NonSerialized] public string RuntimeOnly = "excluded";
         public List<GraphNode> Orphans => throw new InvalidOperationException("Do not invoke lazy getters.");
         public IList Roots => throw new InvalidOperationException();

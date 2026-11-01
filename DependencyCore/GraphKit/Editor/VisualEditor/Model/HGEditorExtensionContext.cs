@@ -51,13 +51,15 @@ public interface IHGEditorExtensionProvider
         public IHGEditorExtensionProvider Provider { get; }
         public IHGEditorMetadataProvider Metadata { get; }
         public HGEditorProfile Profile { get; }
+        public IHGFlowMetadataProvider FlowMetadata { get; }
 
         public HGEditorExtensionContext(IHGEditorExtensionProvider provider, IHGEditorMetadataProvider metadata = null,
-            HGEditorProfile profile = null)
+            HGEditorProfile profile = null, IHGFlowMetadataProvider flowMetadata = null)
         {
             Provider = provider ?? throw new System.ArgumentNullException(nameof(provider));
             Metadata = metadata;
             Profile = profile;
+            FlowMetadata = flowMetadata;
         }
 
     public bool Supports(Object owner, IGraphDocument document)

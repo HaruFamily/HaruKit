@@ -228,7 +228,7 @@ public class GraphDeepCopyTests
     }
 
     [Test]
-    public async Task DisabledFormulaAssetRootUsesEachCallingSlotsFallbackWithoutEvaluating()
+    public async Task DisabledFormulaAssetRootUsesTypeDefaultAndPreservesUnlinkedConstants()
     {
         var asset = ScriptableObject.CreateInstance<TestFormulaAsset>();
         var formula = new CountingFormula();
@@ -242,8 +242,8 @@ public class GraphDeepCopyTests
         second.SetNode(carrier);
         try
         {
-            Assert.That(await first.Evaluate(default, null), Is.EqualTo(7));
-            Assert.That(await second.Evaluate(default, null), Is.EqualTo(13));
+            Assert.That(await first.Evaluate(default, null), Is.Zero);
+            Assert.That(await second.Evaluate(default, null), Is.Zero);
             Assert.That(await asset.Evaluate(default, null), Is.Zero, "資產直接求值沒有呼叫欄位，回 default(T)。");
             Assert.That(formula.Calls, Is.Zero);
             root.Disabled = false;

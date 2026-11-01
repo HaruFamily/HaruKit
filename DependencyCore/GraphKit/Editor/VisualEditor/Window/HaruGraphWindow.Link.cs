@@ -16,8 +16,7 @@ public partial class HaruGraphWindow
     }
 
     private static HGPortKey InputKey(HGRow row)
-        => new HGPortKey(row?.OwnerNodeId, row?.Path,
-            row?.InputSlot is PropertySlotBase ? HGPortRole.Output : HGPortRole.Input);
+        => new HGPortKey(row?.OwnerNodeId, row?.Path, HGPortRole.Input);
 
     private static HGPortKey OutputKey(HGNodeView node)
         => new HGPortKey(node?.Id, "", HGPortRole.Output);
@@ -43,7 +42,7 @@ public partial class HaruGraphWindow
         {
             foreach (var row in HGGraph.AllRows(node.Rows))
             {
-                if (row.HasInputPort && row.InputSlot != null)
+                if (row.HasInputPort && row.InputSlot != null && row.InputSlot is not PropertySlotBase)
                     AddInputPort(context, node, row);
 
                 if (row.Kind == HGRowKind.List)
@@ -53,8 +52,7 @@ public partial class HaruGraphWindow
             if (!node.IsRoot && node.Carrier != null)
                 AddNodeOutputPort(context, node);
 
-            if (node.IsPropertyNode && node.PropertyInput != null)
-                AddPropertyInputPort(context, node);
+
         }
 
         try
@@ -86,13 +84,8 @@ public partial class HaruGraphWindow
     {
         var presentation = new HGDelegatePortPresentation(row, node, row,
             () => row.InputPortPosition, () => PortRect(row.InputPortPosition),
-            () => !node.Hidden && row.IsInputPortVisible, () => row.Locked || node.InLockedSubtree);
-        if (row.InputSlot is PropertySlotBase writer)
-        {
-            context.AddOutput(InputKey(row), new HGPropertyWriteSource(writer, node.Carrier),
-                new HGDelegatePortPolicy(() => true), presentation);
-            return;
-        }
+            () => !node.Hidden && !node.Collapsed && row.IsInputPortVisible, () => row.Locked || node.InLockedSubtree);
+
         var policy = new HGDelegatePortPolicy(
             () => true,
             checkAcceptance: source =>
@@ -107,22 +100,11 @@ public partial class HaruGraphWindow
         context.AddInput(InputKey(row), row.InputSlot, policy, presentation);
     }
 
-    private void AddPropertyInputPort(HGPortBuildContext context, HGNodeView node)
-    {
-        var slot = node.PropertyInput;
-        var presentation = new HGDelegatePortPresentation(slot, node, node.PropertyInputRow,
-            () => node.PropertyInputPortPosition, () => PortRect(node.PropertyInputPortPosition),
-            () => !node.Hidden, () => node.InLockedSubtree);
-        var policy = new HGDelegatePortPolicy(() => true, checkAcceptance: source =>
-        {
-            if (source is not HGPropertyWriteSource writer) return HGPortConnectionResult.IncompatibleType;
-            return writer.CheckTarget(node.Carrier);
-        });
-        context.AddInput(new HGPortKey(node.Id, "/property/input", HGPortRole.Input), slot, policy, presentation);
-    }
+
 
     private void AddNodeOutputPort(HGPortBuildContext context, HGNodeView node)
     {
+        // 內放只隱藏畫布上的 Port 與命中；邏輯端點保留，供拖入相容性守衛使用。
         var presentation = new HGDelegatePortPresentation(node, node, null,
             () => node.OutputPortPosition,
             () => PortRect(node.OutputPortPosition),
@@ -398,6 +380,7 @@ public partial class HaruGraphWindow
         {
             var port = graph.Ports[i];
             if (!port.IsOutput || !port.CanStart) continue;
+            if (OwnerNodeOfPort(port)?.NestedParent != null) continue;
             if (port.Presentation.HitRect.Contains(graphPoint) && IsPortOnTop(port, graphPoint)) return port;
         }
         return null;
@@ -410,6 +393,7 @@ public partial class HaruGraphWindow
         {
             var port = graph.Ports[i];
             if (!port.IsInput || !port.Presentation.Visible) continue;
+            if (OwnerRowOfPort(port)?.NestedNode != null) continue;
             if (port.Presentation.HitRect.Contains(graphPoint) && IsPortOnTop(port, graphPoint)) return port;
         }
         return null;
@@ -452,6 +436,8 @@ public partial class HaruGraphWindow
     {
         if (graph == null) return false;
         HGNodeView top = NodeAt(graphPoint);
+        if (top?.Collapsed == true && PortRect(new Vector2(top.Pos.x + top.Width - HGGraph.PortRadius,
+            top.Pos.y + HGGraph.HeaderHeight * 0.5f)).Contains(graphPoint)) return true;
         foreach (var node in graph.Nodes)
         {
             if (node.Hidden || (top != null && !ReferenceEquals(top, node))) continue;
@@ -468,7 +454,7 @@ public partial class HaruGraphWindow
 
     /// <summary>
     /// 接點朝外的水平方向：位在節點左半邊朝左（-1），右半邊朝右（+1）。
-    /// 不看輸入／輸出：寫入 Property 的欄位是輸出卻在右緣，Property 節點的寫入接點是輸入卻在左緣。
+    /// 依接點實際位置決定方向。
     /// </summary>
     private float PortDirection(HGPort port)
     {
@@ -501,7 +487,7 @@ public partial class HaruGraphWindow
             return;
         }
 
-        if (linkPort.IsOutput && linkPort.Source is not HGPropertyWriteSource)
+        if (linkPort.IsOutput)
         {
             ShowNotification(new GUIContent("請拖到相容的參數接點"));
             return;
@@ -513,39 +499,15 @@ public partial class HaruGraphWindow
             return;
         }
 
-        var slot = (linkPort.Source as HGPropertyWriteSource)?.Slot ?? linkPort.InputSlot;
+        var slot = linkPort.InputSlot;
         if (slot == null) return;
-        if (slot is GraphPropertyInputSlot)
-        {
-            ShowNotification(new GUIContent("請連到 Action 的寫入 OutputSlot"));
-            return;
-        }
-        if (slot is PropertySlotBase output)
-        {
-            int generation = graphGeneration;
-            void Choose(GraphProperty property)
-            {
-                if (generation != graphGeneration) return;
-                ConnectPropertyOutput(output, property, graphMouse);
-            }
-            var menu = new GenericMenu();
-            foreach (var property in VisibleProperties())
-            {
-                if (property == null || !output.AcceptsProperty(property)) continue;
-                var captured = property;
-                menu.AddItem(new GUIContent(property.Name ?? "（未命名）"), false,
-                    () => Choose(captured));
-            }
-            menu.AddSeparator("");
-            menu.AddItem(new GUIContent("新增 Property…"), false,
-                () => Choose(null));
-            menu.ShowAsContext();
-            return;
-        }
+
+
         if (!TryMutateContent(() =>
         {
             PreserveVisibleNodePositions();
             GraphNode carrier = NewSource(slot);
+            carrier.Mode = GraphNodeMode.Connection;
             if ((slot as FormulaSlotBase)?.CreateDefaultBody() is GraphNodeContent body) carrier.SetBody(body);
             carrier.Pos = SnapToGrid(graphMouse);
             carrier.EnsureId();
@@ -558,28 +520,7 @@ public partial class HaruGraphWindow
         Repaint();
     }
 
-    private void ConnectPropertyOutput(PropertySlotBase output, GraphProperty property, Vector2 position)
-    {
-        if (!TryMutateContent(() =>
-        {
-            PreserveVisibleNodePositions();
-            if (property == null)
-            {
-                property = model.CreateProperty(CurrentProperties(), output.FamilyType, out string creationError);
-                if (property == null) throw new InvalidOperationException(creationError);
-            }
-            GraphNode carrier = NewSource(output);
-            carrier.SetProperty(property);
-            carrier.Pos = SnapToGrid(position);
-            carrier.EnsureId();
-        }, out var error))
-        {
-            ShowNotification(new GUIContent(error));
-            return;
-        }
-        Invalidate();
-        Repaint();
-    }
+
 
     private PortCommandResult TryConnectPorts(HGPort first, HGPort second)
     {
@@ -591,32 +532,18 @@ public partial class HaruGraphWindow
         }
         HGPort input = first.IsInput ? first : second;
         HGPort output = first.IsOutput ? first : second;
-        if (output.Source is HGPropertyWriteSource writer)
-        {
-            var target = OwnerNodeOfPort(input);
-            if (target?.Carrier == null || !target.IsPropertyNode) return PortCommandResult.Rejected;
-            if (ReferenceEquals(writer.Slot.Node, target.Carrier)
-                && writer.Slot.AcceptsProperty(target.Property)) return PortCommandResult.NoChange;
-            if (!TryMutateContent(() =>
-            {
-                PreserveVisibleNodePositions();
-                AttachSource(writer.Slot, target.Carrier);
-            }, out string writeError))
-            {
-                ShowNotification(new GUIContent(writeError));
-                return PortCommandResult.Rejected;
-            }
-            Invalidate();
-            return PortCommandResult.Changed;
-        }
+
         if (input.InputSlot == null || output.Source?.OutputNode == null) return PortCommandResult.Rejected;
         if (!graph.PrimaryInputs.ContainsKey(input.InputSlot) || !graph.ByCarrier.ContainsKey(output.Source.OutputNode))
             return PortCommandResult.Rejected;
-        if (ReferenceEquals(input.InputSlot.Node, output.Source.OutputNode)) return PortCommandResult.NoChange;
+        if (ReferenceEquals(input.InputSlot.Node, output.Source.OutputNode)
+            && (input.InputSlot is PropertySlotBase || output.Source.OutputNode.Mode == GraphNodeMode.Connection))
+            return PortCommandResult.NoChange;
 
         if (!TryMutateContent(() =>
         {
             PreserveVisibleNodePositions();
+            if (input.InputSlot is not PropertySlotBase) output.Source.OutputNode.Mode = GraphNodeMode.Connection;
             AttachSource(input.InputSlot, output.Source.OutputNode);
         }, out var error))
         {
@@ -640,25 +567,7 @@ public partial class HaruGraphWindow
 
     private PortCommandResult CutLink(GraphSlotBase slot)
     {
-        if (slot is GraphPropertyInputSlot)
-        {
-            var writers = new List<GraphSlotBase>();
-            foreach (var link in graph.Links)
-                if (ReferenceEquals(link.InputPort?.InputSlot, slot) && link.ParentRow?.InputSlot is PropertySlotBase)
-                    writers.Add(link.ParentRow.InputSlot);
-            if (writers.Count == 0) return PortCommandResult.NoChange;
-            if (!TryMutateContent(() =>
-            {
-                PreserveVisibleNodePositions();
-                foreach (var writer in writers) AttachSource(writer, null);
-            }, out var message))
-            {
-                ShowNotification(new GUIContent(message));
-                return PortCommandResult.Rejected;
-            }
-            Invalidate();
-            return PortCommandResult.Changed;
-        }
+
         if (slot?.Node == null) return PortCommandResult.NoChange;
         if (!TryMutateContent(() =>
         {
@@ -679,6 +588,7 @@ public partial class HaruGraphWindow
         var old = slot.Node;
         if (ReferenceEquals(old, next)) return false;
 
+        next = HGModel.PropertyReferenceForSlot(slot, next, SlotsInCurrentGraph());
         slot.SetNode(next);
         if (old != null && !IsCarrierUsed(old))
         {

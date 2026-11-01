@@ -76,6 +76,7 @@ public static partial class HaruGraphDraft
             }).Concat(map.Nodes.Select(pair => (object)new
             {
                 key = pair.Key, kind = "source", node_kind = pair.Value.Kind.ToString(), node_id = pair.Value.Id,
+                node_mode = pair.Value.Mode.ToString(), read_user_count = draft.Session.ReadNodeUserCount(pair.Value),
                 body_type = pair.Value.BodyObject?.GetType().AssemblyQualifiedName,
                 token_name = pair.Value.Token?.Name, property_name = pair.Value.Property?.Name,
                 asset_path = pair.Value.AssetObject != null ? AssetDatabase.GetAssetPath(pair.Value.AssetObject) : null,
@@ -160,6 +161,8 @@ public static partial class HaruGraphDraft
 
     private static string CommitBlocker(Draft draft, bool saveAs = false, bool dependencyTransaction = false)
     {
+        string policyBlocker = PolicyCommitViolation(draft);
+        if (policyBlocker != null) return policyBlocker;
         string parameterBlocker = ParameterAssetBlocker(draft);
         if (parameterBlocker != null) return parameterBlocker;
         if (draft.OwnsOwner) return saveAs ? NewAssetBlocker(draft) : "New assets have no source file. Use preview_save_as/save_as with an exact destination.";
@@ -254,6 +257,7 @@ public static partial class HaruGraphDraft
                 var live = draft.ReadDocument();
                 draft.BaselineDocument = live;
                 draft.Baseline = HGDocumentInspection.Capture(live, "agent_baseline");
+                draft.BaselineContentHash = ContentFingerprint(live);
                 draft.BaselineHash = Fingerprint(live);
                 draft.AssetRevision = AssetRevision(draft.Session.Owner);
                 draft.DiskRevision = DiskRevision(draft.Session.Owner);

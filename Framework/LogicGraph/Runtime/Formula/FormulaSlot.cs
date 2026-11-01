@@ -25,7 +25,7 @@ public abstract class FormulaSlot<TResult, TFormula, TToken, TAsset, TPack> : Fo
 
     protected FormulaSlot() => FormulaFamily.Register(this);
 
-    /// <summary>帶初始常數值：常數模式即此值，接了來源時是解析失敗的保底值。</summary>
+    /// <summary>帶初始常數值；僅未接來源時使用。</summary>
     protected FormulaSlot(TResult defaultValue)
     {
         _default = defaultValue;
@@ -65,20 +65,20 @@ public abstract class FormulaSlot<TResult, TFormula, TToken, TAsset, TPack> : Fo
 
     public override bool AcceptsProperty(GraphProperty property) => property?.FamilyType == FamilyType;
 
-    /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
+    /// <summary>未接來源時的常數值；已接來源失敗時使用 default(TResult)。</summary>
     public TResult Default { get => _default; set => _default = value; }
 
     /// <summary>未接來源時解析欄位設定；可依本次上下文取值，不改變停用或來源失敗時的保底值。</summary>
     protected virtual TResult EvaluateUnlinked(TPack pack) => _default;
 
     /// <summary>透過此入口求子公式值，沿用收到的 pack 與 tokens，以保留停用、保底值、Token／資產作用域與執行觀察處理。</summary>
-    /// <remarks>每次呼叫重新求值；節點本體的例外與取消會向呼叫端傳遞，不會轉成保底值。</remarks>
+    /// <remarks>每次呼叫重新求值；求值失敗記錄錯誤並回傳 default，取消仍向外傳遞。</remarks>
     public async UniTask<TResult> Evaluate(TPack pack, TokenTable<TPack> tokens)
     {
         if (_node == null) return EvaluateUnlinked(pack);
 
         // 停用不解析未接線設定，避免停用的來源改為操作另一個對象。
-        if (_node.Disabled) return _default;
+        if (_node.Disabled) return default;
 
         using var visit = tokens?.EnterNode(_node);
         try
@@ -89,7 +89,12 @@ public abstract class FormulaSlot<TResult, TFormula, TToken, TAsset, TPack> : Fo
             return result;
         }
         catch (OperationCanceledException) { visit?.Cancel(); throw; }
-        catch (Exception exception) { visit?.Fail(exception); throw; }
+        catch (Exception exception)
+        {
+            visit?.Fail(exception);
+            Debug.LogWarning($"[LogicGraph] {GetType().Name} 求值失敗：{exception.Message}，改用 default({typeof(TResult).Name})。");
+            return default;
+        }
     }
 
     private async UniTask<TResult> EvaluateCore(TPack pack, TokenTable<TPack> tokens)
@@ -109,8 +114,8 @@ public abstract class FormulaSlot<TResult, TFormula, TToken, TAsset, TPack> : Fo
             {
                 var asset = _node.GetAsset<TAsset>();
                 if (asset == null) return Mismatch("資產");
-                // 資產根停用與 inline 停用相同：採用呼叫欄位自己的保底值，不求值參數。
-                if (asset.Root?.Disabled == true) return _default;
+                // 資產根停用與 inline 停用相同：採用型別 default，不求值參數。
+                if (asset.Root?.Disabled == true) return default;
                 return await asset.Evaluate(pack, tokens, _node, _node.Bindings);
             }
             case NodeKind.Token:
@@ -118,18 +123,18 @@ public abstract class FormulaSlot<TResult, TFormula, TToken, TAsset, TPack> : Fo
                 // 求值一律經過 TokenTable：呼叫端的參數覆蓋與循環偵測都在那裡，
                 // 直接呼叫端點的 Slot 會繞過兩者。
                 var endpoint = _node.Token;
-                if (endpoint == null || string.IsNullOrEmpty(endpoint.Name)) return _default;
-                if (tokens == null || !tokens.Has(FamilyType, endpoint.Name)) return _default;
+                if (!AcceptsToken(endpoint) || string.IsNullOrEmpty(endpoint.Name)) return Mismatch("Token");
+                if (tokens == null || !tokens.Has(FamilyType, endpoint.Name)) return Mismatch("Token");
                 return await tokens.Resolve<TResult>(FamilyType, endpoint.Name, pack);
             }
             case NodeKind.Property:
             {
                 GraphProperty property = _node.Property;
-                if (property?.FamilyType != FamilyType || tokens?.Properties == null) return _default;
+                if (property?.FamilyType != FamilyType || tokens?.Properties == null) return Mismatch("Property");
                 return tokens.Properties.Read<TResult>(property);
             }
             default:
-                return _default;   // Empty：編輯中的空節點，存檔驗證會擋，runtime 走保底值續跑。
+                return default;   // Empty：存檔驗證會擋，求值使用型別預設值。
         }
     }
 
@@ -138,9 +143,9 @@ public abstract class FormulaSlot<TResult, TFormula, TToken, TAsset, TPack> : Fo
         if (!_loggedMismatch)
         {
             _loggedMismatch = true;
-            Debug.LogWarning($"[LogicGraph] {typeof(TResult).Name} 欄位接的{what}為空或型別不符，改用預設值。");
+            Debug.LogWarning($"[LogicGraph] {typeof(TResult).Name} 欄位接的{what}為空或型別不符，改用 default({typeof(TResult).Name})。");
         }
-        return _default;
+        return default;
     }
 }
 

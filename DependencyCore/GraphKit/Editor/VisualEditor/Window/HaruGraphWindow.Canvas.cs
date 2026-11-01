@@ -3,6 +3,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
 
@@ -238,6 +239,7 @@ public partial class HaruGraphWindow
                             if (blocked) e.type = beforeBlock;
                         }
                     }
+                    if (!overviewMode) DrawSocketDropPreview();
                     if (!overviewMode) DrawExtensionPorts(snappedPort);
                     DrawEmptyTimingHint();
                 }
@@ -355,7 +357,7 @@ public partial class HaruGraphWindow
         Handles.BeginGUI();
         foreach (var link in graph.Links)
         {
-            if (foldedDuplicateLinks.Contains(link) || IsTracedLink(link)) continue;
+            if (IsNestedSlotLink(link) || foldedDuplicateLinks.Contains(link) || IsTracedLink(link)) continue;
             if (IsLinkVisible(link)) DrawLink(link, false);
             else DrawInvisibleLink(link, false);
         }
@@ -364,7 +366,7 @@ public partial class HaruGraphWindow
             // 預覽線的滑鼠端以相反方向水平進入，看起來就是「接上去之後的樣子」。
             float fromDir = PortDirection(linkPort);
             BuildLinkPath(linkPort.Presentation.Position, fromDir, LinkPreviewEnd(graphMouse), -fromDir, linkPath);
-            DrawGraphPath(linkPath, false, false, IsPropertyWritePort(linkPort));
+            DrawGraphPath(linkPath, false, false);
         }
         Handles.EndGUI();
     }
@@ -379,7 +381,7 @@ public partial class HaruGraphWindow
         Handles.BeginGUI();
         foreach (var link in graph.Links)
         {
-            if (foldedDuplicateLinks.Contains(link) || !IsTracedLink(link)) continue;
+            if (IsNestedSlotLink(link) || foldedDuplicateLinks.Contains(link) || !IsTracedLink(link)) continue;
             if (IsLinkVisible(link)) DrawLink(link, true);
             else DrawInvisibleLink(link, true);
         }
@@ -403,7 +405,7 @@ public partial class HaruGraphWindow
 
     /// <summary>
     /// 先以完整圖的實線佔用關係，再替只有隱藏頁引用的關係選一條殘影。
-    /// 不依目前繪製層分組，避免選取高亮層與一般層各畫一次；來源端用實際 Port key，包含 Property 寫入的反向端點。
+    /// 不依目前繪製層分組，避免選取高亮層與一般層各畫一次；來源端用實際 Port key。
     /// </summary>
     private void RebuildTabGhosts()
     {
@@ -460,15 +462,12 @@ public partial class HaruGraphWindow
     /// </summary>
     private void DrawLinkGhosts(HGLink link, bool traced)
     {
-        // 欄位端是 ParentRow 那一顆接點；寫入 Property 的線兩端角色相反，所以用列比對而不是固定取 InputPort。
-        bool inputIsSlot = ReferenceEquals(OwnerRowOfPort(link.InputPort), link.ParentRow);
-        HGPort slotPort = inputIsSlot ? link.InputPort : link.OutputPort;
-        HGPort targetPort = inputIsSlot ? link.OutputPort : link.InputPort;
+        HGPort slotPort = link.InputPort;
+        HGPort targetPort = link.OutputPort;
         if (!slotPort.Presentation.Visible && FoldedListOf(link) == null) return;
         foldFan.TryGetValue(link, out float slotAngle);
 
-        Color color = LinkColor(link.OutputOwner.InDisabledSubtree || link.OutputOwner.InLockedSubtree, traced,
-            link.ParentRow.IsProducedValue);
+        Color color = LinkColor(link.OutputOwner.InDisabledSubtree || link.OutputOwner.InLockedSubtree, traced);
         float thickness = traced ? LinkThickness + 2f : LinkThickness;
         Vector2 slotPos = slotPort.Presentation.Position;
         bool folded = FoldedListOf(link) != null;
@@ -530,12 +529,11 @@ public partial class HaruGraphWindow
     }
 
     /// <summary>
-    /// 線的顏色表達「這條線接的是選取中的節點」，其次是「這條是輸出不是取值」；
-    /// 透明度仍歸停用管——三件事互不覆蓋，選取最優先。
+    /// 選取以高亮色表示，停用則降低透明度。
     /// </summary>
-    private static Color LinkColor(bool dim, bool traced, bool output)
+    private static Color LinkColor(bool dim, bool traced)
     {
-        Color color = traced ? HGStyles.NodeBorderSelected : output ? HGStyles.OutputPortColor : Color.white;
+        Color color = traced ? HGStyles.NodeBorderSelected : Color.white;
         if (dim) color.a *= HGStyles.LinkDisabled.a;
         return color;
     }
@@ -543,8 +541,7 @@ public partial class HaruGraphWindow
     private void DrawLink(HGLink link, bool traced)
     {
         // 停用子樹的線一起壓暗，才看得出整段路徑都不會被求值。
-        DrawGraphPath(LinkPathOf(link), link.OutputOwner.InDisabledSubtree || link.OutputOwner.InLockedSubtree, traced,
-            link.ParentRow.IsProducedValue);
+        DrawGraphPath(LinkPathOf(link), link.OutputOwner.InDisabledSubtree || link.OutputOwner.InLockedSubtree, traced);
     }
 
     private void EnsureLinkVisuals()
@@ -715,11 +712,11 @@ public partial class HaruGraphWindow
         }
     }
 
-    private void DrawGraphPath(List<Vector2> path, bool dim, bool traced, bool output)
+    private void DrawGraphPath(List<Vector2> path, bool dim, bool traced)
     {
         if (path.Count < 2) return;
 
-        Color color = LinkColor(dim, traced, output);
+        Color color = LinkColor(dim, traced);
         float thickness = traced ? LinkThickness + 2f : LinkThickness;
 
         if (linkScreenPoints.Length < path.Count) linkScreenPoints = new Vector3[path.Count];
@@ -1011,7 +1008,8 @@ public partial class HaruGraphWindow
         HGStyles.RoundedFill(rect, NodeBodyColor(node), NodeCornerRadius);
         var header = new Rect(rect.x, rect.y, rect.width, HGGraph.HeaderHeight);
         HeaderColors(node, out Color headerFrom, out Color headerTo);
-        HGStyles.HeaderFill(header, headerFrom, headerTo, NodeCornerRadius);
+        if (node.Collapsed) HGStyles.GradientFill(header, headerFrom, headerTo, NodeCornerRadius);
+        else HGStyles.HeaderFill(header, headerFrom, headerTo, NodeCornerRadius);
 
         // 固定保留操作區寬度；Hover／選取只改可見性，不讓名稱與 chip 在游標下移動。
         // 節點問題與執行狀態共用 Header 下緣色帶；參數列問題仍標在列上。
@@ -1023,6 +1021,17 @@ public partial class HaruGraphWindow
         var execution = NodeExecution(node);
 
         float headerRight = rect.xMax - 4f;
+        if (node.Collapsed) headerRight -= HGGraph.PortDiameter + 2f;
+        if (node.NestedSlot is { IsItem: true } nestedItem)
+        {
+            var ownerRect = new Rect(node.NestedParent.Pos + pan,
+                new Vector2(node.NestedParent.Width, node.NestedParent.Height));
+            var controlsRect = ListRowRect(nestedItem, ownerRect);
+            controlsRect.y = ownerRect.y + nestedItem.SocketContentY + HGGraph.NestedPadding
+                + (node.Height - HGGraph.RowHeight) * 0.5f;
+            controlsRect.height = HGGraph.RowHeight;
+            DrawListElementControls(nestedItem, controlsRect, ownerRect);
+        }
 
         if (!node.IsRoot)
         {
@@ -1042,7 +1051,16 @@ public partial class HaruGraphWindow
         }
 
         // 左端只讓開輸出接點；右端保留工具列提示與 chip。
-        float titleInset = node.IsRoot || !node.HasOutputPort ? 0f : HGGraph.PortDiameter + 2f;
+        float titleInset = node.IsRoot || node.NestedParent != null || !node.HasOutputPort ? 0f : HGGraph.PortDiameter + 2f;
+        var collapseArrow = new Rect(rect.x + titleInset, rect.y, 16f, HGGraph.HeaderHeight);
+        GUI.Label(collapseArrow, new GUIContent(node.Collapsed ? "▸" : "▾", "收合／展開 Node 內容（隨版面保存）"), HGStyles.HeaderButton);
+        var arrowEvent = Event.current;
+        if (arrowEvent.type == EventType.MouseDown && arrowEvent.button == 0 && collapseArrow.Contains(arrowEvent.mousePosition))
+        {
+            ToggleNodeCollapsed(node);
+            arrowEvent.Use();
+        }
+        titleInset += 16f;
 
         float titleWidth = Mathf.Max(24f, headerRight - rect.x - titleInset);
         // Header 下緣固定留給狀態帶；名稱與來源按鈕的繪製、命中共用上方內容區。
@@ -1078,12 +1096,12 @@ public partial class HaruGraphWindow
         // 資產、Token 與 Property 的本體是一列「選哪一個」的下拉。
         // 所有 Property 節點都引用目前圖庫中的定義。
         // 掛在未勾覆蓋的參數底下＝這一段不會被採用，整顆節點鎖住：控制項灰掉、拉線與清單編輯都擋掉。
+        if (!node.Collapsed)
         using (new EditorGUI.DisabledScope(node.InLockedSubtree))
         {
             if (node.IsPropertyNode)
             {
                 DrawReferencePickerRow(node, rect);
-                DrawPropertyValueRow(node, rect);
                 DrawRows(node, node.Rows, rect);
             }
             else if (node.IsAssetNode || node.IsTokenNode)
@@ -1157,11 +1175,11 @@ public partial class HaruGraphWindow
         if (node.IsRoot)
         {
             var halo = new Rect(rect.x - 3f, rect.y - 3f, rect.width + 6f, rect.height + 6f);
-            HGStyles.RoundedFrame(halo, new Color(HGStyles.HeadBorder.r, HGStyles.HeadBorder.g, HGStyles.HeadBorder.b, 0.35f),
+            DrawNodeFrameWithSlots(node, halo, new Color(HGStyles.HeadBorder.r, HGStyles.HeadBorder.g, HGStyles.HeadBorder.b, 0.35f),
                 NodeCornerRadius + 3f, 1f);
         }
 
-        HGStyles.RoundedFrame(rect, borderColor, NodeCornerRadius, thickness);
+        DrawNodeFrameWithSlots(node, rect, borderColor, NodeCornerRadius, thickness);
         DrawNodePorts(node, snappedPort);
     }
 
@@ -1222,16 +1240,6 @@ public partial class HaruGraphWindow
         if (isToken) ShowTokenPicker(node, picker);
         else if (isProperty) ShowPropertyPicker(node, picker);
         else ShowAssetPicker(node, picker);
-    }
-
-    /// <summary>Property 寫入 Input 固定在這列左側；讀取 Output 仍在 Header。</summary>
-    private static void DrawPropertyValueRow(HGNodeView node, Rect nodeRect)
-    {
-        float offset = HGGraph.RowHeight;
-        var row = new Rect(nodeRect.x, nodeRect.y + HGGraph.HeaderHeight + offset, nodeRect.width, HGGraph.RowHeight);
-        GUI.Label(new Rect(row.x + HGGraph.PortDiameter + 6f, row.y + 1f,
-                row.width - HGGraph.PortDiameter - 12f, row.height - 2f),
-            new GUIContent("寫入", "由左側 Input 指定寫入這顆 Property 的目標"), HGStyles.RowLabel);
     }
 
     /// <summary>列出目前變數庫的全部 Property；換族時由交易中斷不相容的讀寫線。</summary>
@@ -1302,6 +1310,16 @@ public partial class HaruGraphWindow
     private void DrawNodePorts(HGNodeView node, HGPort snappedPort)
     {
         bool dim = node.InDisabledSubtree || node.InLockedSubtree || node.Carrier?.Disabled == true;
+        if (node.Collapsed)
+        {
+            bool hasExternalInput = graph.Links.Any(link => IsLinkVisible(link)
+                && (OwnerRowOfPort(link.InputPort) != null && ReferenceEquals(HGGraph.CollapsedOwner(OwnerNodeOfPort(link.InputPort)), node)
+                    || OwnerRowOfPort(link.OutputPort) != null && ReferenceEquals(HGGraph.CollapsedOwner(OwnerNodeOfPort(link.OutputPort)), node)));
+            if (hasExternalInput)
+                HGStyles.DrawInputPort(PortRect(new Vector2(node.Pos.x + node.Width - HGGraph.PortRadius,
+                    node.Pos.y + HGGraph.HeaderHeight * 0.5f) + pan), HGStyles.InputPortLive, true);
+        }
+        else
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
             // 清單標題列沒有欄位，不能走下面的一般接點路徑（會讀 row.InputSlot）。
@@ -1316,29 +1334,24 @@ public partial class HaruGraphWindow
                 continue;
             }
             var inputPort = PortFor(row);
+            if (row.NestedNode != null) continue;
             if (inputPort?.Presentation.Visible != true) continue;
             if (inputPort.Presentation is IHGPortPresentationAnchor anchor && !ReferenceEquals(anchor.Node, node)) continue;
             var inputPortRect = PortRect(inputPort.Presentation.Position + pan);
             DrawSemanticPort(inputPort, InputPortColor(row), dim || row.Locked || row.InputSlot.Node?.Disabled == true, snappedPort,
                 row.InputSlot.Node != null);
-            // PropertySlot 同樣是「原地放開＝收合、拖出去＝拉線」（DrawInputPortRow 對每一列都攔這一下），符號也要一致。
+            // 輸入接點同時提供收合開關。
             DrawInputPortGlyph(row, inputPortRect);
 
         }
 
-        if (node.IsRoot || !node.HasOutputPort) return;
-        if (node.IsPropertyNode)
-        {
-            var inputKey = new HGPortKey(node.Id, "/property/input", HGPortRole.Input);
-            if (graph.PortsByKey.TryGetValue(inputKey, out var propertyInput) && propertyInput.Presentation.Visible)
-                DrawSemanticPort(propertyInput, HGStyles.OutputPortColor, dim, snappedPort, linkedPorts.Contains(propertyInput));
-        }
+        if (node.IsRoot || node.NestedParent != null || !node.HasOutputPort) return;
+
         var headerPort = PortFor(node);
         // 節點的輸出接點：有任何欄位從它取值才是 ◎；候選池裡沒人用的孤兒節點是 ○。
-        // PropertySlot 當父欄位不算：它是寫入 Property，線接在 Property 的寫入接點，不經過這顆輸出接點。
         if (headerPort?.Presentation.Visible == true)
             DrawSemanticPort(headerPort, PortErrorColor(node.Obj ?? node.ParentSlot, HGStyles.OutputPortLive), dim, snappedPort,
-                linkedPorts.Contains(headerPort) || (node.ParentSlot != null && node.ParentSlot is not PropertySlotBase));
+                linkedPorts.Contains(headerPort) || node.ParentSlot != null);
     }
 
     /// <summary>
@@ -1398,7 +1411,7 @@ public partial class HaruGraphWindow
             bool hasBuiltInAnchor = port.Presentation is IHGPortPresentationAnchor anchor
                 && (anchor.Node != null || anchor.Row != null);
             if (hasBuiltInAnchor || !port.Presentation.Visible) continue;
-            Color color = IsPropertyWritePort(port) ? HGStyles.OutputPortColor : HGStyles.OutputPortLive;
+            Color color = HGStyles.OutputPortLive;
             bool connected = linkedPorts.Contains(port) || (port.IsInput && port.InputSlot?.Node != null);
             object issueTarget = port.IsInput ? port.InputSlot
                 : port.Source?.OutputNode?.BodyObject;
@@ -1409,12 +1422,7 @@ public partial class HaruGraphWindow
         }
     }
 
-    private bool IsPropertyWritePort(HGPort port)
-    {
-        // 寫入 Property 的欄位走輸出色，圖上才看得出資料往哪邊流。
-        if (port?.Source is HGPropertyWriteSource || port?.InputSlot is GraphPropertyInputSlot) return true;
-        return false;
-    }
+
 
     private Color PortErrorColor(object target, Color color)
         => target != null && Rep.HasIssue(target, out bool error) && error ? HGStyles.InputPortError : color;
@@ -1429,7 +1437,7 @@ public partial class HaruGraphWindow
         else HGStyles.DrawInputPort(rect, color, connected);
         if (!linking || !IsCompatible(port)) return;
 
-        // 相容與吸附只改外圈，中心保留灰白／寫入青藍／錯誤紅。
+        // 相容與吸附只改外圈，中心保留原色或錯誤紅色。
         float thickness = ReferenceEquals(port, snappedPort) ? 2f : 1f;
         // 固定圖面外擴量，Header 接點的圈不侵入下緣 20～24 的狀態帶。
         const float inset = 1f;
@@ -1463,7 +1471,7 @@ public partial class HaruGraphWindow
     private static bool HasConnectedElement(HGRow listRow)
     {
         foreach (var child in HGGraph.AllRows(listRow.Children))
-            if (child.HasSlot && child.InputSlot.Node != null) return true;
+            if (child.HasInputPort && child.InputSlot.Node != null && child.NestedNode == null) return true;
         return false;
     }
 
@@ -1471,21 +1479,15 @@ public partial class HaruGraphWindow
     {
         bool hasIssue = Rep.HasIssue(row.InputSlot, out bool isError);
         if (hasIssue && isError) return HGStyles.InputPortError;
-        // 顏色只講用途：寫入是輸出色、取值是灰白。接不接由 ○／◎ 表達，不再用明暗區分。
-        if (row.IsProducedValue) return HGStyles.OutputPortColor;
         return HGStyles.InputPortLive;
     }
 
     private Color AggregatePortColor(HGRow listRow)
     {
-        bool allWrites = true;
         foreach (var child in HGGraph.AllRows(listRow.Children))
-        {
-            if (!child.HasSlot) continue;
-            if (Rep.HasIssue(child.InputSlot, out bool error) && error) return HGStyles.InputPortError;
-            if (child.InputSlot.Node != null && !child.IsProducedValue) allWrites = false;
-        }
-        return allWrites ? HGStyles.OutputPortColor : HGStyles.InputPortLive;
+            if (child.HasInputPort && Rep.HasIssue(child.InputSlot, out bool error) && error)
+                return HGStyles.InputPortError;
+        return HGStyles.InputPortLive;
     }
 
     private void CloseUnselectedEmptyNote(HGNodeView node)
@@ -1518,7 +1520,7 @@ public partial class HaruGraphWindow
             nextOverview = zoom < OverviewZoom;
         nextCanvasNodeIds.Clear();
         foreach (var node in graph.Nodes)
-            if (!node.Hidden && viewport.Overlaps(new Rect(node.Pos, new Vector2(node.Width, node.Height))))
+            if (!node.Hidden && viewport.Overlaps(HGGraph.VisualBounds(node)))
                 nextCanvasNodeIds.Add(node.Id);
         if (canvasNodesReady && (overviewMode != nextOverview || !canvasNodeIds.SetEquals(nextCanvasNodeIds)))
         {
@@ -1537,6 +1539,7 @@ public partial class HaruGraphWindow
 
     private void RefreshRowGeometry()
     {
+        HGGraph.PositionNestedSlots(graph, dragMoved ? dragNode : null);
         foreach (var node in graph.Nodes)
         {
             var state = (node.Pos, node.Width);
@@ -1552,9 +1555,17 @@ public partial class HaruGraphWindow
     {
         foreach (var row in rows)
         {
-            row.ScreenRect = new Rect(node.Pos.x, node.Pos.y + row.LocalY, node.Width, row.Height);
+            row.ScreenRect = row.NestedNode != null || row.NodeList
+                ? HGGraph.SlotBounds(node, row)
+                : new Rect(node.Pos.x, node.Pos.y + row.LocalY, node.Width, row.Height);
             row.InputPortPosition = new Vector2(node.Pos.x + node.Width - HGGraph.PortRadius,
-                node.Pos.y + row.LocalY + row.Height * 0.5f);
+                node.Pos.y + (row.NestedNode != null && row.SocketHeaderHeight == 0f
+                    ? row.SocketContentY + HGGraph.NestedPadding + HGGraph.HeaderHeight * 0.5f
+                    : row.LocalY + (row.NodeSocket ? row.SocketHeaderHeight : row.Height) * 0.5f));
+            var collapsed = HGGraph.CollapsedOwner(node);
+            if (collapsed != null)
+                row.InputPortPosition = new Vector2(collapsed.Pos.x + collapsed.Width - HGGraph.PortRadius,
+                    collapsed.Pos.y + HGGraph.HeaderHeight * 0.5f);
             UpdateRowGeometry(node, row.Children);
         }
     }

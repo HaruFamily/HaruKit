@@ -1,4 +1,4 @@
-namespace HaruFamily.DependencyCore.GraphKit
+﻿namespace HaruFamily.DependencyCore.GraphKit
 {
 using System;
 using System.Reflection;
@@ -95,11 +95,21 @@ public static class HGEnumLabels
     }
 }
 
+/// <summary>Slot 標籤與內容的排列。</summary>
+public enum HGLabelLayout
+{
+    Horizontal,
+    Vertical,
+    Hidden,
+}
+
 /// <summary>覆寫欄位或 enum 成員的顯示名稱；只想調標籤欄寬度時用無參數建構子，例 <c>[HGLabel(Width = 5)]</c>。</summary>
 [AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
 public sealed class HGLabelAttribute : Attribute
 {
     public string Name { get; }
+
+    public HGLabelLayout Layout { get; set; } = HGLabelLayout.Horizontal;
 
     /// <summary>
     /// 這一列標籤欄的寬度，單位＝格線格數（`HGGraph.GridSize`，20px），與 `HGNode.Width` 同單位。
@@ -125,11 +135,6 @@ public sealed class HGLabelAttribute : Attribute
         Name = name;
     }
 }
-
-/// <summary>只藏欄位左側的標籤，欄位本身照畫；整列都不要就用 <see cref="HGHideAttribute"/>。</summary>
-// 不做成 HGLabel 的 mode 參數：命名與畫不畫是兩個決定，合在一起會允許「取了一個永遠不顯示的名字」這種無意義狀態。
-[AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]
-public sealed class HGHideLabelAttribute : Attribute { }
 
 /// <summary>欄位的 Graph 懸停說明。</summary>
 [AttributeUsage(AttributeTargets.Field, Inherited = false, AllowMultiple = false)]

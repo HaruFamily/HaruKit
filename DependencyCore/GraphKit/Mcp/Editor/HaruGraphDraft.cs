@@ -12,15 +12,29 @@ using Newtonsoft.Json.Linq;
 using UnityEditor;
 
 /// <summary>Bounded Agent authoring transactions independent of graph windows.</summary>
-[McpForUnityTool("haru_graph_draft", Description = "Domain-independent GraphKit draft authoring. Discover registered bindings, direct IGraphDocument fields and editable graph assets through haru_graph_inspect. Use open/new_asset/new_owner, then status for supported actions. Edit nodes, Action/Formula slots, Token/Property libraries, assets, nested fields, groups and layout through isolated sessions. endpoints keys expire after each mutation. apply_batch supports 1..32 atomic edits with prior-step $ref data and one Undo; check asserts read-only query results. validate reports structural/document diagnostics, not execution. preview/commit and preview_save_as/save_as enforce generation and source conflicts. No gameplay services, execution contexts or domain-specific test actions. Custom execution integrations own their context and isolation. Supports scalar and common Unity values; slot_asset_choices/slot_asset_reference select compatible persistent ScriptableObjects by exact path and GUID/localFileId. Use haru_graph_transaction for multi-document and dependent-asset commits; haru_graph_execute discovers registered execution providers. status lists limits and capabilities. No graph window is required.")]
+[McpForUnityTool("haru_graph_draft", Description = "Domain-independent GraphKit draft authoring. Discover registered bindings, direct IGraphDocument fields and editable graph assets through haru_graph_inspect. Use open/new_asset/new_owner, then status for supported actions. Edit nodes, Action/Formula slots, Token/Property libraries, assets, nested fields, groups and layout through isolated sessions. endpoints keys expire after each mutation. apply_batch supports 1..32 atomic edits with prior-step $ref data and one Undo; check asserts read-only query results. validate reports structural/document diagnostics, not execution. preview/commit and preview_save_as/save_as enforce generation and source conflicts. No gameplay services, execution contexts or domain-specific test actions. Custom execution integrations own their context and isolation. Supports scalar and common Unity values; slot_asset_choices/slot_asset_reference select compatible persistent ScriptableObjects by exact path and GUID/localFileId. Use haru_graph_transaction for multi-document and dependent-asset commits; haru_graph_execute discovers registered execution providers. flow provides declared structure paths and flow_insert/remove/transfer/wrap. geometry/layout_preview measure a detached background canvas; protect fixes draft edit limits and layout_diff separates content from layout. nodes/endpoints report node_mode and read_user_count. configure_node.node_mode selects Composition or Connection per carrier; connect automatically selects Connection for Port wiring. status lists limits and capabilities. No graph window is required.")]
 public static partial class HaruGraphDraft
 {
     public sealed class Parameters
     {
         [ToolParameter("Structured field path from structured_fields: an array of exact field_id strings and zero-based list indices, max depth 16. Omit or [] to query the inline node body. Requery paths after list edits; nested slot keys expire after every mutation.", Required = false)]
         public JArray value_path { get; set; }
-        [ToolParameter("metadata_fields, set_metadata_value, structured_types, replace_structured_value, structured_fields, set_structured_value, initialize_structured_value, insert_value_item, remove_value_item, move_value_item, asset_types, new_asset, owner_types, new_owner, apply_batch, check, asset_parameters, configure_asset_parameter, open, status, capture, value_fields, set_value, endpoints, check_connection, connect, disconnect, undo, redo, preview, validate, history, commit, preview_save_as, save_as, discard, catalog_fields, field_options, set_field_options, set_field_count, layout_nodes, configure_group, group_tabs, add_group_tab, rename_group_tab, remove_group_tab, activate_group_tab, group_member_tab, duplicate_group, nodes, configure_node, duplicate_nodes, set_group_rect, node_candidates, create_node, replace_node, delete_node, library, create_definition, rename_definition, duplicate_definition, delete_definition, configure_property, slot_lists, slot_items, insert_slot, remove_slot, move_slot, roots, root_options, add_root, remove_root, asset_choices, slot_value, slot_asset_choices, slot_asset_reference, group_scopes, groups, group_members, create_group, edit_group, delete_group, group_member")]
+        [ToolParameter("flow, flow_candidates, flow_insert, flow_remove, flow_transfer, flow_wrap, geometry, layout_preview, layout_diff, protect, metadata_fields, set_metadata_value, structured_types, replace_structured_value, structured_fields, set_structured_value, initialize_structured_value, insert_value_item, remove_value_item, move_value_item, asset_types, new_asset, owner_types, new_owner, apply_batch, check, asset_parameters, configure_asset_parameter, open, status, capture, value_fields, set_value, endpoints, check_connection, connect, disconnect, undo, redo, preview, validate, history, commit, preview_save_as, save_as, discard, catalog_fields, field_options, set_field_options, set_field_count, layout_nodes, configure_group, group_tabs, add_group_tab, rename_group_tab, remove_group_tab, activate_group_tab, group_member_tab, duplicate_group, nodes, configure_node, duplicate_nodes, set_group_rect, node_candidates, create_node, replace_node, delete_node, library, create_definition, rename_definition, duplicate_definition, delete_definition, configure_property, slot_lists, slot_items, insert_slot, remove_slot, move_slot, roots, root_options, add_root, remove_root, asset_choices, slot_value, slot_asset_choices, slot_asset_reference, group_scopes, groups, group_members, create_group, edit_group, delete_group, group_member")]
         public string action { get; set; }
+        [ToolParameter("Generation-local section path from flow, e.g. root/0/body. Requery after every mutation.", Required = false)]
+        public string section_path { get; set; }
+        [ToolParameter("Generation-local target section path from flow for flow_transfer.", Required = false)]
+        public string target_section_path { get; set; }
+        [ToolParameter("Generation-local step path from flow for flow_remove.", Required = false)]
+        public string flow_path { get; set; }
+        [ToolParameter("Exact declared child section key from flow_candidates for flow_wrap.", Required = false)]
+        public string child_section_key { get; set; }
+        [ToolParameter("protect: enforce content unchanged; only GraphViewState and node positions may differ. Policy is immutable until discard.", Required = false)]
+        public bool? layout_only { get; set; }
+        [ToolParameter("protect: 0..64 unique node IDs to preserve, including dependency closure and incoming connections.", Required = false)]
+        public JArray protected_node_ids { get; set; }
+        [ToolParameter("protect: 0..64 unique group IDs. Protects entire group, all tabs, members and their dependencies.", Required = false)]
+        public JArray protected_group_ids { get; set; }
         [ToolParameter("Exact asset path from search_documents; required for open.", Required = false)]
         public string asset_path { get; set; }
         [ToolParameter("Exact document_id from search_documents/list_documents; required for open.", Required = false)]
@@ -37,6 +51,8 @@ public static partial class HaruGraphDraft
         public JObject position_offset { get; set; }
         [ToolParameter("Carrier disabled flag for configure_node; affects all references to this shared carrier.", Required = false)]
         public bool? disabled { get; set; }
+        [ToolParameter("configure_node: exact Composition (default, at most one read Slot) or Connection (standalone, permits sharing; connect also selects it automatically). Preserves references; shared nodes must disconnect extra readers before Composition. This is content, not layout.", Required = false)]
+        public string node_mode { get; set; }
         [ToolParameter("Node note for configure_node, max 16384 characters; explicit null clears, omitted preserves.", Required = false)]
         public JToken note { get; set; }
         [ToolParameter("Manual node position {x,y}, finite float32. Mutually exclusive with clear_position=true.", Required = false)]
@@ -97,7 +113,7 @@ public static partial class HaruGraphDraft
         public string list_key { get; set; }
         [ToolParameter("Zero-based item index; insert permits Count for append.", Required = false)]
         public int? index { get; set; }
-        [ToolParameter("Final zero-based index for move_slot.", Required = false)]
+        [ToolParameter("Final zero-based index for move_slot; pre-removal gap 0..Count for flow_transfer.", Required = false)]
         public int? destination_index { get; set; }
         [ToolParameter("Generation-local root_key from root_options for add_root.", Required = false)]
         public string root_key { get; set; }
@@ -123,7 +139,7 @@ public static partial class HaruGraphDraft
         public JArray option_indices { get; set; }
         [ToolParameter("Option index from field_options for set_field_count.", Required = false)]
         public int? option_index { get; set; }
-        [ToolParameter("Desired count for one HGSpinner choice. Respects declared CountMin/CountMax; other values retain order and counts.", Required = false)]
+        [ToolParameter("Contiguous range length 1..4096 for flow_transfer/flow_wrap; desired count for one HGSpinner choice in set_field_count, respecting declared CountMin/CountMax while other values retain order and counts.", Required = false)]
         public int? count { get; set; }
         [ToolParameter("Property retention; configure_property can also set supported initial value via value.", Required = false)]
         public bool? retain_value { get; set; }
@@ -143,6 +159,7 @@ public static partial class HaruGraphDraft
         public HGDocumentSnapshot Baseline;
         public IGraphDocument BaselineDocument;
         public string BaselineHash;
+        public string BaselineContentHash;
         public string AssetRevision;
         public string DiskRevision;
         public bool InitiallyDirty;
@@ -150,6 +167,8 @@ public static partial class HaruGraphDraft
         public string PreviewHash;
         public int PreviewGeneration = -1;
         public bool RequiresReopen;
+        public EditPolicy Policy;
+        public bool PolicyGuardActive;
         public bool OwnsOwner;
         public FieldInfo DocumentField;
         public string SaveAsToken;
@@ -221,6 +240,9 @@ public static partial class HaruGraphDraft
                 if (input.GetRaw("generation")?.ToObject<int>() != draft.Session.Generation)
                     return Error("stale_generation", "Read status and resolve targets again before editing. No change applied.");
                 if (draft.RequiresReopen) return Error("reopen_required", "A previous commit could not confirm persistence. Inspect Owner and open a fresh draft; automatic retry is disabled.");
+                if (draft.Policy != null && (action == "undo" || action == "redo"))
+                    return Error("protected_history", "History controls are disabled for protected drafts; discard/reopen to choose a different policy.");
+                if (NeedsPolicyGuard(draft, parameters, action)) return GuardedCommand(draft, parameters);
                 if (action == "apply_batch") return ApplyBatch(id, draft, input);
                 if (action == "check") return CheckDraft(id, draft, input);
                 if (authoringActions.Contains(action)) return AuthoringCommand(draft, input, action, offset, pageSize);
@@ -296,7 +318,7 @@ public static partial class HaruGraphDraft
                 return Error("source_changed_during_open", "An editing provider changed Owner while opening. No draft was retained; inspect the source.");
             string id = Guid.NewGuid().ToString("N");
             var draft = new Draft { Session = session, Binding = binding, Context = custom?.Context ?? HGEditorExtensionContext.Default, Expires = DateTime.UtcNow.AddMinutes(30), ReadDocument = read, DocumentField = field,
-                Baseline = baseline, BaselineDocument = live,
+                Baseline = baseline, BaselineContentHash = ContentFingerprint(live), BaselineDocument = live,
                 BaselineHash = baselineHash, AssetRevision = assetRevision, DiskRevision = diskRevision, InitiallyDirty = initiallyDirty };
             drafts.Add(id, draft);
             return Status(id, draft);
@@ -313,8 +335,11 @@ public static partial class HaruGraphDraft
         is_new_asset = draft.OwnsOwner,
         working_copy_dirty = draft.Session.IsDirty, owner_dirty = EditorUtility.IsDirty(draft.Session.Owner),
         expires_utc = draft.Expires.ToString("O"), commit_supported = !draft.OwnsOwner, requires_reopen = draft.RequiresReopen,
-        can_undo = draft.Session.CanUndo, can_redo = draft.Session.CanRedo,
+        can_undo = draft.Policy == null && draft.Session.CanUndo, can_redo = draft.Policy == null && draft.Session.CanRedo,
         authoring_actions = authoringActions,
+        edit_policy = draft.Policy == null ? null : new { layout_only = draft.Policy.LayoutOnly,
+            protected_node_ids = draft.Policy.Nodes, protected_group_ids = draft.Policy.Groups },
+        flow_support = "Declared sections only; use paths from flow, not coordinates. Background geometry and schematic SVG do not prove visual acceptance.",
         batch_action = "apply_batch", execution_tool = "haru_graph_execute", transaction_tool = "haru_graph_transaction", max_open_drafts = 16,
         check_action = "check", check_queries = checkQueries,
         creation_actions = new[] { "asset_types", "new_asset", "owner_types", "new_owner", "preview_save_as", "save_as" },
@@ -368,7 +393,7 @@ public static partial class HaruGraphDraft
             draft.History.Add(new { operation, generation = draft.Session.Generation, details });
         }
         var data = new { result = result.ToString(), generation = draft.Session.Generation,
-            working_copy_dirty = draft.Session.IsDirty, can_undo = draft.Session.CanUndo, can_redo = draft.Session.CanRedo,
+            working_copy_dirty = draft.Session.IsDirty, can_undo = draft.Policy == null && draft.Session.CanUndo, can_redo = draft.Policy == null && draft.Session.CanRedo,
             diagnostic = draft.Session.LastDiagnostic, details };
         return result == HGSessionCommandResult.Changed || result == HGSessionCommandResult.NoChange
             ? new SuccessResponse("Draft command completed; Owner and window drafts were not written.", data)

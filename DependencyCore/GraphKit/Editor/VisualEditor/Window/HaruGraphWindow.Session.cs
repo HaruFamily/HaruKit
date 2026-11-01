@@ -1,4 +1,4 @@
-namespace HaruFamily.DependencyCore.GraphKit.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections.Generic;
@@ -183,11 +183,11 @@ public partial class HaruGraphWindow : IHasCustomMenu
     {
         if (QueryDocument(expected) == null || generation != graphGeneration) return HGSessionCommandResult.StaleGeneration;
         if (!graph.PortsByKey.TryGetValue(key, out var port)
-            || (!port.IsInput && port.Source is not HGPropertyWriteSource)
+            || !port.IsInput
             || port.Binding is IHGListAppendBinding
             || port.Presentation.Locked || !port.Presentation.Visible)
             return HGSessionCommandResult.Rejected;
-        return CutLink((port.Source as HGPropertyWriteSource)?.Slot ?? port.InputSlot) switch
+        return CutLink(port.InputSlot) switch
         {
             PortCommandResult.Changed => HGSessionCommandResult.Changed,
             PortCommandResult.NoChange => HGSessionCommandResult.NoChange,

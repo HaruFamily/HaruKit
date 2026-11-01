@@ -1,4 +1,4 @@
-namespace HaruFamily.DependencyCore.GraphKit.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections.Generic;
@@ -22,6 +22,7 @@ public sealed class HGFieldDescriptor
     public string Label { get; }
     public string Description { get; }
     public bool HideLabel { get; }
+    public HGLabelLayout LabelLayout { get; }
     public int LabelWidthUnits { get; }
     public float LabelWidthRatio { get; }
     public bool ForceEnumButtons { get; }
@@ -45,7 +46,7 @@ public sealed class HGFieldDescriptor
         int labelWidthUnits, float labelWidthRatio, bool forceEnumButtons, bool readOnly, Func<object, object> read,
         Action<object, object> write, Func<object, bool> isVisible, Func<object, object> createMissing = null,
         HGBoolAttribute boolButtons = null, string foldout = null, string tab = null,
-        TextAnchor tabAlignment = TextAnchor.MiddleCenter, int tabWidthUnits = 0, bool managedReference = false)
+        TextAnchor tabAlignment = TextAnchor.MiddleCenter, int tabWidthUnits = 0, bool managedReference = false, HGLabelLayout labelLayout = HGLabelLayout.Horizontal)
     {
         if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("Field id is required.", nameof(id));
         Id = id;
@@ -55,7 +56,8 @@ public sealed class HGFieldDescriptor
         Description = description;
         if (labelWidthUnits < 0) throw new ArgumentOutOfRangeException(nameof(labelWidthUnits));
         if (labelWidthRatio < 0f) throw new ArgumentOutOfRangeException(nameof(labelWidthRatio));
-        HideLabel = hideLabel;
+        HideLabel = hideLabel || labelLayout == HGLabelLayout.Hidden;
+        LabelLayout = HideLabel ? HGLabelLayout.Hidden : labelLayout;
         LabelWidthUnits = labelWidthUnits;
         LabelWidthRatio = labelWidthRatio;
         ForceEnumButtons = forceEnumButtons;
@@ -80,7 +82,7 @@ public sealed class HGFieldDescriptor
         Action<TTarget, TValue> write = null, string label = null, string description = null, bool hideLabel = false,
         int labelWidthUnits = 0, float labelWidthRatio = 0f, bool forceEnumButtons = false,
         Func<TTarget, bool> isVisible = null, HGBoolAttribute boolButtons = null, string foldout = null, string tab = null,
-        TextAnchor tabAlignment = TextAnchor.MiddleCenter, int tabWidthUnits = 0, bool managedReference = false)
+        TextAnchor tabAlignment = TextAnchor.MiddleCenter, int tabWidthUnits = 0, bool managedReference = false, HGLabelLayout labelLayout = HGLabelLayout.Horizontal)
         where TTarget : class
     {
         if (read == null) throw new ArgumentNullException(nameof(read));
@@ -89,14 +91,14 @@ public sealed class HGFieldDescriptor
         return new HGFieldDescriptor(id, typeof(TValue), HGFieldRole.Value, label, description, hideLabel, labelWidthUnits,
             labelWidthRatio, forceEnumButtons, write == null, target => read((TTarget)target), typedWrite,
             isVisible == null ? null : target => isVisible((TTarget)target), boolButtons: boolButtons, foldout: foldout, tab: tab,
-            tabAlignment: tabAlignment, tabWidthUnits: tabWidthUnits, managedReference: managedReference);
+            tabAlignment: tabAlignment, tabWidthUnits: tabWidthUnits, managedReference: managedReference, labelLayout: labelLayout);
     }
 
     /// <summary>Creates a slot descriptor. Linking edits the referenced slot, never replaces the field instance.</summary>
     public static HGFieldDescriptor CreateSlot<TTarget, TSlot>(string id, Func<TTarget, TSlot> read,
         string label = null, string description = null, bool hideLabel = false, int labelWidthUnits = 0,
         float labelWidthRatio = 0f, Func<TTarget, bool> isVisible = null, string foldout = null, string tab = null,
-        TextAnchor tabAlignment = TextAnchor.MiddleCenter, int tabWidthUnits = 0)
+        TextAnchor tabAlignment = TextAnchor.MiddleCenter, int tabWidthUnits = 0, HGLabelLayout labelLayout = HGLabelLayout.Horizontal)
         where TTarget : class
         where TSlot : GraphSlotBase
     {
@@ -104,7 +106,7 @@ public sealed class HGFieldDescriptor
         return new HGFieldDescriptor(id, typeof(TSlot), HGFieldRole.Slot, label, description, hideLabel, labelWidthUnits,
             labelWidthRatio, false, false, target => read((TTarget)target), null,
             isVisible == null ? null : target => isVisible((TTarget)target), foldout: foldout, tab: tab, tabAlignment: tabAlignment,
-            tabWidthUnits: tabWidthUnits);
+            tabWidthUnits: tabWidthUnits, labelLayout: labelLayout);
     }
 
     /// <summary>Creates a slot descriptor that can normalize a missing slot in the current working copy.</summary>
@@ -112,7 +114,7 @@ public sealed class HGFieldDescriptor
         Action<TTarget, TSlot> write, Func<TTarget, TSlot> create, string label = null, string description = null,
         bool hideLabel = false, int labelWidthUnits = 0, float labelWidthRatio = 0f, Func<TTarget, bool> isVisible = null,
         string foldout = null, string tab = null, TextAnchor tabAlignment = TextAnchor.MiddleCenter,
-        int tabWidthUnits = 0)
+        int tabWidthUnits = 0, HGLabelLayout labelLayout = HGLabelLayout.Horizontal)
         where TTarget : class
         where TSlot : GraphSlotBase
     {
@@ -123,41 +125,41 @@ public sealed class HGFieldDescriptor
             labelWidthRatio, false, false, target => read((TTarget)target),
             (target, value) => write((TTarget)target, (TSlot)value),
             isVisible == null ? null : target => isVisible((TTarget)target), target => create((TTarget)target), foldout: foldout, tab: tab,
-            tabAlignment: tabAlignment, tabWidthUnits: tabWidthUnits);
+            tabAlignment: tabAlignment, tabWidthUnits: tabWidthUnits, labelLayout: labelLayout);
     }
 
     /// <summary>Creates an explicitly expandable group; GraphKit does not infer this role from the value type.</summary>
     public static HGFieldDescriptor CreateGroup<TTarget, TGroup>(string id, Func<TTarget, TGroup> read,
         string label = null, string description = null, bool hideLabel = false, Func<TTarget, bool> isVisible = null,
         string foldout = null, string tab = null, TextAnchor tabAlignment = TextAnchor.MiddleCenter,
-        int tabWidthUnits = 0)
+        int tabWidthUnits = 0, HGLabelLayout labelLayout = HGLabelLayout.Horizontal)
         where TTarget : class
         where TGroup : class
     {
         if (read == null) throw new ArgumentNullException(nameof(read));
         return new HGFieldDescriptor(id, typeof(TGroup), HGFieldRole.Group, label, description, hideLabel, 0, 0f, false,
             true, target => read((TTarget)target), null, isVisible == null ? null : target => isVisible((TTarget)target),
-            foldout: foldout, tab: tab, tabAlignment: tabAlignment, tabWidthUnits: tabWidthUnits);
+            foldout: foldout, tab: tab, tabAlignment: tabAlignment, tabWidthUnits: tabWidthUnits, labelLayout: labelLayout);
     }
 
     /// <summary>Creates an IList-backed descriptor with an explicit element type.</summary>
     public static HGFieldDescriptor CreateList<TTarget, TElement>(string id, Func<TTarget, System.Collections.IList> read,
         string label = null, string description = null, bool hideLabel = false, Func<TTarget, bool> isVisible = null,
         string foldout = null, string tab = null, TextAnchor tabAlignment = TextAnchor.MiddleCenter,
-        int tabWidthUnits = 0)
+        int tabWidthUnits = 0, HGLabelLayout labelLayout = HGLabelLayout.Horizontal)
         where TTarget : class
     {
         if (read == null) throw new ArgumentNullException(nameof(read));
         return new HGFieldDescriptor(id, typeof(TElement), HGFieldRole.List, label, description, hideLabel, 0, 0f, false,
             false, target => read((TTarget)target), null, isVisible == null ? null : target => isVisible((TTarget)target),
-            foldout: foldout, tab: tab, tabAlignment: tabAlignment, tabWidthUnits: tabWidthUnits);
+            foldout: foldout, tab: tab, tabAlignment: tabAlignment, tabWidthUnits: tabWidthUnits, labelLayout: labelLayout);
     }
 
     /// <summary>Creates a list descriptor that can normalize a missing IList in the current working copy.</summary>
     public static HGFieldDescriptor CreateListWithFactory<TTarget, TList, TElement>(string id, Func<TTarget, TList> read,
         Action<TTarget, TList> write, Func<TTarget, TList> create, string label = null, string description = null,
         bool hideLabel = false, Func<TTarget, bool> isVisible = null, string foldout = null, string tab = null,
-        TextAnchor tabAlignment = TextAnchor.MiddleCenter, int tabWidthUnits = 0)
+        TextAnchor tabAlignment = TextAnchor.MiddleCenter, int tabWidthUnits = 0, HGLabelLayout labelLayout = HGLabelLayout.Horizontal)
         where TTarget : class
         where TList : class, System.Collections.IList
     {
@@ -167,7 +169,7 @@ public sealed class HGFieldDescriptor
         return new HGFieldDescriptor(id, typeof(TElement), HGFieldRole.List, label, description, hideLabel, 0, 0f, false,
             false, target => read((TTarget)target), (target, value) => write((TTarget)target, (TList)value),
             isVisible == null ? null : target => isVisible((TTarget)target), target => create((TTarget)target), foldout: foldout, tab: tab,
-            tabAlignment: tabAlignment, tabWidthUnits: tabWidthUnits);
+            tabAlignment: tabAlignment, tabWidthUnits: tabWidthUnits, labelLayout: labelLayout);
     }
 
     /// <summary>Evaluates a Tool-owned visibility predicate without leaking predicate failures into the build loop.</summary>

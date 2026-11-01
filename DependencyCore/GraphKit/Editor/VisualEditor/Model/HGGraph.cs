@@ -1,8 +1,9 @@
-namespace HaruFamily.DependencyCore.GraphKit.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
     using System;
     using System.Collections;
     using System.Collections.Generic;
+    using System.Linq;
     using System.Reflection;
     using System.Text;
     using UnityEditor;
@@ -71,8 +72,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// <summary>這顆節點指到的 Property 定義（不是 Property 節點就是 null）。定義住圖層清單。</summary>
         public GraphProperty Property;
         /// <summary>Property 節點下方輸入的持久綁定；不是 ParentSlot 的重畫。</summary>
-        public GraphPropertyInputSlot PropertyInput;
-        public HGRow PropertyInputRow;
         /// <summary>Property 節點（不論有沒有指定定義）。讀它只取目前值，不執行寫入它的動作。</summary>
         public bool IsPropertyNode;
         /// <summary>Header 左緣那顆接點畫不畫。沒有任何欄位指得到的包節點沒有它：接不上就不該看得到圓。</summary>
@@ -99,6 +98,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// 圖照樣建到底——引用數要走完整張圖才算得準，收起來只是最後一步的標記。
         /// </summary>
         public bool Hidden;
+        public bool Collapsed;
+        public HGNodeView NestedParent;
+        public HGRow NestedSlot;
+        public float NestedMinWidth;
         public string Tips;
         /// <summary>註解框被打開但還沒有內容：只有這顆節點被選取時才成立，取消選取就收起來。</summary>
         public bool NoteOpen;
@@ -122,8 +125,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public Vector2 OutputPortPosition => new Vector2(Pos.x + HGGraph.PortRadius,
             Pos.y + HGGraph.HeaderHeight * 0.5f);
 
-        public Vector2 PropertyInputPortPosition => new Vector2(Pos.x + HGGraph.PortRadius,
-            Pos.y + HGGraph.HeaderHeight + HGGraph.RowHeight * 1.5f);
+
 
     }
 
@@ -140,7 +142,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public bool IsActionSlot;
 
         /// <summary>這一列寫入 Property：接點與線改用輸出色，不畫常數框。</summary>
-        public bool IsProducedValue;
         public NamedFormulaSlot AssetBinding;
 
         public object Target;            // payload：一般值欄位所屬的物件
@@ -178,7 +179,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// <summary>這一列屬於哪個節點。折疊與分支收合的 key 都是「節點 Id + Path」，繪製時不必再回頭找主人。</summary>
         public string OwnerNodeId;
 
-        /// <summary>項目本體，而且項目控制項由共用繪製路徑代畫（序號欄、把手、✕）。展開出來的子列不畫。</summary>
+        /// <summary>項目本體，而且項目控制項由共用繪製路徑代畫（排序把手、✕）。展開出來的子列不畫。</summary>
         // 自己有繪製路徑的來源（容器的格子）不設這個旗標，它的 ✕ 位置與命中都不一樣。
         public bool IsItem;
 
@@ -197,7 +198,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public HGRow ItemOwnerRow;
 
         /// <summary>
-        /// 左側額外留白。清單元素要留位置給序號／拖曳把手，而**它展開出來的子列也必須繼承**，
+        /// 左側額外留白。清單元素要留位置給拖曳把手，而**它展開出來的子列也必須繼承**，
         /// 否則子列會比自己的父標題還靠左，看起來像壞掉。
         /// </summary>
         public float LeftPad;
@@ -234,6 +235,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// <summary>欄位或 Slot 類別標的 <c>[HGBool]</c>；null＝bool 畫勾選框。</summary>
         public HGBoolAttribute BoolButtons;
         public bool HideLabel;
+        public HGLabelLayout LabelLayout => HideLabel ? HGLabelLayout.Hidden
+            : Descriptor != null ? Descriptor.LabelLayout : HGReflect.LabelLayout(Field);
+        public bool LabelAbove => LabelLayout == HGLabelLayout.Vertical
+            && (NodeList || NestedNode != null) && !IsItem;
         public int LabelWidthUnits;
         public float LabelWidthRatio;
         public bool Normalized;
@@ -242,10 +247,19 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         // 排版結果（每次重畫填）
         public float LocalY;
         public float Height;
-        public float AddRowY;            // 清單列的「新增項目」列位置
+        public float AddRowY;            // 清單尾端的插入位置；新增入口位於標題列。
         public bool Hidden;              // 被折疊的清單蓋住：不畫、不畫接點、不可當拉線目標
         public Rect ScreenRect;
         public Vector2 InputPortPosition;
+        public bool NodeSocket;
+        public HGNodeView NestedNode;
+        public float SocketHeaderHeight;
+        public float SocketContentY;
+        public bool ActionSequence;
+        public bool NodeList;
+        public bool TimingActions;
+        public bool CanAddItem => Items is HGListItemSource source && source.CanEditStructure && !Locked
+            && Descriptor?.ReadOnly != true && Field?.IsInitOnly != true;
 
         /// <summary>
         /// 這一列掛著一個欄位。<b>payload 判定，與 <see cref="Kind"/> 無關</b>——
@@ -254,7 +268,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         public bool HasSlot => InputSlot != null;
 
         /// <summary>右側輸入接點畫不畫。</summary>
-        public bool HasInputPort => Kind == HGRowKind.InputPort;
+        public bool HasInputPort => Kind == HGRowKind.InputPort && InputSlot is not PropertySlotBase;
 
         /// <summary>右側輸入接點是否可見：折疊起來的列不算，否則會接到看不見的東西。</summary>
         public bool IsInputPortVisible => HasInputPort && !Hidden;
@@ -285,7 +299,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
     /// <summary>
     /// 由焦點根 Slot 遞迴展開節點圖：節點 → 參數列 → 子節點，並套用記憶座標或樹狀自動排版。
     /// </summary>
-    public static class HGGraph
+    public static partial class HGGraph
     {
         public const float RowHeight = 20f;
         public const float HeaderHeight = 24f;
@@ -332,8 +346,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             return SnapUpToGrid(rowWidth * ratio);
         }
 
-        /// <summary>清單元素左側的控制欄：序號與拖曳把手各佔一半，兩者都常態顯示。</summary>
-        public const float ListGutter = 30f;
+        /// <summary>清單元素左側只保留排序把手；順序由上下排列表示。</summary>
+        public const float ListGutter = 16f;
         /// <summary>清單元素右側保留給刪除鈕的寬度。永遠保留（hover 才畫），欄位寬度才不會跳動。</summary>
         public const float ListDeleteWidth = 16f;
         /// <summary>超過這個項數的清單預設折疊：不折的話一個動作序列就能把節點撐到幾百 px 高。</summary>
@@ -355,7 +369,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             string headTitle, IReadOnlyDictionary<string, bool> listCollapse = null,
             string noteOpenId = null, ICollection<string> noteCollapsed = null, object headCarrier = null,
             IReadOnlyDictionary<string, Type> orphanHints = null, IHGEditorMetadataProvider metadata = null,
-            IReadOnlyDictionary<string, string> fieldTabs = null)
+            IReadOnlyDictionary<string, string> fieldTabs = null, bool nestSlots = false)
         {
             var view = new HGGraphView();
             try
@@ -396,11 +410,18 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     if (row.Kind == HGRowKind.Tabs && fieldTabs != null
                         && fieldTabs.TryGetValue(CollapseKey(node.Id, row), out var selected)
                         && row.Children.Exists(page => page.Label == selected)) row.ActiveTab = selected;
+            var savedState = (model.Data as IGraphViewStateOwner)?.ViewState;
+            foreach (var node in view.Nodes)
+                node.Collapsed = listCollapse != null
+                    ? listCollapse.TryGetValue(NodeCollapseKey(node.Id), out bool collapsed) && collapsed
+                    : savedState?.Folded.Contains(NodeCollapseKey(node.Id)) == true;
             ApplyViewState(model, view, noteOpenId, noteCollapsed);
+            if (nestSlots) PrepareNestedSlots(model, view, listCollapse);
             foreach (var node in view.Nodes)
                 foreach (var row in AllRows(node.Rows))
                     if (row.Normalized) view.Normalized = true;
             AutoLayout(model, view);
+            PositionNestedSlots(view);
             foreach (var node in view.Nodes)
                 foreach (var row in AllRows(node.Rows))
                     if (!string.IsNullOrEmpty(row.DrawerError))
@@ -421,7 +442,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
         /// <summary>
         /// 把一個 `ActionTimingGroup` 畫成 HEAD：Header 是時機名，本體就是那個時機的動作清單，
-        /// 所以每個動作直接是清單的一列——序號、拖曳把手、刪除鈕、折疊、斑馬紋全部沿用清單那一套，
+        /// 所以每個動作直接是清單的一列——拖曳把手、刪除鈕、折疊、斑馬紋全部沿用清單那一套，
         /// 不需要為動作另做一組互動。一張畫布上有幾個時機就有幾顆。
         /// </summary>
         private static HGNodeView MakeGroupNode(HGModel model, object group, IHGEditorMetadataProvider metadata,
@@ -436,6 +457,15 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             // 群組不回傳值，chip 改寫身分：一眼分得出 root 與一般節點。文字由圖的契約提供，編輯器不寫死領域用詞。
             node.Chip = model?.Doc?.RootChip;
             node.Desc = null;
+
+            var actions = model?.Doc?.ItemsOf(group);
+            foreach (var row in AllRows(node.Rows))
+                if (row.Items is HGListItemSource source && ReferenceEquals(source.List, actions))
+                {
+                    row.TimingActions = true;
+                    row.HideLabel = true;
+                    row.Collapsed = false;
+                }
 
             model.RegisterCarrier(node.Id, group);
             return node;
@@ -547,7 +577,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         node = new HGNodeView
                         {
                             Property = property,
-                            PropertyInput = carrier.PropertyInput,
                             IsPropertyNode = true,
                             ResultType = propertyResult,
                             Title = "Property",
@@ -703,7 +732,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
             foreach (var row in AllRows(node.Rows))
             {
-                if (!row.HasSlot) continue;
+                if (!row.HasSlot || row.InputSlot is PropertySlotBase) continue;
 
                 var carrier = row.InputSlot.Node;
                 if (carrier == null) continue;            // 常數／空槽留在列上，不長節點
@@ -736,23 +765,10 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     view.Links.Add(new HGLink { ParentRow = row, OutputOwner = child, InputOwner = node });
             }
 
-            CollectPropertyInput(model, node, view, depth, listCollapse, metadata, diagnostics);
+
         }
 
-        private static void CollectPropertyInput(HGModel model, HGNodeView node, HGGraphView view, int depth,
-            IReadOnlyDictionary<string, bool> listCollapse, IHGEditorMetadataProvider metadata, List<GraphDiagnostic> diagnostics)
-        {
-            if (!node.IsPropertyNode || node.PropertyInput == null) return;
-            var row = new HGRow
-            {
-                Kind = HGRowKind.InputPort,
-                InputSlot = node.PropertyInput,
-                OwnerNodeId = node.Id,
-                Path = "/property/input",
-            };
-            node.PropertyInputRow = row;
-            // 寫入關係由 Action 的 PropertySlot 保存；此接收端不另外求值來源子樹。
-        }
+
 
         /// <summary>這一列自己的載體被停用了：掛在它右側的子樹跟著壓暗。</summary>
         private static bool RowCarrierDisabled(HGRow row) => false;
@@ -790,6 +806,15 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
         /// <summary>清單折疊狀態的鍵：節點 Id + 欄位路徑，重建圖之後仍然指到同一個清單。</summary>
         public static string CollapseKey(string nodeId, HGRow row) => nodeId + "#" + row.Path;
+        internal static string NodeCollapseKey(string nodeId) => nodeId + "#@node";
+
+        internal static HGNodeView CollapsedOwner(HGNodeView node)
+        {
+            HGNodeView collapsed = null;
+            for (var current = node; current != null; current = current.NestedParent)
+                if (current.Collapsed) collapsed = current;
+            return collapsed;
+        }
 
         /// <summary>Slot 設定預設收合；一般群組預設展開，清單依項數決定。</summary>
         private static bool DefaultCollapsed(HGRow row)
@@ -1352,7 +1377,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             row.Children.Clear();
             if (row.Items is not HGListItemSource items) return;
 
-            // 元素與其展開出來的子列都要讓開左側的序號欄，父子左緣才對得齊。
+            // 元素與其展開出來的子列都要讓開左側的把手欄，父子左緣才對得齊。
             float elementPad = row.LeftPad + ListGutter;
 
             for (int i = 0; i < items.Count; i++)
@@ -1367,7 +1392,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 }
                 else if (HGReflect.IsSlotType(item.GetType()))
                 {
-                    // 序號已經有自己的欄位，標籤只留內容。
+                    // 排序把手另有控制欄，標籤只留內容。
                     child = SlotRow((GraphSlotBase)item, SlotShortName((GraphSlotBase)item), depth);
                     // 公式元素不畫標籤，常數框吃滿整列：接了什麼順著線看子節點 Header，每列寬度也不隨接線跳動。
                     // 動作元素的標籤就是內容本身（見 DrawInputPortRow 的 labelIsContent），保留。
@@ -1462,7 +1487,6 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 Depth = depth,
                 InputSlot = slot,
                 IsActionSlot = isAction,
-                IsProducedValue = propertySlot != null,
                 ResultType = isAction ? null
                     : propertySlot != null ? HGReflect.ResultType(propertySlot.FamilyType)
                     : HGReflect.ResultType(slot.GetType()),
@@ -1624,7 +1648,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
         public static void MeasureNode(HGNodeView node)
         {
-            node.Width = WidthOf(node);
+            node.Width = Mathf.Max(WidthOf(node), node.NestedMinWidth);
             // 節點上不畫型別說明（它是型別常數，重複出現只是噪音），改由畫布左上角的說明面板顯示選取節點的 Desc。
             // 註解則是「這一顆節點」的資訊，任何節點（含Token／資產葉節點）都能加。
             node.TipsHeight = !node.NoteOpen
@@ -1640,18 +1664,22 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 float leafY = HeaderHeight;
                 if (node.TipsHeight > 0f) leafY += node.TipsHeight + 12f;
                 node.ContentHeight = leafY;
-                node.Height = leafY + NodeBottomPad;
+                node.Height = node.Collapsed ? HeaderHeight : leafY + NodeBottomPad;
+                if (node.Collapsed) { node.ContentHeight = HeaderHeight; node.TipsHeight = 0f; }
                 return;
             }
             // 資產、Token 與 Property 的本體第一列是「選哪一個」的下拉。
-            // Property 另有一列寫入端點，定義選擇與寫入分開。
-            float refRows = node.IsPropertyNode
-                ? RowHeight * 2f
-                : node.IsAssetNode || node.IsTokenNode || node.Obj is IGraphNodeOwner ? RowHeight : 0f;
+            float refRows = node.IsPropertyNode || node.IsAssetNode || node.IsTokenNode || node.Obj is IGraphNodeOwner
+                ? RowHeight : 0f;
             float y = MeasureRows(node.Rows, HeaderHeight + refRows, node.Width);
             if (node.TipsHeight > 0f) y += node.TipsHeight + 10f;
             node.ContentHeight = Mathf.Max(y, HeaderHeight + 8f);
             node.Height = node.ContentHeight + NodeBottomPad;
+            if (node.Collapsed)
+            {
+                node.Height = node.ContentHeight = HeaderHeight;
+                node.TipsHeight = 0f;
+            }
         }
 
         private static void ApplyViewState(HGModel model, HGGraphView view, string noteOpenId,
@@ -1699,7 +1727,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         break;
                     case HGRowKind.List:
                         r.Height = r.HeaderHidden ? 0f : RowHeight;
-                        y += r.Height;
+                        if (!r.NodeList || r.Collapsed || r.LabelAbove) y += r.Height;
                         if (r.Collapsed)
                         {
                             // 折疊的子列不佔高度，但接點要收斂到標題列中心：連線因此看起來是「插進這個清單」。
@@ -1708,8 +1736,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                             break;
                         }
                         y = MeasureRows(r.Children, y, nodeWidth);
-                        r.AddRowY = y;                // 新增項目列
-                        y += RowHeight;
+                        r.AddRowY = y;                // 尾端插入位置
+                        if (r.CanAddItem) y += ListAddRowHeight;
+                        else if (r.NodeList && r.Children.Count == 0) y += RowHeight;
                         break;
                     case HGRowKind.Foldout:
                         float headerHeight = r.HeaderHidden ? 0f : RowHeight;
@@ -1725,9 +1754,26 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         r.Height = y - r.LocalY;
                         break;
                     default:
+                        if (r.NestedNode != null)
+                        {
+                            r.SocketHeaderHeight = r.LabelAbove ? RowHeight : 0f;
+                            y += r.SocketHeaderHeight;
+                            r.SocketContentY = y;
+                            y += r.NestedNode.Height + NestedPadding * 2f;
+                            if (r.SlotSettingsRow != null) y = MeasureRows(r.Children, y, nodeWidth);
+                            r.Height = y - r.LocalY;
+                            break;
+                        }
                         r.Height = DescriptorHeight(r, nodeWidth);
+                        r.SocketHeaderHeight = r.Height;
                         y += r.Height;
                         if (r.SlotSettingsRow != null) y = MeasureRows(r.Children, y, nodeWidth);
+                        r.SocketContentY = y;
+                        if (r.NodeSocket)
+                        {
+                            if (r.NestedNode != null) y += r.NestedNode.Height + NestedPadding * 2f;
+                            r.Height = y - r.LocalY;
+                        }
                         break;
                 }
             }
@@ -1769,11 +1815,25 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             return new Rect(rect.x + left, rect.y + 1f, Mathf.Max(8f, rect.width - left - right), rect.height - 2f);
         }
 
+        internal const float ParameterRightInset = PortDiameter + 10f;
+
+        internal static float ParameterColumnLeft(HGRow row, float rowWidth)
+        {
+            if (row.NodeSocket && !row.IsItem)
+                return NestedContentInset(row);
+            if (row.IsItem && row.ItemOwnerRow?.NodeList == true) return NestedContentInset(row);
+            var (units, ratio) = row.Descriptor != null
+                ? (row.LabelWidthUnits, row.LabelWidthRatio) : HGReflect.LabelWidth(row.Field);
+            if (row.IsItem || units > 0 || ratio > 0f) return LabelWidthOf(rowWidth, units, ratio);
+            // 普通參數與 Slot 共用預設內容欄；群組縮排只影響 Label，不推移值欄。
+            return NestedPadding + NestedLabelWidth(row);
+        }
+
         internal static Rect ValueFieldRect(Rect rect, HGRow row)
         {
-            float inset = 20f + (row.IsItem ? ListDeleteWidth : 0f);
-            float left = row.HideLabel ? 4f + row.LeftPad + row.Depth * IndentWidth
-                : LabelWidthOf(rect.width, row.LabelWidthUnits, row.LabelWidthRatio);
+            float inset = ParameterRightInset + (row.IsItem ? ListDeleteWidth : 0f);
+            float left = row.IsItem && row.ItemOwnerRow?.NodeList == true ? ParameterColumnLeft(row, rect.width)
+                : row.HideLabel ? 4f + row.LeftPad + row.Depth * IndentWidth : ParameterColumnLeft(row, rect.width);
             return new Rect(rect.x + left, rect.y + 1f, Mathf.Max(20f, rect.width - left - inset), rect.height - 3f);
         }
 
@@ -1835,17 +1895,18 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             y = SnapUpToGrid(y);
 
             node.Pos = new Vector2(x, y);
-            float childX = SnapUpToGrid(x + node.Width + ColumnGap);
+            float childX = SnapUpToGrid(x + NestedVisualWidth(node) + ColumnGap);
             float childY = y;
             foreach (var c in children[node])
             {
-                float nextY = childY;
-                if (c.IsPropertyNode && c.ParentRow?.InputSlot is PropertySlotBase)
+                if (ReferenceEquals(c.NestedParent, node))
                 {
-                    float inputOffset = c.PropertyInputPortPosition.y - c.Pos.y;
-                    float writerOffset = c.ParentRow.LocalY + c.ParentRow.Height * 0.5f;
-                    nextY = Mathf.Max(childY, node.Pos.y + writerOffset - inputOffset);
+                    float nestedY = node.Pos.y + c.NestedSlot.SocketContentY + NestedPadding;
+                    childY = Mathf.Max(childY, Place(c, node.Pos.x + NestedContentInset(c.NestedSlot), nestedY, children) + NodeGap);
+                    continue;
                 }
+                float nextY = childY;
+
                 childY = Place(c, childX, nextY, children) + NodeGap;
             }
 

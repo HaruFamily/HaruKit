@@ -48,43 +48,68 @@ public class HGPortTests
         public override Type FamilyType => typeof(TestFormulaSlot);
     }
 
-    [Test]
-    public void PropertyWriterConnectsToLowerInputAndRebuildsWithoutUsingHeader()
-    {
-        var property = new GraphNode();
-        property.SetProperty(new GraphProperty("Value", new TestFormulaSlot()));
-        var writer = new WriteTargetSlot();
-        writer.SetNode(property);
-        var source = new HGPropertyWriteSource(writer, new GraphNode());
-        var graph = new HGGraphView();
-        var build = new HGPortBuildContext(graph, 4);
-        var writerKey = new HGPortKey("action", "/output", HGPortRole.Output);
-        var inputKey = new HGPortKey("property", "/property/input", HGPortRole.Input);
-        var headerKey = new HGPortKey("property", "", HGPortRole.Output);
-        Assert.That(build.AddOutput(writerKey, source, new HGDelegatePortPolicy(() => true), Presentation(new object())), Is.True);
-        Assert.That(build.AddInput(inputKey, property.PropertyInput,
-            new HGDelegatePortPolicy(() => true, checkAcceptance: candidate =>
-                candidate is HGPropertyWriteSource write ? write.CheckTarget(property) : HGPortConnectionResult.IncompatibleType),
-            Presentation(new object())), Is.True);
-        Assert.That(build.AddOutput(headerKey, new HGDelegatePortSource(property, null, _ => true),
-            new HGDelegatePortPolicy(() => true), Presentation(new object()), true), Is.True);
 
-        var output = graph.PortsByKey[writerKey];
-        var input = graph.PortsByKey[inputKey];
-        Assert.That(HGPortConnection.Check(output, input, 4), Is.EqualTo(HGPortConnectionResult.Allowed));
-        Assert.That(HGPortConnection.Check(output, graph.PortsByKey[headerKey], 4), Is.EqualTo(HGPortConnectionResult.SameRole));
-        var link = new HGLink
+
+    [Test]
+    public void PropertyWriteTargetsHaveNoCanvasPortsOrLinks()
+    {
+        var document = new PropertyDocument();
+        var property = new GraphProperty("Value", new TestFormulaSlot());
+        document.Properties.Add(property);
+        var target = new GraphNode(); target.SetProperty(property); target.EnsureId();
+        var writer = new PropertyWriterBody(); writer.Target.SetNode(target);
+        var carrier = new GraphNode(writer); carrier.EnsureId(); document.Orphans.Add(carrier);
+        var model = HGModel.CreateDetachedView(null, document, null);
+        var view = HGGraph.Build(model, Array.Empty<object>(), document.Orphans, "root", "Root", nestSlots: true);
+        Assert.That(view.ByCarrier.ContainsKey(target), Is.False);
+        Assert.That(view.Links.Exists(link => link.ParentRow?.InputSlot is PropertySlotBase), Is.False);
+        Assert.That(writer.Target.Node, Is.SameAs(target));
+        Assert.That(target.Property, Is.SameAs(property));
+        Assert.That(typeof(GraphNode).GetProperty("PropertyInput"), Is.Null);
+        var registry = new HGPortRegistry(1);
+        Assert.That(registry.AddInput(new HGPortKey("writer", "/target", HGPortRole.Input), writer.Target,
+            new HGDelegatePortPolicy(() => true), Presentation(new object())), Is.False);
+    }
+
+    [Test]
+    public void NodeModeSwitchPreservesReferencesAndRejectsSharedComposition()
+    {
+        var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
         {
-            ParentRow = new HGRow { OwnerNodeId = "action", Path = "/output", InputSlot = writer },
-            OutputOwner = new HGNodeView { Id = "property", Carrier = property },
-        };
-        Assert.That(HGLinkPortResolver.Resolve(link, graph.PortsByKey, graph.PrimaryOutputs, 4, graph.PrimaryInputs),
-            Is.EqualTo(HGLinkPortResolution.Resolved));
-        Assert.That(link.InputPort, Is.SameAs(input));
-        Assert.That(link.OutputPort, Is.SameAs(output));
-        property.SetProperty(null);
-        Assert.That(input.Presentation.Visible, Is.True);
-        Assert.That(HGPortConnection.Check(output, input, 4), Is.EqualTo(HGPortConnectionResult.MissingBinding));
+            var document = new PropertyDocument();
+            var property = new GraphNode(); property.SetProperty(new GraphProperty("Value", new TestFormulaSlot()));
+            property.Mode = GraphNodeMode.Connection;
+            string id = property.EnsureId(); document.Properties.Add(property.Property);
+            var first = new PropertyReaderBody(); first.Source.SetNode(property);
+            var second = new PropertyReaderBody(); second.Source.SetNode(property);
+            var firstNode = new GraphNode(first); string firstId = firstNode.EnsureId();
+            var secondNode = new GraphNode(second); string secondId = secondNode.EnsureId();
+            document.Orphans.Add(firstNode); document.Orphans.Add(secondNode); owner.Document = document;
+            Assert.That(window.BindDocument(owner, PropertyBinding(), PropertyContext()), Is.True);
+            var commands = window.GetDocumentCommands(); commands.Query();
+            var node = window.NodeOfId(id);
+            InvokeRemoval(window, "SetNodeMode", node, GraphNodeMode.Composition);
+            Assert.That(node.Carrier.Mode, Is.EqualTo(GraphNodeMode.Connection));
+            var currentFirst = (PropertyReaderBody)window.NodeOfId(firstId).Obj;
+            var currentSecond = (PropertyReaderBody)window.NodeOfId(secondId).Obj;
+            Assert.That(currentFirst.Source.Node, Is.SameAs(currentSecond.Source.Node));
+            currentSecond.Source.SetNode(null);
+            InvokeRemoval(window, "SetNodeMode", node, GraphNodeMode.Composition);
+            commands.Query();
+            node = window.NodeOfId(id);
+            Assert.That(node.Carrier.Mode, Is.EqualTo(GraphNodeMode.Composition));
+            Assert.That(node.NestedParent, Is.Not.Null);
+            Assert.That(currentFirst.Source.Node, Is.SameAs(node.Carrier));
+            Assert.That(window.NodeSourceOptions(node).Exists(option => option.Group == "Node 模式"), Is.False);
+            var view = (HGGraphView)typeof(HaruGraphWindow).GetField("graph", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(window);
+            InvokeRemoval(window, "TryConnectPorts", view.PrimaryInputs[currentFirst.Source], view.PrimaryOutputs[node.Carrier]);
+            commands.Query();
+            Assert.That(window.NodeOfId(id).NestedParent, Is.Null);
+            Assert.That(currentFirst.Source.Node, Is.SameAs(window.NodeOfId(id).Carrier));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(window); UnityEngine.Object.DestroyImmediate(owner); }
     }
 
     [Test]
@@ -151,8 +176,6 @@ public class HGPortTests
         var second = new GraphNode();
         first.SetProperty(original);
         second.SetProperty(original);
-        var input = new GraphNode();
-        first.SetPropertyInput(input);
         var library = new List<GraphProperty>();
 
         HaruGraphWindow.CopyPropertyDefinitions(new[] { first, second }, library);
@@ -162,7 +185,6 @@ public class HGPortTests
         Assert.That(first.Property, Is.Not.SameAs(original));
         Assert.That(first.Property.Id, Is.Not.EqualTo(original.Id));
         Assert.That(first.Property.RetainValue, Is.True);
-        Assert.That(first.PropertyInput.Node, Is.SameAs(input));
         Assert.That(original.Name, Is.EqualTo("Shared"));
     }
 
@@ -234,6 +256,7 @@ public class HGPortTests
             // Property 節點刻意不放候選池：它只被寫入欄位牽著，斷線後若沒有回收就會從整張圖失聯。
             var writer = new PropertyWriterBody();
             writer.Target.SetNode(propertyNode);
+            document.Orphans.Add(propertyNode); // 明確保留可操作的讀取引用，不由寫入選單建立畫布 Node。
             var writerNode = new GraphNode(writer);
             string writerId = writerNode.EnsureId();
             document.Orphans.Add(writerNode);
@@ -268,8 +291,7 @@ public class HGPortTests
         node.SetProperty(null);
         Assert.That(node.Kind, Is.EqualTo(NodeKind.Property));
         Assert.That(node.Id, Is.EqualTo(id));
-        Assert.That(new HGPropertyWriteSource(new WriteTargetSlot(), new GraphNode()).CheckTarget(node),
-            Is.EqualTo(HGPortConnectionResult.MissingBinding));
+        Assert.That(new WriteTargetSlot().AcceptsProperty(node.Property), Is.False);
     }
 
     [Test]
@@ -1380,7 +1402,10 @@ MonoBehaviour:
         Assert.That(view.Nodes[0].Rows[0].ValueDrawer, Is.SameAs(drawer));
         Assert.That(view.Nodes[0].Rows[0].Height, Is.EqualTo(38f));
         Assert.That(drawer.MeasuredTarget.Count, Is.EqualTo(2));
-        Assert.That(drawer.MeasuredWidth, Is.EqualTo(180f));
+        var drawnField = HGGraph.ValueFieldRect(new Rect(0, 0, 300, 38), view.Nodes[0].Rows[0]);
+        Assert.That(drawnField.xMin, Is.EqualTo(124f));
+        Assert.That(drawer.MeasuredWidth, Is.EqualTo(drawnField.width));
+        Assert.That(drawer.MeasuredWidth, Is.EqualTo(152f));
     }
 
     [Test]
@@ -1393,7 +1418,7 @@ MonoBehaviour:
         var view = HGGraph.Build(new HGModel(), new object[] { new TestValueOwner() }, null, "test", "Test", metadata: metadata);
         var row = view.Nodes[0].Rows[0];
         Assert.That(drawer.MeasuredWidth, Is.EqualTo(HGGraph.ValueFieldRect(new Rect(0, 0, 300, row.Height), row).width));
-        Assert.That(drawer.MeasuredWidth, Is.EqualTo(276f));
+        Assert.That(drawer.MeasuredWidth, Is.EqualTo(272f));
         metadata = new TestMetadataProvider(new HGNodeDescriptor(typeof(TestValueOwner), new[] { field }), new ThrowingDrawer());
         view = HGGraph.Build(new HGModel(), new object[] { new TestValueOwner() }, null, "test", "Test", metadata: metadata);
         Assert.That(view.Diagnostics.Exists(issue => issue.Code == "graphkit.metadata.drawer-failed"), Is.True);
@@ -2085,22 +2110,7 @@ MonoBehaviour:
         Assert.That(HGListAppend.WouldCreateCycle(null, owner), Is.False);
     }
 
-    [Test]
-    public void PropertySlotListAppendIsAWriteOutput()
-    {
-        var registry = new HGPortRegistry(1);
-        var owner = new GraphNode();
-        owner.EnsureId();
-        var items = new HGListItemSource(new List<PropertyWriteSlot>(), typeof(PropertyWriteSlot));
-        var binding = new HGListAppendWriteBinding(new PropertyWriteSlot(), owner, items);
-        var key = new HGPortKey("owner", "/writes", HGPortRole.Input);
 
-        Assert.That(registry.AddListAppend(key, binding, new HGDelegatePortPolicy(() => true), Presentation(new object())), Is.True);
-        Assert.That(registry.TryGet(new HGPortKey("owner", "/writes", HGPortRole.Output), out var port), Is.True);
-        Assert.That(port.IsOutput, Is.True);
-        Assert.That(port.Source, Is.InstanceOf<HGPropertyWriteSource>());
-        Assert.That(items.Count, Is.EqualTo(0));
-    }
 
     [Test]
     public void DescriptorDrawerMeasuresWithItsConfiguredLabelWidth()
@@ -2109,9 +2119,12 @@ MonoBehaviour:
         var field = HGFieldDescriptor.Create<TestValueOwner, int>("count", target => target.Count,
             (target, value) => target.Count = value, labelWidthUnits: 4);
         var metadata = new TestMetadataProvider(new HGNodeDescriptor(typeof(TestValueOwner), new[] { field }), drawer);
-        HGGraph.Build(new HGModel(), new object[] { new TestValueOwner() }, null, "test", "Test", metadata: metadata);
+        var view = HGGraph.Build(new HGModel(), new object[] { new TestValueOwner() }, null, "test", "Test", metadata: metadata);
 
-        Assert.That(drawer.MeasuredWidth, Is.EqualTo(200f));
+        var drawnField = HGGraph.ValueFieldRect(new Rect(0, 0, 300, 38), view.Nodes[0].Rows[0]);
+        Assert.That(drawnField.xMin, Is.EqualTo(80f));
+        Assert.That(drawer.MeasuredWidth, Is.EqualTo(drawnField.width));
+        Assert.That(drawer.MeasuredWidth, Is.EqualTo(196f));
     }
 
     [Test]

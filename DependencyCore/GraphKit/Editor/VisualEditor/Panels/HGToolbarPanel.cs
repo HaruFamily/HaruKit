@@ -1,4 +1,4 @@
-namespace HaruFamily.DependencyCore.GraphKit.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using UnityEditor;

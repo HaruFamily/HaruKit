@@ -1,6 +1,7 @@
 namespace HaruFamily.Framework.LogicGraph.Editor.Tests
 {
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Cysharp.Threading.Tasks;
@@ -24,6 +25,113 @@ public sealed class LogicGraphUsageTests
     }
     private sealed class Pack { }
 
+    [Serializable]
+    private sealed class FlowAction : ActionBase<Pack>, IGraphFlowContainer
+    {
+        public GraphFlowKind Kind;
+        public IntSlot Input = new();
+        public List<ActionSlot<Pack>> Body = new();
+        public List<ActionSlot<Pack>> Otherwise = new();
+
+        public GraphFlowDescription DescribeFlow()
+        {
+            if (Kind == GraphFlowKind.FirstMatch) return new(Kind, new[]
+            {
+                new GraphFlowSection("case", "條件", GraphFlowSectionRole.Case, Body, Input),
+                new GraphFlowSection("default", "預設", GraphFlowSectionRole.Default, Otherwise),
+            });
+            if (Kind == GraphFlowKind.Conditional) return new(Kind, new[]
+            {
+                new GraphFlowSection("yes", "成立", GraphFlowSectionRole.WhenTrue, Body),
+                new GraphFlowSection("no", "不成立", GraphFlowSectionRole.WhenFalse, Otherwise),
+            }, new[] { new GraphFlowInput("condition", "條件", Input) });
+            if (Kind == GraphFlowKind.Loop) return new(Kind,
+                new[] { new GraphFlowSection("body", "動作", GraphFlowSectionRole.Body, Body) },
+                new[] { new GraphFlowInput("source", "來源", Input) });
+            return GraphFlowDescription.Sequence(Body);
+        }
+
+        protected override UniTask OnExecute(Pack pack, TokenTable<Pack> tokens)
+            => throw new InvalidOperationException("Flow inspection must never execute actions.");
+    }
+
+    [Test]
+    public void FlowProjectionKeepsBranchOrderAndSharedUsesWithoutChangingSession()
+    {
+        var owner = ScriptableObject.CreateInstance<PlainOwner>();
+        try
+        {
+            var shared = new GraphNode(new ReadValue());
+            var loop = new FlowAction { Kind = GraphFlowKind.Loop };
+            var firstUse = new ActionSlot<Pack>(); firstUse.SetNode(shared);
+            firstUse.Label = "第一步";
+            loop.Body.Add(firstUse);
+            loop.Body.Add(new ActionSlot<Pack>(new ReadValue()) { Label = "第二步" });
+            var conditional = new FlowAction { Kind = GraphFlowKind.Conditional };
+            conditional.Body.Add(new ActionSlot<Pack>(loop));
+            var secondUse = new ActionSlot<Pack>(); secondUse.SetNode(shared);
+            conditional.Otherwise.Add(secondUse);
+            owner.Second.ActionGroups.Add(new ActionTimingGroup<Timing, Pack>
+            { Timing = Timing.Start, Actions = new()
+                { new ActionSlot<Pack>(conditional), new ActionSlot<Pack>(new FlowAction { Kind = GraphFlowKind.FirstMatch }) } });
+            Assert.That(HGDocumentSession<LogicGraph<Timing, Pack>>.TryOpen(owner, SecondBinding(), out var session), Is.True);
+            string ownerBefore = JsonUtility.ToJson(owner.Second);
+            string draftBefore = JsonUtility.ToJson(session.Document);
+            int generation = session.Generation;
+            var snapshot = session.CaptureFlow();
+            Assert.That(snapshot.Complete, Is.True);
+            Assert.That(snapshot.Roots[0].FlowKind, Is.EqualTo(GraphFlowKind.Sequence));
+            var branch = snapshot.Roots[0].Sections[0].Steps[0];
+            Assert.That(branch.FlowKind, Is.EqualTo(GraphFlowKind.Conditional));
+            Assert.That(branch.Sections.Select(section => section.Role), Is.EqualTo(new[]
+                { GraphFlowSectionRole.WhenTrue, GraphFlowSectionRole.WhenFalse }));
+            var repeated = branch.Sections[0].Steps[0];
+            Assert.That(repeated.FlowKind, Is.EqualTo(GraphFlowKind.Loop));
+            Assert.That(repeated.Sections[0].Steps.Select(step => step.Label), Is.EqualTo(new[] { "第一步", "第二步" }));
+            var yes = repeated.Sections[0].Steps[0];
+            var no = branch.Sections[1].Steps[0];
+            Assert.That(yes.Path, Is.Not.EqualTo(no.Path));
+            Assert.That(yes.ReferenceCount, Is.EqualTo(2));
+            Assert.That(no.IsShared, Is.True);
+            Assert.That(yes.Unknown, Is.True, "Undeclared actions remain opaque, not inferred from fields.");
+            var selection = snapshot.Roots[0].Sections[0].Steps[1];
+            Assert.That(selection.FlowKind, Is.EqualTo(GraphFlowKind.FirstMatch));
+            Assert.That(selection.Sections.Select(section => section.Role), Is.EqualTo(new[]
+                { GraphFlowSectionRole.Case, GraphFlowSectionRole.Default }));
+            Assert.That(selection.Sections[0].Condition.SlotType, Is.EqualTo(typeof(IntSlot).AssemblyQualifiedName));
+            Assert.That(JsonUtility.ToJson(owner.Second), Is.EqualTo(ownerBefore));
+            Assert.That(JsonUtility.ToJson(session.Document), Is.EqualTo(draftBefore));
+            Assert.That(session.Generation, Is.EqualTo(generation));
+            Assert.That(session.IsDirty || session.CanUndo || session.CanRedo, Is.False);
+            Assert.That(session.CaptureFlow().Roots[0].Sections[0].Steps[0].Path, Is.EqualTo(branch.Path));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void FlowProjectionBoundsCyclesAndKeepsSnapshotsDetached()
+    {
+        var graph = new LogicGraph<Timing, Pack>();
+        var body = new FlowAction { Kind = GraphFlowKind.Sequence };
+        var node = new GraphNode(body);
+        var recursive = new ActionSlot<Pack>(); recursive.SetNode(node);
+        body.Body.Add(recursive);
+        var rootSlot = new ActionSlot<Pack>(); rootSlot.SetNode(node);
+        graph.ActionGroups.Add(new ActionTimingGroup<Timing, Pack> { Timing = Timing.Start, Actions = new() { rootSlot } });
+        var snapshot = HGFlowSnapshot.Capture(graph);
+        var projected = snapshot.Roots[0].Sections[0].Steps[0];
+        Assert.That(projected.Sections[0].Steps[0].Cycle, Is.True);
+        Assert.That(snapshot.Issues.Any(issue => issue.Code == "graphkit.flow.cycle"), Is.True);
+        Assert.That(snapshot.Complete, Is.False);
+        var bounded = HGFlowSnapshot.Capture(graph, maxSteps: 1);
+        Assert.That(bounded.Issues.Any(issue => issue.Code == "graphkit.flow.limit"), Is.True);
+        rootSlot.Disabled = true;
+        body.Body.Clear();
+        Assert.That(projected.Disabled, Is.False);
+        Assert.That(projected.Sections[0].Steps.Count, Is.EqualTo(1), "Snapshot contains copied data, not the live list.");
+        Assert.That(HGFlowSnapshot.Capture(graph).Roots[0].Sections[0].Steps[0].Disabled, Is.True);
+    }
+
     private sealed class DisplayOwner : ScriptableObject
     {
         public LogicGraph<DisplayTiming, Pack> Graph = new();
@@ -38,6 +146,7 @@ public sealed class LogicGraphUsageTests
     [Serializable]
     private sealed class ReadValue : ActionBase<Pack>
     {
+        public ReadValue() { }
         public IntSlot Input = new();
         protected override async UniTask OnExecute(Pack pack, TokenTable<Pack> tokens)
         {
@@ -77,6 +186,192 @@ public sealed class LogicGraphUsageTests
     private static HGDocumentBinding<LogicGraph<Timing, Pack>> SecondBinding()
         => new HGDocumentBinding<LogicGraph<Timing, Pack>>("test.second",
             owner => ((PlainOwner)owner).Second, (owner, graph) => ((PlainOwner)owner).Second = graph);
+
+    [Serializable]
+    private sealed class FlowConstant : IntFormula
+    {
+        public int Value;
+        protected override UniTask<int> OnEvaluate(Pack pack, TokenTable<Pack> tokens) => UniTask.FromResult(Value);
+    }
+
+    [Serializable]
+    private abstract class WrapAction : ActionBase<Pack>, IGraphFlowContainer
+    {
+        public IntSlot Input = new();
+        public List<ActionSlot<Pack>> Body = new();
+        public List<ActionSlot<Pack>> Otherwise = new();
+        protected abstract GraphFlowKind Kind { get; }
+        public GraphFlowDescription DescribeFlow() => new(Kind, Kind == GraphFlowKind.Conditional ? new[]
+        {
+            new GraphFlowSection("body", "成立", GraphFlowSectionRole.WhenTrue, Body),
+            new GraphFlowSection("otherwise", "不成立", GraphFlowSectionRole.WhenFalse, Otherwise),
+        } : new[] { new GraphFlowSection("body", "動作", GraphFlowSectionRole.Body, Body) },
+            new[] { new GraphFlowInput("input", "條件或來源", Input) });
+        protected override UniTask OnExecute(Pack pack, TokenTable<Pack> tokens)
+            => throw new InvalidOperationException("Structural authoring must never execute a container.");
+    }
+    [Serializable] private sealed class ConditionalFlowWrapper : WrapAction
+    { public ConditionalFlowWrapper() { } protected override GraphFlowKind Kind => GraphFlowKind.Conditional; }
+    [Serializable] private sealed class LoopFlowWrapper : WrapAction
+    { public LoopFlowWrapper() { } protected override GraphFlowKind Kind => GraphFlowKind.Loop; }
+    [Serializable] private sealed class NonemptyFlowWrapper : WrapAction
+    {
+        public NonemptyFlowWrapper() => Body.Add(new ActionSlot<Pack>(new ReadValue()));
+        protected override GraphFlowKind Kind => GraphFlowKind.Loop;
+    }
+
+    [Test]
+    public void FlowTransferPreservesSlotsSharingAndRejectsDescendantOrStaleTargets()
+    {
+        var owner = ScriptableObject.CreateInstance<PlainOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            var shared = new GraphNode(new ReadValue()); shared.EnsureId();
+            var first = new ActionSlot<Pack> { Label = "first" }; first.SetNode(shared); first.EnsureId();
+            var second = new ActionSlot<Pack> { Label = "second", Disabled = true }; second.SetNode(shared); second.EnsureId();
+            owner.Second.ActionGroups.Add(new ActionTimingGroup<Timing, Pack> { Timing = Timing.Start, Actions = new()
+                { first, second, new ActionSlot<Pack>(new ConditionalFlowWrapper()) } });
+            string original = JsonUtility.ToJson(owner.Second);
+            Assert.That(window.BindDocument(owner, SecondBinding(), LogicGraphEditor.Context), Is.True);
+            var commands = window.GetDocumentCommands();
+            int generation = commands.Query().Generation;
+            string beforeHover = JsonUtility.ToJson(window.CaptureDocumentSnapshot());
+            Assert.That(commands.CanTransferFlowSteps(generation, "root/0/body", 0, 2, "root/0/body/2/body", 0), Is.True);
+            Assert.That(JsonUtility.ToJson(window.CaptureDocumentSnapshot()), Is.EqualTo(beforeHover), "Hover validation must not write.");
+            Assert.That(commands.TransferFlowSteps(generation, "root/0/body", 0, 2, "root/0/body/2/body", 0), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(JsonUtility.ToJson(owner.Second), Is.EqualTo(original));
+            Assert.That(commands.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(window.CaptureDocumentSnapshot().Records.Count(record => record.Kind == "action-slot"), Is.EqualTo(3));
+            Assert.That(commands.Redo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.TransferFlowSteps(generation, "root/0/body", 0, 1, "root/0/body", 0), Is.EqualTo(HGSessionCommandResult.StaleGeneration));
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            var wrapper = (ConditionalFlowWrapper)owner.Second.ActionGroups[0].Actions.Single().Node.BodyObject;
+            Assert.That(wrapper.Body.Select(slot => slot.Id), Is.EqualTo(new[] { first.Id, second.Id }));
+            Assert.That(wrapper.Body[1].Disabled, Is.True);
+            Assert.That(wrapper.Body[0].Node, Is.SameAs(wrapper.Body[1].Node));
+            Assert.That(owner.Second.Orphans.Any(node => node.Id == shared.Id), Is.False);
+            generation = commands.Query().Generation;
+            string beforeReject = JsonUtility.ToJson(window.CaptureDocumentSnapshot());
+            Assert.That(commands.CanTransferFlowSteps(generation, "root/0/body", 0, 1, "root/0/body/0/body", 0), Is.False);
+            Assert.That(commands.TransferFlowSteps(generation, "root/0/body", 0, 1, "root/0/body/0/body", 0), Is.EqualTo(HGSessionCommandResult.Rejected));
+            Assert.That(JsonUtility.ToJson(window.CaptureDocumentSnapshot()), Is.EqualTo(beforeReject));
+            Assert.That(commands.TransferFlowSteps(generation, "root/0/body/0/body", 0, 1, "root/0/body", 1), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(owner.Second.ActionGroups[0].Actions.Count, Is.EqualTo(1));
+            Assert.That(((ConditionalFlowWrapper)owner.Second.ActionGroups[0].Actions[0].Node.BodyObject).Body.Count, Is.EqualTo(2));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(window); UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void FlowWrappingIsAtomicAndKeepsOriginalStepIdentityThroughNestedContainers()
+    {
+        var owner = ScriptableObject.CreateInstance<PlainOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            var first = new ActionSlot<Pack>(new ReadValue()); first.EnsureId();
+            var second = new ActionSlot<Pack>(new ReadValue()) { Label = "keep", Disabled = true }; second.EnsureId();
+            owner.Second.ActionGroups.Add(new ActionTimingGroup<Timing, Pack> { Timing = Timing.Start, Actions = new() { first, second } });
+            Assert.That(window.BindDocument(owner, SecondBinding(), LogicGraphEditor.Context), Is.True);
+            var commands = window.GetDocumentCommands();
+            int generation = commands.Query().Generation;
+            string beforeReject = JsonUtility.ToJson(window.CaptureDocumentSnapshot());
+            Assert.That(commands.WrapFlowSteps(generation, "root/0/body", 0, 2, typeof(NonemptyFlowWrapper), "body"), Is.EqualTo(HGSessionCommandResult.Rejected));
+            Assert.That(commands.WrapFlowSteps(generation, "root/0/body", 0, 2, typeof(ConditionalFlowWrapper), "missing"), Is.EqualTo(HGSessionCommandResult.Rejected));
+            Assert.That(JsonUtility.ToJson(window.CaptureDocumentSnapshot()), Is.EqualTo(beforeReject));
+            Assert.That(commands.WrapFlowSteps(generation, "root/0/body", 0, 2, typeof(ConditionalFlowWrapper), "body"), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(window.CaptureDocumentSnapshot().Records.Count(record => record.Kind == "action-slot"), Is.EqualTo(2), "One Undo must remove the wrapper and restore all original positions.");
+            Assert.That(commands.Redo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.WrapFlowSteps(commands.Query().Generation, "root/0/body/0/body", 1, 1, typeof(LoopFlowWrapper), "body"), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            var condition = (ConditionalFlowWrapper)owner.Second.ActionGroups[0].Actions.Single().Node.BodyObject;
+            Assert.That(condition.Body[0].Id, Is.EqualTo(first.Id));
+            var loop = (LoopFlowWrapper)condition.Body[1].Node.BodyObject;
+            Assert.That(loop.Body.Single().Id, Is.EqualTo(second.Id));
+            Assert.That(loop.Body[0].Label, Is.EqualTo("keep"));
+            Assert.That(loop.Body[0].Disabled, Is.True);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(window); UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void FlowEditingKeepsSingleUndoSharedCarriersAndSavedRoundTrip()
+    {
+        var owner = ScriptableObject.CreateInstance<PlainOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            var shared = new GraphNode(new ReadValue()); shared.EnsureId();
+            var first = new ActionSlot<Pack>(); first.SetNode(shared);
+            var second = new ActionSlot<Pack>(); second.SetNode(shared);
+            owner.Second.ActionGroups.Add(new ActionTimingGroup<Timing, Pack> { Timing = Timing.Start, Actions = new() { first, second } });
+            string before = JsonUtility.ToJson(owner.Second);
+            Assert.That(window.BindDocument(owner, SecondBinding(), LogicGraphEditor.Context), Is.True);
+            var commands = window.GetDocumentCommands();
+            int generation = commands.Query().Generation;
+            Assert.That(commands.InsertFlowStep(generation, "root/0/body", 1, typeof(ReadValue)), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(window.CaptureDocumentSnapshot().Records.Count(record => record.Kind == "action-slot"), Is.EqualTo(3));
+            Assert.That(commands.RemoveFlowStep(generation, "root/0/body/0"), Is.EqualTo(HGSessionCommandResult.StaleGeneration));
+            Assert.That(JsonUtility.ToJson(owner.Second), Is.EqualTo(before));
+            Assert.That(commands.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(window.CaptureDocumentSnapshot().Records.Count(record => record.Kind == "action-slot"), Is.EqualTo(2), "One Undo must undo the complete insertion.");
+            Assert.That(commands.Redo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.RemoveFlowStep(commands.Query().Generation, "root/0/body/0"), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.MoveFlowStep(commands.Query().Generation, "root/0/body/1", -1), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(owner.Second.ActionGroups[0].Actions.Count, Is.EqualTo(2));
+            Assert.That(owner.Second.ActionGroups[0].Actions[0].Node.Id, Is.EqualTo(shared.Id));
+            Assert.That(owner.Second.Orphans.Any(node => node.Id == shared.Id), Is.False, "Removing one use cannot orphan a still-used carrier.");
+            Assert.That(commands.InsertFlowStep(commands.Query().Generation, "root/0/body", 0, typeof(ReadValue)), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Cancel(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(window.CaptureDocumentSnapshot().Records.Count(record => record.Kind == "action-slot"), Is.EqualTo(2));
+            Assert.That(commands.RemoveFlowStep(commands.Query().Generation, "root/0/body/0"), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(owner.Second.Orphans.Any(node => node.Id == shared.Id), Is.True, "Last-use removal preserves the complete source in the candidate pool.");
+        }
+        finally { UnityEngine.Object.DestroyImmediate(window); UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void FlowValueAndSourceEditsRejectStaleOrInvalidWritesAndPersistExplicitly()
+    {
+        var owner = ScriptableObject.CreateInstance<PlainOwner>();
+        var window = ScriptableObject.CreateInstance<HaruGraphWindow>();
+        try
+        {
+            var body = new ReadValue(); body.Input.DefaultObject = 5;
+            var carrier = new GraphNode(body); carrier.EnsureId();
+            var slot = new ActionSlot<Pack>(); slot.SetNode(carrier);
+            owner.Second.ActionGroups.Add(new ActionTimingGroup<Timing, Pack> { Timing = Timing.Start, Actions = new() { slot } });
+            Assert.That(window.BindDocument(owner, SecondBinding(), LogicGraphEditor.Context), Is.True);
+            var commands = window.GetDocumentCommands();
+            var query = commands.Query();
+            string path = query.Ports.First(port => port.Anchor.NodeId == carrier.Id && port.Anchor.FieldPath?.EndsWith("Input", StringComparison.Ordinal) == true).Anchor.FieldPath;
+            Assert.That(commands.SetFlowValue(query.Generation, carrier.Id, path, 7), Is.EqualTo(HGSessionCommandResult.Changed));
+            query = commands.Query();
+            string beforeFailure = JsonUtility.ToJson(window.CaptureDocumentSnapshot());
+            Assert.That(commands.SetFlowValue(query.Generation, carrier.Id, path, "invalid"), Is.EqualTo(HGSessionCommandResult.Rejected));
+            Assert.That(commands.SetFlowSource(query.Generation, carrier.Id, path, null, HGCarrierSource.Body(new ReadValue())), Is.EqualTo(HGSessionCommandResult.Rejected));
+            Assert.That(JsonUtility.ToJson(window.CaptureDocumentSnapshot()), Is.EqualTo(beforeFailure));
+            Assert.That(body.Input.DefaultObject, Is.EqualTo(5));
+            Assert.That(body.Input.Node, Is.Null);
+            Assert.That(commands.SetFlowSource(query.Generation, carrier.Id, path, null,
+                HGCarrierSource.Body(new FlowConstant { Value = 11 })), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.SetFlowValue(commands.Query().Generation, carrier.Id, path, 8), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(commands.Commit(), Is.EqualTo(HGSessionCommandResult.Changed));
+            var saved = (ReadValue)owner.Second.ActionGroups[0].Actions[0].Node.BodyObject;
+            Assert.That(saved.Input.DefaultObject, Is.EqualTo(8));
+            Assert.That(((FlowConstant)saved.Input.Node.BodyObject).Value, Is.EqualTo(11));
+            Assert.That(window.BindDocument(owner, SecondBinding(), LogicGraphEditor.Context), Is.True);
+            Assert.That(commands.SetFlowValue(query.Generation, carrier.Id, path, 99), Is.EqualTo(HGSessionCommandResult.StaleGeneration));
+            Assert.That(window.GetDocumentCommands().Query().Nodes.Any(node => node.Id == carrier.Id), Is.True);
+        }
+        finally { UnityEngine.Object.DestroyImmediate(window); UnityEngine.Object.DestroyImmediate(owner); }
+    }
 
     private class PrivateOwner : ScriptableObject
     {

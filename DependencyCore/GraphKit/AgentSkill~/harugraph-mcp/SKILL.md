@@ -38,3 +38,21 @@ On stale generation, read current status and resolve targets again, rather than 
 Release only your unused drafts/snapshots; remove only temporary assets whose exact ownership is known. Preserve formal results and recovery evidence. Complete an authorized useful work segment without asking at every step.
 
 Report the project and asset/document identities, intended changes, persistence result, structural checks, execution provider/assertions, saved-content reread, cleanup and remaining limitations. Distinguish checks run now from historical evidence. Save a usage report only when requested or needed for handoff, using the consuming project's conventions; do not append session history to this skill. Skill installation does not connect the AI client: configure MCP for Unity separately.
+
+## Flow structure and layout
+
+Prefer flow/flow_candidates followed by flow_insert/flow_remove/flow_transfer/flow_wrap for declared control flow. Page through flow entries; use current section and step paths and exact candidate types. Requery after every mutation, including fresh $ref queries within apply_batch. Transfer destination_index is a pre-removal gap. Set wrapper inputs explicitly. Unknown structures remain boundaries; shared nodes remain shared.
+
+For layout-only work, set protect with layout_only:true and requested protected_node_ids/protected_group_ids before editing. Whole groups include every tab, members and dependencies. Policy is immutable for this draft; Undo/Redo are disabled while active. Do not discard/reopen merely to evade protection. Respect the latest user-defined baseline and original source/window conflict guards.
+
+Query geometry or layout_preview with current scope_id/group_id/tab_index. These background queries do not alter a window or visible tab. Preview returns measured schematic SVG text, not a Unity screenshot; boundaries, custom controls, exact wire routes, crossings and text clipping are not fully represented. Do not create/focus/maximize a window or activate visible tabs for verification. Measure before placing, inspect overlaps and ports, and mark missing visual evidence as pending.
+
+Require layout_diff.content_unchanged for pure layout and protection_passed for protected work before the normal preview/commit flow. Content hashes retain reference sharing and normalize declared validation invalidation; node-change entries have separate truncation/completeness flags. Reopen and reread after save. Never copy sources, add Properties/Tokens or change execution/evaluation semantics to make the picture smaller. See Documentation~/Mcp/AgentWorkflow.md and Maintenance.md for exact limits.
+
+## Per-node composition and connection modes
+
+Read `nodes` or source entries in `endpoints`: `node_mode` is `Composition` or `Connection`, and `read_user_count` counts distinct read Slots (excluding Property write targets and duplicate Union wrappers). New carriers default to Composition. Dragging a Node into a Slot/list selects Composition; dragging a Port wire selects Connection automatically, preserving the same carrier and allowing one-to-many reads. The UI has no mode selection menu. Dragging a nested Node onto empty canvas preserves its references and selects Connection.
+
+MCP `connect` represents Port wiring: it selects Connection in the same atomic edit, including when reconnecting the same source. Property write-target selection does not change the reader carrier's mode. `check_connection` checks actual compatibility without changing mode. Requery generation and endpoints after every successful edit. Connection stays external even with one reader; it never becomes Composition merely because other readers disconnect.
+
+For background composition authoring, use `configure_node` with the current draft/generation, exact node_id and node_mode:"Composition". Disconnect extra read Slots first; multiple readers reject the change without automatic copying/disconnection. Mode changes are content edits and obey normal Undo/Redo, atomic batches, protection and persistence guards. Optional position places a standalone source. Mode does not override type, cycle, group/tab or nesting constraints.

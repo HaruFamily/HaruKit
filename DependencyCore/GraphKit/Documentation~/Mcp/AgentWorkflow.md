@@ -35,3 +35,21 @@ The transaction has compensating file/memory rollback, not crash-atomic persiste
 ## Consumer integration responsibilities
 
 Register stable document bindings using `HaruGraphExtensions.RegisterDocuments` and executors using `RegisterExecutor`. Retain/dispose registration leases and register again after domain reload. Supply the existing GraphKit context for custom root adapters, metadata and diagnostics. GraphKit and GraphMcp must not reference a consuming game's types. Keep provider-specific implementations in the consumer's Editor assembly.
+
+## Flow and layout tasks
+
+Prefer `flow` and `flow_candidates` over guessing node coordinates or concrete types. Follow every next_offset and inspect complete/issues. Use structural commands for insertion, removal, contiguous transfer and wrapping; set the new container's inputs explicitly through existing endpoint/value commands. Requery paths after mutations, including inside batches via fresh queries and $ref. A shared node edit affects all uses; never duplicate sources, add state or change evaluation timing just to reduce wires.
+
+Before a layout-only task, inspect the current Owner and any unsaved window draft; open a draft from the intended source. Call protect with layout_only:true and the requested protected group/node IDs before edits. Whole-group protection includes all tabs and dependency closures; do not promise one-tab granularity. Policy is fixed until discard, and Undo/Redo are unavailable while protected. Use bounded batches and inspect rollback errors.
+
+Use group_scopes/groups/group_tabs, then geometry or layout_preview with scope_id/group_id/tab_index. These background queries do not control the user's window. Measure bounds/ports before placement; use overlap data and anchor heights, not a fixed grid alone. Inspect boundary counts and the schematic limitations. Do not focus, maximize, activate visible tabs or send window events to obtain a picture. No screenshot or measured crossing/text-clipping evidence means visual acceptance remains pending.
+
+Before persistence require layout_diff.content_unchanged for a pure layout task and protection_passed for protected work; verify node comparison completeness separately from full hashes. Validation-state invalidation is normalized on both content comparisons; other content/reference changes remain failures. Then follow the existing preview/commit or dependency transaction, reopen, and reread protected/current content. Report structural, disk and visual evidence separately.
+
+## Per-node composition and connection modes
+
+Read `nodes` or source entries in `endpoints`: `node_mode` is `Composition` or `Connection`, and `read_user_count` counts distinct read Slots (excluding Property write targets and duplicate Union wrappers). New carriers default to Composition. Dragging a Node into a Slot/list selects Composition; dragging a Port wire selects Connection automatically, preserving the same carrier and allowing one-to-many reads. The UI has no mode selection menu. Dragging a nested Node onto empty canvas preserves its references and selects Connection.
+
+MCP `connect` represents Port wiring: it selects Connection in the same atomic edit, including when reconnecting the same source. Property write-target selection does not change the reader carrier's mode. `check_connection` checks actual compatibility without changing mode. Requery generation and endpoints after every successful edit. Connection stays external even with one reader; it never becomes Composition merely because other readers disconnect.
+
+For background composition authoring, use `configure_node` with the current draft/generation, exact node_id and node_mode:"Composition". Disconnect extra read Slots first; multiple readers reject the change without automatic copying/disconnection. Mode changes are content edits and obey normal Undo/Redo, atomic batches, protection and persistence guards. Optional position places a standalone source. Mode does not override type, cycle, group/tab or nesting constraints.

@@ -1,4 +1,4 @@
-namespace HaruFamily.DependencyCore.GraphKit.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections.Generic;
@@ -876,7 +876,7 @@ public partial class HaruGraphWindow
     }
 
     private static Color GhostColor(HGLink link, bool traced)
-        => LinkColor(link.OutputOwner.InDisabledSubtree || link.OutputOwner.InLockedSubtree, traced, link.ParentRow.IsProducedValue);
+        => LinkColor(link.OutputOwner.InDisabledSubtree || link.OutputOwner.InLockedSubtree, traced);
 
     private static float GhostThickness(bool traced) => traced ? LinkThickness + 2f : LinkThickness;
 

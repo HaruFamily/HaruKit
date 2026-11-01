@@ -13,7 +13,7 @@ using UnityEngine;
 
 public static partial class HaruGraphDraft
 {
-    private static readonly string[] authoringActions = { "metadata_fields", "set_metadata_value", "structured_types", "replace_structured_value", "structured_fields", "set_structured_value", "initialize_structured_value", "insert_value_item", "remove_value_item", "move_value_item", "catalog_fields", "field_options", "set_field_options", "set_field_count", "layout_nodes", "configure_group", "group_tabs", "add_group_tab", "rename_group_tab", "remove_group_tab", "activate_group_tab", "group_member_tab", "duplicate_group", "nodes", "configure_node", "duplicate_nodes", "set_group_rect", "node_candidates", "create_node", "replace_node", "delete_node", "asset_parameters", "configure_asset_parameter",
+    private static readonly string[] authoringActions = { "flow", "flow_candidates", "flow_insert", "flow_remove", "flow_transfer", "flow_wrap", "geometry", "layout_preview", "layout_diff", "protect", "metadata_fields", "set_metadata_value", "structured_types", "replace_structured_value", "structured_fields", "set_structured_value", "initialize_structured_value", "insert_value_item", "remove_value_item", "move_value_item", "catalog_fields", "field_options", "set_field_options", "set_field_count", "layout_nodes", "configure_group", "group_tabs", "add_group_tab", "rename_group_tab", "remove_group_tab", "activate_group_tab", "group_member_tab", "duplicate_group", "nodes", "configure_node", "duplicate_nodes", "set_group_rect", "node_candidates", "create_node", "replace_node", "delete_node", "asset_parameters", "configure_asset_parameter",
         "library", "create_definition", "rename_definition", "duplicate_definition", "delete_definition", "configure_property",
         "slot_lists", "slot_items", "insert_slot", "remove_slot", "move_slot", "roots", "root_options", "add_root", "remove_root", "asset_choices", "slot_value", "slot_asset_choices", "slot_asset_reference",
         "group_scopes", "groups", "group_members", "create_group", "edit_group", "delete_group", "group_member" };
@@ -50,6 +50,10 @@ public static partial class HaruGraphDraft
 
     private static object AuthoringCommand(Draft draft, ToolParams input, string action, int offset, int pageSize)
     {
+        if (flowActions.Contains(action)) return BoundedFlowResponse(FlowCommand(draft, input, action, offset, pageSize));
+        if (action == "geometry" || action == "layout_preview") return BoundedFlowResponse(Geometry(draft, input, action == "layout_preview"));
+        if (action == "layout_diff") return LayoutDiff(draft);
+        if (action == "protect") return Protect(draft, input);
         if (action == "slot_asset_choices" || action == "slot_asset_reference") return SlotAssetCommand(draft, input, action, offset, pageSize);
         if (action == "metadata_fields" || action == "set_metadata_value") return MetadataCommand(draft, input, action, offset, pageSize);
         if (structuredActions.Contains(action)) return StructuredCommand(draft, input, action, offset, pageSize);

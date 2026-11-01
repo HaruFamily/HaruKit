@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor.Tests
+﻿namespace HaruFamily.Framework.LogicGraph.Editor.Tests
 {
 using System;
 using System.Collections.Generic;
@@ -89,6 +89,14 @@ public sealed class LogicGraphValidationTests
         body.Output.SetNode(new GraphNode(new ReadValue()));
         Assert.That(graph.CollectDiagnostics().Single(d => d.Code == "logicgraph.node.body-incompatible").Location.FieldPath,
             Does.EndWith(".Output"));
+    }
+
+    [Test]
+    public void UnselectedPropertyOutputIsValid()
+    {
+        var body = new ReadWriteValue();
+        var graph = Graph(new ActionSlot<Pack>(body));
+        Assert.That(graph.CollectDiagnostics(), Is.Empty);
     }
 
     [Test]

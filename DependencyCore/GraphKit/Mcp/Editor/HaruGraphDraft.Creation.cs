@@ -53,7 +53,7 @@ public static partial class HaruGraphDraft
                 return new ErrorResponse("harugraph.draft.open_failed", new { diagnostic });
             if (TransientRevision(owner) != revision) return Error("source_changed_during_open", "A provider changed the new asset's template while opening; no draft retained.");
             var draft = new Draft { Session = session, OwnsOwner = true, Expires = DateTime.UtcNow.AddMinutes(30),
-                ReadDocument = adapter.ReadDocument, BaselineDocument = live, Baseline = baseline,
+                ReadDocument = adapter.ReadDocument, BaselineDocument = live, Baseline = baseline, BaselineContentHash = ContentFingerprint(live),
                 BaselineHash = hash, AssetRevision = revision };
             drafts.Add(id, draft);
             retained = true;
@@ -132,6 +132,7 @@ public static partial class HaruGraphDraft
         if (fieldDocument ? SingleOwnerDocument(draft.Session.Owner.GetType()) != draft.DocumentField
             : draft.Session.Document is not HGAssetDocument)
             return "Save As requires a standalone graph asset or an Owner with exactly one writable document field.";
+        if (PolicyCommitViolation(draft) is string policyBlocker) return policyBlocker;
         if (draft.OwnsOwner) return NewAssetBlocker(draft) ?? DestinationBlocker(destination);
         string source = AssetDatabase.GetAssetPath(draft.Session.Owner);
         if (!AssetDatabase.IsMainAsset(draft.Session.Owner)

@@ -308,8 +308,9 @@ where TTiming : Enum
 }
 
 [Serializable]
-public class ActionTimingGroup<TTiming, TPack> : IGraphHead where TTiming : Enum
+public class ActionTimingGroup<TTiming, TPack> : IGraphHead, ISequentialActionContainer where TTiming : Enum
 {
+    IReadOnlyList<ActionSlotBase> ISequentialActionContainer.SequentialActions => Actions;
     // 節點圖上不顯示：改下去會跟別的群組撞同一個時機。要換時機就刪掉這顆、重新建一顆。
     [HGHide]
     public TTiming Timing;

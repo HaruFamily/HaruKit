@@ -1,4 +1,4 @@
-namespace HaruFamily.DependencyCore.GraphKit.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -14,6 +14,11 @@ public partial class HaruGraphWindow
 {
     private void DropAssetOn(Vector2 graphMouse)
     {
+        if (drag.Asset is ScriptableObject asset)
+        {
+            var reference = new GraphNode(); reference.SetAsset(asset);
+            if (InsertListReference(graphMouse, reference)) return;
+        }
         var row = RowAt(graphMouse, out _);
         if (row == null)
         {
@@ -32,6 +37,8 @@ public partial class HaruGraphWindow
     private void DropTokenOn(GraphToken endpoint, Vector2 graphMouse)
     {
         if (endpoint == null) return;
+        var reference = new GraphNode(); reference.SetToken(endpoint);
+        if (InsertListReference(graphMouse, reference)) return;
         var row = RowAt(graphMouse, out _);
         if (row == null)
         {
@@ -55,6 +62,8 @@ public partial class HaruGraphWindow
     private void DropPropertyOn(GraphProperty property, Vector2 graphMouse)
     {
         if (property == null) return;
+        var reference = new GraphNode(); reference.SetProperty(property);
+        if (InsertListReference(graphMouse, reference)) return;
         var row = RowAt(graphMouse, out _);
         if (row == null)
         {
@@ -143,18 +152,21 @@ public partial class HaruGraphWindow
             break;
         }
         if (asset == null) return false;
-
+        var reference = new GraphNode(); reference.SetAsset((ScriptableObject)asset);
+        var listTarget = ActionGapAt(graphMouse, null, out _);
         var row = RowAt(graphMouse, out _);
-        bool canAssign = row != null && CanAssignAsset(row, asset);
-        bool canCreate = row == null && CanCreateReferenceNode();
-        DragAndDrop.visualMode = canAssign || canCreate ? DragAndDropVisualMode.Copy : DragAndDropVisualMode.Rejected;
+        bool canAssign = listTarget == null && row != null && CanAssignAsset(row, asset);
+        bool canCreate = listTarget == null && row == null && CanCreateReferenceNode();
+        bool canInsert = listTarget != null && AcceptsListReference(listTarget, reference);
+        DragAndDrop.visualMode = canAssign || canCreate || canInsert ? DragAndDropVisualMode.Copy : DragAndDropVisualMode.Rejected;
         if (e.type == EventType.DragUpdated)
         {
             e.Use();
             return true;
         }
 
-        if (canAssign) AssignAsset(row.InputSlot, asset);
+        if (listTarget != null) InsertListReference(graphMouse, reference);
+        else if (canAssign) AssignAsset(row.InputSlot, asset);
         else if (canCreate) AddAssetReferenceNode(asset, graphMouse);
         else if (row == null) ShowNotification(new GUIContent("先指定根公式或動作，才能放入參照節點"));
         else ShowNotification(new GUIContent("資產型別不符，無法接到這個欄位"));
@@ -204,6 +216,7 @@ public partial class HaruGraphWindow
     {
         var options = new List<HGSourceOption>();
         if (node == null) return options;
+        AddNestedListOptions(node, options);
         // 來源由自身的族決定；接線只在替換後決定保留或斷開，不控制候選可用性。
         Type slotType = ReplacementSlotType(node);
         bool isAction = slotType != null
@@ -355,7 +368,7 @@ public partial class HaruGraphWindow
             replace();
             foreach (var slot in new List<GraphSlotBase>(SlotsInCurrentGraph()))
             {
-                if (slot is GraphPropertyInputSlot || !ReferenceEquals(slot?.Node, carrier)) continue;
+                if (!ReferenceEquals(slot?.Node, carrier)) continue;
                 bool compatible = carrier.Kind switch
                 {
                     NodeKind.Inline => slot.AcceptsBody(carrier.BodyObject),
@@ -367,6 +380,7 @@ public partial class HaruGraphWindow
                 if (!compatible && AttachSource(slot, null)) disconnected++;
                 else if (compatible && slot is UnionSlotBase) slot.SetNode(carrier);
             }
+            HGModel.SeparatePropertyReferences(SlotsInCurrentGraph(), carrier);
         }
         finally { model.TrackChanges = trackChanges; }
         // AttachSource 可能記到寫入端的 PropertySlot 型別；來源的族提示必須維持讀值族。
@@ -602,7 +616,7 @@ public partial class HaruGraphWindow
         if (graph?.Nodes == null) return;
         foreach (var node in graph.Nodes)
         {
-            if (node == null || string.IsNullOrEmpty(node.Id)) continue;
+            if (node == null || string.IsNullOrEmpty(node.Id) || node.NestedParent != null || ReferenceEquals(node, dragNode) && dragMoved) continue;
             model.SetPosition(node.Id, node.Pos);
         }
     }

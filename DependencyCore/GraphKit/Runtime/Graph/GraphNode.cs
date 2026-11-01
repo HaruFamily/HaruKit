@@ -1,4 +1,4 @@
-namespace HaruFamily.DependencyCore.GraphKit
+﻿namespace HaruFamily.DependencyCore.GraphKit
 {
 using System;
 using System.Collections.Generic;
@@ -27,15 +27,11 @@ public enum NodeKind
     Property = 6,
 }
 
-/// <summary>Property 節點接收端的穩定身分。寫入連線由 Action 的 PropertySlot 保存。</summary>
-[Serializable]
-public sealed class GraphPropertyInputSlot : GraphSlotBase
+/// <summary>每顆 Node 的組合歸屬或外部共用連線設定。</summary>
+public enum GraphNodeMode
 {
-    [SerializeReference]
-    private GraphNode node;
-
-    public override GraphNode Node => node;
-    public override void SetNode(GraphNode value) => node = value;
+    Composition = 0,
+    Connection = 1,
 }
 
 /// <summary>
@@ -65,6 +61,9 @@ public class GraphNode
     private bool _disabled;
 
     [SerializeField]
+    private GraphNodeMode _mode = GraphNodeMode.Composition;
+
+    [SerializeField]
     private NodeKind _kind = NodeKind.Empty;
 
     [SerializeReference]
@@ -81,9 +80,6 @@ public class GraphNode
     [SerializeReference]
     private GraphProperty _property;
 
-    // Property 的下方 Input 必須有自己的持久綁定，不能借用指向這顆節點的 ParentSlot。
-    [SerializeReference]
-    private GraphPropertyInputSlot _propertyInput = new();
 
     // 資產呼叫點的參數綁定。它屬於這次引用，不屬於共用資產。
     [SerializeField]
@@ -101,6 +97,8 @@ public class GraphNode
     public string Id => _id;
 
     public NodeKind Kind => _kind;
+
+    public GraphNodeMode Mode { get => _mode; set => _mode = value; }
 
     /// <summary>節點座標。<see cref="HasPos"/> 為 false 時無意義。</summary>
     public Vector2 Pos
@@ -128,15 +126,6 @@ public class GraphNode
 
     /// <summary>Property 模式指向的定義；其他模式為 null。</summary>
     public GraphProperty Property => _kind == NodeKind.Property ? _property : null;
-
-    /// <summary>Property 節點下方輸入的持久綁定；尚未選擇定義時也存在。</summary>
-    public GraphPropertyInputSlot PropertyInput => _propertyInput ??= new GraphPropertyInputSlot();
-
-    /// <summary>保留來源資料的相容入口；不寫入共享定義，也不參與 Property 求值。</summary>
-    public void SetPropertyInput(GraphNode source)
-    {
-        PropertyInput.SetNode(source);
-    }
 
     public List<NamedFormulaSlot> Bindings
     {
@@ -168,7 +157,6 @@ public class GraphNode
     /// <summary>換成內嵌 Action / Formula。Id、座標、備註與連入邊不變。</summary>
     public void SetBody(GraphNodeContent body)
     {
-        ClearPropertyInput();
         _body = body;
         _asset = null;
         _endpoint = null;
@@ -184,7 +172,6 @@ public class GraphNode
     {
         if (endpoint == null) { Clear(); return; }
 
-        ClearPropertyInput();
         _endpoint = endpoint;
         _body = null;
         _asset = null;
@@ -198,7 +185,6 @@ public class GraphNode
     // 所以這裡清掉 Bindings 反而會把剛保留的東西洗掉。SetBody / Clear 是換成另一種內容，才清。
     public void SetAsset(ScriptableObject asset)
     {
-        ClearPropertyInput();
         _asset = asset;
         _body = null;
         _endpoint = null;
@@ -220,7 +206,6 @@ public class GraphNode
     /// <summary>清成空節點（編輯中狀態）。</summary>
     public void Clear()
     {
-        ClearPropertyInput();
         _body = null;
         _asset = null;
         _endpoint = null;
@@ -229,10 +214,7 @@ public class GraphNode
         _kind = NodeKind.Empty;
     }
 
-    private void ClearPropertyInput()
-    {
-        PropertyInput.SetNode(null);
-    }
+
 }
 
 }

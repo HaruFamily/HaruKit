@@ -38,7 +38,7 @@ public sealed class HGListItemSource : HGItemSource
     public override object Get(int index) => InRange(index) ? List[index] : null;
 
     /// <summary>陣列長度由程式或 Inspector 決定，編輯器不得增刪或重排。</summary>
-    public bool CanEditStructure => !List.IsFixedSize;
+    public bool CanEditStructure => !List.IsFixedSize && !List.IsReadOnly;
 
     /// <summary>就地改寫一項。固定長度的陣列仍可改內容，只是不能改結構。</summary>
     public bool Set(int index, object value)

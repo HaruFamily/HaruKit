@@ -52,6 +52,8 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 
 ### 3.2 Action 與 Formula
 
+`ActionTimingGroup<TTiming, TPack>` 明確實作 `ISequentialActionContainer`，只讀回傳原 `Actions` 的執行順序，不新增序列化資料。GraphKit 的 `HGFlowSnapshot` 因此可投影時機 root；具體條件／迴圈由使用端實作 `IGraphFlowContainer`，不得冒用循序容器。投影不呼叫 TriggerAction／Evaluate、不改變求值時點；完整 API 見 GraphKit 維護手冊「唯讀流程描述與投影」。
+
 - Action 繼承 `ActionBase<TPack>`，覆寫 `protected OnExecute(pack, tokens)`；Formula 繼承 `FormulaBase<TResult, TPack>`，覆寫 `protected OnEvaluate(pack, tokens)`。本體的 `Execute`／`Evaluate` 是 internal 派發入口，作者不直接呼叫。
 - 組合節點透過公開的 Slot API 呼叫子節點：`await childFormula.Evaluate(pack, tokens)`、`await childAction.Execute(pack, tokens)`。**永遠把收到的 `pack` 和 `tokens` 往下傳**；Slot 負責停用處理、保底值、作用域和執行觀察。
 - 長時間的非同步工作要傳入 `tokens.CancellationToken`。
@@ -63,14 +65,14 @@ LogicGraph 是**依時機分派、非同步執行**的 Action／Formula 圖框�
 - **族身分是具體 Slot 型別**，不是結果型別。兩個都回 `string` 的 Slot 是兩個族，各自可以有同名 Token。
 - 新增結果種類需 Formula／Token／Asset／Slot 四個型別；編輯器讀 Slot 宣告列出配對，不維護另一張 Token 清單。HaruFamily/LogicGraph/Add Formula Type 產生四件套及 Slot 的 Preserve 標記；同族的新計算只繼承 Formula 基底。
 - Slot 建構子只有 `XSlot()` 和 `XSlot(TResult defaultValue)`。有沒有接來源由 `_node` 決定。
-- 未接來源的求值走 `protected virtual TResult EvaluateUnlinked(TPack pack)`，預設回 `_default`。具體 Slot 可配合 GraphKit 的 `DefaultEditType`／`DefaultObject`，把序列化選項依當次 Pack 解析成結果。一般 Evaluate、IFormulaSlot、Token 及資產參數共用此入口，不以隱藏 Evaluate 或另一個 Resolve API 分流。此入口只處理 `Node == null`；已接但停用、空節點或來源失敗仍回原本保底值，不改取未接線選項。
+- 未接來源的求值走 `protected virtual TResult EvaluateUnlinked(TPack pack)`，預設回 `_default`。具體 Slot 可配合 GraphKit 的 `DefaultEditType`／`DefaultObject`，把序列化選項依當次 Pack 解析成結果。一般 Evaluate、IFormulaSlot、Token 及資產參數共用此入口，不以隱藏 Evaluate 或另一個 Resolve API 分流。此入口只處理 `Node == null`；已接但停用、空節點或來源失敗回 default(TResult)，不改取未接線選項。
 - 跨族接收：Slot 覆寫 `AllowCompatibleResult` 回 true 後，可額外接受「Pack 相同、結果型別可指派給本族」的其他族公式，並以 `ExcludedFormulaFamilies` 排除特定族（連同子類）。同族永遠優先且不受黑名單影響。不做數值轉換或向下轉型。Token、Property、Formula Asset 不受此開關放寬。
 
 ### 多族輸入 UnionSlot
 
 - `UnionSlot<TResult, TPack, TA, TB>` 提供 2、3、4、5 個來源族的泛型版本，共用求值入口；TA～TE 是具有公開無參數建構子的具體 FormulaSlotBase，同一 Pack、不同族，且實作 `IFormulaSlot<TPack>`。不接受巢狀 Union。
 - 使用端以具體可序列化子類實作 `OnEvaluate(pack, tokens)`，對 `SelectedSlot` 分支呼叫其正式 `Evaluate` 並轉為 TResult。外層只做配置及前後取消檢查；不重複 EnterNode，不把 Slot 求值降成裸 Formula 呼叫。
-- Union 自己序列化 TResult `_default`，由 Default／DefaultObject 編輯；未接線、Empty 或來源載體停用時直接回此值，不呼叫子類轉換。分支初始化為第一族只為保存來源；SetSelectedSlot 不改 Union 預設值。接線用 SetNode 自動選族，斷線保留 Union 預設值；有效來源仍由內層 Slot 處理 Token／Property／Asset 與來源失敗保底，子類轉換其結果。
+- Union 自己序列化 TResult `_default`，由 Default／DefaultObject 編輯；未接線時回此值；Empty 或來源載體停用時回 default(TResult)，不呼叫子類轉換。分支初始化為第一族只為保存來源；SetSelectedSlot 不改 Union 預設值。接線用 SetNode 自動選族，斷線保留 Union 預設值；有效來源仍由內層 Slot 處理 Token／Property／Asset 與來源失敗保底，子類轉換其結果。
 - Union 是輸入欄位，不作為新的 Token／Property 宣告族。具體 Token 可宣告 Union 輸入與另一個原生輸出族；TokenTable 以 Token.FamilyType 登記，求值 Token.Slot。資產覆蓋按對外族配對，公式輸出仍由既有 FormulaBase 決定。
 - 程式原地替換來源載體內容後，須對受影響 Union 再呼叫 `SetNode(carrier)` 重新選族；編輯器換來源與非視窗 ReplaceSource 在同一交易內完成。配置不一致由 Core／Editor 驗證回報。
 - GraphKit 的載體／選族／畫面規則見其維護手冊「多族輸入」。`UnionSlotTests` 涵蓋二族求值、四種來源、五族切換與獨立 TResult 預設值、序列化／DeepCopy、取消與 Editor 換來源／Undo。
@@ -118,7 +120,7 @@ Editor 編譯時，ActionAssetBase 與 FormulaAssetBase 提供 GraphKit 的 IEdi
 5. 程式修改圖之後呼叫 `InvalidateValidation()`，同時撤銷編輯器旗標與 runtime 檢查快取。Inspector 與 `LogicGraphEditor.Verify(owner)` 可手動檢查 Usage；`TryValidate` 與無 Owner 的 `Verify()` 只驗 Core 規則。
 6. **驗證有兩趟**：第一趟不穿透停用節點（殘缺是錯誤），第二趟補走停用子樹（殘缺降為警告）。順序不可顛倒；只要還有一條啟用路徑指著同一個載體，殘缺仍是錯誤。GraphKit 的 `HGValidator` 要同步同一套判準。
 7. **不要把 Node 的序列化欄位當跨呼叫的快取**；每次執行的上下文放在 Pack。
-8. 缺來源或停用的公式回 Slot 保底值；**節點本體丟出的例外照常往外傳**，保底值不是通用例外處理。runtime 遇到型別不符或空節點時，每個 Slot 只警告一次並回保底值。
+8. 未接來源的公式使用常數／EvaluateUnlinked。已接來源停用、遺失、型別不符或求值失敗回 default(TResult)，不使用儲存常數。求值例外記錄警告及失敗 visit；取消仍向外傳遞。型別不符每個 Slot 只警告一次。動作例外維持中止流程。
 9. Usage 的 `ConfigureGraph` 與驗證 callback 只宣告規則，**不可修改 Owner、圖或資產**；驗證 callback 使用傳入的文件，不讀回 Owner 上的圖。
 10. 候選池（`Orphans`）不執行、不驗證、不算資產引用。正式資料的邊界是動作樹加上每個 Token 的取值子樹。
 
@@ -191,3 +193,5 @@ public sealed class LogAmountAction : ActionBase<MyPack>
 - 在 Unity Test Runner 以 EditMode 執行；從 UPM 安裝時，要把 `com.harufamily.framework.logicgraph` 加進 `manifest.json` 的 `testables`。**沒有實際執行的測試不可回報為通過。**
 
 > Trace: verified 2026-10-29 · doc `Doc/2026-10-2/DECISION_Property單一模型與資料保留.md`（原始碼靜態核對；使用者確認本輪 TestRunner 修正，驗證範圍見決策文件）
+
+PropertySlot.Write 在 Node 為 null（明確不輸出）時回傳 true，表示合法略過保存結果；動作繼續執行。已指定的空載體、停用／不相容目標或無效作用域仍回傳 false。保存結構沿用 Node 引用，既有寫入設定不需遷移。

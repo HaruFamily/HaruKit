@@ -37,9 +37,11 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 formula.Value = null;
                 Assert.That(action.Input.Evaluate(), Is.Null);
                 source.Node.Disabled = true;
-                Assert.That(action.Input.Evaluate(), Is.SameAs(value), "來源停用使用來源的保底值。");
+                Assert.That(action.Input.Evaluate(), Is.Null, "來源停用使用型別 default。");
                 node.Disabled = true;
-                Assert.That(action.Input.Evaluate(), Is.SameAs(fallback), "引用停用使用接收端的保底值。");
+                Assert.That(action.Input.Evaluate(), Is.Null, "引用停用使用型別 default。");
+                action.Input.SetNode(null);
+                Assert.That(action.Input.Evaluate(), Is.SameAs(fallback), "未接來源保留常數。");
             }
             finally
             {
@@ -144,7 +146,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(GraphVerifier.CollectDiagnostics(graph).Exists(
                 item => item.Code == $"assetpipeline.{kind}.target-incompatible"), Is.True);
             LogAssert.Expect(LogType.Warning, new Regex(propertySource ? "接的Property" : "接的Token"));
-            Assert.That(open.Evaluate(), Is.EqualTo("fallback"));
+            Assert.That(open.Evaluate(), Is.Null);
             Assert.That(blockedBody.Calls, Is.Zero);
         }
 
@@ -168,7 +170,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
             Assert.That(GraphVerifier.CollectDiagnostics(graph).Exists(
                 item => item.Code == "assetpipeline.token.cycle"), Is.True);
             LogAssert.Expect(LogType.Warning, new Regex("Token \\[Second\\] 遞迴求值"));
-            Assert.That(first.Evaluate(), Is.EqualTo("first"));
+            Assert.That(first.Evaluate(), Is.Null);
             second.SetNode(null);
             Assert.That(first.Evaluate(), Is.EqualTo("second"));
         }
@@ -194,7 +196,7 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
                 formula.Value = null;
                 Assert.That(action.Input.Evaluate(), Is.Null);
                 node.Disabled = true;
-                Assert.That(action.Input.Evaluate(), Is.SameAs(clip));
+                Assert.That(action.Input.Evaluate(), Is.Null);
                 Assert.That(action.Input.AcceptsBody(new OtherPackAudio()), Is.False);
             }
             finally { UnityEngine.Object.DestroyImmediate(clip); }

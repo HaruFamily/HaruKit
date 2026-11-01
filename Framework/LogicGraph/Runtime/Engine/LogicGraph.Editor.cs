@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph
+﻿namespace HaruFamily.Framework.LogicGraph
 {
 using System;
 using System.Collections.Generic;
@@ -606,7 +606,7 @@ where TTiming : Enum
         HashSet<GraphNode> completed, HashSet<object> visitedObjects)
     {
         if (value == null) return false;
-        if (value is PropertySlotBase || value is GraphPropertyInputSlot) return false;
+        if (value is PropertySlotBase) return false;
         if (value is ActionSlot<TPack> actionSlot) return HasCarrierCycle(actionSlot.Node, stack, completed, visitedObjects);
         if (value is FormulaSlotBase formulaSlot) return HasCarrierCycle(formulaSlot.Node, stack, completed, visitedObjects);
         if (value is GraphNode carrier)

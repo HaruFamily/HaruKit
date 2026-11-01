@@ -181,7 +181,7 @@ namespace HaruFamily.Framework.LogicGraph.Editor.Tests
                 Assert.That(copy.TryValidate(out error), Is.True, error);
                 Assert.That(await copy.CreateTokenTable().Resolve<int>(typeof(NumberSlot), "value", new Pack()), Is.EqualTo(3));
                 copy.Tokens[0].Slot.Node.Disabled = true;
-                Assert.That(await copy.CreateTokenTable().Resolve<int>(typeof(NumberSlot), "value", new Pack()), Is.EqualTo(9));
+                Assert.That(await copy.CreateTokenTable().Resolve<int>(typeof(NumberSlot), "value", new Pack()), Is.Zero);
             }
         }
 
@@ -318,7 +318,7 @@ namespace HaruFamily.Framework.LogicGraph.Editor.Tests
             slot.SetNode(carrier);
             Assert.That(await slot.Evaluate(pack, tokens), Is.EqualTo("7"));
             carrier.Disabled = true;
-            Assert.That(await slot.Evaluate(pack, tokens), Is.EqualTo("3"));
+            Assert.That(await slot.Evaluate(pack, tokens), Is.Null);
             Assert.That(pack.Calls, Is.EqualTo(1));
 
             var textToken = GraphTestTokens.Create("same", new TextSlot { Default = "token" });

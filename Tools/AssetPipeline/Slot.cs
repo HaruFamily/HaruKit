@@ -88,21 +88,22 @@ namespace HaruFamily.Tools.AssetPipeline
 
         object IFormulaSlot.EvaluateBoxed() => Evaluate();
 
-        /// <summary>常數模式的值，也是所有來源解析失敗時的保底值。</summary>
+        /// <summary>僅未接來源時使用的常數值。</summary>
         public TResult Default { get => _default; set => _default = value; }
 
         /// <summary>
-        /// 沒接來源、或來源解析失敗時取什麼。預設就是 <see cref="Default"/>。
+        /// 僅沒接來源時取什麼。預設就是 <see cref="Default"/>。
         /// </summary>
         // 給「常數欄位本身還要再解析一次」的族覆寫（資料夾族的固定值可能是物件也可能是路徑字串）。
         // 不可在這裡面回頭呼叫 Evaluate()，那會變成無窮遞迴。
         protected virtual TResult Fallback() => _default;
 
-        /// <summary>求值。空槽、停用、型別不符一律回保底值，不丟例外。</summary>
+        /// <summary>求值。未接來源使用常數；停用與來源失敗回型別 default。</summary>
         public TResult Evaluate()
         {
-            // 空槽與停用走同一條路：都回保底值，企劃可以關掉一段而不必拆線。
-            if (_node == null || _node.Disabled) return Fallback();
+            // 未接來源才解析常數；停用來源不解析常數或資料夾路徑。
+            if (_node == null) return Fallback();
+            if (_node.Disabled) return default;
 
             switch (_node.Kind)
             {
@@ -119,8 +120,8 @@ namespace HaruFamily.Tools.AssetPipeline
                     }
                     catch (Exception e)
                     {
-                        AssetPipeline.ReportFormulaWarning($"{formula.GetType().Name} 求值失敗：{e.Message}，改用預設值。");
-                        return Fallback();
+                        AssetPipeline.ReportFormulaWarning($"{formula.GetType().Name} 求值失敗：{e.Message}，改用型別 default。");
+                        return default;
                     }
                 }
                 case NodeKind.Property:
@@ -142,8 +143,8 @@ namespace HaruFamily.Tools.AssetPipeline
                     // 編輯期 Verify 會擋掉環，這條是執行期最後一道防線：遞迴當場回保底值而不是炸堆疊。
                     if (!TokenGuard.TryEnter(endpoint))
                     {
-                        AssetPipeline.ReportFormulaWarning($"Token [{endpoint.Name}] 遞迴求值，改用預設值。");
-                        return Fallback();
+                        AssetPipeline.ReportFormulaWarning($"Token [{endpoint.Name}] 遞迴求值，改用型別 default。");
+                        return default;
                     }
 
                     try
@@ -159,7 +160,7 @@ namespace HaruFamily.Tools.AssetPipeline
                     }
                 }
                 default:
-                    return Fallback();   // Empty：編輯中的空節點，Verify 會擋，求值走保底值續跑。
+                    return default;   // Empty：Verify 會擋，求值使用型別預設值。
             }
         }
 
@@ -168,9 +169,9 @@ namespace HaruFamily.Tools.AssetPipeline
             if (!_loggedMismatch)
             {
                 _loggedMismatch = true;
-                AssetPipeline.ReportFormulaWarning($"{typeof(TResult).Name} 欄位接的{what}為空或型別不符，改用預設值。");
+                AssetPipeline.ReportFormulaWarning($"{typeof(TResult).Name} 欄位接的{what}為空或型別不符，改用型別 default。");
             }
-            return Fallback();
+            return default;
         }
     }
 

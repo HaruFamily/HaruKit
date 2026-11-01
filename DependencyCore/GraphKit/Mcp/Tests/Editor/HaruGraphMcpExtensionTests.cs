@@ -59,6 +59,174 @@ public sealed class HaruGraphMcpExtensionTests
     private static JToken Transaction(object request) => Ok(HaruGraphTransaction.HandleCommand(JObject.FromObject(request)));
 
     [Test]
+    public void NodeModesAreExplicitTransactionalAndRejectSharedComposition()
+    {
+        var owner = FlowOwner();
+        string id = Open(owner), nodeId = Node(id);
+        var state = Draft(new { action = "nodes", draft_id = id, generation = Generation(id), node_id = nodeId })["entries"][0];
+        Assert.That((string)state["node_mode"], Is.EqualTo("Composition"));
+        Assert.That((int)state["read_user_count"], Is.EqualTo(2));
+        Fails(HaruGraphDraft.HandleCommand(JObject.FromObject(new { action = "configure_node", draft_id = id,
+            generation = Generation(id), node_id = nodeId, node_mode = "connection" })), "harugraph.draft.invalid_node_mode");
+        Draft(new { action = "configure_node", draft_id = id, generation = Generation(id), node_id = nodeId, node_mode = "Connection" });
+        state = Draft(new { action = "nodes", draft_id = id, generation = Generation(id), node_id = nodeId })["entries"][0];
+        Assert.That((string)state["node_mode"], Is.EqualTo("Connection"));
+        Fails(HaruGraphDraft.HandleCommand(JObject.FromObject(new { action = "configure_node", draft_id = id,
+            generation = Generation(id), node_id = nodeId, node_mode = "Composition", note = "must rollback" })), "harugraph.draft.node_mode_shared");
+        Draft(new { action = "undo", draft_id = id, generation = Generation(id) });
+        state = Draft(new { action = "nodes", draft_id = id, generation = Generation(id), node_id = nodeId })["entries"][0];
+        Assert.That((string)state["node_mode"], Is.EqualTo("Composition"));
+        Assert.That((int)state["read_user_count"], Is.EqualTo(2));
+        Assert.That((string)state["note"], Is.Not.EqualTo("must rollback"));
+        Assert.That(owner.Document.Entries[0].Actions[0].Source.Mode, Is.EqualTo(GraphNodeMode.Composition), "Owner must stay unchanged.");
+    }
+
+    [Test]
+    public void PortConnectionAutomaticallySelectsConnectionMode()
+    {
+        string id = Open(FlowOwner()), nodeId = Node(id);
+        JToken Endpoints() => Draft(new { action = "endpoints", draft_id = id, generation = Generation(id) })["entries"];
+        var entries = Endpoints();
+        string slotKey = (string)entries.First(item => (string)item["kind"] == "slot")["key"];
+        Draft(new { action = "disconnect", draft_id = id, generation = Generation(id), slot_key = slotKey });
+        entries = Endpoints();
+        slotKey = (string)entries.First(item => (string)item["kind"] == "slot" && item["source_key"].Type == JTokenType.Null)["key"];
+        string sourceKey = (string)entries.First(item => (string)item["node_id"] == nodeId)["key"];
+        var check = Draft(new { action = "check_connection", draft_id = id, generation = Generation(id), slot_key = slotKey, source_key = sourceKey });
+        Assert.That((bool)check["allowed"], Is.True);
+        Draft(new { action = "connect", draft_id = id, generation = Generation(id), slot_key = slotKey, source_key = sourceKey });
+        Assert.That((int)Draft(new { action = "nodes", draft_id = id, generation = Generation(id), node_id = nodeId })["entries"][0]["read_user_count"], Is.EqualTo(2));
+        Assert.That((string)Draft(new { action = "nodes", draft_id = id, generation = Generation(id), node_id = nodeId })["entries"][0]["node_mode"], Is.EqualTo("Connection"));
+        Draft(new { action = "undo", draft_id = id, generation = Generation(id) });
+        Assert.That((string)Draft(new { action = "nodes", draft_id = id, generation = Generation(id), node_id = nodeId })["entries"][0]["node_mode"], Is.EqualTo("Composition"));
+    }
+
+    private PortableFlowOwner FlowOwner()
+    {
+        var owner = ScriptableObject.CreateInstance<PortableFlowOwner>();
+        var shared = new GraphNode(new PortableFlowAction()); shared.EnsureId();
+        var first = new PortableActionSlot { Label = "first", Source = shared }; first.EnsureId();
+        var second = new PortableActionSlot { Label = "second", Source = shared, Disabled = true }; second.EnsureId();
+        owner.Document.Entries.Add(new PortableFlowRoot { Actions = new() { first, second } });
+        AssetDatabase.CreateAsset(owner, folder + "/flow.asset");
+        AssetDatabase.SaveAssetIfDirty(owner);
+        return owner;
+    }
+
+    [Test]
+    public void FlowProtocolUsesFreshPathsAndPreservesSharedSlotsWithAtomicRollback()
+    {
+        var owner = FlowOwner();
+        // Test assemblies are excluded from the production catalog. A document-owned prototype is an explicit authoring choice.
+        var prototype = new GraphNode(new PortableFlowLoop()); prototype.EnsureId();
+        owner.Document.Candidates.Add(prototype);
+        EditorUtility.SetDirty(owner); AssetDatabase.SaveAssetIfDirty(owner);
+        string original = JsonUtility.ToJson(owner.Document);
+        string id = Open(owner);
+        var candidates = Draft(new { action = "flow_candidates", draft_id = id, generation = Generation(id), section_path = "root/0/body", page_size = 100 });
+        string loopType = (string)candidates["entries"].Single(item => (string)item["type"] == typeof(PortableFlowLoop).AssemblyQualifiedName)["type"];
+        var initial = Draft(new { action = "flow", draft_id = id, generation = Generation(id), page_size = 100 });
+        Assert.That((int)initial["total"], Is.EqualTo(3));
+        Assert.That((bool)initial["entries"][1]["shared"], Is.True);
+        int generation = Generation(id);
+        Draft(new { action = "flow_wrap", draft_id = id, generation, section_path = "root/0/body", index = 0, count = 2,
+            type = loopType, child_section_key = "body" });
+        Fails(HaruGraphDraft.HandleCommand(JObject.FromObject(new { action = "flow_remove", draft_id = id, generation,
+            flow_path = "root/0/body/0" })), "harugraph.draft.stale_generation");
+        Draft(new { action = "undo", draft_id = id, generation = Generation(id) });
+        var undone = Draft(new { action = "flow", draft_id = id, generation = Generation(id) });
+        Assert.That((int)undone["total"], Is.EqualTo(3));
+        Draft(new { action = "redo", draft_id = id, generation = Generation(id) });
+        Draft(new { action = "flow_transfer", draft_id = id, generation = Generation(id), section_path = "root/0/body/0/body",
+            index = 0, count = 1, target_section_path = "root/0/body", destination_index = 1 });
+        var shared = (bool)HaruGraphDraft.WithDraftSnapshot((JObject)Request(id), read =>
+        {
+            var doc = (PortableFlowDocument)read.Document;
+            var loop = (PortableFlowLoop)doc.Entries[0].Actions[0].Node.BodyObject;
+            return ReferenceEquals(loop.Body[0].Node, doc.Entries[0].Actions[1].Node) && loop.Body[0].Disabled;
+        });
+        Assert.That(shared, Is.True);
+        Fails(HaruGraphDraft.HandleCommand(JObject.FromObject(new { action = "apply_batch", draft_id = id, generation = Generation(id), commands = new object[] {
+            new { action = "flow_insert", section_path = "root/0/body", index = 0, type = typeof(PortableFlowAction).AssemblyQualifiedName },
+            new { action = "flow_remove", flow_path = "root/0/body/0" } } })), "harugraph.draft.batch_rejected");
+        var flow = Draft(new { action = "flow", draft_id = id, generation = Generation(id) });
+        Assert.That((int)flow["entries"][0]["count"], Is.EqualTo(2));
+        Assert.That(JsonUtility.ToJson(owner.Document), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void BackgroundGeometryAndImmutablePoliciesSeparateLayoutFromContentAndProtectGroups()
+    {
+        var owner = FlowOwner();
+        var extra = new GraphNode(new PortableFlowAction()); extra.EnsureId();
+        owner.Document.Candidates.Add(extra);
+        owner.Document.Validated = true;
+        EditorUtility.SetDirty(owner);
+        AssetDatabase.SaveAssetIfDirty(owner);
+        string original = JsonUtility.ToJson(owner.Document);
+        string id = Open(owner);
+        var scope = Draft(new { action = "group_scopes", draft_id = id, generation = Generation(id) });
+        string root = (string)scope["entries"][0]["scope_id"];
+        string protectedId = owner.Document.Entries[0].Actions[0].Node.Id;
+        var group = Draft(new { action = "create_group", draft_id = id, generation = Generation(id), scope_id = root, name = "Keep" });
+        string groupId = (string)group["details"]["group_id"];
+        Draft(new { action = "group_member", draft_id = id, generation = Generation(id), group_id = groupId, node_id = protectedId, member = true });
+        Draft(new { action = "add_group_tab", draft_id = id, generation = Generation(id), group_id = groupId, name = "Second" });
+        int generation = Generation(id);
+        var geometry = Draft(new { action = "layout_preview", draft_id = id, generation, scope_id = root, group_id = groupId, tab_index = 1 });
+        Assert.That((string)geometry["svg"], Does.StartWith("<svg"));
+        var visible = Draft(new { action = "geometry", draft_id = id, generation, scope_id = root, group_id = groupId, tab_index = 0 });
+        Assert.That(((JArray)visible["ports"]).Count, Is.GreaterThan(0));
+        Assert.That(((JArray)visible["edges"]).Count, Is.GreaterThan(0));
+        Assert.That(Generation(id), Is.EqualTo(generation));
+        var tabs = Draft(new { action = "group_tabs", draft_id = id, generation, group_id = groupId });
+        Assert.That((int)tabs["active_tab"], Is.EqualTo(0));
+        Assert.That((bool)Draft(new { action = "layout_diff", draft_id = id, generation })["content_unchanged"], Is.True);
+        Draft(new { action = "protect", draft_id = id, generation, layout_only = true, protected_group_ids = new[] { groupId } });
+        Draft(new { action = "configure_node", draft_id = id, generation = Generation(id), node_id = extra.Id, position = new { x = 800, y = 200 } });
+        Fails(HaruGraphDraft.HandleCommand(JObject.FromObject(new { action = "configure_node", draft_id = id, generation = Generation(id),
+            node_id = protectedId, position = new { x = 1, y = 2 } })), "harugraph.draft.protected_edit_rejected");
+        Fails(HaruGraphDraft.HandleCommand(JObject.FromObject(new { action = "flow_remove", draft_id = id, generation = Generation(id),
+            flow_path = "root/0/body/0" })), "harugraph.draft.protected_edit_rejected");
+        Fails(HaruGraphDraft.HandleCommand(JObject.FromObject(new { action = "protect", draft_id = id, generation = Generation(id),
+            layout_only = false })), "harugraph.draft.policy_already_set");
+        var diff = Draft(new { action = "layout_diff", draft_id = id, generation = Generation(id) });
+        Assert.That((bool)diff["content_unchanged"], Is.True);
+        Assert.That((bool)diff["protection_passed"], Is.True);
+        Assert.That(JsonUtility.ToJson(owner.Document), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void UndeclaredCustomContainerStopsFlowExpansionWhileNodeGeometryRemainsReadable()
+    {
+        var owner = FlowOwner();
+        var hidden = new GraphNode(new PortableFlowAction()); hidden.EnsureId();
+        var opaque = new PortableOpaqueFlow();
+        opaque.HiddenActions.Add(new PortableActionSlot { Source = hidden });
+        var carrier = new GraphNode(opaque); carrier.EnsureId();
+        owner.Document.Entries[0].Actions[0].Source = carrier;
+        EditorUtility.SetDirty(owner); AssetDatabase.SaveAssetIfDirty(owner);
+        string sourceBefore = JsonUtility.ToJson(owner.Document);
+        string id = Open(owner);
+        int generation = Generation(id);
+        string DraftJson() => (string)HaruGraphDraft.WithDraftSnapshot((JObject)Request(id), read => JsonUtility.ToJson(read.Document));
+        string before = DraftJson();
+        var flow = Draft(new { action = "flow", draft_id = id, generation, page_size = 100 });
+        var use = flow["entries"].Single(item => (string)item["node_id"] == carrier.Id);
+        Assert.That((bool)use["unknown"], Is.True);
+        Assert.That(flow["entries"].Any(item => (string)item["node_id"] == hidden.Id), Is.False);
+        string scope = (string)Draft(new { action = "group_scopes", draft_id = id, generation })["entries"][0]["scope_id"];
+        var canvas = Draft(new { action = "geometry", draft_id = id, generation, scope_id = scope });
+        Assert.That(canvas["nodes"].Any(node => (string)node["node_id"] == hidden.Id), Is.True, "Unknown execution semantics do not remove ordinary Node inspection.");
+        Fails(HaruGraphDraft.HandleCommand(JObject.FromObject(new { action = "flow_transfer", draft_id = id, generation,
+            section_path = "root/0/body", index = 1, count = 1, target_section_path = "root/0/body/0/body", destination_index = 0 })),
+            "harugraph.draft.command_rejected");
+        Assert.That(Generation(id), Is.EqualTo(generation));
+        Assert.That(DraftJson(), Is.EqualTo(before));
+        Assert.That(JsonUtility.ToJson(owner.Document), Is.EqualTo(sourceBefore));
+    }
+
+    [Test]
     public void ExecutorsAreDiscoveredTypedAndIsolatedAndCanBeUnregistered()
     {
         var first = new Executor("portable.sum", false); var second = new Executor("portable.double", true);

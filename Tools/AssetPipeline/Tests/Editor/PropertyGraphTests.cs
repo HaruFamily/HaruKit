@@ -1,4 +1,4 @@
-using NUnit.Framework;
+﻿using NUnit.Framework;
 using System;
 using System.Collections.Generic;
 using HaruFamily.DependencyCore.GraphKit;
@@ -151,12 +151,10 @@ namespace HaruFamily.Tools.AssetPipeline.Tests
         }
 
         [Test]
-        public void PropertyInput_DoesNotOverwriteSharedDefinitionOrEvaluateOnRead()
+        public void PropertyReadDoesNotOverwriteSharedDefinitionOrEvaluateOtherSources()
         {
             var sourceValue = new List<Object>();
-            GraphNode source = new GraphNode(new ListFormula(sourceValue));
             GraphNode propertyNode = PropertyNode(out GraphProperty property, hasInitialValue: true);
-            propertyNode.SetPropertyInput(source);
 
             List<GraphDiagnostic> diagnostics = GraphVerifier.CollectDiagnostics(graph);
 

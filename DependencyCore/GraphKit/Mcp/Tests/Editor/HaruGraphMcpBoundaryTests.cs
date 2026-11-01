@@ -10,6 +10,12 @@ public sealed class HaruGraphMcpBoundaryTests
     [Test]
     public void IntegrationAndTestsReferenceOnlyGenericAssemblies()
     {
+        foreach (var assembly in new[] { typeof(HaruFamily.DependencyCore.GraphKit.GraphNode).Assembly,
+            typeof(HaruFamily.DependencyCore.GraphKit.Editor.HGDocumentSession<>).Assembly })
+            foreach (string name in assembly.GetReferencedAssemblies().Select(value => value.Name))
+                Assert.That(name.StartsWith("System") || name.StartsWith("Unity") || name == "mscorlib" || name == "netstandard"
+                    || name == "HaruFamily.DependencyCore.GraphKit", Is.True,
+                    assembly.GetName().Name + " core unexpectedly references " + name);
         foreach (var assembly in new[] { typeof(HaruGraphDraft).Assembly, GetType().Assembly })
         {
             var references = assembly.GetReferencedAssemblies().Select(value => value.Name);

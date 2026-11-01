@@ -1400,6 +1400,75 @@ public class HGModel
         }
     }
 
+    /// <summary>列出 Node 的讀取使用者，Union 包裝與選定 Slot 視為同一位置。</summary>
+    internal static List<GraphSlotBase> NodeUsers(GraphNode node, IEnumerable<GraphSlotBase> slots)
+    {
+        var users = new List<GraphSlotBase>();
+        var seen = new HashSet<GraphSlotBase>();
+        foreach (var candidate in slots)
+        {
+            var slot = candidate is UnionSlotBase union ? union.SelectedSlot ?? candidate : candidate;
+            if (slot != null && slot is not PropertySlotBase && seen.Add(slot) && ReferenceEquals(slot.Node, node)) users.Add(slot);
+        }
+        return users;
+    }
+
+    internal static bool CanReferenceNode(GraphNode node, GraphSlotBase target, IEnumerable<GraphSlotBase> slots)
+    {
+        if (node == null || node.Mode == GraphNodeMode.Connection || target is PropertySlotBase) return true;
+        if (target is UnionSlotBase union) target = union.SelectedSlot ?? target;
+        foreach (var slot in NodeUsers(node, slots)) if (!ReferenceEquals(slot, target)) return false;
+        return true;
+    }
+
+    /// <summary>組合 Property 需要時建立獨立引用載體；連線模式保留共用。</summary>
+    internal static GraphNode PropertyReferenceForSlot(GraphSlotBase slot, GraphNode source, IEnumerable<GraphSlotBase> slots)
+    {
+        if (source?.Kind != NodeKind.Property || source.Mode == GraphNodeMode.Connection) return source;
+        var target = slot is UnionSlotBase union ? union.SelectedSlot ?? slot : slot;
+        foreach (var candidate in slots)
+        {
+            var other = candidate is UnionSlotBase wrapper ? wrapper.SelectedSlot ?? candidate : candidate;
+            if (!ReferenceEquals(other, target) && ReferenceEquals(other?.Node, source))
+                return CopyPropertyReference(source);
+        }
+        return source;
+    }
+
+    private static GraphNode CopyPropertyReference(GraphNode source)
+    {
+        var copy = new GraphNode();
+        copy.SetProperty(source.Property);
+        copy.Note = source.Note;
+        copy.Disabled = source.Disabled;
+        copy.Mode = source.Mode;
+        if (source.HasPos) copy.Pos = source.Pos;
+        copy.EnsureId();
+        return copy;
+    }
+
+    internal static List<GraphSlotBase> SharedPropertySlots(IEnumerable<GraphSlotBase> slots, GraphNode only = null)
+    {
+        var seenSlots = new HashSet<GraphSlotBase>();
+        var seenNodes = new HashSet<GraphNode>();
+        var shared = new List<GraphSlotBase>();
+        foreach (var candidate in slots)
+        {
+            var slot = candidate is UnionSlotBase union ? union.SelectedSlot ?? candidate : candidate;
+            if (slot == null || !seenSlots.Add(slot) || slot.Node?.Kind != NodeKind.Property || slot.Node.Mode == GraphNodeMode.Connection
+                || only != null && !ReferenceEquals(slot.Node, only)) continue;
+            if (!seenNodes.Add(slot.Node)) shared.Add(slot);
+        }
+        return shared;
+    }
+
+    internal static int SeparatePropertyReferences(IEnumerable<GraphSlotBase> slots, GraphNode only = null)
+    {
+        var shared = SharedPropertySlots(slots, only);
+        foreach (var slot in shared) slot.SetNode(CopyPropertyReference(slot.Node));
+        return shared.Count;
+    }
+
     /// <summary>由任一節點或 Slot 往下收集所有 Slot。Asset（ScriptableObject）視為 leaf。</summary>
     public static IEnumerable<GraphSlotBase> WalkSlots(object node, HashSet<object> visited)
     {

@@ -154,3 +154,5 @@ public class RecordObjects : ActionBase
 `Tests/Editor/` 涵蓋執行與交易回復、Property 讀寫與回復、驗證、跨工具 session 與庫內順序。在 Unity Test Runner 以 EditMode 執行；從 UPM 安裝時，要把 `com.harufamily.tools.assetpipeline` 加進 `manifest.json` 的 `testables`，並安裝 LogicGraph 與 UniTask。
 
 執行期使用 static 的 `AssetPipeline.current` 與回報 handler，**不支援同時執行多條管線**。交易只涵蓋經由 `context.Assets` 登記的寫入，不攔截任意 `AssetDatabase`、檔案或第三方回呼的副作用。
+
+Graph 的 ActionGroup 以 ISequentialActionContainer 宣告既有同步動作順序，可供 GraphKit 混合式流程讀取與編排；不改執行引擎。未知動作仍可在完整 Node 檢視。驗收範圍見 [GraphKit 混合式流程驗收](../../DependencyCore/GraphKit/Documentation~/HybridFlowValidation.md)。

@@ -24,7 +24,7 @@ internal sealed class HaruGraphDraftConnections
         {
             if (value is GraphNode node) Nodes.Add("n" + Nodes.Count, node);
             if (value is GraphSlotBase slot && (slot is ActionSlotBase || slot is FormulaSlotBase || slot is PropertySlotBase)
-                && slot is not GraphPropertyInputSlot && !declarations.Contains(slot))
+                && !declarations.Contains(slot))
                 Slots.Add("s" + Slots.Count, slot);
         }
         foreach (var pair in Nodes)

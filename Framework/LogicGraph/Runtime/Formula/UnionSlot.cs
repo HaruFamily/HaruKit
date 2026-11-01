@@ -37,13 +37,23 @@ namespace HaruFamily.Framework.LogicGraph
         public async UniTask<TResult> Evaluate(TPack pack, TokenTable<TPack> tokens)
         {
             tokens?.CancellationToken.ThrowIfCancellationRequested();
-            if (Node == null || Node.Kind == NodeKind.Empty || Node.Disabled) return _default;
+            if (Node == null) return _default;
+            if (Node.Kind == NodeKind.Empty || Node.Disabled) return default;
             string error = ConfigurationError;
             if (error != null) throw new InvalidOperationException(error);
             // 執行觀察、停用、Token／Property 與資產 scope 均由內層 Slot 負責，外層不重複 EnterNode。
-            TResult result = await OnEvaluate(pack, tokens);
-            tokens?.CancellationToken.ThrowIfCancellationRequested();
-            return result;
+            try
+            {
+                TResult result = await OnEvaluate(pack, tokens);
+                tokens?.CancellationToken.ThrowIfCancellationRequested();
+                return result;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"[LogicGraph] {GetType().Name} 求值失敗：{exception.Message}，改用 default({typeof(TResult).Name})。");
+                return default;
+            }
         }
 
         protected abstract UniTask<TResult> OnEvaluate(TPack pack, TokenTable<TPack> tokens);

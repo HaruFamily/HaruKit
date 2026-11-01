@@ -1,4 +1,4 @@
-namespace HaruFamily.DependencyCore.GraphKit.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -684,7 +684,7 @@ public partial class HaruGraphWindow : EditorWindow
     private HGGraphView BuildCurrentGraph()
         => focus.Kind == HGFocusKind.None ? new HGGraphView()
             : HGGraph.Build(model, focus.Roots, OrphansOfCurrentFocus(), focus.Id, focus.HeadTitle,
-                listCollapse, noteOpenId, noteCollapsed, focus.HeadCarrier, orphanKindHints, activeContext.Metadata, fieldTabs);
+                listCollapse, noteOpenId, noteCollapsed, focus.HeadCarrier, orphanKindHints, activeContext.Metadata, fieldTabs, nestSlots: true);
 
     /// <summary>
     /// 套用 Slot 的分支收合。圖一律建到底再標記，因為「有沒有別的欄位在用」要走完整張圖才算得準；
@@ -700,6 +700,8 @@ public partial class HaruGraphWindow : EditorWindow
         if (soloSlotKey != null)
         {
             ApplySolo();
+            foreach (var node in graph.Nodes)
+                if (node.NestedParent != null) node.Hidden |= node.NestedParent.Hidden || node.NestedParent.Collapsed;
             effectiveHidden.Add(soloSlotKey);
             HideGroupOffMembers();
             MarkHiddenSlots();
@@ -726,6 +728,8 @@ public partial class HaruGraphWindow : EditorWindow
             if (n.ParentRow == null) MarkVisibleFrom(n, visible);
 
         foreach (var n in graph.Nodes) n.Hidden = !visible.Contains(n);
+        foreach (var n in graph.Nodes)
+            if (n.NestedParent != null) n.Hidden |= n.NestedParent.Hidden || n.NestedParent.Collapsed;
         HideGroupOffMembers();
         MarkHiddenSlots();
     }
@@ -876,6 +880,8 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private void RevealNode(HGNodeView target)
     {
+        for (var node = target; node != null; node = node.NestedParent)
+            if (node.Collapsed) SetListFolded(HGGraph.NodeCollapseKey(node.Id), false);
         soloSlotKey = null;
         soloRestore.Clear();
         ExpandNodeGroupOf(target?.Id);
@@ -986,7 +992,10 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private bool IsLinkVisible(HGLink link)
     {
+        if (IsNestedSlotLink(link)) return false;
         if (link?.InputPort == null || link.OutputPort == null) return false;
+        var collapsedInput = HGGraph.CollapsedOwner(OwnerNodeOfPort(link.InputPort));
+        if (collapsedInput != null && ReferenceEquals(collapsedInput, HGGraph.CollapsedOwner(OwnerNodeOfPort(link.OutputPort)))) return false;
         if (link.ParentRow?.IsTabHidden == true) return false;
         if (IsGroupOffLink(link)) return false;
         if (effectiveHidden.Contains(HGGraph.CollapseKey(link.ParentRow.OwnerNodeId, link.ParentRow))) return false;
@@ -999,6 +1008,8 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private bool IsLinkEndVisible(HGLink link, HGPort port)
     {
+        var collapsed = HGGraph.CollapsedOwner(OwnerNodeOfPort(port));
+        if (collapsed != null && !collapsed.Hidden) return true;
         if (port.Presentation.Visible) return true;
         return FoldedListOf(link) != null && ReferenceEquals(OwnerRowOfPort(port), link.ParentRow);
     }
@@ -1079,9 +1090,9 @@ public partial class HaruGraphWindow : EditorWindow
         }
     }
 
-    /// <summary>欄位列以外的接點，供折疊扇形與 Tab 殘影分組使用（寫入 Property 的線兩端角色相反，用列比對）。</summary>
+    /// <summary>來源輸出接點，供折疊扇形與 Tab 殘影分組使用。</summary>
     private HGPort FoldTargetPort(HGLink link)
-        => ReferenceEquals(OwnerRowOfPort(link.InputPort), link.ParentRow) ? link.OutputPort : link.InputPort;
+        => link.OutputPort;
 
     /// <summary>
     /// 從這顆節點沿「沒有收起來」的欄位往下走，走得到的節點都要畫。沒有父列的節點（HEAD 與候選）
@@ -1092,7 +1103,8 @@ public partial class HaruGraphWindow : EditorWindow
         if (node == null || !visible.Add(node)) return;
         foreach (var row in HGGraph.AllRows(node.Rows))
         {
-            if (row.InputSlot == null) continue;
+            if (row.InputSlot == null || row.InputSlot is PropertySlotBase) continue;
+            if (row.Hidden && row.NestedNode != null) continue;
             if (effectiveHidden.Contains(HGGraph.CollapseKey(node.Id, row))) continue;
             if (graph.BySlot.TryGetValue(row.InputSlot, out var child)) MarkVisibleFrom(child, visible);
         }

@@ -1,4 +1,4 @@
-namespace HaruFamily.DependencyCore.GraphKit.Editor
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor
 {
 using System;
 using System.Collections;
@@ -185,6 +185,12 @@ public partial class HaruGraphWindow
                     var pressedPort = inputPortClickPort;
                     inputPortClickPort = null;
                     HGRow pressed = OwnerRowOfPort(pressedPort);
+                    if (pressed is { NodeSocket: true, Locked: false } && pressed.InputSlot.Node == null)
+                    {
+                        ShowSocketSourcePicker(pressed, GraphToWindowRect(PortRect(pressedPort.Presentation.Position)));
+                        e.Use();
+                        break;
+                    }
                     if (pressed?.InputSlot?.Node != null)
                     {
                         ToggleSlotVisibility(HGGraph.CollapseKey(pressed.OwnerNodeId, pressed), e.alt);
@@ -213,13 +219,13 @@ public partial class HaruGraphWindow
                 {
                     // 只有真的拖動過才落盤。單純點一下也寫的話，還沒有座標記憶的節點會被寫入
                     // AutoLayout 算出來的位置（SetPosition 的「值沒變就跳過」對它不成立），畫面沒變卻要求存檔。
-                    if (dragMoved)
+                    if (dragMoved && !FinishNodeSocketDrag(dragNode, graphMouse))
                     {
                         BreakUndoMerge();
                         var moved = new List<HGNodeView>();
                         foreach (var n in graph.Nodes)
-                            if (dragStartPositions.ContainsKey(n.Id)) { model.SetPosition(n.Id, n.Pos); moved.Add(n); }
-                        model.SetPosition(dragNode.Id, dragNode.Pos);
+                            if (n.NestedParent == null && dragStartPositions.ContainsKey(n.Id)) { model.SetPosition(n.Id, n.Pos); moved.Add(n); }
+                        if (dragNode.NestedParent == null) model.SetPosition(dragNode.Id, dragNode.Pos);
                         if (!moved.Contains(dragNode)) moved.Add(dragNode);
                         MarkPositionsChanged();
                         // 放手時滑鼠在哪個群組框裡＝進那個群組，在框外＝移出；與座標同一步 Undo。
@@ -271,6 +277,13 @@ public partial class HaruGraphWindow
                 break;
 
             case EventType.KeyDown:
+                if (e.keyCode == KeyCode.Escape && dragNode != null)
+                {
+                    RestoreNodeSocketDrag();
+                    dragNode = titleClickNode = null; dragMoved = false;
+                    dragStartPositions.Clear(); frozenNodeGroupRects.Clear();
+                    e.Use(); break;
+                }
                 // F3 不是輸入字元，搜尋框握著焦點時也要能跳下一筆，所以排在文字輸入判斷之前。
                 if (e.keyCode == KeyCode.F3 && nodeSearch.IsOpen) { StepNodeSearch(e.shift ? -1 : 1); e.Use(); break; }
                 // 左欄與焦點列的輸入框畫在畫布之後，按鍵先到這裡：正在打字時不能當快捷鍵吃掉，
@@ -435,19 +448,21 @@ public partial class HaruGraphWindow
     {
         if (graph == null) return null;
         for (int i = graph.Nodes.Count - 1; i >= 0; i--)
-            if (!graph.Nodes[i].Hidden && graph.Nodes[i].Rect.Contains(graphPoint)) return graph.Nodes[i];
+            if (!graph.Nodes[i].Hidden && NodeContainsPoint(graph.Nodes[i], graphPoint)) return graph.Nodes[i];
         return null;
     }
 
     /// <summary>把節點提到最上層並記住。已經在最上層時回 false，順序不動。</summary>
     private bool RaiseNode(HGNodeView node)
     {
+        while (node?.NestedParent != null) node = node.NestedParent;
         if (graph == null || node == null || string.IsNullOrEmpty(node.Id)) return false;
         int index = graph.Nodes.IndexOf(node);
         if (index < 0 || index == graph.Nodes.Count - 1) return false;
 
         graph.Nodes.RemoveAt(index);
         graph.Nodes.Add(node);
+        HGGraph.OrderNestedSlots(graph);
         raisedNodeIds.Remove(node.Id);
         raisedNodeIds.Add(node.Id);
         // 只需要記得最近碰過的幾顆；更早的順序讓給建圖順序，清單才不會隨使用時間一直長。
@@ -467,6 +482,7 @@ public partial class HaruGraphWindow
             graph.Nodes.RemoveAt(index);
             graph.Nodes.Add(node);
         }
+        HGGraph.OrderNestedSlots(graph);
     }
 
     /// <summary>接點命中只認游標下最上層的節點：被蓋住的節點，它的接點也算被蓋住。</summary>

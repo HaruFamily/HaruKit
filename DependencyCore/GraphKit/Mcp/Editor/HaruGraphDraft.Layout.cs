@@ -9,9 +9,9 @@ using UnityEngine;
 
 public static partial class HaruGraphDraft
 {
-    private static object NodeState(GraphNode node) => new
+    private static object NodeState(GraphNode node, int readUsers) => new
     {
-        node_id = node.Id, kind = node.Kind.ToString(), disabled = node.Disabled, note = node.Note,
+        node_id = node.Id, kind = node.Kind.ToString(), node_mode = node.Mode.ToString(), read_user_count = readUsers, disabled = node.Disabled, note = node.Note,
         has_position = node.HasPos, position = node.HasPos ? WireValue(node.Pos) : null,
         body_type = node.BodyObject?.GetType().AssemblyQualifiedName,
         token_id = node.Token?.Id, property_id = node.Property?.Id,
@@ -59,12 +59,21 @@ public static partial class HaruGraphDraft
             {
                 generation = draft.Session.Generation, total = selected.Length,
                 next_offset = (long)offset + pageSize < selected.Length ? (int?)(offset + pageSize) : null,
-                entries = selected.Skip(offset).Take(pageSize).Select(NodeState).ToArray(),
+                entries = selected.Skip(offset).Take(pageSize).Select(node => NodeState(node, draft.Session.ReadNodeUserCount(node))).ToArray(),
             });
         }
         if (string.IsNullOrEmpty(id) || nodes.Count(node => node.Id == id) != 1)
             return Error("node_unavailable", "Select a unique nonempty node_id from nodes at this generation.");
         var target = nodes.Single(node => node.Id == id);
+        GraphNodeMode? mode = null;
+        if (input.GetRaw("node_mode") is JToken rawMode)
+        {
+            if (rawMode.Type != JTokenType.String || ((string)rawMode != "Composition" && (string)rawMode != "Connection"))
+                return Error("invalid_node_mode", "node_mode must be exactly Composition or Connection.");
+            mode = (string)rawMode == "Composition" ? GraphNodeMode.Composition : GraphNodeMode.Connection;
+            if (mode == GraphNodeMode.Composition && draft.Session.ReadNodeUserCount(target) > 1)
+                return Error("node_mode_shared", "Disconnect extra read Slots before switching to Composition. Connection preserves one-to-many references; no automatic copies or disconnections.");
+        }
         var disabled = input.GetRaw("disabled");
         var note = input.GetRaw("note");
         var position = input.GetRaw("position");
@@ -81,12 +90,12 @@ public static partial class HaruGraphDraft
         }
         bool clear = clearPosition?.Value<bool>() == true;
         if (clear && position != null) return Error("invalid_value", "position and clear_position=true are mutually exclusive.");
-        if (disabled == null && note == null && position == null && !clear)
-            return Error("value_required", "Provide disabled, note, position or clear_position=true.");
-        var before = NodeState(target);
+        if (!mode.HasValue && disabled == null && note == null && position == null && !clear)
+            return Error("value_required", "Provide node_mode, disabled, note, position or clear_position=true.");
+        var before = NodeState(target, draft.Session.ReadNodeUserCount(target));
         var result = draft.Session.ConfigureNode(target, disabled?.Value<bool>(), note != null,
-            note?.Type == JTokenType.Null ? null : (string)note, parsedPosition, clear);
-        return CommandResult(draft, result, action, new { node_id = id, before, after = NodeState(target) });
+            note?.Type == JTokenType.Null ? null : (string)note, parsedPosition, clear, mode);
+        return CommandResult(draft, result, action, new { node_id = id, before, after = NodeState(target, draft.Session.ReadNodeUserCount(target)) });
     }
 }
 }

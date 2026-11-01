@@ -1,4 +1,4 @@
-namespace HaruFamily.Framework.LogicGraph.Editor.Tests
+﻿namespace HaruFamily.Framework.LogicGraph.Editor.Tests
 {
 using System;
 using System.Collections.Generic;
@@ -77,6 +77,8 @@ public sealed class LogicGraphExecutionTests
         formula.Value = null;
         Assert.That(await slot.Evaluate(pack, tokens), Is.Null);
         node.Disabled = true;
+        Assert.That(await slot.Evaluate(pack, tokens), Is.Null);
+        slot.SetNode(null);
         Assert.That(await slot.Evaluate(pack, tokens), Is.EqualTo("fallback"));
         Assert.That(pack.Count, Is.EqualTo(2));
     }
@@ -115,6 +117,31 @@ public sealed class LogicGraphExecutionTests
     }
 
     [Serializable] private sealed class IntToken : FormulaToken<int, IntSlot, Pack> { }
+    private sealed class ThrowingInt : IntFormula
+    {
+        public bool Cancel;
+        protected override UniTask<int> OnEvaluate(Pack pack, TokenTable<Pack> tokens)
+            => throw (Cancel ? new OperationCanceledException() : new InvalidOperationException("formula failure"));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task FormulaFailureUsesTypeDefaultWithoutConsumingConstantAndPreservesCancellation(bool cancel)
+    {
+        var slot = new IntSlot(42);
+        slot.SetNode(new GraphNode(new ThrowingInt { Cancel = cancel }));
+        if (cancel)
+            Assert.ThrowsAsync(Is.InstanceOf<OperationCanceledException>(),
+                async () => await slot.Evaluate(new Pack(), new TokenTable<Pack>()));
+        else
+        {
+            UnityEngine.TestTools.LogAssert.Expect(UnityEngine.LogType.Warning,
+                new System.Text.RegularExpressions.Regex("求值失敗：formula failure"));
+            Assert.That(await slot.Evaluate(new Pack(), new TokenTable<Pack>()), Is.Zero);
+        }
+        slot.SetNode(null);
+        Assert.That(await slot.Evaluate(new Pack(), new TokenTable<Pack>()), Is.EqualTo(42));
+    }
     [Serializable] private sealed class ContextualToken : FormulaToken<int, ContextualIntSlot, Pack> { }
     private sealed class IntFormulaAsset : FormulaAsset<int, IntSlot, Pack> { }
 
@@ -163,9 +190,9 @@ public sealed class LogicGraphExecutionTests
         slot.SetNode(new GraphNode(new IntFormula()));
         Assert.That(await typed.Evaluate(pack, table), Is.Zero);
         slot.Node.Disabled = true;
-        Assert.That(await typed.Evaluate(pack, table), Is.EqualTo(-1));
+        Assert.That(await typed.Evaluate(pack, table), Is.Zero);
         slot.SetNode(new GraphNode());
-        Assert.That(await typed.Evaluate(pack, table), Is.EqualTo(-1));
+        Assert.That(await typed.Evaluate(pack, table), Is.Zero);
     }
 
     [Test]
@@ -822,6 +849,17 @@ public sealed class LogicGraphExecutionTests
         node.SetProperty(property);
         input.SetNode(node);
         return input;
+    }
+
+    [Test]
+    public void OptionalPropertyOutputSkipsWritingButRejectsInvalidSelectedTarget()
+    {
+        var output = new PropertySlot<int, IntSlot>();
+        Assert.That(output.Write<Pack>(42, null), Is.True);
+        output.SetNode(new GraphNode());
+        Assert.That(output.Write<Pack>(42, null), Is.False);
+        output.SetNode(null);
+        Assert.That(output.Write<Pack>(42, null), Is.True);
     }
 
     private static PropertySlot<int, IntSlot> PropertyTarget(GraphProperty property)

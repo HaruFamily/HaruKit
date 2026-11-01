@@ -46,25 +46,38 @@ public sealed partial class HGDocumentSession<TDocument> where TDocument : class
     });
     /// <summary>Edits carrier state and layout without replacing its identity or connections.</summary>
     public HGSessionCommandResult ConfigureNode(GraphNode node, bool? disabled, bool setNote, string note,
-        UnityEngine.Vector2? position, bool clearPosition) => Guard(() =>
+        UnityEngine.Vector2? position, bool clearPosition, GraphNodeMode? mode = null) => Guard(() =>
     {
         if (!IsDocumentOwned(node) || position.HasValue && clearPosition || setNote && note?.Length > 16384)
             return HGSessionCommandResult.Rejected;
         if (position.HasValue && (!FiniteCoordinate(position.Value.x) || !FiniteCoordinate(position.Value.y)))
             return HGSessionCommandResult.Rejected;
-        bool contentChanged = disabled.HasValue && node.Disabled != disabled.Value;
+        if (mode.HasValue && (!Enum.IsDefined(typeof(GraphNodeMode), mode.Value)
+            || mode.Value == GraphNodeMode.Composition && ReadNodeUserCount(node) > 1))
+            return HGSessionCommandResult.Rejected;
+        bool contentChanged = disabled.HasValue && node.Disabled != disabled.Value
+            || mode.HasValue && node.Mode != mode.Value;
         bool noteChanged = setNote && node.Note != note;
         bool positionChanged = position.HasValue && (!node.HasPos || !node.Pos.Equals(position.Value))
             || clearPosition && (node.HasPos || !node.Pos.Equals(UnityEngine.Vector2.zero));
         if (!contentChanged && !noteChanged && !positionChanged) return HGSessionCommandResult.NoChange;
         return Apply(() =>
         {
+            if (mode.HasValue) node.Mode = mode.Value;
             if (disabled.HasValue) node.Disabled = disabled.Value;
             if (setNote) node.Note = note;
             if (position.HasValue) node.Pos = position.Value;
             else if (clearPosition) node.ClearPos();
         }, content: contentChanged);
     });
+
+    /// <summary>Counts distinct read slots, excluding Property write targets and duplicate union branches.</summary>
+    public int ReadNodeUserCount(GraphNode node) => HGModel.NodeUsers(node,
+        HGModel.WalkSlots(Document, new HashSet<object>(HGRefComparer.Instance))).Count;
+
+    /// <summary>Checks whether a read reference obeys the carrier's composition/connection mode.</summary>
+    public bool CanReferenceNode(GraphNode node, GraphSlotBase target) => HGModel.CanReferenceNode(node, target,
+        HGModel.WalkSlots(Document, new HashSet<object>(HGRefComparer.Instance)));
 
     private static bool FiniteCoordinate(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
 

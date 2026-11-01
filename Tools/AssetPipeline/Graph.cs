@@ -12,8 +12,10 @@ namespace HaruFamily.Tools.AssetPipeline
     // 形狀對應 LogicGraph 的 ActionTimingGroup：它是 root，本體是一串頭端。
     // AssetPipeline 目前只有一條管線，所以整張圖只會有一顆 root。
     [Serializable]
-    public class ActionGroup : IGraphHead
+    public class ActionGroup : IGraphHead, ISequentialActionContainer
     {
+        IReadOnlyList<ActionSlotBase> ISequentialActionContainer.SequentialActions => Actions;
+
         [SerializeReference]
         public List<ActionSlot> Actions = new List<ActionSlot>();
 

@@ -1,4 +1,4 @@
-namespace HaruFamily.DependencyCore.GraphKit.Editor.Tests
+﻿namespace HaruFamily.DependencyCore.GraphKit.Editor.Tests
 {
 using System;
 using System.Collections;
@@ -307,30 +307,7 @@ public sealed class HGPublicConsumerTests
         }
     }
 
-    [Test]
-    public void PublicSessionRefusesToTreatThePropertyNodeInputAsTheWriteLink()
-    {
-        var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
-        try
-        {
-            owner.B = ConsumerDocument.Create();
-            Assert.That(HGDocumentSession<ConsumerDocument>.TryOpen(owner, Binding(), out var session), Is.True);
-            // 寫入關係的正本是 Action 的 PropertySlot；Property 節點下方的 Input 只是接收端身分。
-            GraphNode property = session.Document.Orphans[0];
-            property.SetProperty(new GraphProperty());
-            GraphNode source = session.Document.Orphans[1];
-            var key = new HGPortKey(property.Id, "/property/input", HGPortRole.Input);
-            var registry = session.CreatePortRegistry();
-            registry.AddInput(key, property.PropertyInput, new HGDelegatePortPolicy(() => true, _ => true), ConsumerPresentation());
 
-            Assert.That(session.ReconnectInput(registry, key, Source(source)), Is.EqualTo(HGSessionCommandResult.Rejected));
-            Assert.That(session.LastDiagnostic.Message, Does.Contain("PropertySlot"));
-            Assert.That(session.Disconnect(registry, key), Is.EqualTo(HGSessionCommandResult.Rejected));
-            Assert.That(property.PropertyInput.Node, Is.Null);
-            Assert.That(session.IsDirty, Is.False);
-        }
-        finally { UnityEngine.Object.DestroyImmediate(owner); }
-    }
 
     [Test]
     public void CurrentRegistryCannotMutateLiveForeignDetachedOrStaleSlots()
@@ -1021,6 +998,7 @@ public sealed class HGPublicConsumerTests
         var owner = ScriptableObject.CreateInstance<ConsumerOwner>();
         owner.B = ConsumerDocument.Create();
         owner.B.Root.Items.Add(new ConsumerSlot());
+        owner.B.Orphans[0].Mode = GraphNodeMode.Connection;
         var binding = new HGDocumentBinding<ConsumerDocument>("Consumer.B", target => ((ConsumerOwner)target).B,
             (target, document) => ((ConsumerOwner)target).B = document, ConsumerDocument.Create);
         var presentation = new HGDelegatePortPresentation(new object(), () => Vector2.zero, () => Rect.zero,

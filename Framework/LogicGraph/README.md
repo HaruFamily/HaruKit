@@ -1,4 +1,4 @@
-﻿# LogicGraph
+# LogicGraph
 
 目前套件版本：`2.0.0`（Unity 2021.3 以上）。
 
@@ -10,12 +10,14 @@ LogicGraph 是用來編寫與執行序列化 Action 圖的框架：依時機分�
 
 ## 功能
 
+- 時機 root 提供明確循序描述，可由 GraphKit 唯讀投影 API 取得流程資料；尚未提供積木介面。見維護手冊 §3.2。
+
 - Editor 提供 `IEditableGraphAsset` 隔離編輯契約，完整保留資產輸入、庫與版面；保存與跨資產影響由呼叫端管理。
 
 - `LogicGraph<TTiming, TPack>` 依使用端定義的時機 enum 與執行上下文分派非同步動作。
 - 時機 enum 可標 `[HGLabel("顯示名稱")]`，同步改變節點標題、下拉與新增選單；執行仍使用 enum 值。完整規則見維護手冊 §3.1。
 - `ActionBase<TPack>` 執行副作用；`FormulaBase<TResult, TPack>` 非同步計算型別化的值。
-- Slot 可以是常數保底值、內嵌節點、可重用資產、具名 Token（公式），或 Property（讀目前值）。
+- Slot 可以是未接來源時的常數、內嵌節點、可重用資產、具名 Token（公式），或 Property（讀目前值）。
 - `UnionSlot<TResult, TPack, TA, TB, ...>` 支援 2～5 種輸入族；具體子類覆寫 `OnEvaluate` 統一結果，畫面保留一個輸入孔。詳見維護手冊「多族輸入 UnionSlot」。
 - Slot 可覆寫 `EvaluateUnlinked(pack)`，將未接線時的 Default 選項依當次上下文解析；配合 GraphKit 的 `DefaultEditType`／`DefaultObject` 編輯，不影響接線與停用保底。
 - Action 以 `PropertySlot<TResult, TSlot>` 寫入 Property；讀取不會觸發寫入者。
@@ -250,7 +252,7 @@ namespace LogicGraphQuickStart
 
 - 用程式修改圖之後，呼叫 `InvalidateValidation()` 撤銷 runtime 檢查快取與編輯器旗標。可用 `TryValidate(out error)` 檢查結構，或透過 Inspector／`LogicGraphEditor.Verify(owner)` 手動檢查含 Usage 的規則；`MarkValidated()` 不會略過 runtime 檢查。
 - Token 是具名的計算，不是快取變數，每次查詢都重新求值（包含隨機公式）。查詢要帶具體的 Slot 型別：`await tokens.Resolve<int>(typeof(DemoIntSlot), "Amount", pack)` 需要圖裡另外有一個該族、名為 `Amount` 的 Token，不是指動作上同名的欄位。
-- 缺來源或停用的公式回保底值；節點本體丟出的例外照常往外傳，保底值不是通用的例外處理。
+- 未接來源使用常數；已接來源停用、遺失、型別不符或求值例外回 default(T)，例外記錄警告，取消仍向外傳遞。
 - 每次執行的上下文放在 Pack，不要把節點的序列化欄位當跨呼叫的快取。
 
 ## 整合

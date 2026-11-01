@@ -1,4 +1,4 @@
-﻿# GraphKit 維護手冊
+# GraphKit 維護手冊
 
 給 AI Agent 與維護者。修改、擴充 GraphKit，或在使用端串接它之前先讀完本檔，並遵守其中的規則。
 
@@ -98,7 +98,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 - Core／Editor 驗證公式資產的 Input，不拿呼叫端的對外 Slot 當成內部接收端；資產參數的循環探索走 Token.Slot，不走對外宣告欄位。
 - `GraphProperty`：圖內具名、型別化儲存定義，唯一歸屬為 `IPropertyOwner.Properties`。所有節點以單一引用指向庫；驗證拒絕未登記定義。新定義預設不保留，初始內容可明確為 null。讀取不求值寫入者，寫入邊不構成求值循環。
 - 側邊庫直接呈現圖層定義。RetainValue 只由展開核取方塊調整，標題列「保留 ○／●」唯讀；所有新定義預設關閉。序列化欄位 `_executionLocal` 與 RetainValue 反向，生命週期由各執行層負責。
-- `GraphPropertyInputSlot` 只是 Property 節點接收端的身分；寫入連線的正本是寫入端 `PropertySlot.Node`。
+- 寫入目標由 `PropertySlot.Node` 保存，介面只用目標選單；PropertyNode 無接收端。舊輸入欄位與型別已移除，既有資產已由 Unity 重存。
 - `PropertySlotBase` 欄位的型別 chip 依 `FamilyType` 顯示對應 FormulaSlot 族的 `[HGKind]` 名稱；未指定名稱時沿用結果型別短名。
 
 ### 3.4 文件與能力
@@ -149,6 +149,8 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 | `.Source.cs` | 換來源、Token／資產／Property 節點建立與拖放、轉存、右鍵選單 |
 | `.Execution.cs` | 執行觀察、session 選擇、Hold |
 | `.NodeGroups.cs` | 畫布節點群組：建立、繪製、整組移位、分頁、註解、改色、選取、右鍵選單、拖放進出的成員判定 |
+| `.FlowPreview.cs` | 唯讀流程預覽的隔離副本、切換、手動重讀與引用檢視路由；面板與局部畫布狀態在 HGFlowPreviewPanel |
+| `.FlowEditing.cs` | 流程基本編輯、generation／歸屬／唯讀檢查、來源選單與暫存值編輯；沿用視窗交易與歷程 |
 
 資料流：Owner → 明確 binding 或 legacy 欄位探索 → DeepCopy 成 `HGModel.Data` → `HGFocus` 決定中間畫布在編輯哪些 root → `HGGraph.Build` 每次資料變動整份重建節點與列 → 視窗用 IMGUI 繪製 → 存檔時清理遺失型別、DeepCopy、撤銷過期驗證、通過版本守衛後寫回。
 
@@ -515,6 +517,146 @@ HGDocumentSession.TryOpenPreservingOwner 可接收既有 HGEditorExtensionContex
 
 CommitAssetsPreservingOwners 對 1..16 個不同持久文件先核對全部 guard、複製並撤銷驗證狀態，再暫存全部 Owner、驗證 staged references，最後保存選定檔案。32 MiB／檔、備份合計 128 MiB；錯誤逐項回復磁碟與記憶體並驗證，結果回報 recovery directory。所有寫入後的 session 均須重新開啟。Library/GraphKitAssetRecovery 保存路徑／狀態與原始檔案備份；此機制不保證程序崩潰跨檔原子性。相依閉包與用途權限由呼叫端規劃，GraphKit 不反向引用 MCP。
 
+## 唯讀流程描述與投影
+
+`Runtime/Contracts/GraphFlow.cs` 的 `IGraphFlowContainer.DescribeFlow()` 宣告 Sequence、Conditional、Loop、FirstMatch，不排程、不求值、不取代原序列化欄位。描述借用實際 Slot／子動作清單；讀取不得建立 Slot、補 Id、修改文件或執行使用端。Conditional 的唯一 Input 是條件，兩個 section 依序為 WhenTrue／WhenFalse；Loop 的 Inputs 描述迴圈來源、Body 為每次迭代的有序動作；FirstMatch 的 Case 依判斷順序附 Condition，最後一個 Default 無條件。使用端負責確保宣告與實際執行相符，不用反射欄位順序猜語意。
+
+`HGEditorExtensionContext` 的可選 `flowMetadata` 實作 `IHGFlowMetadataProvider`，成功回傳時完整取代內容自己的流程宣告；回傳 false 才回退 `IGraphFlowContainer`，再回退既有 `ISequentialActionContainer`。例外或無效宣告回報 issue，不改採其他描述來掩飾錯誤。未知內容保留 opaque Node，不推斷子流程；不進入引用資產、Formula、Token 或 Property 求值。
+
+`HGFlowSnapshot.Capture(document, context)` 及 `HGDocumentSession.CaptureFlow()` 透過原 root adapter 讀取，輸出無 live Slot／Node／清單引用的唯讀 DTO。Root 與 Step 的 Path 是當次結構的使用位置，結構變更、Undo／Redo 後須重取，不是永久 ID 或可寫 handle。NodeId 只讀現有值、不補值；同一載體依使用位置展開，ReferenceCount 僅計本次投影中的 action 使用位置，不是全文件反向引用數。Disabled 包含祖先、Slot 及載體停用。未知結構以 Unknown 呈現，不代表執行或驗證失敗。
+
+投影使用 reference identity 防遞迴，有步驟／root／section／input 數量及深度上限；循環、空 Slot、無效宣告、讀取例外與超限列入 Issues。Complete 只表示沒有擷取問題，不表示圖合法、所有 opaque 內容已理解或玩法已驗收。契約 getter 與 provider 是受信任的 Editor 接入；投影本身沒有寫入命令，不能隔離違約 getter 的副作用。Session 讀取不更動 generation、Dirty、Undo、驗證或保存。
+
+投影 Input 另帶無連線時的純值文字摘要，Step 以 HasCustomLabel 區分作者標籤與型別名稱；只讀 DefaultObject，不呼叫 Evaluate。複合預設值不展開成可修改物件。LogicGraph 與專案在其範圍宣告流程，GraphKit 不引用使用端。
+
+## 原畫布的巢狀 Node 與動作清單
+
+HaruGraphWindow 只有原 Node 畫布的編輯流程，直接啟用 HGGraph.Build 的 nestSlots。一般單值 Slot、可寫動作清單元素及帶 Slot 設定的輸入，沿用同一份 Slot→Node、DrawNode／DrawRows、Port、來源選單與交易。唯讀流程描述是 MCP／工具的語意查詢，不是另一個視窗編輯系統。
+
+HGGraph.Nested.cs 按文件的實際 Slot 引用建立 view 父子森林。組合模式且全域單一使用的 Inline／Token／Asset／Property 來源可嵌入；連線模式固定保留在畫布，允許多個 Slot 使用。循環、跨群組及超過 16 層仍受既有安全限制。父子須在同一 Group／Tab 或皆未分組，不改動既有群組成員。動作清單預設展開，但尊重手動收合；不可寫清單與欄位不提供插入。欄位巢狀不代表自動推斷執行語意，未知 Action 的資料仍可用原 Node 檢視。
+
+量測由葉往根計算寬高，定位及繪製由根往葉，Header／Slot 設定／嵌入內容分開量測。NestedParent／NestedSlot／SocketContentY 只存在 view，不能回填投影位置；拖父節點帶整個子樹，層級提昇操作以最外層為區塊。內部 Slot 邊不畫也不命中，資料端點仍存在。普通欄位、Slot 設定、清單把手／刪除仍用原生控制項。
+
+單選拖 Node Header 到單值槽以 HGPortConnection.Check 判斷族、唯讀與循環；同槽、無效目標、父框內放空、畫布外及 Esc 取消。抽出到畫布會斷開原引用並保留原空槽，來源留在候選池，槽位設定不被丟棄。已共用的外部來源拖入只新增引用。清單項目要移到插入線，避免將整個 Slot 設定誤當成單一連線覆寫。
+
+清單標題旁「＋」直接新增 Default／空 Slot 項目，不顯示來源選單。拖到清單標題、元素上緣或尾端會顯示插入線；清單間移動搬原 Slot，保留 Id／Label／Disabled，沿用 HGFlowStructure.ResolveTransfer 的型別、範圍及自我子流程守衛。從外部來源加入則建立新 Slot；來自單值動作槽時保留其 Label／Disabled 並留下原空槽。多選維持原畫布搬移，不做多項拼裝。
+
+TryMutateContent／ApplyGraphMutation／AttachSource 共用草稿、失敗回復與 Undo；中間 TrackChanges 暫停，最後一次 Invalidate。WindowSession 的流程結構／值／來源命令維持可用，MCP 經 HGDocumentSession 使用同一份圖資料及共用結構守衛。公開背景 API 不依賴 MCP／JSON。
+
+HGDocumentSession.Geometry 使用相同巢狀量測；nodes 的 parent_node_id 表示 view 包含關係。所有祖先／子孫的預期接合區不計為重疊，內部槽邊不列示意線路。HGGraphSnapshotSafety 共用隔離及原生值檢查，不負責呈現另一套 UI。背景 SVG 仍不是 IMGUI 截圖。
+
+跨使用端與人工驗收見 [HybridFlowValidation.md](HybridFlowValidation.md)。Unity 編譯、測試、拖放及畫面由使用者驗證。
+
+> Trace: verified 2026-10-31 · doc `Doc/2026-10-2/REPORT_GraphKit多層巢狀與流程介面整併.md`（來源靜態核對；Unity／拖放／視覺待驗證）
+
+已填入巢狀 Node 的簡單 Slot 使用左 Label／右 Node，Node 標題只顯示自己的名稱；已有內容時不另畫 Slot 外框。含額外 Slot 設定者在左側保留展開箭頭，設定內容排在 Node 下方。Default／外部引用維持單列參數。
+
+動作清單收合保留 NestedParent／NestedSlot 歸屬。被收合列持有的唯一內放 Node 及其內放後代一併隱藏，展開後回原內容欄；Window 的可達性走訪不穿過隱藏的內放列。共用外部來源仍依既有引用可達性判定，不因收合一處而被全域隱藏。
+
+左右內放配置：父 Node 本體與 Header 維持自身宣告寬度，高度依子樹量測。單值槽與 NodeList 各自繪製 Slot 框，向右延伸只包住直屬子 Node 本體，不追隨更深層的 Slot 延伸；子 Node 留在左標籤右側的內容欄，維持自身寬度與完整圓角外框，不移到父層右緣。父層右框在 Slot 延伸區留出開口。可見範圍、命中、拖放與自動排版計入 Slot 延伸範圍。清單 ＋ 與把手維持固定欄位和垂直置中，收合狀態保存。投影不回填儲存座標。
+
+> Trace: verified 2026-11-01 · doc `Doc/2026-10-2/REPORT_GraphKit固定寬度與開口接合.md`（使用者視覺回報後恢復內放；來源靜態核對，Unity 待驗證）
+
+槽位內容使用同一區域：未接來源顯示常數與原 Port，點空 Port 依原 Slot 候選契約建立 Node，拖入及拉線共用原連線守衛；已有來源顯示 Node／引用名稱，不編輯備援常數。NodeSocket 不配置額外空框高度與型別 chip，型別仍由 Slot／Port 契約判定。Slot 有 NestedNode 才隱藏輸入 Port；未接來源與外部接線均保留原 Port。內放 Node（NestedParent 非空）隱藏 Header 輸出 Port 與命中，不預留標題接點空間；外部 Node 保留輸出 Port。內放清單項目不顯示 ×，保留排序把手；Node 的來源 ▾ 提供拔出、移除與公式項目的改為常數，無需右鍵。邏輯端點保留以供拖入型別／循環守衛，不以畫布裝飾的顯示決定來源相容性。來源相容性與拖入守衛仍沿用原 Slot／Port 契約。常數儲存不因接線或拔除而清除；求值失敗政策由各使用端決定。
+
+> Trace: verified 2026-10-31 · doc `Doc/2026-10-2/REPORT_GraphKit槽位內容合併與求值default.md`（來源及資產文字盤點；Unity 待驗證）
+
+
+### 參數與清單控制欄對齊
+
+NodeList 標題固定預留外側 ListGutter 把手欄；空清單、收合及項目數不影響 ＋ 的水平位置。內放 Slot Label 垂直置中於整顆子 Node；清單標題與 ＋ 置中於右側項目區。空清單及收合維持單列高度。普通參數與 Slot 的預設值欄起點由 HGGraph.ParameterColumnLeft 決定，普通群組／Slot 設定的縮排只影響 Label。明確宣告的 Label 寬度仍沿用既有規則，無 Label 的值維持自身縮排。
+
+普通值與可內放 Slot 的右側共用 ParameterRightInset（PortDiameter + 10px），未放 Port 的列也保留該空間。ValueFieldRect 同時供 drawer 量測與繪製，避免 enum／自訂控制項與 Slot 各算一套寬度。需要顯示型別 chip、清單刪除等控制項的列仍額外保留其必要寬度；Spinner 的完整列介面維持原版面。
+
+> Trace: verified 2026-10-31 · doc `Doc/2026-10-2/REPORT_GraphKit清單拖放與常數入口.md`（來源靜態核對；Unity 視覺待確認）
+
+### 清單拖放與常數
+
+Canvas 的清單新增入口位於標題旁 ＋，不配置尾端整列新增按鈕。可寫 List<ActionSlot> 與 List<FormulaSlot> 標記 NodeList，共用左右兩欄量測與拖放插入；各類清單的 ＋ 一律直接新增預設元素：公式 Slot 為 Default，動作 Slot 為空槽，不跳選單；要使用 Node 可拖入該槽或清單插入位置。List<int>／List<string> 等純值清單仍只有常數新增，不將 Node 寫進純值元素。固定長度或唯讀清單不得改結構。
+
+拖入插入位置新增 Slot；跨清單搬移原 Slot，保留常數與設定，相同清單重排修正移除後索引。動作沿用 HGFlowStructure.ResolveTransfer，所有 Node 清單保留族、循環與唯讀守衛。內放清單 Node 拖到畫布空白處時移除原項目，來源留在畫布／候選池；畫布外、其他 Node 的非接收區及 Esc 取消。外部共用 Node 的搬動不移除引用項目。
+
+Node 來源 ▾ 的「改為常數」僅斷開公式清單項目的來源，保留原項目與儲存 Default；來源留在候選池。▾ 同時提供移除此項目、拔出到畫布，不新增右鍵入口。新增與搬移沿用既有交易、回復與 Undo，不改序列化型別或資產。
+
+> Trace: verified 2026-10-31 · doc `Doc/2026-10-2/REPORT_GraphKit清單拖放與常數入口.md`（來源靜態核對；Unity 編譯／拖放／Undo 待驗證）
+
+### Node Header 收合
+
+Header 左側 ▾／▸ 收合整顆 Node，保留展開寬度，只占 Header 高度；內放後代隱藏但保留歸屬。外部接線集中到最外層收合 Node 的 Header 右側，集中端點只供顯示，不暴露隱藏欄位操作；展開後回原欄位。狀態沿用 GraphViewState.Folded／Unfolded，保留 key `nodeId#@node`，走 SetListFolded／MarkViewStateChanged，屬版面修改而非執行內容。無 ViewState 持有者時只存於視窗查詢表。RevealNode 同時展開內放祖先。原 Header 狀態提示維持可見。
+
+> Trace: verified 2026-10-31 · doc `Doc/2026-10-2/REPORT_GraphKit節點Header收合.md`（來源靜態核對；Unity／接線／保存與 Undo 待驗證）
+
 ## Optional AI/MCP access
 
-GraphKit 1.2.0 includes optional MCP assemblies under Mcp/, a portable AgentSkill~/harugraph-mcp skill, and Window/HaruGraph/AI and MCP Setup. The core assemblies and package remain independent of MCP/JSON. Conditional assembly constraints enable integration only with the supported bridge/JSON/Unity versions. See [MCP installation](Mcp/Installation.md) and [MCP maintenance](Mcp/Maintenance.md). Register only GraphKit in testables; optional MCP tests become available when the bridge is installed.
+
+可選工具、安裝及獨立套件邊界見 [MCP 維護手冊](Mcp/Maintenance.md)。流程契約／快照、MCP 結構操作、背景幾何、草稿保護及保存守衛保持可用；與人工 Node 編輯使用同一份原始圖資料。
+
+清單不顯示 1.／2. 序號，順序由上下排列表示；ListGutter 為 16px，只保留排序把手與其命中區。
+
+HGHideLabel 的內放 Slot 不預留名稱欄，但在 Slot 框左側保留 12px 層級縮排；單值另保留必要設定箭頭。NodeList 隱藏名稱與數量，僅預留收合箭頭、＋（32px 操作欄）及固定 ListGutter 把手欄；項目沿用清單內容起點，不移動把手相對位置。
+
+Timing HEAD 的根動作清單依文件 ItemsOf 回傳的清單身分辨識，隱藏 Actions 名稱、數量及清單收合箭頭；只留新增 ＋、固定排序把手欄與 12px 層級縮排。整組沿用 Header 收合，舊清單收合狀態不再遮住內容；其他分支清單維持原規則。TimingActions 僅為 view 旗標，不修改文件或保存格式。
+
+清單新增入口統一放在展開清單底部的整列按鈕（動作清單為「＋ 新增動作」，其他為「＋ 新增項目」），標題旁不再放 ＋。可編輯清單量測預留一列，Slot 框涵蓋此列；空清單也可直接新增 Default／空 Slot。收合時隱藏底部按鈕，唯讀與固定長度清單不提供新增。Timing 仍無清單收合箭頭，保留 Header 收合與排序把手。此規則取代前述標題 ＋ 的舊描述。
+
+底部新增按鈕使用獨立實心底色、ListRule 淡邊框與 3px 圓角，hover 時提亮；沿用主題 NodeBody 作實心灰底色來源，不變更排序把手共用的 ListAdd 樣式。
+
+底部新增列高度為 RowHeight + 8px，按鈕維持 RowHeight，上下各留 4px、左右在內容區再收 4px。背景由 NodeBody 小幅提亮且 alpha 固定為 1；文字採獨立 ListFooter 樣式使用 Text 色，其他 ListAdd 控制項維持原樣。
+
+## HGLabel 三種排列
+
+`HGLabel.Layout` 使用 `HGLabelLayout.Horizontal`（預設）、`Vertical`、`Hidden`。Horizontal 為左 Label／右 Slot；Vertical 在單值 Slot 有內放 Node 時預留一列標題、Node 排在下面，未內放（常數、外部接線、共用引用）仍用左右排列。NodeList 的 Vertical 標題在上、項目在下，保留排序把手及底部新增按鈕。一般值不因 Vertical 改成兩列。
+
+Hidden 只隱藏 Label，不隱藏 Slot；沿用 12px 層級縮排。既有 HGHideLabel 相容為 Hidden，與 HGLabel 同時標記時隱藏優先。不要改動既有資產。descriptor factories 提供尾端可選 `labelLayout:`，原 `hideLabel: true` 同樣優先。新增欄位使用 `[HGLabel("條件", Layout = HGLabelLayout.Vertical)]` 或 `[HGLabel(Layout = HGLabelLayout.Hidden)]`。
+
+> Trace: verified 2026-11-01 · doc `Doc/2026-11-0/REPORT_GraphKit_Label排列整合.md`（來源靜態核對；Unity 編譯與測試待執行）
+
+Vertical 排列的單值 Slot 與 NodeList 共用 ListGutter（16px）前置欄，清單把手放在此欄內，不再額外加上層級縮排；相同深度與 LeftPad 的單值 Node 與清單項目左緣對齊。
+
+Token、Asset、Property 引用 Node 與 Inline Node 共用內放投影與外觀，不縮成另外的卡片。唯一 Slot 引用的載體可內放，隱藏 Header 輸出 Port 與內部線，保持現有來源欄位與引用資料；Property 拖入仍走原 Port 相容性守衛。共用同一 GraphNode 載體、跨 Group／Tab、循環與超深者維持外部連線。不同載體引用同一 Token／Asset／Property 定義可各自內放，不複製來源內容。Property 寫入端與 PropertySlot 保持既有接線契約。
+
+同一父 Node 的 Slot 框共用所有可見直屬子 Node 的最右緣（不追溯孫層）；空／收合分支亦沿用此右緣。新增按鈕左緣對齊清單內容起點，右緣距 Slot 框 NestedPadding，不重複累加內距；上下各 4px 維持不變。
+
+單值內放 Slot 的延伸框高度只包含 Label 與子 Node（SocketContentY + 子 Node.Height + 上下 NestedPadding），不包含下方 SlotSettingsRow。完整列量測仍保留設定列高度；設定沿用父 Node 寬度，在延伸框外下方繪製。框線開口與延伸區命中使用相同 SlotBounds。
+
+一般參數、Slot Label 與清單標題統一預留 14px 箭頭欄；Slot 設定展開箭頭使用此欄，無箭頭時留白，不改變值／內放 Node 起點。Hidden 不增加可見 Label 留白，清單標題由自身箭頭欄處理避免重複縮排。
+
+## OutputProperty 與讀取 Node 分離
+
+PropertySlotBase 欄位直接顯示相容 Property 選單及「不輸出」，不提供畫布寫入 Port／連線／殘影；PropertyNode 只顯示讀取輸出。僅寫入關係不使目標 Node 在畫布可見，也不計入內放讀取來源的共用計數。PropertySlot.Node 保存結構沿用；舊寫入 Port adapter、接收端與連線操作已移除，既有資產不遷移；寫入仍在動作執行時發生。
+
+選擇目標沿用內容交易及 Undo，限制當前庫與同族。換目標建立獨立引用載體，不改寫其他讀取者共用的舊載體；清除只清此 Slot，不刪 Property 定義。選單 generation 過期時拒絕寫入。
+
+OutputProperty 使用獨立繪製列：淡紫色底帶、紫色左側細線，Label 保留原名、不加文字前綴，選單可選相容 Property 或不輸出；型別 chip 保留，不預留舊 Port。PropertySlot 不登記 Input／Output Port；背景幾何、Link resolver、拖線建立、斷線與工具接點皆無寫入特殊路徑。
+
+GraphNode 的舊 Property 輸入欄位、API 與型別均已移除。2026-11-01 已依使用者授權用 Unity 重存剩餘 8 個資產，Assets 序列化舊記錄清零；不保留反序列化空型別或一次性工具。
+
+OutputProperty 選單與型別 Chip 共用 4px 右側預留，兩者以 SlotChipGap 分隔，Chip 不再沿用輸入 Port 的位置。PropertyNode 本體只有一列來源選擇，不繪製舊寫入文字列或預留其高度。
+
+## 每 Slot 獨立 Property 引用
+
+Property 定義共用；預設組合模式的引用載體按 Slot 獨立，明確選連線模式則允許共用同一載體。新接線／Slot 拖入／清單追加及將共用載體改成 Property 時，若另一個 Slot 已使用相同 Property 載體，就建立新的引用載體；不複製 GraphProperty、Slot 初始內容或執行期值。Inline／Token／Asset 的共用規則不變。
+
+現有資產的一對多已依使用者明確授權於 2026-11-01 透過 Unity 直接拆分並存檔（10 個資產、40 個引用），不提供一次性工具列按鈕，也不在載入、建圖或保存時隱式轉換。第一個 Slot 保留原載體，其他 Slot 改用新 ID 載體，保留來源定義、Note、Disabled、已設座標。Union 包裝與實際選定 Slot 視為同一個使用位置。共用拆分 helper 留供來源切換的正常操作使用。
+
+> Trace: verified 2026-11-01 · doc `Doc/2026-11-0/REPORT_Property每Slot獨立引用.md`（來源靜態核對；Unity 操作／保存／測試待執行）
+
+巢狀引用計數同時納入文件的實際 Slot 與目前畫布的 InputSlot，按 Slot 身分去重（Union 使用 SelectedSlot），不把同一使用位置計兩次。Asset／Token 焦點的獨立工作副本即使不在 model.Data 仍可內放；文件內其他真正使用者仍計入，維持共用來源的外部連線。
+
+> Trace: verified 2026-11-01 · doc `Doc/2026-11-0/REPORT_AssetToken焦點內放計數修正.md`（Unity 建圖與 20 個巢狀測試通過）
+
+## 每 Node 的組合／連線設定
+
+GraphNode.Mode 保存 GraphNodeMode.Composition（0，預設）或 Connection（1），不是整張圖的切換，也不是依引用數暫時計算的顯示旗標。拖 Node 到 Slot／清單設為組合，拉 Port 線設為連線，不提供模式選單；走既有內容交易、Undo 與保存。更換來源內容不重設 Mode。
+
+組合模式在可內放的唯一 Slot 中展開；拖入組合時拒絕其他讀取使用者；Port 拉線則在同一交易自動改成連線模式。連線模式即使只剩一個使用者也維持外部 Node 與 Port，一對多保留同一載體。PropertySlot 寫入目標不算讀取使用者，Union 包裝不重複計數。Inline／Token／Asset／Property 共用同一規則。
+
+組合改連線（含拔出／拖到空白畫布）保留原 Slot 與清單項目，不解除引用；只改 Mode 與畫布座標。拖入 Slot／清單切成組合前檢查其他讀取使用者；連線改組合多於一個使用者時拒絕，不自動複製或斷線。零使用者的組合 Node 可暫留候選池，等待拖入 Slot。
+
+既有資產中的共用 Node 已依本輪授權由 Unity 明確保存為 Connection：AssetPipeline 4 顆、GluttonousSalamander 5 顆。只改模式，沒有改定義、引用、數值或 ID；不保留轉換腳本／按鈕，也不在載入時增加歷史分支。
+
+> Trace: verified 2026-11-01 · doc `Doc/2026-11-0/REPORT_Node組合與連線模式.md`（來源與 Unity 資產核對，測試結果見報告）
+
+### 槽位拖曳提示
+
+內放 Node 拖曳時，Label 與清單把手的垂直位置從父 Node＋SocketContentY＋NestedPadding 計算，不使用移動中的子 Node.Pos。Slot 框和排版高度保留，原位畫淡色佔位框。單一 Slot 接受落點只以淡青底色與外框呈現，範圍使用實際 ScreenRect，不依拖入 Node 尺寸延伸、不畫卡片預覽、不重建排版或修改來源；無效落點顯示錯誤框。清單新增仍用插入線。預覽在節點繪製後以 Repaint overlay 畫出，不建立互動控制項。

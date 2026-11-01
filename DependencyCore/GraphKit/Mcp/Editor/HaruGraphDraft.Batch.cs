@@ -10,7 +10,7 @@ using Newtonsoft.Json.Linq;
 
 public static partial class HaruGraphDraft
 {
-    private static bool BatchAction(string action) => authoringActions.Contains(action)
+    private static bool BatchAction(string action) => action != "protect" && authoringActions.Contains(action)
         || new[] { "endpoints", "check_connection", "connect", "disconnect", "value_fields", "set_value", "check" }.Contains(action);
 
     // References address a previous named step's data, never arbitrary JSONPath expressions or external objects.
@@ -69,7 +69,10 @@ public static partial class HaruGraphDraft
         int resultSize = 0;
         draft.PreviewToken = null;
         draft.SaveAsToken = null;
-        var outcome = draft.Session.RunAtomic(() =>
+        bool guarded = draft.PolicyGuardActive;
+        draft.PolicyGuardActive = true;
+        HGSessionCommandResult outcome;
+        try { outcome = draft.Session.RunAtomic(() =>
         {
             for (int i = 0; i < commands.Count; i++)
             {
@@ -83,7 +86,7 @@ public static partial class HaruGraphDraft
                 foreach (var property in keyArguments)
                 {
                     string key = property.Name.Replace("_", "").ToLowerInvariant();
-                    if (!new[] { "slotkey", "sourcekey", "listkey", "rootkey", "rootindex", "tabindex" }.Contains(key)) continue;
+                    if (!new[] { "slotkey", "sourcekey", "listkey", "rootkey", "rootindex", "tabindex", "sectionpath", "targetsectionpath", "flowpath" }.Contains(key)) continue;
                     bool current = property.Value is JObject reference && reference["$ref"]?.Type == JTokenType.String
                         ? resultGenerations.TryGetValue(((string)reference["$ref"]).Split('.')[0], out int sourceGeneration)
                             && sourceGeneration == draft.Session.Generation
@@ -112,9 +115,12 @@ public static partial class HaruGraphDraft
                 }
                 steps.Add(new { index = i, id, action = (string)args["action"], data });
             }
+            string violation = PolicyViolation(draft);
+            if (violation != null) { failure = new { code = "protected_edit_rejected", message = violation }; return false; }
             failedIndex = -1;
             return true;
-        });
+        }); }
+        finally { draft.PolicyGuardActive = guarded; }
         draft.History.Clear(); draft.History.AddRange(history); draft.HistoryDropped = dropped;
         if (outcome != HGSessionCommandResult.Changed && outcome != HGSessionCommandResult.NoChange)
         {

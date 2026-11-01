@@ -77,7 +77,7 @@ public static partial class HaruGraphDraft
             if (!ReferenceEquals(field.GetValue(owner), live) || TransientRevision(owner) != revision)
                 return Error("source_changed_during_open", "A provider changed the temporary owner while opening; no draft retained.");
             var draft = new Draft { Session = session, OwnsOwner = true, DocumentField = field, Expires = DateTime.UtcNow.AddMinutes(30),
-                ReadDocument = () => field.GetValue(owner) as IGraphDocument, BaselineDocument = live, Baseline = baseline,
+                ReadDocument = () => field.GetValue(owner) as IGraphDocument, BaselineDocument = live, Baseline = baseline, BaselineContentHash = ContentFingerprint(live),
                 BaselineHash = hash, AssetRevision = revision };
             drafts.Add(id, draft);
             retained = true;

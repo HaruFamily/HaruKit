@@ -60,7 +60,7 @@ AP 是 **Editor-only、同步執行**的資產處理管線框架。一個 `Asset
 - 同步公式繼承 `FormulaBase<TResult, TPack>`，只覆寫 `protected OnEvaluate(pack)`。AP 的輸入欄位一律使用 `NullPack`，所以公式寫成 `Formula_Int<NullPack>` 這種形式。
 - 輸入欄位 `IntSlot`、`ObjectListSlot`、`FolderSlot` 等綁定對應族的 NullPack 版本；`slot.Evaluate()` 不需要參數。
 - 輸入欄位的來源是常數、內嵌公式、具名 Token 或 Property 之一。AP 不支援共用資產節點（`AssetBaseType` 為 null）。
-- 空槽、停用、型別不符、公式例外一律回保底值並寫公式警告，**不中斷執行**。Token 遞迴在執行期回保底值。
+- 未接來源使用常數（含 FolderSlot 的路徑解析）；停用、型別不符、公式例外與 Token 遞迴回 default(TResult)，失敗寫公式警告，**不中斷執行**。
 - 每顆公式只有一種結果型別；`List<AudioClip>` 不會自動當成 `List<Object>`。Slot 的 `AllowCompatibleResult`／`ExcludedFormulaFamilies` 統一控制 Formula、Token、Property 三種讀取來源，透過 GraphKit 的共用相容政策判定。`ObjectSlot` 可接受宣告結果是 Unity Object 子類的三種來源；清單欄位維持同族限制。
 - Token 接收先確認輸入實作 AP internal `IFormulaSlot`，再以 Token.OutputSlot 問共用相容政策；求值使用 Token.Slot。先問 `AcceptsToken`，同封閉泛型直接呼叫 `Evaluate()`，其餘透過顯式 `IFormulaSlot.EvaluateBoxed()` 呼叫輸入。通用 GraphToken 的 OutputSlot 就是 Slot，AP 既有圖沿用同一套同步求值；驗證檢查 Token.ConfigurationError。保留合法 null、保底與 TokenGuard 的 finally 清理。
 - 接收與驗證拒絕 IsObsolete 的 Token。AP 未宣告 TokenType 的原生 Slot 仍可使用通用 GraphToken；共用開圖流程只在工作副本清除確定過時的端點。
@@ -172,3 +172,11 @@ public class CollectAssets : ActionBase
 測試會建立自己專用的暫存資料夾；已有未完成的 AP 交易時先拒絕執行，不清除別人的日誌。在 Unity Test Runner 以 EditMode 執行；從 UPM 安裝時，要把 `com.harufamily.tools.assetpipeline` 加進 `manifest.json` 的 `testables`。**沒有實際執行的測試不可回報為通過。**
 
 > Trace: verified 2026-10-29 · doc `Doc/2026-10-2/DECISION_Property單一模型與資料保留.md`（原始碼靜態核對；使用者確認本輪 TestRunner 修正，驗證範圍見決策文件）
+
+## GraphKit 混合式流程接入
+
+ActionGroup 實作 ISequentialActionContainer，直接回傳序列化的 Actions 清單；GraphKit 讀取這項宣告，不依欄位順序猜執行。新增宣告不改 RunPipeline、Slot 族、Property 及資產交易。同步子動作僅在明確宣告流程時展開；未知內容保持完整 Node 可檢視，不因 List<ActionSlot> 欄位存在就視為會執行。AP 的動作 Slot 不收 Token／動作資產，不借用 LogicGraph 的非同步族。
+
+宿主 MCP 接入與保存重讀測試及人工驗收項目見 GraphKit Documentation~/HybridFlowValidation.md；AP 框架不引用 MCP。
+
+> Trace: verified 2026-10-31 · doc `Doc/2026-10-2/REPORT_GraphKit混合式第六階段.md`（來源靜態核對；Unity／協定／視覺待驗證）

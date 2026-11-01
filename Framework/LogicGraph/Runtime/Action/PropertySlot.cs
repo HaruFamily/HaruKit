@@ -24,6 +24,8 @@ public abstract class SetPropertySlot<TResult, TSlot> : PropertySlotBase where T
 
     public bool Write<TPack>(TResult value, TokenTable<TPack> tokens)
     {
+        // 未選輸出是合法設定：動作照常執行，只略過保存結果。
+        if (node == null) return true;
         GraphProperty property = node?.Kind == NodeKind.Property && !node.Disabled ? node.Property : null;
         return AcceptsProperty(property) && tokens?.Properties?.Write(property, value) == true;
     }

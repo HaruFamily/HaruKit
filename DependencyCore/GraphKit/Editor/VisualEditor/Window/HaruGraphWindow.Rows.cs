@@ -12,6 +12,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
     /// </summary>
     public partial class HaruGraphWindow
     {
+        private const float LabelArrowGutter = 14f;
+
         private void DrawRows(HGNodeView node, List<HGRow> rows, Rect nodeRect)
         {
             foreach (var row in rows)
@@ -20,7 +22,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 var rowRect = ListRowRect(row, nodeRect);
                 if (rowRect.yMax > nodeRect.yMax) continue;
                 // 底要畫在所有內容之下，而且元素展開出來的子列也算同一段，所以在這裡統一畫，不放進元素控制項。
-                if (row.ItemOwnerRow != null) DrawListRowBackground(row, rowRect);
+                if (row.ItemOwnerRow != null && !row.ItemOwnerRow.NodeList && row.NestedNode == null) DrawListRowBackground(row, rowRect);
                 // 兼任常數清單標題的 Slot 列先畫，整段底帶與標題色要在它的內容之前鋪好。
                 if (row.DefaultListRow is { } defaultList)
                     DrawListSectionBackground(defaultList, ListSectionRect(defaultList, ListRowRect(defaultList, nodeRect), nodeRect));
@@ -32,8 +34,56 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         DrawNoPortRow(row, rowRect);
                         break;
                     case HGRowKind.InputPort:
-                        if (row.IsItem) DrawListElementControls(row, rowRect, nodeRect);
-                        DrawInputPortRow(row, rowRect);
+                        if (row.NestedNode != null)
+                        {
+                            DrawNodeSocket(row, rowRect);
+                            float labelWidth = HGGraph.NestedLabelWidth(row);
+                            if (labelWidth > 0f)
+                            {
+                                float labelX = rowRect.x + HGGraph.NestedContentInset(row) - labelWidth;
+                                var labelRect = new Rect(labelX,
+                                    nodeRect.y + row.SocketContentY + HGGraph.NestedPadding
+                                        + (row.NestedNode.Height - HGGraph.RowHeight) * 0.5f,
+                                    Mathf.Max(0f, Mathf.Min(labelWidth - HGGraph.NestedPadding,
+                                        rowRect.xMax - HGGraph.NestedPadding - labelX)), HGGraph.RowHeight);
+                                if (row.LabelAbove)
+                                    labelRect = new Rect(rowRect.x + HGGraph.NestedPadding + row.LeftPad + row.Depth * HGGraph.IndentWidth,
+                                        rowRect.y, rowRect.width - HGGraph.NestedPadding * 2f, HGGraph.RowHeight);
+                                var style = Rep.HasIssue(row.InputSlot, out bool error) && error
+                                    ? HGStyles.RowLabelError : HGStyles.RowLabel;
+                                if (row.SlotSettingsRow is { } nestedSettings)
+                                {
+                                    var arrow = new Rect(labelRect.x, labelRect.y, 12f, labelRect.height);
+                                    GUI.Label(arrow, new GUIContent(nestedSettings.Collapsed ? "▸" : "▾", "展開／收合 Slot 設定"), style);
+                                    var evt = Event.current;
+                                    if (evt.type == EventType.MouseDown && evt.button == 0 && arrow.Contains(evt.mousePosition))
+                                    {
+                                        BreakUndoMerge();
+                                        GUIUtility.keyboardControl = 0;
+                                        EditorGUIUtility.editingTextField = false;
+                                        SetListFolded(HGGraph.CollapseKey(nestedSettings.OwnerNodeId, nestedSettings), !nestedSettings.Collapsed);
+                                        graphDirty = true;
+                                        Repaint();
+                                        evt.Use();
+                                    }
+                                }
+                                if (!row.HideLabel || row.SlotSettingsRow != null)
+                                    labelRect.xMin = Mathf.Min(labelRect.xMax, labelRect.xMin + LabelArrowGutter);
+                                if (!row.HideLabel && !row.IsItem)
+                                    GUI.Label(labelRect, HGStyles.Elide(row.Label, style, labelRect.width,
+                                        row.Descriptor?.Description ?? HGReflect.FieldDescription(row.Field)), style);
+                            }
+                            if (row.SlotSettingsRow != null)
+                                using (new EditorGUI.DisabledScope(row.Locked)) DrawRows(node, row.Children, nodeRect);
+                            break;
+                        }
+                        var controlsRect = rowRect;
+                        if (row.NodeSocket) controlsRect.height = row.SocketHeaderHeight;
+                        if (row.IsItem) DrawListElementControls(row, controlsRect, nodeRect);
+                        if (row.NodeSocket) DrawNodeSocket(row, rowRect);
+                        var inputRect = rowRect;
+                        if (row.NodeSocket) inputRect.height = row.SocketHeaderHeight;
+                        DrawInputPortRow(row, inputRect);
                         if (row.SlotSettingsRow != null)
                             using (new EditorGUI.DisabledScope(row.Locked)) DrawRows(node, row.Children, nodeRect);
                         break;
@@ -216,14 +266,16 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         }
 
         /// <summary>
-        /// 清單畫成「一段」而不是一堆同高的列：底帶包住整段、左側一條縱線串起元素、尾端是整列寬的新增列。
+        /// 清單以底部按鈕新增；Node 清單沿用兩欄配置，普通清單保留底帶。
         /// 折疊時只留標題列，子列由 MeasureRows 標成 Hidden。
         /// </summary>
         private void DrawListSection(HGNodeView node, HGRow row, Rect rowRect, Rect nodeRect)
         {
-            var items = row.Items as HGListItemSource;
-            bool fixedSize = items != null && !items.CanEditStructure;
-
+            if (row.NodeList)
+            {
+                DrawActionSequenceColumns(node, row, rowRect, nodeRect);
+                return;
+            }
             var band = ListSectionRect(row, rowRect, nodeRect);
             // 標題藏起來的常數清單由上一列 Slot 代畫標題與底（DrawRows → DrawInputPortRow），這裡只補元素與外框。
             if (!row.HeaderHidden)
@@ -239,24 +291,37 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
 
             // 元素的底由 DrawListRowBackground 逐列畫（含展開出來的子列），疊在這層底帶之上。
             DrawRows(node, row.Children, nodeRect);
+            DrawListAddButton(node, row, nodeRect);
             // 外框要壓在斑馬紋之上，否則左右兩條邊會被元素列的底蓋掉。
             DrawListSectionFrame(band);
             if (ReferenceEquals(dragListRow, row)) DrawListInsertLine(row, nodeRect, band);
+        }
 
-            var addRect = new Rect(rowRect.x, nodeRect.y + row.AddRowY, rowRect.width, HGGraph.RowHeight);
-            if (addRect.yMax > nodeRect.yMax) return;
-
-            // 整列寬的按鈕：60px 的小鈕在 0.45 倍縮放下只剩 27px，按不到也讀不到。
-            var addBtn = new Rect(band.x + 4f, addRect.y + 2f, band.width - 8f, HGGraph.RowHeight - 4f);
-            if (fixedSize)
-            {
-                GUI.Label(addBtn, new GUIContent("陣列長度固定", "陣列長度在程式或 Inspector 決定，這裡不能增刪；需要增刪請把欄位改成 List<T>"),
-                    HGStyles.ListAdd);
-                return;
-            }
-            HGStyles.RoundedFrame(addBtn, HGStyles.ListRule, 3f);
-            if (GUI.Button(addBtn, new GUIContent("＋ 新增", "在清單尾端加一項"), HGStyles.ListAdd))
-                AddListItem(items);
+        /// <summary>Node 清單與單值槽共用左標籤、右內容的兩欄。</summary>
+        private void DrawActionSequenceColumns(HGNodeView node, HGRow row, Rect rowRect, Rect nodeRect)
+        {
+            var socket = HGGraph.SlotBounds(node, row);
+            socket.position += pan;
+            DrawSlotPanel(socket);
+            float inset = HGGraph.NestedContentInset(row);
+            float contentHeight = !row.Collapsed && row.Children.Count > 0
+                ? Mathf.Max(HGGraph.RowHeight, row.AddRowY - row.LocalY) : HGGraph.RowHeight;
+            var caption = new Rect(rowRect.x + inset - HGGraph.NestedLabelWidth(row),
+                rowRect.y + (contentHeight - HGGraph.RowHeight) * 0.5f,
+                HGGraph.NestedLabelWidth(row) - HGGraph.ListGutter,
+                HGGraph.RowHeight);
+            if (row.LabelAbove)
+                caption = new Rect(rowRect.x + HGGraph.NestedPadding + row.LeftPad + row.Depth * HGGraph.IndentWidth,
+                    rowRect.y, rowRect.width - HGGraph.NestedPadding * 2f, HGGraph.RowHeight);
+            DrawListFoldCaption(row, caption, row.Label, HGStyles.RowLabel, null);
+            if (row.Collapsed) return;
+            DrawRows(node, row.Children, nodeRect);
+            DrawListAddButton(node, row, nodeRect);
+            var band = new Rect(rowRect.x + inset, rowRect.y,
+                nodeRect.width - inset - HGGraph.NestedPadding,
+                Mathf.Max(HGGraph.RowHeight, nodeRect.y + row.AddRowY - rowRect.y));
+            if (ReferenceEquals(dragListRow, row)) DrawListInsertLine(row, nodeRect, band);
+            DrawActionDropHint(node, row, nodeRect);
         }
 
         /// <summary>拖曳重排的插入位置：一條線就夠，不需要動到資料。</summary>
@@ -270,7 +335,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         }
 
         /// <summary>
-        /// 列的左緣＝縮排 + LeftPad（清單元素的序號欄）。子列繼承父的 LeftPad，父子左緣才對得齊。
+        /// 列的左緣＝縮排 + LeftPad（清單元素的把手欄）。子列繼承父的 LeftPad，父子左緣才對得齊。
         /// spansRow＝這個 Rect 是整列寬，右側要讓開刪除鈕；只是列內的標籤欄時傳 false。
         /// </summary>
         private static Rect Indent(Rect r, HGRow row, bool spansRow = true)
@@ -297,14 +362,18 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// </summary>
         private static void SplitRow(Rect rowRect, HGRow row, float rightInset, out Rect labelRect, out Rect fieldRect)
         {
-            var (units, ratio) = row.Descriptor != null
-                ? (row.LabelWidthUnits, row.LabelWidthRatio)
-                : HGReflect.LabelWidth(row.Field);
-            float labelWidth = HGGraph.LabelWidthOf(rowRect.width, units, ratio);
+            float labelWidth = HGGraph.ParameterColumnLeft(row, rowRect.width);
 
             labelRect = Indent(new Rect(rowRect.x, rowRect.y, labelWidth, rowRect.height), row, false);
             fieldRect = new Rect(rowRect.x + labelWidth, rowRect.y + 1f,
                 Mathf.Max(20f, rowRect.width - labelWidth - rightInset), rowRect.height - 3f);
+            if (row.IsItem && row.ItemOwnerRow?.NodeList == true)
+            {
+                float contentInset = HGGraph.ParameterColumnLeft(row, rowRect.width);
+                labelRect = new Rect(rowRect.x + contentInset, rowRect.y + 1f,
+                    Mathf.Max(20f, rowRect.width - contentInset - rightInset), rowRect.height - 3f);
+                fieldRect = labelRect;
+            }
         }
 
         /// <summary>
@@ -322,7 +391,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// （`HGReflect.ResultTypeName`）。**寬度固定不隨文字長短浮動**：所有 chip 貼著接點排成一條垂直線。
         /// 裝不下的型別名在 chip 內截字，完整名進 tooltip。
         /// </summary>
-        private static void DrawSlotChip(HGRow row, Rect rowRect)
+        private static void DrawSlotChip(HGRow row, Rect rowRect, float rightReserve = InputPortReserve)
         {
             float inset = ChipInset(row);
             if (inset <= 0f) return;
@@ -334,7 +403,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 : HGReflect.SlotKindName(row.InputSlot);
             float width = inset - HGGraph.SlotChipGap;   // 間距留在 chip 與接點之間
             float height = Mathf.Min(14f, rowRect.height);
-            var chipRect = new Rect(rowRect.xMax - InputPortReserve - inset,
+            var chipRect = new Rect(rowRect.xMax - rightReserve - inset,
                 rowRect.y + (rowRect.height - height) * 0.5f, width, height);
             HGStyles.RoundedFill(chipRect, HGStyles.SlotChipBody, 2f);
             GUI.Label(chipRect, HGStyles.Elide(text, HGStyles.SlotChip, width - 4f, text), HGStyles.SlotChip);
@@ -367,7 +436,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             float top = listRow.HeaderRow != null ? nodeRect.y + listRow.HeaderRow.LocalY : rowRect.y;
             float bottom = listRow.Collapsed
                 ? rowRect.yMax
-                : Mathf.Min(nodeRect.yMax, nodeRect.y + listRow.AddRowY + HGGraph.RowHeight);
+                : Mathf.Min(nodeRect.yMax, nodeRect.y + listRow.AddRowY + (listRow.CanAddItem ? HGGraph.ListAddRowHeight : 0f));
             var band = ListBandRect(listRow, rowRect);
             band.y = top;
             band.height = Mathf.Max(0f, bottom - top);
@@ -406,7 +475,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         }
 
         /// <summary>
-        /// 清單元素左側的序號 + 拖曳把手、右側的刪除鈕。
+        /// 清單元素左側的拖曳把手、右側的刪除鈕。
         /// 把手與 ✕ 都常態顯示，但刻意放在列的兩端：舊版把 ✕ 貼在把手右邊 1px，想拖曳結果刪掉。
         /// </summary>
         private void DrawListElementControls(HGRow row, Rect rowRect, Rect nodeRect)
@@ -419,12 +488,11 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             bool dragging = ReferenceEquals(dragListRow, owner) && dragListIndex == row.ItemIndex;
             bool fixedSize = !items.CanEditStructure;
 
-            // 序號與把手各佔控制欄一半：序號是順序資訊，把手是操作入口，兩件事不該互相取代。
-            // 把手排在最前面——它是這一列的抓取點，放在最外緣最好瞄準。
+            // 清單順序由上下排列表示，控制欄只保留排序把手。
             float x = rowRect.x + 4f + row.Depth * HGGraph.IndentWidth + row.LeftPad - HGGraph.ListGutter;
+            if (row.ItemOwnerRow?.NodeList == true)
+                x = rowRect.x + HGGraph.NestedContentInset(row) - HGGraph.ListGutter;
             var handle = new Rect(x, rowRect.y, 13f, rowRect.height);
-            var index = new Rect(x + 13f, rowRect.y, 15f, rowRect.height);
-            GUI.Label(index, new GUIContent((row.ItemIndex + 1) + ".", "序號即執行順序"), HGStyles.ListIndex);
             GUI.Label(handle,
                 new GUIContent("≡", fixedSize ? "陣列長度固定，不能重排" : "拖曳可調整順序；右鍵有插入與刪除"),
                 dragging ? HGStyles.RowLabel : HGStyles.Tiny);
@@ -433,7 +501,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             // 存回原本的 GUI.enabled，不能寫死 true——外層可能正把整顆鎖定節點畫成不可編輯。
             bool wasEnabled = GUI.enabled;
             GUI.enabled = wasEnabled && !fixedSize;
-            bool clickedRemove = GUI.Button(remove,
+            bool clickedRemove = row.NestedNode == null && GUI.Button(remove,
                 new GUIContent("✕", fixedSize ? "陣列不能刪除項目" : "移除此項目，保留已連接節點（可用 Ctrl+Z 復原）"),
                 HGStyles.ListAdd);
             GUI.enabled = wasEnabled;
@@ -444,13 +512,14 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             }
             if (fixedSize || !wasEnabled) return;     // 鎖定子樹裡不給重排與右鍵增刪
 
-            if (e.type == EventType.MouseDown && e.button == 1 && hover)
+            if (e.type == EventType.MouseDown && e.button == 1
+                && (row.NestedNode == null ? hover : handle.Contains(e.mousePosition)))
             {
                 ShowListElementMenu(items, row.ItemIndex);
                 e.Use();
             }
             else if (e.type == EventType.MouseDown && e.button == 0 &&
-                     (handle.Contains(e.mousePosition) || index.Contains(e.mousePosition)))
+                     handle.Contains(e.mousePosition))
             {
                 dragListRow = owner;
                 dragListIndex = row.ItemIndex;
@@ -565,12 +634,17 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         /// <summary>右側一顆輸入接點的參數列：常數框、狀態 chip、接點命中與拉線起點都在這裡。</summary>
         private void DrawInputPortRow(HGRow row, Rect rowRect)
         {
+            if (row.InputSlot is PropertySlotBase output)
+            {
+                DrawPropertyOutputRow(row, rowRect, output);
+                return;
+            }
             var slot = row.InputSlot;
             var contentKind = slot.Node?.Kind;
             bool hasIssue = Rep.HasIssue(slot, out bool isError);
 
             // 由右往左：接點 → chip → ✕ → 常數框。收合鈕已經併進接點自己（見 DrawInputPortGlyph），不另外佔寬。
-            float inputPortInset = InputPortReserve + ChipInset(row) + ListRightInset(row) + 10f;
+            float inputPortInset = HGGraph.ParameterRightInset + (row.NodeSocket ? 0f : ChipInset(row)) + ListRightInset(row);
             SplitRow(rowRect, row, inputPortInset, out var labelRect, out var fieldRect);
 
             if (row.AssetBinding != null)
@@ -601,8 +675,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     Repaint();
                     evt.Use();
                 }
-                labelRect.xMin += 14f;
             }
+            if ((!row.HideLabel && row.DefaultListRow == null) || row.SlotSettingsRow != null)
+                labelRect.xMin = Mathf.Min(labelRect.xMax, labelRect.xMin + LabelArrowGutter);
 
             // 沒勾覆蓋＝資產用自己內部的預設，這一列填什麼都不會被採用，所以連名稱帶欄位一起鎖住。
             EditorGUI.BeginDisabledGroup(row.Locked);
@@ -615,7 +690,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             bool labelIsContent = row.IsActionSlot && row.IsItem;
             if (labelIsContent) labelRect.xMax = rowRect.xMax - inputPortInset;
 
-            if (!row.HideLabel)
+            if (!row.HideLabel && !(row.IsItem && row.ItemOwnerRow?.NodeList == true && !row.IsActionSlot))
             {
                 // 只有動作清單的元素能就地改名：具名欄位那一列的標籤是欄位名，改了標籤也看不到。
                 if (labelIsContent) DrawActionLabel(row, labelRect, labelStyle);
@@ -635,12 +710,14 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             // 型別 chip 排在右端、和標籤無關：常數框只有 int／bool／enum 這種有專屬 widget 的型別才隱含說得出
             // 型別，接了來源整格轉灰、或型別畫不出輸入框時就完全沒有線索。它的寬度已經從 portInset 扣掉，
             // 和常數框不重疊。
-            DrawSlotChip(row, rowRect);
+            if (!row.NodeSocket) DrawSlotChip(row, rowRect);
 
             // 沒有標籤的列讓欄位從縮排起點一路吃到右緣：那一列沒有標籤欄可分。
             if (row.HideLabel)
-                fieldRect = new Rect(labelRect.x, rowRect.y + 1f,
+                fieldRect = new Rect(row.IsItem && row.ItemOwnerRow?.NodeList == true ? rowRect.x + HGGraph.ParameterColumnLeft(row, rowRect.width) : labelRect.x, rowRect.y + 1f,
                     Mathf.Max(20f, rowRect.xMax - labelRect.x - inputPortInset), rowRect.height - 3f);
+
+
 
             if (labelIsContent)
             {
@@ -656,17 +733,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 };
                 GUI.Label(fieldRect, HGStyles.Elide(text, HGStyles.Tiny, fieldRect.width), HGStyles.Tiny);
             }
-            // 輸出格沒有常數模式：沒接線就是沒人收，畫一格可編的保底值只會讓人以為那個值會被用到。
-            else if (row.IsProducedValue)
-            {
-                string text = contentKind == NodeKind.Property
-                    ? "→ " + (slot.Node.Property?.Name ?? "Property")
-                    : (contentKind is NodeKind.Inline or NodeKind.Empty) && HGReflect.GetFormula(slot) is object target
-                    ? $"→ {HGReflect.TypeName(target.GetType())}"
-                    : "";
-                string tip = "這一格是產出：執行時由這個步驟寫進接上的節點，不是從它取值。";
-                GUI.Label(fieldRect, HGStyles.Elide(text, HGStyles.Tiny, fieldRect.width, tip), HGStyles.Tiny);
-            }
+
             // 常數框畫的型別可以不等於結果型別（見 FormulaSlotBase.DefaultEditType）：清單這種畫不出輸入框的
             // 結果型別，可以改用一格 enum 表示「沒接線時取什麼」。拉線相容性仍然只看 row.ResultType。
             else if (!HGValueField.CanDraw(HGReflect.DefaultEditType(slot, row.ResultType)))
@@ -683,30 +750,25 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 string tip = $"{HGReflect.ResultTypeName(row.ResultType)} 沒有常數保底可編，只能從接點拉線指定來源。";
                 GUI.Label(fieldRect, HGStyles.Elide(text, HGStyles.Tiny, fieldRect.width, tip), HGStyles.Tiny);
             }
+            else if (contentKind != null)
+            {
+                string sourceName = contentKind switch
+                {
+                    NodeKind.Token => slot.Node.Token?.Name ?? "Token",
+                    NodeKind.Asset => slot.Node.AssetObject?.name ?? "Asset",
+                    NodeKind.Property => slot.Node.Property?.Name ?? "Property",
+                    _ => HGReflect.GetFormula(slot) is object source ? HGReflect.TypeName(source.GetType()) : "（空 Node）",
+                };
+                GUI.Label(fieldRect, HGStyles.Elide(sourceName, HGStyles.Tiny, fieldRect.width,
+                    "已接來源；求值失敗時使用型別 default。拔除來源後恢復常數值。"), HGStyles.Tiny);
+            }
             else
             {
                 var editType = HGReflect.DefaultEditType(slot, row.ResultType);
 
-                // 常數框永遠在。接了公式／資產／Token時它是解析失敗的保底值，只是視覺上轉灰；鎖住時整列不可編。
-                // 替代型別的常數框（editType != ResultType）語意不同：它只在沒接線時採用，不是失敗保底。
-                Type defaultResultType = row.ResultType;
-                bool isSubstitute = editType != defaultResultType;
-
-                // 一般與替代型別的 enum 都只在明確宣告 HGEnum 時使用按鈕列。
-                bool enumButtons = row.ForceEnumButtons;
-                string tooltip = contentKind switch
-                {
-                    null => null,
-                    _ when isSubstitute => "已接來源：以接的來源為準，這一格不會被採用",
-                    NodeKind.Inline or NodeKind.Empty => "已接公式：公式解析失敗時回到這個值",
-                    NodeKind.Asset => "已接資產：資產缺內容時回到這個值",
-                    NodeKind.Token => "已接 Token：Token 不存在或循環時回到這個值",
-                    _ => null,
-                };
+                // 只有未接來源時顯示並編輯常數。
                 EditorGUI.BeginChangeCheck();
-                var value = contentKind == null
-                    ? HGValueField.Draw(fieldRect, editType, HGReflect.GetDefault(slot), enumButtons, row.BoolButtons)
-                    : HGValueField.DrawMuted(fieldRect, editType, HGReflect.GetDefault(slot), tooltip, enumButtons, row.BoolButtons);
+                var value = HGValueField.Draw(fieldRect, editType, HGReflect.GetDefault(slot), row.ForceEnumButtons, row.BoolButtons);
                 if (EditorGUI.EndChangeCheck()) { HGReflect.SetDefault(slot, value); Invalidate(); }
             }
 
@@ -720,7 +782,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             // 不在 MouseDown 當下就起拉線：想收合卻抖了一下的話，放開時會在畫布空白處建出一顆空節點。
             // 鎖住的列照樣記：它不能拉線（接上去也不會被採用），但更需要收起來。
             var e = Event.current;
-            if (e.type == EventType.MouseDown && e.button == 0 && inputPortRect.Contains(e.mousePosition))
+            if (row.NestedNode == null
+                && e.type == EventType.MouseDown && e.button == 0 && inputPortRect.Contains(e.mousePosition))
             {
                 inputPortClickPort = PortFor(row);
                 inputPortClickStart = e.mousePosition - pan;   // 群組座標扣掉 pan＝圖面座標，才和 graphMouse 同一套
@@ -760,21 +823,19 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 DrawSpinnerField(row, rowRect, spinner);
                 return;
             }
-            float rightInset = 20f + ListRightInset(row);
+            float rightInset = HGGraph.ParameterRightInset + ListRightInset(row);
             SplitRow(rowRect, row, rightInset, out var labelRect, out var fieldRect);
 
             if (!row.HideLabel)
             {
+                labelRect.xMin = Mathf.Min(labelRect.xMax, labelRect.xMin + LabelArrowGutter);
                 string description = row.Descriptor?.Description ?? HGReflect.FieldDescription(row.Field);
                 GUI.Label(labelRect, HGStyles.Elide(row.Label, HGStyles.RowLabel, labelRect.width, description), HGStyles.RowLabel);
             }
-            else
-                fieldRect = new Rect(labelRect.x, rowRect.y + 1f,
-                    Mathf.Max(20f, rowRect.xMax - labelRect.x - rightInset), rowRect.height - 3f);
+            fieldRect = HGGraph.ValueFieldRect(rowRect, row);
 
             if (row.Descriptor != null && row.Target != null)
             {
-                fieldRect = HGGraph.ValueFieldRect(rowRect, row);
                 if (!string.IsNullOrEmpty(row.DrawerError))
                 {
                     GUI.Label(fieldRect, new GUIContent("無法編輯", row.DrawerError));
@@ -1099,22 +1160,106 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         }
 
         /// <summary>
-        /// 「▾ 名稱 (N)」折疊開關。清單標題列與兼任常數清單標題的 Slot 列共用；箭頭與文字整塊都是開關，不必瞄準小三角。
+        /// 清單底部新增入口，使用獨立底框，不改動排序把手的樣式。
         /// </summary>
+        private void DrawPropertyOutputRow(HGRow row, Rect rect, PropertySlotBase writer)
+        {
+            var band = new Rect(rect.x + 4f, rect.y + 1f, rect.width - 8f, rect.height - 2f);
+            var tint = HGStyles.HeaderProperty; tint.a = 0.16f;
+            HGStyles.RoundedFill(band, tint, 3f);
+            var accent = HGStyles.HeaderProperty; accent.a = 1f;
+            HGStyles.Fill(new Rect(band.x, band.y + 2f, 2f, Mathf.Max(0f, band.height - 4f)), accent);
+            SplitRow(rect, row, 4f + ChipInset(row) + HGGraph.SlotChipGap + ListRightInset(row), out var label, out var field);
+            if (!row.HideLabel)
+            {
+                label.xMin += LabelArrowGutter;
+                string text = row.Label;
+                GUI.Label(label, HGStyles.Elide(text, HGStyles.RowLabel, label.width,
+                    "寫入目標：" + row.Label + "。不輸出時仍執行動作。"), HGStyles.RowLabel);
+            }
+            else field.xMin = rect.x + 8f;
+            using (new EditorGUI.DisabledScope(row.Locked))
+            {
+                DrawSlotChip(row, rect, 4f);
+                string name = writer.Node == null ? "（不輸出）" : writer.Node.Property?.Name ?? "（無效 Property 目標）";
+                if (EditorGUI.DropdownButton(field, new GUIContent(name, "選擇要寫入的 Property"), FocusType.Keyboard))
+                    ShowOutputPropertyPicker(writer, field);
+            }
+        }
+
+        private void ShowOutputPropertyPicker(PropertySlotBase writer, Rect anchor)
+        {
+            int generation = graphGeneration;
+            void Select(GraphProperty property)
+            {
+                if (generation != graphGeneration) return;
+                if (property != null && (CurrentProperties()?.Contains(property) != true || !writer.AcceptsProperty(property))) return;
+                if (property == null && writer.Node == null || property != null && ReferenceEquals(writer.Node?.Property, property)) return;
+                BreakUndoMerge();
+                if (!TryMutateContent(() =>
+                {
+                    PreserveVisibleNodePositions();
+                    if (property == null) writer.SetNode(null);
+                    else
+                    {
+                        // 使用獨立引用載體，不能改動其他讀取者共用的舊 PropertyNode。
+                        var reference = new GraphNode(); reference.SetProperty(property); reference.EnsureId();
+                        writer.SetNode(reference);
+                    }
+                }, out var error)) ShowNotification(new GUIContent(error));
+                Invalidate();
+                Repaint();
+            }
+            var options = new List<HGSourceOption>
+            {
+                new HGSourceOption { Name = "（不輸出）", IsCurrent = writer.Node == null, Apply = () => Select(null) },
+            };
+            foreach (var property in CurrentProperties() ?? new List<GraphProperty>())
+            {
+                if (property == null || !writer.AcceptsProperty(property)) continue;
+                var target = property;
+                options.Add(new HGSourceOption { Name = property.Name ?? "（未命名）",
+                    IsCurrent = ReferenceEquals(writer.Node?.Property, property), Apply = () => Select(target) });
+            }
+            HGTypeIndex.ShowSourcePicker(anchor, options, "選擇輸出 Property");
+        }
+
+        private void DrawListAddButton(HGNodeView node, HGRow row, Rect nodeRect)
+        {
+            if (!row.CanAddItem || row.Collapsed) return;
+            var bounds = row.NodeList ? HGGraph.SlotBounds(node, row) : row.ScreenRect;
+            float left = row.NodeList ? nodeRect.x + HGGraph.NestedContentInset(row)
+                : nodeRect.x + 4f + row.LeftPad + row.Depth * HGGraph.IndentWidth;
+            float right = row.NodeList ? bounds.xMax + pan.x - HGGraph.NestedPadding : nodeRect.xMax - 4f;
+            var button = new Rect(left, nodeRect.y + row.AddRowY + 4f,
+                Mathf.Max(18f, right - left), HGGraph.RowHeight);
+            bool hover = GUI.enabled && button.Contains(Event.current.mousePosition);
+            var background = Color.Lerp(HGStyles.NodeBody, Color.white, hover ? 0.10f : 0.04f);
+            background.a = 1f;
+            HGStyles.RoundedFill(button, background, 3f);
+            HGStyles.RoundedFrame(button, HGStyles.ListRule, 3f);
+            if (GUI.Button(button, new GUIContent(row.ActionSequence ? "＋ 新增動作" : "＋ 新增項目",
+                "直接新增 Default／空 Slot 項目"), HGStyles.ListFooter))
+                AddListItem((HGListItemSource)row.Items);
+        }
+
         private void DrawListFoldCaption(HGRow listRow, Rect rect, string label, GUIStyle style, string description)
         {
+            // Timing 已有 Header 收合，不再提供第二層清單收合入口。
+            if (listRow.TimingActions) return;
             var arrow = new Rect(rect.x, rect.y, 12f, rect.height);
-            var text = new Rect(arrow.xMax, rect.y, Mathf.Max(8f, rect.width - 12f), rect.height);
+            var text = new Rect(rect.x + LabelArrowGutter, rect.y, Mathf.Max(0f, rect.width - LabelArrowGutter), rect.height);
 
             GUI.Label(arrow, listRow.Collapsed ? "▸" : "▾", HGStyles.Tiny);
             int count = listRow.Items?.Count ?? 0;
             string tooltip = string.IsNullOrEmpty(description) ? "點一下摺疊／展開" : description + "\n點一下摺疊／展開";
-            var content = HGStyles.Elide($"{label} ({count})", style, text.width, tooltip);
-            GUI.Label(text, content, style);
+            var content = listRow.HideLabel ? new GUIContent("", tooltip)
+                : HGStyles.Elide($"{label} ({count})", style, text.width, tooltip);
+            if (!listRow.HideLabel) GUI.Label(text, content, style);
 
             // 只有箭頭與文字本身是開關；剩下的空白要留給拖曳節點。
             var toggle = new Rect(arrow.x, rect.y,
-                Mathf.Min(rect.width, 12f + style.CalcSize(content).x), rect.height);
+                Mathf.Min(rect.width, LabelArrowGutter + style.CalcSize(content).x), rect.height);
             var e = Event.current;
             if (e.type != EventType.MouseDown || e.button != 0 || !toggle.Contains(e.mousePosition)) return;
             SetListFolded(HGGraph.CollapseKey(CurrentNodeId(listRow), listRow), !listRow.Collapsed);

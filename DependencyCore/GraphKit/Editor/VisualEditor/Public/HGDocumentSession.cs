@@ -47,6 +47,10 @@ public sealed partial class HGDocumentSession<TDocument>
     public bool CanRedo => redo.Count > 0;
     public GraphDiagnostic LastDiagnostic { get; private set; }
 
+    /// <summary>Reads the current draft without commands, validation, IDs, history or persistence changes.</summary>
+    public HGFlowSnapshot CaptureFlow(int maxSteps = 4096, int maxDepth = 64)
+        => HGFlowSnapshot.Capture(Document, context, maxSteps, maxDepth);
+
     private HGDocumentSession(Object owner, HGDocumentBinding<TDocument> binding, TDocument document,
         HGEditorExtensionContext context, HGDocumentCommitGuard commitGuard)
     {
@@ -123,7 +127,7 @@ public sealed partial class HGDocumentSession<TDocument>
     {
         if (!TryGetConnection(registry, first, second, out HGPort input, out HGPort output, out var result)) return result;
         if (input.Binding is IHGListAppendBinding append) return AppendAndConnect(append, output.Source);
-        return ReplaceInputSource(input, output.Source);
+        return ReplaceInputSource(input, output.Source, connection: true);
     }
 
     /// <summary>
@@ -137,7 +141,9 @@ public sealed partial class HGDocumentSession<TDocument>
         if (!IsDocumentOwned(next)) return HGSessionCommandResult.Rejected;
         return Apply(() =>
         {
+            if (append.Element is not PropertySlotBase) next.Mode = GraphNodeMode.Connection;
             if (!append.Commit()) throw new InvalidOperationException("The list cannot add an item.");
+            next = HGModel.PropertyReferenceForSlot(append.Element, next, HGModel.WalkSlots(Document, new HashSet<object>(HGRefComparer.Instance)));
             append.Element.SetNode(next);
             RemoveFromOrphanPools(next);
         });
@@ -169,7 +175,6 @@ public sealed partial class HGDocumentSession<TDocument>
             return HGSessionCommandResult.Rejected;
         if (!Owns(input.InputSlot) || input.Presentation.Locked || !input.Presentation.Visible)
             return HGSessionCommandResult.Rejected;
-        if (RejectsPropertyInputSlot(input.InputSlot)) return HGSessionCommandResult.Rejected;
 
         GraphNode previous = input.InputSlot.Node;
         if (previous == null) return HGSessionCommandResult.NoChange;
@@ -322,21 +327,11 @@ public sealed partial class HGDocumentSession<TDocument>
     private bool IsCurrentRegistry(HGPortRegistry registry)
         => registry != null && registry.Generation == Generation && ReferenceEquals(registry.Scope, this);
 
-    /// <summary>A Property node's lower input is a receiving identity, not the record of a write link.</summary>
-    // The write relation is stored on the writing PropertySlot, so mutating this slot would leave a source
-    // that drives nothing while reporting success. Callers connect and disconnect the writer's own Port instead.
-    private bool RejectsPropertyInputSlot(GraphSlotBase slot)
-    {
-        if (slot is not GraphPropertyInputSlot) return false;
-        LastDiagnostic = Failure("connection", DocumentId,
-            "A Property write link is owned by the writing PropertySlot, not by the Property node input.");
-        return true;
-    }
 
-    private HGSessionCommandResult ReplaceInputSource(HGPort input, IHGPortSource source)
+
+    private HGSessionCommandResult ReplaceInputSource(HGPort input, IHGPortSource source, bool connection = false)
     {
         if (!Owns(input.InputSlot)) return HGSessionCommandResult.Rejected;
-        if (RejectsPropertyInputSlot(input.InputSlot)) return HGSessionCommandResult.Rejected;
         var acceptance = HGPortConnection.CheckInputSource(input, source, Generation);
         if (acceptance != HGPortConnectionResult.Allowed)
         {
@@ -346,12 +341,17 @@ public sealed partial class HGDocumentSession<TDocument>
 
         GraphNode next = source.OutputNode;
         if (!IsDocumentOwned(next)) return HGSessionCommandResult.Rejected;
-        if (ReferenceEquals(input.InputSlot.Node, next)) return HGSessionCommandResult.NoChange;
+        bool connectionMode = connection && input.InputSlot is not PropertySlotBase;
+        if (ReferenceEquals(input.InputSlot.Node, next) && (!connectionMode || next.Mode == GraphNodeMode.Connection))
+            return HGSessionCommandResult.NoChange;
+        if (!connection && !CanReferenceNode(next, input.InputSlot)) return HGSessionCommandResult.Rejected;
 
         return Apply(() =>
         {
+            if (connectionMode) next.Mode = GraphNodeMode.Connection;
             GraphNode previous = input.InputSlot.Node;
             List<GraphNode> orphanPool = FindOrphanPool(input.InputSlot);
+            next = HGModel.PropertyReferenceForSlot(input.InputSlot, next, HGModel.WalkSlots(Document, new HashSet<object>(HGRefComparer.Instance)));
             input.InputSlot.SetNode(next);
             RemoveFromOrphanPools(next);
             ReturnUnreferenced(previous, orphanPool);
@@ -473,6 +473,7 @@ public sealed partial class HGDocumentSession<TDocument>
                     if (slot is UnionSlotBase && ReferenceEquals(slot.Node, carrier)) slot.SetNode(carrier);
                 foreach (var input in HGModel.WalkSlots(carrier, new HashSet<object>(HGRefComparer.Instance)))
                     if (input.Node != null && !ReferenceEquals(input.Node, carrier)) RemoveFromOrphanPools(input.Node);
+                HGModel.SeparatePropertyReferences(slots, carrier);
                 foreach (var child in children) ReturnUnreferenced(child, pool);
             });
         });
@@ -842,6 +843,22 @@ public sealed class HGWindowSession
     private readonly HGModel model;
     internal HGWindowSession(HaruGraphWindow window, HGModel model) { this.window = window; this.model = model; }
     public HGWindowSnapshot Query() => window != null ? window.QueryDocument(model) : null;
+    public HGSessionCommandResult InsertFlowStep(int generation, string sectionPath, int index, Type nodeType)
+        => window != null ? window.InsertFlowStep(model, generation, sectionPath, index, nodeType) : HGSessionCommandResult.Rejected;
+    public HGSessionCommandResult RemoveFlowStep(int generation, string stepPath)
+        => window != null ? window.ChangeFlowStep(model, generation, stepPath, 0) : HGSessionCommandResult.Rejected;
+    public HGSessionCommandResult MoveFlowStep(int generation, string stepPath, int direction)
+        => window != null ? window.ChangeFlowStep(model, generation, stepPath, direction) : HGSessionCommandResult.Rejected;
+    public bool CanTransferFlowSteps(int generation, string sourceSection, int index, int count, string targetSection, int gap)
+        => window != null && window.CanTransferFlowSteps(model, generation, sourceSection, index, count, targetSection, gap);
+    public HGSessionCommandResult TransferFlowSteps(int generation, string sourceSection, int index, int count, string targetSection, int gap)
+        => window != null ? window.TransferFlowSteps(model, generation, sourceSection, index, count, targetSection, gap) : HGSessionCommandResult.Rejected;
+    public HGSessionCommandResult WrapFlowSteps(int generation, string sourceSection, int index, int count, Type containerType, string childSectionKey)
+        => window != null ? window.WrapFlowSteps(model, generation, sourceSection, index, count, containerType, childSectionKey) : HGSessionCommandResult.Rejected;
+    public HGSessionCommandResult SetFlowValue(int generation, string nodeId, string fieldPath, object value)
+        => window != null ? window.SetFlowValue(model, generation, nodeId, fieldPath, value) : HGSessionCommandResult.Rejected;
+    public HGSessionCommandResult SetFlowSource(int generation, string nodeId, string fieldPath, string stepPath, HGCarrierSource source)
+        => window != null ? window.SetFlowSource(model, generation, nodeId, fieldPath, stepPath, source) : HGSessionCommandResult.Rejected;
     public IReadOnlyList<GraphDiagnostic> Validate()
         => window != null ? window.ValidateDocument(model) : new[]
         {
@@ -885,6 +902,7 @@ public sealed class HGCarrierSource
     private readonly GraphNodeContent content;
     internal GraphNodeContent Content => content;
     private readonly ScriptableObject asset;
+    internal ScriptableObject AssetObject => asset;
     internal GraphToken Token { get; }
     internal GraphProperty Property { get; }
     internal bool IsValid => kind switch
