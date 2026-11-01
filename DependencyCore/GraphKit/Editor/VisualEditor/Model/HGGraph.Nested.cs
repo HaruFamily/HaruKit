@@ -78,7 +78,7 @@ public static partial class HGGraph
                 if (!IsSimpleNodeSocket(row) || row.IsTabHidden) continue;
                 row.NodeSocket = true;
                 var source = row.InputSlot.Node;
-                if (source == null || source.Mode == GraphNodeMode.Connection || source.Kind is not (NodeKind.Inline or NodeKind.Token or NodeKind.Asset or NodeKind.Property)
+                if (source == null || source.Mode == GraphNodeMode.Connection || source.Kind is not (NodeKind.Empty or NodeKind.Inline or NodeKind.Token or NodeKind.Asset or NodeKind.Property)
                     || !users.TryGetValue(source, out int count) || count != 1
                     || !view.ByCarrier.TryGetValue(source, out var child) || child.IsRoot || child.NestedParent != null
                     || state?.Hidden.Contains(CollapseKey(owner.Id, row)) == true) continue;

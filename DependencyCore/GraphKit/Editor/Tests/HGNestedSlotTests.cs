@@ -9,6 +9,37 @@ using UnityEngine;
 
 public sealed class HGNestedSlotTests
 {
+    [TestCase(GraphNodeMode.Composition)]
+    [TestCase(GraphNodeMode.Connection)]
+    public void EmptyNodesNestInRootListsAndValueSlotsOnlyInCompositionMode(GraphNodeMode mode)
+    {
+        var emptyAction = new GraphNode(); emptyAction.EnsureId(); emptyAction.Mode = mode;
+        var emptyValue = new GraphNode(); emptyValue.EnsureId(); emptyValue.Mode = mode;
+        var action = new Action(); action.Value.SetNode(emptyValue);
+        var carrier = new GraphNode(action); carrier.EnsureId();
+        var first = new ActionSlot(); first.SetNode(emptyAction);
+        var second = new ActionSlot(); second.SetNode(carrier);
+        var document = new Document(); document.Root.Actions.Add(first); document.Root.Actions.Add(second);
+        string before = JsonUtility.ToJson(document);
+        var view = HGGraph.Build(HGModel.CreateDetachedView(null, document, null),
+            new object[] { document.Root }, null, "empty", "Empty", nestSlots: true);
+        foreach (var empty in new[] { emptyAction, emptyValue })
+        {
+            var node = view.ByCarrier[empty];
+            Assert.That(node.IsPlaceholder, Is.True);
+            if (mode == GraphNodeMode.Composition)
+            {
+                Assert.That(node.NestedParent, Is.Not.Null);
+                Assert.That(node.NestedSlot.InputSlot.Node, Is.SameAs(empty));
+                Assert.That(node.NestedSlot.NestedNode, Is.SameAs(node));
+            }
+            else Assert.That(node.NestedParent, Is.Null);
+        }
+        Assert.That(action.Value.Node, Is.SameAs(emptyValue));
+        Assert.That(document.Root.Actions[0], Is.SameAs(first));
+        Assert.That(JsonUtility.ToJson(document), Is.EqualTo(before));
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public void SingleSlotNestingUsesOneViewAndKeepsStoredPositionsAndSharedIdentity(bool shared)

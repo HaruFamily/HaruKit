@@ -531,6 +531,10 @@ CommitAssetsPreservingOwners 對 1..16 個不同持久文件先核對全部 guar
 
 ## 原畫布的巢狀 Node 與動作清單
 
+外部連線 Node 拖回已引用它的原清單時，只切換為組合模式，沿用原 Slot、順序與設定，不新增項目；其他 Slot 仍有讀取引用時拒絕內放。
+
+Empty Node 可拖入相容的單值 Slot，沿用 Port 的預定族、唯讀與循環檢查及內放引用守衛；尚未選擇具體型別仍屬編輯中狀態，不豁免文件驗證。
+
 HaruGraphWindow 只有原 Node 畫布的編輯流程，直接啟用 HGGraph.Build 的 nestSlots。一般單值 Slot、可寫動作清單元素及帶 Slot 設定的輸入，沿用同一份 Slot→Node、DrawNode／DrawRows、Port、來源選單與交易。唯讀流程描述是 MCP／工具的語意查詢，不是另一個視窗編輯系統。
 
 HGGraph.Nested.cs 按文件的實際 Slot 引用建立 view 父子森林。組合模式且全域單一使用的 Inline／Token／Asset／Property 來源可嵌入；連線模式固定保留在畫布，允許多個 Slot 使用。循環、跨群組及超過 16 層仍受既有安全限制。父子須在同一 Group／Tab 或皆未分組，不改動既有群組成員。動作清單預設展開，但尊重手動收合；不可寫清單與欄位不提供插入。欄位巢狀不代表自動推斷執行語意，未知 Action 的資料仍可用原 Node 檢視。

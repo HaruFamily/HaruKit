@@ -20,9 +20,9 @@ public partial class HaruGraphWindow
         return null;
     }
 
-    private bool CanComposeDrop(HGNodeView node, HGRow row)
+    private bool CanComposeDrop(HGNodeView node, HGRow row, GraphSlotBase existingListSlot = null)
     {
-        var target = row?.InputSlot;
+        var target = row?.InputSlot ?? existingListSlot;
         if (target is UnionSlotBase union) target = union.SelectedSlot ?? target;
         var previous = node?.NestedSlot?.InputSlot;
         if (previous is UnionSlotBase wrapper) previous = wrapper.SelectedSlot ?? previous;
@@ -32,7 +32,7 @@ public partial class HaruGraphWindow
     }
 
     private bool CanDropNodeInSocket(HGNodeView node, HGRow row)
-        => node?.Carrier != null && node.Carrier.Kind is NodeKind.Inline or NodeKind.Token or NodeKind.Asset or NodeKind.Property
+        => node?.Carrier != null && node.Carrier.Kind is NodeKind.Empty or NodeKind.Inline or NodeKind.Token or NodeKind.Asset or NodeKind.Property
             && row?.InputSlot != null && CanComposeDrop(node, row)
             && graph.PrimaryOutputs.TryGetValue(node.Carrier, out var output)
             && graph.PrimaryInputs.TryGetValue(row.InputSlot, out var input)
@@ -291,10 +291,18 @@ public partial class HaruGraphWindow
         return true;
     }
 
+    private static GraphSlotBase ExistingListSlot(HGNodeView node, HGRow row)
+    {
+        if (node?.Carrier == null || row?.Items is not HGListItemSource list) return null;
+        for (int i = 0; i < list.Count; i++)
+            if (list.Get(i) is GraphSlotBase slot && ReferenceEquals(slot.Node, node.Carrier)) return slot;
+        return null;
+    }
+
     private bool CanDropAction(HGNodeView node, HGRow row)
     {
         if (node?.Carrier == null || row?.Items is not HGListItemSource list || !list.CanEditStructure
-            || !CanComposeDrop(node, null)
+            || !CanComposeDrop(node, null, ExistingListSlot(node, row))
             || HGGraph.NestedWithin(OwnerOfRow(row), node) || HGFlowAddress.Contains(node.Carrier, list.List)) return false;
         return list.TryCreateElement(out var item) && item is GraphSlotBase slot
             && SourceAcceptance(node, slot) == HGPortConnectionResult.Allowed;
@@ -317,6 +325,12 @@ public partial class HaruGraphWindow
         try
         {
             if (!CanDropAction(node, row)) throw new ArgumentException("清單族不相容，或會形成循環。");
+            // 外部接線拖回原清單只改模式，保留原 Slot 的順序及設定。
+            if (node.NestedSlot == null && ExistingListSlot(node, row) != null)
+            {
+                SetNodeMode(node, GraphNodeMode.Composition);
+                return true;
+            }
             var destination = (HGListItemSource)row.Items;
             var previous = node.NestedSlot;
             if (previous?.IsItem == true && previous.ItemSource is HGListItemSource source)
