@@ -417,7 +417,6 @@ public partial class HaruGraphWindow
     private void AddNestedListOptions(HGNodeView node, List<HGSourceOption> options)
     {
         if (node.NestedSlot == null || node.InLockedSubtree) return;
-        options.Add(new HGSourceOption { Group = "清單與槽位", Name = "拔出到畫布", Apply = () => DetachNestedNode(node) });
         if (!node.NestedSlot.IsItem || node.NestedSlot.ItemSource is not HGListItemSource items || !items.CanEditStructure) return;
         if (node.NestedSlot.InputSlot is FormulaSlotBase)
             options.Add(new HGSourceOption { Group = "清單與槽位", Name = "改為常數", Apply = () =>
@@ -438,9 +437,6 @@ public partial class HaruGraphWindow
             && ReferenceEquals(items.Get(node.NestedSlot.ItemIndex), node.NestedSlot.InputSlot);
 
 
-
-    private void DetachNestedNode(HGNodeView node)
-        => SetNodeMode(node, GraphNodeMode.Connection);
 
     private void RestoreNodeSocketDrag()
     {

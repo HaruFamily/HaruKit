@@ -237,8 +237,8 @@
         public bool HideLabel;
         public HGLabelLayout LabelLayout => HideLabel ? HGLabelLayout.Hidden
             : Descriptor != null ? Descriptor.LabelLayout : HGReflect.LabelLayout(Field);
-        public bool LabelAbove => LabelLayout == HGLabelLayout.Vertical
-            && (NodeList || NestedNode != null) && !IsItem;
+        public bool LabelAbove => !HideLabel && !IsItem
+            && (NodeList || LabelLayout == HGLabelLayout.Vertical && NestedNode != null);
         public int LabelWidthUnits;
         public float LabelWidthRatio;
         public bool Normalized;
@@ -1410,9 +1410,10 @@
                 }
                 else
                 {
-                    child = new HGRow { Kind = HGRowKind.Group, Label = HGReflect.TypeName(item.GetType()), Depth = depth };
+                    child = new HGRow { Kind = HGRowKind.Foldout, Label = HGReflect.TypeName(item.GetType()), Depth = depth };
                     BuildRows(item, depth + 1, child.Children, visited ?? new HashSet<object>(HGRefComparer.Instance),
                         childPath, elementPad, metadata, diagnostics);
+                    foreach (var member in child.Children) MarkFoldoutSubtree(member, child);
                 }
 
                 child.Path = childPath;

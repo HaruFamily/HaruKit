@@ -491,6 +491,8 @@ Unity 物件引用只回 GUID／local ID／path（非持久物件回 instance ID
 
 `HGDocumentSession.Authoring` 提供 CreateNode、定義庫 CRUD／Property 設定、Slot fallback 與可變 Slot 清單、root adapter CRUD、基本版面 Group 操作。命令共用 Apply 的單步快照回復／Undo，庫命名、複製及刪除引用語意沿用 HGModel。模型的 CreateDetachedView 只接管傳入的隔離副本，不 Bind／Reload、不清理 Owner、不自己記歷程；不得把 Owner 正本傳進後再執行命令。
 
+`SetPropertyTarget` 為文件所持有的 PropertySlot 選擇本文件庫內相容定義，或傳入 null 清除；使用獨立引用載體，保留既有讀取者與模式。它不建立畫布 Port，走 Guard／Apply、Undo／Redo 與內容驗證失效；外部定義或外部 Slot 拒絕。
+
 每個命令的既有物件參數必須屬於目前草稿，成功及 mutation 回復後須重取 generation／引用。新節點放入文件候選池，由呼叫者明確 Connect。Slot 清單限 List<具體 GraphSlotBase>，不接受一般庫或任意 IList；移除保留失去使用者的來源。Group 使用 Root／Token 的合法 scope、同 scope 成員互斥，純版面 Apply 不使內容驗證失效；提交規則不變。
 
 `SetSlotDefault` 也接受文件所屬的 UnionSlotBase：型別依 DefaultEditType，僅修改外層 DefaultObject，不切換 SelectedSlot 或改分支設定。沿用 Apply／Undo／Redo；Property 的宣告 Slot 仍拒絕，改用 Property 設定命令。
@@ -568,7 +570,7 @@ HGDocumentSession.Geometry 使用相同巢狀量測；nodes 的 parent_node_id �
 
 ### 參數與清單控制欄對齊
 
-NodeList 標題固定預留外側 ListGutter 把手欄；空清單、收合及項目數不影響 ＋ 的水平位置。內放 Slot Label 垂直置中於整顆子 Node；清單標題與 ＋ 置中於右側項目區。空清單及收合維持單列高度。普通參數與 Slot 的預設值欄起點由 HGGraph.ParameterColumnLeft 決定，普通群組／Slot 設定的縮排只影響 Label。明確宣告的 Label 寬度仍沿用既有規則，無 Label 的值維持自身縮排。
+有名稱的 NodeList 標題獨佔上方一列，項目與新增按鈕排在下面，項目保留 ListGutter 把手欄；收合只顯示標題。隱藏名稱的清單保留原精簡配置。內放單值 Slot Label 依欄位排列設定呈現。普通參數與 Slot 的預設值欄起點由 HGGraph.ParameterColumnLeft 決定，普通群組／Slot 設定的縮排只影響 Label。明確宣告的 Label 寬度仍沿用既有規則，無 Label 的值維持自身縮排。
 
 普通值與可內放 Slot 的右側共用 ParameterRightInset（PortDiameter + 10px），未放 Port 的列也保留該空間。ValueFieldRect 同時供 drawer 量測與繪製，避免 enum／自訂控制項與 Slot 各算一套寬度。需要顯示型別 chip、清單刪除等控制項的列仍額外保留其必要寬度；Spinner 的完整列介面維持原版面。
 
@@ -580,7 +582,7 @@ Canvas 的清單新增入口位於標題旁 ＋，不配置尾端整列新增按
 
 拖入插入位置新增 Slot；跨清單搬移原 Slot，保留常數與設定，相同清單重排修正移除後索引。動作沿用 HGFlowStructure.ResolveTransfer，所有 Node 清單保留族、循環與唯讀守衛。內放清單 Node 拖到畫布空白處時移除原項目，來源留在畫布／候選池；畫布外、其他 Node 的非接收區及 Esc 取消。外部共用 Node 的搬動不移除引用項目。
 
-Node 來源 ▾ 的「改為常數」僅斷開公式清單項目的來源，保留原項目與儲存 Default；來源留在候選池。▾ 同時提供移除此項目、拔出到畫布，不新增右鍵入口。新增與搬移沿用既有交易、回復與 Undo，不改序列化型別或資產。
+Node 來源 ▾ 的「改為常數」僅斷開公式清單項目的來源，保留原項目與儲存 Default；來源留在候選池。▾ 同時提供移除此項目；將 Node 移出槽位直接拖到畫布空白處，不提供拔出選單。新增與搬移沿用既有交易、回復與 Undo，不改序列化型別或資產。
 
 > Trace: verified 2026-10-31 · doc `Doc/2026-10-2/REPORT_GraphKit清單拖放與常數入口.md`（來源靜態核對；Unity 編譯／拖放／Undo 待驗證）
 
@@ -609,13 +611,17 @@ Timing HEAD 的根動作清單依文件 ItemsOf 回傳的清單身分辨識，�
 
 ## HGLabel 三種排列
 
-`HGLabel.Layout` 使用 `HGLabelLayout.Horizontal`（預設）、`Vertical`、`Hidden`。Horizontal 為左 Label／右 Slot；Vertical 在單值 Slot 有內放 Node 時預留一列標題、Node 排在下面，未內放（常數、外部接線、共用引用）仍用左右排列。NodeList 的 Vertical 標題在上、項目在下，保留排序把手及底部新增按鈕。一般值不因 Vertical 改成兩列。
+複合 class 清單元素使用可獨立收合的 Foldout 列，預設展開；成員沿用 FoldoutOwnerRow、CollapseRows 與既有版面保存，不改動資料。標題列保留排序把手與刪除按鈕；收合摘要只讀首個非動作 Slot 的內放來源名稱與動作清單項數，沿用 Elide／Tooltip。元素內部清單可獨立收合。
+
+複合 class 清單元素內的 Slot 框左緣，依該列 LeftPad 與 Depth 縮排至 class 內容區；不沿用父 Node 的最左緣。SlotBounds 同時提供繪製與命中範圍，右緣及 Node 內容位置維持既有計算。
+
+`HGLabel.Layout` 使用 `HGLabelLayout.Horizontal`（預設）、`Vertical`、`Hidden`。Horizontal 為左 Label／右 Slot；Vertical 在單值 Slot 有內放 Node 時預留一列標題、Node 排在下面，未內放（常數、外部接線、共用引用）仍用左右排列。有名稱的 NodeList 一律標題在上、項目在下，保留排序把手及底部新增按鈕，不依 Horizontal／Vertical 切換。一般值不因 Vertical 改成兩列。
 
 Hidden 只隱藏 Label，不隱藏 Slot；沿用 12px 層級縮排。既有 HGHideLabel 相容為 Hidden，與 HGLabel 同時標記時隱藏優先。不要改動既有資產。descriptor factories 提供尾端可選 `labelLayout:`，原 `hideLabel: true` 同樣優先。新增欄位使用 `[HGLabel("條件", Layout = HGLabelLayout.Vertical)]` 或 `[HGLabel(Layout = HGLabelLayout.Hidden)]`。
 
 > Trace: verified 2026-11-01 · doc `Doc/2026-11-0/REPORT_GraphKit_Label排列整合.md`（來源靜態核對；Unity 編譯與測試待執行）
 
-Vertical 排列的單值 Slot 與 NodeList 共用 ListGutter（16px）前置欄，清單把手放在此欄內，不再額外加上層級縮排；相同深度與 LeftPad 的單值 Node 與清單項目左緣對齊。
+Vertical 單值 Slot 使用 ListGutter（16px）前置欄。具名 NodeList 的項目保留同層水平單值 Slot 的名稱欄寬，與條件等單值內容對齊；把手位於項目左側。清單底部新增按鈕與該清單直屬 Node 的最大本體寬度一致，空清單使用父 Node 寬度。複合清單與 Slot 外框只包本層直接引用的 Node 本體，不沿用 NestedVisualWidth 追隨孫層延伸；完整子樹寬度仍用於畫布裁切與排版。
 
 Token、Asset、Property 引用 Node 與 Inline Node 共用內放投影與外觀，不縮成另外的卡片。唯一 Slot 引用的載體可內放，隱藏 Header 輸出 Port 與內部線，保持現有來源欄位與引用資料；Property 拖入仍走原 Port 相容性守衛。共用同一 GraphNode 載體、跨 Group／Tab、循環與超深者維持外部連線。不同載體引用同一 Token／Asset／Property 定義可各自內放，不複製來源內容。Property 寫入端與 PropertySlot 保持既有接線契約。
 

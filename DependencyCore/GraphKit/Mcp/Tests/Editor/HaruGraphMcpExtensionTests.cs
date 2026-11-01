@@ -226,6 +226,48 @@ public sealed class HaruGraphMcpExtensionTests
         Assert.That(JsonUtility.ToJson(owner.Document), Is.EqualTo(sourceBefore));
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void BackgroundGeometryHonorsSavedCompositeAndListCollapseWithoutRemovingDataEndpoints(bool collapseCase)
+    {
+        var owner = FlowOwner();
+        var child = new GraphNode(new PortableFlowAction()); child.EnsureId();
+        var composite = new CompositeListAction();
+        composite.Cases.Add(new PortableFlowRoot { Actions = new() { new PortableActionSlot { Source = child } } });
+        var carrier = new GraphNode(composite); carrier.EnsureId();
+        owner.Document.Entries[0].Actions.Clear();
+        owner.Document.Entries[0].Actions.Add(new PortableActionSlot { Source = carrier });
+        string key = carrier.Id + (collapseCase ? "#/Cases[0]" : "#/Cases[0]/Actions");
+        owner.Document.View.SetFolded(key, true);
+        EditorUtility.SetDirty(owner); AssetDatabase.SaveAssetIfDirty(owner);
+        string ownerBefore = JsonUtility.ToJson(owner.Document);
+        string id = Open(owner);
+        int generation = Generation(id);
+        string scope = (string)Draft(new { action = "group_scopes", draft_id = id, generation })["entries"][0]["scope_id"];
+        string before = (string)HaruGraphDraft.WithDraftSnapshot((JObject)Request(id), read => JsonUtility.ToJson(read.Document));
+        var geometry = Draft(new { action = "geometry", draft_id = id, generation, scope_id = scope });
+        Assert.That(geometry["nodes"].Any(node => (string)node["node_id"] == child.Id), Is.False);
+        var preview = Draft(new { action = "layout_preview", draft_id = id, generation, scope_id = scope });
+        Assert.That((string)preview["svg"], Does.StartWith("<svg"));
+        Assert.That((bool)HaruGraphDraft.WithDraftSnapshot((JObject)Request(id), read =>
+            read.Nodes.Values.Any(node => node.Id == child.Id) && read.Slots.Values.Any(slot => slot.Node?.Id == child.Id)), Is.True);
+        Assert.That((string)HaruGraphDraft.WithDraftSnapshot((JObject)Request(id), read => JsonUtility.ToJson(read.Document)), Is.EqualTo(before));
+        Assert.That(Generation(id), Is.EqualTo(generation));
+        Assert.That(JsonUtility.ToJson(owner.Document), Is.EqualTo(ownerBefore));
+        Draft(new { action = "discard", draft_id = id });
+        drafts.Remove(id);
+        owner.Document.View.SetFolded(key, false);
+        EditorUtility.SetDirty(owner); AssetDatabase.SaveAssetIfDirty(owner);
+        id = Open(owner); generation = Generation(id);
+        geometry = Draft(new { action = "geometry", draft_id = id, generation, scope_id = scope });
+        Assert.That(geometry["nodes"].Any(node => (string)node["node_id"] == child.Id), Is.True);
+    }
+
+    [Serializable] private sealed class CompositeListAction : PortableFlowAction
+    {
+        public List<PortableFlowRoot> Cases = new();
+    }
+
     [Test]
     public void ExecutorsAreDiscoveredTypedAndIsolatedAndCanBeUnregistered()
     {

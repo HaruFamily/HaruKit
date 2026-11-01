@@ -567,6 +567,43 @@ public class HGPortTests
         finally { UnityEngine.Object.DestroyImmediate(owner); }
     }
 
+    [Test]
+    public void SessionPropertyTargetSelectionPreservesReadersAndSupportsUndoAndClear()
+    {
+        var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();
+        try
+        {
+            owner.Document = new PropertyDocument();
+            var first = new GraphProperty("First", new TestFormulaSlot());
+            var second = new GraphProperty("Second", new TestFormulaSlot());
+            owner.Document.Properties.Add(first);
+            owner.Document.Properties.Add(second);
+            var shared = new GraphNode(); shared.SetProperty(first); shared.EnsureId();
+            shared.Mode = GraphNodeMode.Connection;
+            var writer = new PropertyWriterBody(); writer.Target.SetNode(shared);
+            var reader = new PropertyReaderBody(); reader.Source.SetNode(shared);
+            owner.Document.Orphans.Add(new GraphNode(writer));
+            owner.Document.Orphans.Add(new GraphNode(reader));
+            Assert.That(HGDocumentSession<PropertyDocument>.TryOpen(owner, PropertyBinding(), out var session), Is.True);
+            PropertyWriterBody Writer() => (PropertyWriterBody)session.Document.Orphans[0].BodyObject;
+            PropertyReaderBody Reader() => (PropertyReaderBody)session.Document.Orphans[1].BodyObject;
+            Assert.That(session.SetPropertyTarget(Writer().Target, second), Is.EqualTo(HGSessionCommandResult.Rejected));
+            Assert.That(session.SetPropertyTarget(Writer().Target, session.Document.Properties[1]), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(Writer().Target.Node.Property, Is.SameAs(session.Document.Properties[1]));
+            Assert.That(Reader().Source.Node.Property, Is.SameAs(session.Document.Properties[0]));
+            Assert.That(Reader().Source.Node.Mode, Is.EqualTo(GraphNodeMode.Connection));
+            Assert.That(writer.Target.Node, Is.SameAs(shared), "Owner remains untouched.");
+            Assert.That(session.Undo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(Writer().Target.Node, Is.SameAs(Reader().Source.Node));
+            Assert.That(session.Redo(), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(session.SetPropertyTarget(Writer().Target, null), Is.EqualTo(HGSessionCommandResult.Changed));
+            Assert.That(Writer().Target.Node, Is.Null);
+            Assert.That(Reader().Source.Node.Property, Is.SameAs(session.Document.Properties[0]));
+            Assert.That(session.SetPropertyTarget(Writer().Target, null), Is.EqualTo(HGSessionCommandResult.NoChange));
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
     private static void AssertGraphBuilt(HaruGraphWindow window)
     {
         var graph = (HGGraphView)typeof(HaruGraphWindow).GetField("graph",

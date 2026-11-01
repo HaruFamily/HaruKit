@@ -9,6 +9,44 @@ using UnityEngine;
 
 public sealed class HGNestedSlotTests
 {
+    [Test]
+    public void CompositeListItemCollapseHidesNestedNodesAndRestoresThemOnExpansion()
+    {
+        var formula = new GraphNode(new Formula()); formula.EnsureId();
+        var entry = new CompositeEntry(); entry.Condition.SetNode(formula);
+        var action = new CompositeAction(); action.Cases.Add(entry);
+        var carrier = new GraphNode(action); carrier.EnsureId();
+        var root = new ActionSlot(); root.SetNode(carrier);
+        var document = new Document(); document.Root.Actions.Add(root);
+        var model = HGModel.CreateDetachedView(null, document, null);
+        var roots = new object[] { document.Root };
+        var state = new Dictionary<string, bool>();
+        HGGraphView Build() => HGGraph.Build(model, roots, null, "root", "Root", state, nestSlots: true);
+        var view = Build();
+        var item = HGGraph.AllRows(view.ByCarrier[carrier].Rows).Single(row => row.IsItem && row.Kind == HGRowKind.Foldout);
+        Assert.That(item.Collapsed, Is.False);
+        string key = HGGraph.CollapseKey(carrier.Id, item);
+        state[key] = true;
+        view = Build();
+        Assert.That(view.ByCarrier[formula].Hidden, Is.True);
+        Assert.That(view.ByCarrier[formula].NestedParent, Is.SameAs(view.ByCarrier[carrier]));
+        state[key] = false;
+        view = Build();
+        Assert.That(view.ByCarrier[formula].Hidden, Is.False);
+        Assert.That(entry.Condition.Node, Is.SameAs(formula));
+    }
+
+    [Serializable] private sealed class CompositeAction : Action
+    {
+        public List<CompositeEntry> Cases = new();
+    }
+
+    [Serializable] private sealed class CompositeEntry
+    {
+        public ValueSlot Condition = new();
+        public List<ActionSlot> Actions = new();
+    }
+
     [TestCase(GraphNodeMode.Composition)]
     [TestCase(GraphNodeMode.Connection)]
     public void EmptyNodesNestInRootListsAndValueSlotsOnlyInCompositionMode(GraphNodeMode mode)
@@ -444,8 +482,8 @@ public sealed class HGNestedSlotTests
         Assert.That(hiddenRow.SocketContentY, Is.EqualTo(hiddenRow.LocalY));
         Assert.That(legacy.HideLabel, Is.True, "Legacy hide wins over Vertical.");
         Assert.That(list.LabelAbove, Is.True);
-        Assert.That(view.ByCarrier[step].Pos.x, Is.EqualTo(view.ByCarrier[formula].Pos.x),
-            "Vertical single slots and list items share one drag gutter and content column.");
+        Assert.That(view.ByCarrier[step].Pos.x, Is.GreaterThan(view.ByCarrier[formula].Pos.x),
+            "List items reserve the same label column as horizontal single slots.");
         Assert.That(view.ByCarrier[step].Pos.y, Is.GreaterThanOrEqualTo(owner.Pos.y + list.LocalY + HGGraph.RowHeight));
         Assert.That(action.Stacked.Node, Is.SameAs(formula));
     }

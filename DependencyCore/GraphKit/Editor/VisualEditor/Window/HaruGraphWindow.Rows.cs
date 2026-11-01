@@ -22,7 +22,7 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 var rowRect = ListRowRect(row, nodeRect);
                 if (rowRect.yMax > nodeRect.yMax) continue;
                 // 底要畫在所有內容之下，而且元素展開出來的子列也算同一段，所以在這裡統一畫，不放進元素控制項。
-                if (row.ItemOwnerRow != null && !row.ItemOwnerRow.NodeList && row.NestedNode == null) DrawListRowBackground(row, rowRect);
+                if (row.ItemOwnerRow != null && !row.ItemOwnerRow.NodeList && !row.NodeList && row.NestedNode == null) DrawListRowBackground(row, rowRect);
                 // 兼任常數清單標題的 Slot 列先畫，整段底帶與標題色要在它的內容之前鋪好。
                 if (row.DefaultListRow is { } defaultList)
                     DrawListSectionBackground(defaultList, ListSectionRect(defaultList, ListRowRect(defaultList, nodeRect), nodeRect));
@@ -95,6 +95,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                         DrawListSection(node, row, rowRect, nodeRect);
                         break;
                     case HGRowKind.Foldout:
+                        if (row.IsItem)
+                            DrawListElementControls(row, new Rect(rowRect.x, rowRect.y, rowRect.width, HGGraph.RowHeight), nodeRect);
                         DrawFoldoutRow(node, row, rowRect, nodeRect);
                         break;
                     case HGRowKind.Tabs:
@@ -221,12 +223,22 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 HGStyles.Fill(new Rect(band.x + 6f, band.yMax - 4f, 6f, 2f), HGStyles.ListRule);
             }
 
-            var caption = Indent(new Rect(rowRect.x, rowRect.y, rowRect.width - InputPortReserve, HGGraph.RowHeight), row);
+            var caption = Indent(new Rect(rowRect.x, rowRect.y,
+                rowRect.width - InputPortReserve - (row.IsItem ? HGGraph.ListDeleteWidth : 0f), HGGraph.RowHeight), row);
             var arrow = new Rect(caption.x, caption.y, 12f, caption.height);
             var text = new Rect(arrow.xMax, caption.y, Mathf.Max(8f, caption.width - 12f), caption.height);
             var labelStyle = HGStyles.TabLabel(TextAnchor.MiddleLeft, true);
             GUI.Label(arrow, row.Collapsed ? "▸" : "▾", labelStyle);
-            var content = HGStyles.Elide(row.Label + FoldoutMark(row), labelStyle, text.width, "點一下摺疊／展開");
+            string title = row.Label;
+            if (row.IsItem && row.Collapsed)
+            {
+                var source = HGGraph.AllRows(row.Children).FirstOrDefault(member => member.HasSlot && !member.IsActionSlot);
+                if (source?.NestedNode != null) title += " · " + source.NestedNode.Title;
+                int actionCount = HGGraph.AllRows(row.Children)
+                    .Where(member => member.ActionSequence).Sum(member => member.Items?.Count ?? 0);
+                if (actionCount > 0) title += $" · {actionCount} 個動作";
+            }
+            var content = HGStyles.Elide(title + FoldoutMark(row), labelStyle, text.width, title + "\n點一下摺疊／展開");
             GUI.Label(text, content, labelStyle);
 
             if (!row.Collapsed) DrawRows(node, row.Children, nodeRect);
@@ -438,6 +450,12 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 ? rowRect.yMax
                 : Mathf.Min(nodeRect.yMax, nodeRect.y + listRow.AddRowY + (listRow.CanAddItem ? HGGraph.ListAddRowHeight : 0f));
             var band = ListBandRect(listRow, rowRect);
+            // 複合清單只包本層直接引用的 Node 本體，更深層由各自的 Slot 框承接。
+            if (!listRow.Collapsed)
+                foreach (var child in HGGraph.AllRows(listRow.Children))
+                    if (!child.Hidden && child.NestedNode != null)
+                        band.xMax = Mathf.Max(band.xMax, nodeRect.x + HGGraph.NestedContentInset(child)
+                            + child.NestedNode.Width + HGGraph.NestedPadding);
             band.y = top;
             band.height = Mathf.Max(0f, bottom - top);
             return band;
@@ -1227,10 +1245,17 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
         private void DrawListAddButton(HGNodeView node, HGRow row, Rect nodeRect)
         {
             if (!row.CanAddItem || row.Collapsed) return;
-            var bounds = row.NodeList ? HGGraph.SlotBounds(node, row) : row.ScreenRect;
             float left = row.NodeList ? nodeRect.x + HGGraph.NestedContentInset(row)
                 : nodeRect.x + 4f + row.LeftPad + row.Depth * HGGraph.IndentWidth;
-            float right = row.NodeList ? bounds.xMax + pan.x - HGGraph.NestedPadding : nodeRect.xMax - 4f;
+            float right = ListSectionRect(row, ListRowRect(row, nodeRect), nodeRect).xMax - 2f;
+            if (row.NodeList)
+            {
+                float width = 0f;
+                foreach (var child in row.Children)
+                    if (!child.Hidden && child.NestedNode != null)
+                        width = Mathf.Max(width, child.NestedNode.Width);
+                right = left + (width > 0f ? width : nodeRect.width);
+            }
             var button = new Rect(left, nodeRect.y + row.AddRowY + 4f,
                 Mathf.Max(18f, right - left), HGGraph.RowHeight);
             bool hover = GUI.enabled && button.Contains(Event.current.mousePosition);

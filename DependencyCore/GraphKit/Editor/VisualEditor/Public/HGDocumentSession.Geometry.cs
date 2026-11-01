@@ -65,7 +65,15 @@ public sealed partial class HGDocumentSession<TDocument> where TDocument : class
             roots.Add(token.Slot);
             orphans = token.Orphans;
         }
-        var graph = HGGraph.Build(model, roots, orphans, scope, "背景幾何", metadata: context.Metadata, nestSlots: true);
+        var viewState = (copy as IGraphViewStateOwner)?.ViewState;
+        var collapse = new Dictionary<string, bool>();
+        if (viewState != null)
+        {
+            foreach (string key in viewState.Folded) collapse[key] = true;
+            foreach (string key in viewState.Unfolded) collapse[key] = false;
+        }
+        var graph = HGGraph.Build(model, roots, orphans, scope, "背景幾何", listCollapse: collapse,
+            metadata: context.Metadata, nestSlots: true);
         var diagnostics = graph.Diagnostics.Select(issue => issue.Code + ": " + issue.Message).ToList();
         if (graph.Diagnostics.Any(issue => issue.Severity == GraphDiagnosticSeverity.Error))
             throw new InvalidOperationException("Cannot measure a failed graph build: " + string.Join(" | ", diagnostics.Take(3)));

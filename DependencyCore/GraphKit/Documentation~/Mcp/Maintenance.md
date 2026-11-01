@@ -18,6 +18,10 @@ Document discovery uses direct serialized `IGraphDocument` fields, `IEditableGra
 
 Draft writes require the current generation. Keys from endpoints and root/list queries expire after mutations. `apply_batch` is atomic only within one draft, keeps one Undo entry and requires fresh query references after edits. `check` accepts only read operations. `validate` is structure/document diagnostics, not execution.
 
+Property write targets remain serialized endpoints without canvas ports. For these endpoints, `check_connection` checks the selected Property source's family; `connect` selects its library definition through `HGDocumentSession.SetPropertyTarget`, and `disconnect` clears it. Selection creates an independent writer reference and preserves existing reader carriers and their modes. Ordinary read connections still use the Port registry.
+
+> Trace: verified 2026-11-01 · consumer doc `Doc/2026-11-0/REPORT_貪噬鯢A循環與Property目標MCP修正.md`（live MCP selection, Undo/Redo, clear and saved-content readback; Test Runner pending）
+
 Single-file saves use preview/commit or preview_save_as/save_as. Referenced graph assets retain the single-file blocker; use `haru_graph_transaction` for a complete dependency-aware commit. Keep source-memory/disk/window conflicts and missing-reference checks. Up to 16 drafts can be open.
 
 `RegisterDocuments` returns a disposable registration lease. Each provider supplies at most 64 uniquely keyed `HaruGraphDocumentEntry` values per Owner, with a binding and optional `HGEditorExtensionContext`. Discovery IDs combine persistent Owner identity, provider ID and entry key; bindings can address nested/multiple documents. A provider must return stable keys, read without mutation, write only its document, and retain the submitted reference. Discovery still scans ScriptableObject asset files, not scene components. Disposing a registration prevents future discovery; existing sessions retain their binding/context.
@@ -91,6 +95,8 @@ Test fixtures must follow the same candidate contract as production callers: HGT
 > Trace: verified 2026-10-31 · doc `Doc/2026-10-2/REPORT_GraphKit混合式第六階段.md`（測試回報追查；修正後待重跑）
 
 Background geometry follows the original canvas multilevel slot and action-list nesting layout. Node entries include parent_node_id; ordinary ancestor/descendant containment is excluded from overlap pairs and internal nested-slot edges are omitted from schematic wiring. Data endpoints and sharing remain unchanged. Scope and first-version limits are specified in the core Maintenance.md section 原畫布的巢狀 Node 與動作清單.
+
+CaptureLayout passes the detached document's Folded and Unfolded view-state keys to HGGraph.Build. Saved composite-list element and nested-list collapse therefore affect measured visibility and height, while data endpoints remain available independently of canvas visibility. BackgroundGeometryHonorsSavedCompositeAndListCollapseWithoutRemovingDataEndpoints covers both saved-collapse paths through geometry/layout_preview and verifies that reads retain draft generation and content. Tests require Unity execution; source presence is not a passing result. Slot/class decorative frames remain outside the schematic contract.
 
 > Trace: verified 2026-10-31 · doc `Doc/2026-10-2/REPORT_GraphKit槽位巢狀Node第一版.md`（原始碼靜態核對；Unity／拖放與視覺待驗證）
 

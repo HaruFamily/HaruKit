@@ -29,8 +29,8 @@ public static partial class HGGraph
     {
         if (row.IsItem && row.ItemOwnerRow?.NodeList == true) return NestedContentInset(row.ItemOwnerRow);
         float inset = NestedPadding + row.LeftPad + row.Depth * IndentWidth;
-        // 上下排列共用同一個前置拖曳欄，清單不再額外疊加縮排。
-        if (row.LabelAbove) return inset + ListGutter;
+        // 清單標題在上方，項目仍對齊同層單值 Slot 的內容欄。
+        if (row.LabelAbove) return inset + (row.NodeList ? NestedLabelWidth(row) : ListGutter);
         return inset + NestedLabelWidth(row) + (row.HideLabel && !row.IsItem ? HiddenLabelIndent : 0f);
     }
 
@@ -149,6 +149,14 @@ public static partial class HGGraph
         // Slot 框只包直屬子 Node；後代延伸由各自的 Slot 框呈現。
         // 整棵子樹的裁切與排版範圍仍由 NestedVisualWidth 計算。
         float right = owner.Width - NestedPadding;
+        float left = NestedPadding;
+        // 複合清單元素內的 Slot 留在元素內容區，不跨過 class 的縮排導引線。
+        for (var group = row.FoldoutOwnerRow; group != null; group = group.FoldoutOwnerRow)
+            if (group.IsItem)
+            {
+                left += row.LeftPad + row.Depth * IndentWidth;
+                break;
+            }
         // 同一父 Node 的 Slot 共用直屬內容右緣，空分支也不會突然變窄。
         if (!owner.Collapsed)
             foreach (var item in AllRows(owner.Rows))
@@ -158,8 +166,8 @@ public static partial class HGGraph
         // 完整列高度仍包含 Slot 設定，但延伸框在內放內容結束處收尾。
         if (row.NestedNode != null)
             height = row.SocketContentY - row.LocalY + row.NestedNode.Height + NestedPadding * 2f;
-        return new Rect(owner.Pos.x + NestedPadding, owner.Pos.y + row.LocalY + 1f,
-            right - NestedPadding, Mathf.Max(1f, height - 2f));
+        return new Rect(owner.Pos.x + left, owner.Pos.y + row.LocalY + 1f,
+            Mathf.Max(1f, right - left), Mathf.Max(1f, height - 2f));
     }
 
     public static void PositionNestedSlots(HGGraphView view, HGNodeView dragging = null)

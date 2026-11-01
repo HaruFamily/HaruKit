@@ -92,7 +92,10 @@ public static partial class HaruGraphDraft
         {
             string previousSource = map.SourceKey(map.Slots[slotKey]);
             string previousNodeId = map.Slots[slotKey].Node?.Id;
-            return CommandResult(draft, draft.Session.Disconnect(map.Registry, HaruGraphDraftConnections.InputKey(slotKey)),
+            var disconnected = map.Slots[slotKey] is PropertySlotBase writer
+                ? draft.Session.SetPropertyTarget(writer, null)
+                : draft.Session.Disconnect(map.Registry, HaruGraphDraftConnections.InputKey(slotKey));
+            return CommandResult(draft, disconnected,
                 "disconnect", new { slot_key = slotKey, slot_type = map.Slots[slotKey].GetType().FullName,
                     previous_source_key = previousSource, previous_node_id = previousNodeId });
         }
@@ -101,7 +104,10 @@ public static partial class HaruGraphDraft
             new { generation = draft.Session.Generation, result = check.ToString(), allowed = check == HGPortConnectionResult.Allowed });
         if (check != HGPortConnectionResult.Allowed) return Error("connection_rejected", check.ToString());
         string previousNode = map.Slots[slotKey].Node?.Id;
-        return CommandResult(draft, draft.Session.Connect(map.Registry, HaruGraphDraftConnections.InputKey(slotKey), HaruGraphDraftConnections.OutputKey(sourceKey)),
+        var connected = map.Slots[slotKey] is PropertySlotBase propertyWriter
+            ? draft.Session.SetPropertyTarget(propertyWriter, map.Nodes[sourceKey].Property)
+            : draft.Session.Connect(map.Registry, HaruGraphDraftConnections.InputKey(slotKey), HaruGraphDraftConnections.OutputKey(sourceKey));
+        return CommandResult(draft, connected,
             "connect", new { slot_key = slotKey, slot_type = map.Slots[slotKey].GetType().FullName,
                 source_key = sourceKey, source_node_id = map.Nodes[sourceKey].Id, previous_node_id = previousNode });
     }

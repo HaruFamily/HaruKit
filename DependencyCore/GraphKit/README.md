@@ -4,6 +4,8 @@
 
 可選 MCP 保留流程查詢／命令、背景幾何與草稿保護，見 [MCP 手冊](Documentation~/Mcp/Maintenance.md)。
 
+非視窗組圖可用 `HGDocumentSession.SetPropertyTarget` 選擇或清除 Property 寫入目標，保留讀取者並支援 Undo；MCP 對應操作見同一手冊。
+
 目前套件版本：`1.1.0`（Unity 2021.3 以上）。
 
 > **使用 AI Agent 修改或串接本套件前，請要求它先閱讀並遵守 [`Documentation~/Maintenance.md`](Documentation~/Maintenance.md)（維護手冊）。**

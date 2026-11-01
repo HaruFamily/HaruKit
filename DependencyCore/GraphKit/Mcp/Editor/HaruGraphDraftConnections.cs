@@ -70,6 +70,8 @@ internal sealed class HaruGraphDraftConnections
     {
         if (slotKey == null || nodeKey == null || !Slots.ContainsKey(slotKey) || !Nodes.ContainsKey(nodeKey))
             return HGPortConnectionResult.InvalidEndpoint;
+        if (Slots[slotKey] is PropertySlotBase writer)
+            return Accepts(writer, Nodes[nodeKey]) ? HGPortConnectionResult.Allowed : HGPortConnectionResult.IncompatibleFamily;
         Registry.TryGet(InputKey(slotKey), out var input);
         Registry.TryGet(OutputKey(nodeKey), out var output);
         return HGPortConnection.Check(input, output, Registry.Generation);

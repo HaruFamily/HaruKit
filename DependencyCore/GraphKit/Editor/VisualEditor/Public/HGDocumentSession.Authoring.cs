@@ -10,6 +10,27 @@ public sealed partial class HGDocumentSession<TDocument> where TDocument : class
 {
     private HGModel AuthoringModel() => HGModel.CreateDetachedView(Owner, Document, context.Profile?.RootAdapter);
 
+    /// <summary>Selects a writer's library target without creating a canvas port or changing reader carriers.</summary>
+    public HGSessionCommandResult SetPropertyTarget(PropertySlotBase writer, GraphProperty property) => Guard(() =>
+    {
+        if (writer == null || !Owns(writer) || Document is not IPropertyOwner owner
+            || property != null && (!owner.Properties.Contains(property) || !writer.AcceptsProperty(property)))
+            return HGSessionCommandResult.Rejected;
+        if (property == null ? writer.Node == null : ReferenceEquals(writer.Node?.Property, property))
+            return HGSessionCommandResult.NoChange;
+        return Apply(() =>
+        {
+            GraphNode reference = null;
+            if (property != null)
+            {
+                reference = new GraphNode();
+                reference.SetProperty(property);
+                reference.EnsureId();
+            }
+            writer.SetNode(reference);
+        });
+    });
+
     /// <summary>Creates or configures one caller-owned binding, matching the current asset's family and name.</summary>
     public HGSessionCommandResult ConfigureAssetParameter(GraphNode carrier, Type family, string name,
         bool enabled, bool setDefault, object value) => Guard(() =>
