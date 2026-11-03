@@ -212,6 +212,8 @@ public sealed class HGFlowSnapshot
                     GraphFlowKind.FirstMatch => description.Inputs.Count == 0
                         && section.Role == (i == count - 1 ? GraphFlowSectionRole.Default : GraphFlowSectionRole.Case)
                         && (i == count - 1 ? section.Condition == null : section.Condition != null),
+                    GraphFlowKind.RoundRobin => description.Inputs.Count == 0
+                        && section.Role == GraphFlowSectionRole.Case && section.Condition == null,
                     _ => false,
                 };
                 if (!valid) { Issue("invalid-description", path, "Section roles do not match the declared control structure."); return null; }

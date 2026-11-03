@@ -521,6 +521,8 @@ CommitAssetsPreservingOwners 對 1..16 個不同持久文件先核對全部 guar
 
 ## 唯讀流程描述與投影
 
+`RoundRobin` 描述依序輪替的無條件 Case sections（至少一個、無 Inputs）；每次呼叫只執行目前 section，成功後推進並循環。使用端持有進度與取消語意，GraphKit 僅投影結構，不保存或執行進度。
+
 `Runtime/Contracts/GraphFlow.cs` 的 `IGraphFlowContainer.DescribeFlow()` 宣告 Sequence、Conditional、Loop、FirstMatch，不排程、不求值、不取代原序列化欄位。描述借用實際 Slot／子動作清單；讀取不得建立 Slot、補 Id、修改文件或執行使用端。Conditional 的唯一 Input 是條件，兩個 section 依序為 WhenTrue／WhenFalse；Loop 的 Inputs 描述迴圈來源、Body 為每次迭代的有序動作；FirstMatch 的 Case 依判斷順序附 Condition，最後一個 Default 無條件。使用端負責確保宣告與實際執行相符，不用反射欄位順序猜語意。
 
 `HGEditorExtensionContext` 的可選 `flowMetadata` 實作 `IHGFlowMetadataProvider`，成功回傳時完整取代內容自己的流程宣告；回傳 false 才回退 `IGraphFlowContainer`，再回退既有 `ISequentialActionContainer`。例外或無效宣告回報 issue，不改採其他描述來掩飾錯誤。未知內容保留 opaque Node，不推斷子流程；不進入引用資產、Formula、Token 或 Property 求值。

@@ -4,7 +4,7 @@ using System;
 using System.Collections.Generic;
 
 /// <summary>Declared control structure; GraphKit does not execute or evaluate it.</summary>
-public enum GraphFlowKind { Sequence, Conditional, Loop, FirstMatch }
+public enum GraphFlowKind { Sequence, Conditional, Loop, FirstMatch, RoundRobin }
 
 /// <summary>The execution role of a section, independent of its display label.</summary>
 public enum GraphFlowSectionRole { Body, WhenTrue, WhenFalse, Case, Default }
