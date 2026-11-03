@@ -1093,6 +1093,18 @@ public partial class HaruGraphWindow
             titleTip = $"{node.Obj.GetType().FullName}\n{HGReflect.TypeDescription(node.Obj.GetType())}\n{titleTip}".TrimEnd();
         GUI.Label(titleRect, HGStyles.Elide(node.Title, HGStyles.NodeTitle, textWidth, titleTip), HGStyles.NodeTitle);
 
+        // HEAD 是整張圖的起點，再套一圈外光暈把它和一般節點分開（顏色會被選取／拉線狀態蓋過，光暈不會）。
+        if (node.IsRoot)
+        {
+            var halo = new Rect(rect.x - 3f, rect.y - 3f, rect.width + 6f, rect.height + 6f);
+            DrawNodeFrameWithSlots(node, halo, new Color(HGStyles.HeadBorder.r, HGStyles.HeadBorder.g, HGStyles.HeadBorder.b, 0.35f),
+                NodeCornerRadius + 3f, 1f);
+        }
+
+        // 本體框先畫，讓向右延伸的清單與 Slot 內容遮住父層邊線。
+        DrawNodeFrameWithSlots(node, rect, node.IsRoot ? HGStyles.HeadBorder : HGStyles.NodeBorder,
+            NodeCornerRadius, node.IsRoot ? 2f : 1f);
+
         // 資產、Token 與 Property 的本體是一列「選哪一個」的下拉。
         // 所有 Property 節點都引用目前圖庫中的定義。
         // 掛在未勾覆蓋的參數底下＝這一段不會被採用，整顆節點鎖住：控制項灰掉、拉線與清單編輯都擋掉。
@@ -1171,15 +1183,13 @@ public partial class HaruGraphWindow
             : node.IsRoot ? HGStyles.HeadBorder : HGStyles.NodeBorder;
         float thickness = isLinkTarget || selected ? 2f : linkCandidate || searchMatch ? 1.5f : node.IsRoot ? 2f : 1f;
 
-        // HEAD 是整張圖的起點，再套一圈外光暈把它和一般節點分開（顏色會被選取／拉線狀態蓋過，光暈不會）。
-        if (node.IsRoot)
+        // 強調僅留在標題與左緣，不讓父層右框穿過巢狀欄位。
+        if (isLinkTarget || linkCandidate || selected || searchMatch)
         {
-            var halo = new Rect(rect.x - 3f, rect.y - 3f, rect.width + 6f, rect.height + 6f);
-            DrawNodeFrameWithSlots(node, halo, new Color(HGStyles.HeadBorder.r, HGStyles.HeadBorder.g, HGStyles.HeadBorder.b, 0.35f),
-                NodeCornerRadius + 3f, 1f);
+            HGStyles.RoundedFrame(header, borderColor, NodeCornerRadius, thickness);
+            HGStyles.Fill(new Rect(rect.x, header.yMax, thickness,
+                Mathf.Max(0f, rect.yMax - header.yMax - NodeCornerRadius)), borderColor);
         }
-
-        DrawNodeFrameWithSlots(node, rect, borderColor, NodeCornerRadius, thickness);
         DrawNodePorts(node, snappedPort);
     }
 

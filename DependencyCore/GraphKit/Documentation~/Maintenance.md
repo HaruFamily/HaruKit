@@ -672,3 +672,9 @@ GraphNode.Mode 保存 GraphNodeMode.Composition（0，預設）或 Connection（
 ### 槽位拖曳提示
 
 內放 Node 拖曳時，Label 與清單把手的垂直位置從父 Node＋SocketContentY＋NestedPadding 計算，不使用移動中的子 Node.Pos。Slot 框和排版高度保留，原位畫淡色佔位框。單一 Slot 接受落點只以淡青底色與外框呈現，範圍使用實際 ScreenRect，不依拖入 Node 尺寸延伸、不畫卡片預覽、不重建排版或修改來源；無效落點顯示錯誤框。清單新增仍用插入線。預覽在節點繪製後以 Repaint overlay 畫出，不建立互動控制項。
+
+### 巢狀節點選取提示
+
+一般編輯模式的選取、搜尋命中及拉線候選以標題框與左側線強調；本體框與 Root 光暈在欄位內容之前繪製，避免父層右緣覆蓋延伸的清單／Slot。低倍率總覽維持完整輪廓。新增項目／動作按鈕的繪製與點擊範圍限制在所屬 Node 本體內，不使用延伸清單面板或子 Node 寬度；垂直量測與插入落點維持既有規則。
+
+> Trace: verified 2026-11-03 · doc `Doc/2026-11-0/DECISION_GraphKit巢狀選取提示.md`（靜態核對；Unity 視覺待驗證）

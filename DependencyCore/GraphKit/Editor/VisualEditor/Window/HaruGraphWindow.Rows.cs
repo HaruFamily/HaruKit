@@ -1247,15 +1247,9 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
             if (!row.CanAddItem || row.Collapsed) return;
             float left = row.NodeList ? nodeRect.x + HGGraph.NestedContentInset(row)
                 : nodeRect.x + 4f + row.LeftPad + row.Depth * HGGraph.IndentWidth;
-            float right = ListSectionRect(row, ListRowRect(row, nodeRect), nodeRect).xMax - 2f;
-            if (row.NodeList)
-            {
-                float width = 0f;
-                foreach (var child in row.Children)
-                    if (!child.Hidden && child.NestedNode != null)
-                        width = Mathf.Max(width, child.NestedNode.Width);
-                right = left + (width > 0f ? width : nodeRect.width);
-            }
+            // 新增操作屬於父節點，不沿著內放子節點擴張。
+            float right = nodeRect.xMax - 4f;
+            left = Mathf.Min(left, right - 18f);
             var button = new Rect(left, nodeRect.y + row.AddRowY + 4f,
                 Mathf.Max(18f, right - left), HGGraph.RowHeight);
             bool hover = GUI.enabled && button.Contains(Event.current.mousePosition);
