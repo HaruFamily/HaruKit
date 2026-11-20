@@ -1,0 +1,40 @@
+# Unity 產生的資料夾（每台電腦各自產生）
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+
+# IDE 產物
+.vs/
+.vscode/
+.idea/
+*.csproj
+*.unityproj
+*.sln
+*.slnx
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# 其他
+sysinfo.txt
+crashlytics-build.properties
+mono_crash.*
+*.apk
+*.aab
+
+# GraphKit 設定視窗匯出的 skill 副本；正本在 DependencyCore/GraphKit/AgentSkill~，每台電腦用 HaruFamily/GraphKit/AI and MCP Setup 重新匯出
+/.agents/
