@@ -1,0 +1,24 @@
+{
+  "name": "HaruKitEvi.Fixtures.Editor",
+  "rootNamespace": "HaruKitEvi.FixtureTools",
+  "references": [
+    "HaruKitEvi.Fixtures",
+    "HaruFamily.DependencyCore.GraphKit",
+    "HaruFamily.DependencyCore.GraphKit.Editor",
+    "HaruFamily.Framework.LogicGraph",
+    "HaruFamily.Framework.LogicGraph.Editor",
+    "HaruFamily.Tools.AssetPipeline.Editor",
+    "UniTask"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

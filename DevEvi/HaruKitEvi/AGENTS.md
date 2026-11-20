@@ -11,7 +11,10 @@
 
 ## 這個專案怎麼運作
 - 套件原始碼在 repo 根目錄的 `UX/`、`Framework/`、`DependencyCore/`、`Tools/`；`Packages/manifest.json` 以 `file:` 參照它們。**修改套件一律改 repo 裡的套件資料夾**，不要複製進 `Assets/` 或 `Packages/`。
-- `Assets/` 只放測試用 Fixtures、範例與專案設定。
+- `Assets/` 只放測試用 Fixtures、範例與專案設定：
+  - `Assets/Project/`：URP、場景、Input 等專案設定資產。
+  - `Assets/Fixtures/`：手動測試用的使用端程式與範例資產，說明見 `Assets/Fixtures/README.md`。選單在 `HaruKitEvi/Fixtures/`。
+  - `Assets/Editor/HaruFamily/AssetPipeline/`：AssetPipeline 套件寫死的預設資產位置，不要搬。
 - 測試：Test Runner 的 EditMode（`testables` 已列出 GraphKit、LogicGraph、AssetPipeline、Bookmarks）。
 - MCP：CoplayDev 的 MCP for Unity。不要另外安裝 Unity 官方 AI Assistant／MCP。
 - 開發環境細節見 CONVENTIONS §4.1；發佈與 tag 見 §3.3；禁止事項見 §5（push、刪 tag、改寫歷史都要先問 owner）。

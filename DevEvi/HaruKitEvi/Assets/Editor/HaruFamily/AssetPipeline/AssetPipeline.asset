@@ -1,0 +1,38 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b1f5d71bf14dba94880ac5cebc7ccea4, type: 3}
+  m_Name: AssetPipeline
+  m_EditorClassIdentifier: HaruFamily.Tools.AssetPipeline.Editor::HaruFamily.Tools.AssetPipeline.AssetPipeline
+  graph:
+    _roots:
+    - rid: 4031951382408594021
+    _orphans: []
+    _endpoints: []
+    _properties: []
+    _validated: 0
+    _viewState:
+      _hidden: []
+      _folded:
+      - f1e36586b243449e9cb3f0fa10c5fd75#@node
+      _unfolded: []
+      _notesCollapsed: []
+      _fieldTabs: []
+      _groups: []
+  references:
+    version: 2
+    RefIds:
+    - rid: 4031951382408594021
+      type: {class: ActionGroup, ns: HaruFamily.Tools.AssetPipeline, asm: HaruFamily.Tools.AssetPipeline.Editor}
+      data:
+        Actions: []
+        _pos: {x: 40, y: 40}
+        _hasPos: 1

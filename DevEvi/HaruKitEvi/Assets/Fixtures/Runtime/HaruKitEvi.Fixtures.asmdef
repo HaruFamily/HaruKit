@@ -1,0 +1,18 @@
+{
+  "name": "HaruKitEvi.Fixtures",
+  "rootNamespace": "HaruKitEvi.Fixtures",
+  "references": [
+    "HaruFamily.DependencyCore.GraphKit",
+    "HaruFamily.Framework.LogicGraph",
+    "UniTask"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
