@@ -57,6 +57,7 @@ HaruKit/                       ← repo root
   - **registry 依賴**（Unity registry 上的，例 `com.unity.addressables`）→ 寫進 `dependencies`，UPM 會自動解析，使用端不必管。
   - **git-only 依賴**（只有 git URL 的，例 UniTask）→ **不可寫進 `dependencies`**（UPM 解析不到，整包會裝不起來）。改為三件一起做：①該工具 README 開 `## Requirements` 段列出名稱與完整 git URL；②README 的 `## Install` 段給**含所有依賴的可整段複製 `dependencies` JSON 片段**；③在本檔 §6 與 repo `README.md` 的清單表「需先手動安裝」欄標註。
 - **缺 git-only 依賴時讓編譯直接失敗，不要用 `defineConstraints` 靜默停用套件再印提示**：靜默停用會讓使用端看到「裝了但什麼都沒發生」，比紅字難查。此為既定決定，見 `Framework/LogicGraph/README.md`。
+- **例外：可選整合**（套件本體不需要、只在使用端另外裝了某套件時才啟用的附加組件，例 GraphKit 的 MCP 整合 `HaruFamily.Tools.GraphMcp.Editor`）可以用 `versionDefines` + `defineConstraints` 自動停用；條件是套件本體在缺少它時完全正常，且 README 或設定視窗會顯示整合狀態。必要依賴一律照上一條讓編譯失敗。
 
 ### 2.3 asmdef
 - 命名 `HaruFamily.<Category>.<Tool>.Editor`（Editor 工具）或 `HaruFamily.<Category>.<Tool>`（runtime）。
@@ -131,7 +132,8 @@ https://github.com/HaruFamily/HaruKit.git?path=/<Category>/<Tool>
 
 ## 5. 禁止 / 注意
 
-- ❌ 不 commit `Library/`、`Temp/`、`obj/`、`.vs/`、`*.csproj`、`*.sln`（IDE / build 產物）。
+- ❌ 不 commit `Library/`、`Temp/`、`obj/`、`.vs/`、`*.csproj`、`*.sln`、`*.slnx`（IDE / build 產物）。
+- ⚠️ `DevEvi/` 是開發用的宿主 Unity 專案，**不是套件**：不放 `package.json`，不列入套件清單。它以 `file:` 參照 repo 內的套件，修改套件一律改套件資料夾本身；DevEvi 只放 Fixtures、專案設定與 agent 指引。產物由 `DevEvi/HaruKitEvi/.gitignore` 排除。
 - ❌ 不把 PAT / token 寫進 URL 或任何檔案。
 - ⚠️ 改 repo 結構（移夾 / 改 namespace）後，同步更新 `README.md` 套件表、`CONVENTIONS.md` §6、及各使用端 manifest.json。
 - ⚠️ runtime 套件才需 `Runtime/` 夾 + runtime asmdef；純 Editor 工具全放 `<Category>/<Tool>/` 同層即可。
@@ -144,7 +146,7 @@ https://github.com/HaruFamily/HaruKit.git?path=/<Category>/<Tool>
 | 類別 | 套件 | package name | 安裝 path | 需先手動安裝 |
 |------|------|--------------|-----------|--------------|
 | UX | Bookmarks | `com.harufamily.ux.bookmarks` | `?path=/UX/Bookmarks` | — |
-| Framework | Nexus | `com.harufamily.framework.nexus` | `?path=/Framework/Nexus` | — |
+| Framework | Nexus | `com.harufamily.framework.nexus` | `?path=/Framework/Nexus` | UniTask |
 | DependencyCore | GraphKit | `com.harufamily.dependencycore.graphkit` | `?path=/DependencyCore/GraphKit` | — |
 | Framework | LogicGraph | `com.harufamily.framework.logicgraph` | `?path=/Framework/LogicGraph` | GraphKit、UniTask |
 | Tools | AssetPipeline | `com.harufamily.tools.assetpipeline` | `?path=/Tools/AssetPipeline` | GraphKit |

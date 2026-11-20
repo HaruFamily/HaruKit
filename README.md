@@ -3,6 +3,8 @@
 Unity Editor / runtime 工具集，以 UPM (Unity Package Manager) 分發。每個工具都是獨立套件，依類別放在 `UX`、`Framework`、`DependencyCore`、`Tools`，透過 Git URL 的 `?path=` 個別安裝。
 
 > 新增工具 / AI 上架規範見 [`CONVENTIONS.md`](./CONVENTIONS.md)。
+>
+> `DevEvi/` 是維護這些套件用的開發宿主 Unity 專案，不是套件，使用端不需要也不會安裝它。
 
 ## 維護手冊（給 AI Agent）
 
@@ -42,9 +44,9 @@ Unity → `Window > Package Manager` → `+` → `Add package from git URL...`�
 |---|---|---:|---|---|---|---|
 | UX | Bookmarks | 1.0.3 | Editor 書籤與釘選物件 Inspector | `com.harufamily.ux.bookmarks` | `?path=/UX/Bookmarks` | — |
 | Framework | [Nexus](./Framework/Nexus/README.md) | 1.0.1 | 有 scope、生命週期、pool 與 Addressables 支援的非同步 service locator | `com.harufamily.framework.nexus` | `?path=/Framework/Nexus` | UniTask |
-| DependencyCore | [GraphKit](./DependencyCore/GraphKit/README.md) | 1.1.0 | 無領域執行語意的序列化節點圖模型與 IMGUI 編輯器 | `com.harufamily.dependencycore.graphkit` | `?path=/DependencyCore/GraphKit` | — |
-| Framework | [LogicGraph](./Framework/LogicGraph/README.md) | 2.0.0 | Action、Formula、Token、驗證與描述編譯框架 | `com.harufamily.framework.logicgraph` | `?path=/Framework/LogicGraph` | GraphKit、UniTask |
-| Tools | [AssetPipeline](./Tools/AssetPipeline/README.md) | 2.0.0 | 基於 GraphKit 的 Editor-only 資產處理管線框架 | `com.harufamily.tools.assetpipeline` | `?path=/Tools/AssetPipeline` | GraphKit |
+| DependencyCore | [GraphKit](./DependencyCore/GraphKit/README.md) | 1.2.0 | 無領域執行語意的序列化節點圖模型與 IMGUI 編輯器 | `com.harufamily.dependencycore.graphkit` | `?path=/DependencyCore/GraphKit` | — |
+| Framework | [LogicGraph](./Framework/LogicGraph/README.md) | 2.0.1 | Action、Formula、Token、驗證與描述編譯框架 | `com.harufamily.framework.logicgraph` | `?path=/Framework/LogicGraph` | GraphKit、UniTask |
+| Tools | [AssetPipeline](./Tools/AssetPipeline/README.md) | 2.0.1 | 基於 GraphKit 的 Editor-only 資產處理管線框架 | `com.harufamily.tools.assetpipeline` | `?path=/Tools/AssetPipeline` | GraphKit |
 
 表中的版本來自各套件目前的 `package.json`，不是建議安裝 tag。釘版時請使用該套件實際存在的 tag 或 commit。
 

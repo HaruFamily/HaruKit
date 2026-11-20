@@ -1,6 +1,6 @@
 # LogicGraph
 
-目前套件版本：`2.0.0`（Unity 2021.3 以上）。
+目前套件版本：`2.0.1`（Unity 2021.3 以上）。
 
 > **使用 AI Agent 修改本套件、新增 Action／Formula 或串接前，請要求它先閱讀並遵守 [`Documentation~/Maintenance.md`](Documentation~/Maintenance.md)（維護手冊）。**
 > 可以直接對 Agent 說：「先讀 LogicGraph 和 GraphKit 的維護手冊，照裡面的規則做。」

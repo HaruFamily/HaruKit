@@ -6,7 +6,7 @@
 
 非視窗組圖可用 `HGDocumentSession.SetPropertyTarget` 選擇或清除 Property 寫入目標，保留讀取者並支援 Undo；MCP 對應操作見同一手冊。
 
-目前套件版本：`1.1.0`（Unity 2021.3 以上）。
+目前套件版本：`1.2.0`（Unity 2021.3 以上）。
 
 > **使用 AI Agent 修改或串接本套件前，請要求它先閱讀並遵守 [`Documentation~/Maintenance.md`](Documentation~/Maintenance.md)（維護手冊）。**
 > 可以直接對 Agent 說：「先讀 GraphKit 的維護手冊，照裡面的規則做。」
@@ -178,6 +178,6 @@ public class IntIf : MyIntFormula
 
 ## AI / MCP
 
-GraphKit includes optional AI graph tools and a portable skill. Install GraphKit once, then use **Window → HaruGraph → AI and MCP Setup** to install the bridge if needed and export the skill. Without MCP for Unity the graph editor still works. Do not install the retired separate GraphMcp package alongside this version. See [installation and upgrade](Documentation~/Mcp/Installation.md).
+GraphKit includes optional AI graph tools and a portable skill. Install GraphKit once, then use **HaruFamily → GraphKit → AI and MCP Setup** to install the bridge if needed and export the skill. Without MCP for Unity the graph editor still works. Do not install the retired separate GraphMcp package alongside this version. See [installation and upgrade](Documentation~/Mcp/Installation.md).
 
 混合式流程的使用端適用範圍、Test Runner 篩選及人工驗收清單見 [混合式流程驗收](Documentation~/HybridFlowValidation.md)。靜態檢查、協定測試與真實畫面證據須分開記錄。

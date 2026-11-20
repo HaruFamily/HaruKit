@@ -8,7 +8,7 @@ MCP is bundled in com.harufamily.dependencycore.graphkit 1.2.0 under Mcp/Editor 
 
 Both optional assemblies use versionDefines AND defineConstraints: MCP for Unity [10.3.0,11.0.0), Newtonsoft JSON [3.0.2,4.0.0), and UNITY_6000_3_OR_NEWER. Without these prerequisites Unity excludes the integration and its tests, including their unavailable assembly references. Do not add a mandatory MCP/JSON dependency to GraphKit. Core support metadata stays at its existing Unity floor; optional MCP is verified on 6000.3.12f1 only.
 
-Window/HaruGraph/AI and MCP Setup lives in the ordinary GraphKit Editor assembly, works without the bridge, and offers explicit bridge installation, project-local skill export and documentation. Existing bridge installations are not overwritten. Setup does not edit AI client settings; AgentDock or MCP for Unity owns the connection. See [Installation.md](Installation.md).
+HaruFamily/GraphKit/AI and MCP Setup lives in the ordinary GraphKit Editor assembly, works without the bridge, and offers explicit bridge installation, project-local skill export and documentation. Existing bridge installations are not overwritten. Setup does not edit AI client settings; MCP for Unity or the AI client's own MCP configuration owns the connection. See [Installation.md](Installation.md).
 
 The portable skill is at AgentSkill~/harugraph-mcp. Distribution~/setup.py installs GraphKit alone by default; --with-mcp opts into pinned bridge/JSON sources, --skill-only exports without changing dependencies. GraphKit testables enables core tests and, when its prerequisites exist, optional MCP tests. Release creation is described in [Publishing.md](Publishing.md).
 

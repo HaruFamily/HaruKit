@@ -18,7 +18,7 @@ public sealed class HGAgentSetupWindow : EditorWindow
     private int skillRoot;
     private string message;
 
-    [MenuItem("Window/HaruGraph/AI and MCP Setup")]
+    [MenuItem("HaruFamily/GraphKit/AI and MCP Setup")]
     public static void Open() => GetWindow<HGAgentSetupWindow>("HaruGraph AI");
 
     private void OnDisable() => EditorApplication.update -= PollInstall;
@@ -47,7 +47,7 @@ public sealed class HGAgentSetupWindow : EditorWindow
         }
         if (GUILayout.Button("開啟安裝與連線說明"))
             EditorUtility.RevealInFinder(Path.Combine(PackageRoot(), "Documentation~/Mcp/Installation.md"));
-        EditorGUILayout.HelpBox("AI 客戶端連線由 AgentDock 或 MCP for Unity 管理；此視窗不改寫客戶端設定。", MessageType.None);
+        EditorGUILayout.HelpBox("AI 客戶端連線由 MCP for Unity 或 AI 客戶端自己的 MCP 設定管理；此視窗不改寫客戶端設定。", MessageType.None);
         if (!string.IsNullOrEmpty(message)) EditorGUILayout.HelpBox(message, MessageType.Info);
     }
 
