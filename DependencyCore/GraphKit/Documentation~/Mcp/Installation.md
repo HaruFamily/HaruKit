@@ -1,6 +1,6 @@
 # GraphKit with optional AI access
 
-Install **GraphKit 1.2.0** once. Its UPM package includes the graph editor, optional MCP integration, portable operation skill and setup window. There is no separate HaruGraph MCP package to install. GraphKit has no mandatory MCP or Newtonsoft JSON dependencies.
+Install **GraphKit 1.3.0** or later once. Its UPM package includes the graph editor, optional MCP integration, portable operation skill and setup window. There is no separate HaruGraph MCP package to install. GraphKit has no mandatory MCP or Newtonsoft JSON dependencies.
 
 ## Recommended Unity workflow
 

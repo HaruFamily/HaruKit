@@ -4,7 +4,7 @@ This optional Editor package exposes `haru_graph_inspect`, `haru_graph_draft`, `
 
 ## Installation and dependencies
 
-MCP is bundled in com.harufamily.dependencycore.graphkit 1.2.0 under Mcp/Editor and Mcp/Tests/Editor. There is no separate GraphMcp package to install. GraphKit's package manifest has no external dependencies; its core runtime/editor assemblies do not reference MCP or Newtonsoft JSON. The existing optional assembly names HaruFamily.Tools.GraphMcp.Editor and HaruFamily.Tools.GraphMcp.Editor.Tests are retained for consumer compatibility.
+MCP has been bundled in com.harufamily.dependencycore.graphkit since 1.2.0, under Mcp/Editor and Mcp/Tests/Editor. There is no separate GraphMcp package to install. GraphKit's package manifest has no external dependencies; its core runtime/editor assemblies do not reference MCP or Newtonsoft JSON. The existing optional assembly names HaruFamily.Tools.GraphMcp.Editor and HaruFamily.Tools.GraphMcp.Editor.Tests are retained for consumer compatibility.
 
 Both optional assemblies use versionDefines AND defineConstraints: MCP for Unity [10.3.0,11.0.0), Newtonsoft JSON [3.0.2,4.0.0), and UNITY_6000_3_OR_NEWER. Without these prerequisites Unity excludes the integration and its tests, including their unavailable assembly references. Do not add a mandatory MCP/JSON dependency to GraphKit. Core support metadata stays at its existing Unity floor; optional MCP is verified on 6000.3.12f1 only.
 
