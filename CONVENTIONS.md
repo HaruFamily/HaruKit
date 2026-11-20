@@ -5,6 +5,18 @@ Raw 讀取：`https://raw.githubusercontent.com/HaruFamily/HaruKit/main/CONVENTI
 
 ---
 
+## 0. 開工檢查（每次工作階段先做）
+
+AI Agent 開始修改前依序確認，任何一項異常就先停下來回報，不要自行「修好」：
+
+1. `git remote -v`：記下 remote 名稱（owner 的電腦上叫 `HaruFamily`，不一定是 `origin`）。下文的 `<remote>` 指它。
+2. `git fetch <remote>` 後 `git status -sb`：確認**目前分支**與是否落後／領先遠端。發佈與 tag 只在 `main` 上做；若停在其他分支，先問 owner 這次要在哪個分支工作。
+3. `git status --short`：工作區有沒有別人留下、未 commit 的修改。不要覆蓋或順手一起 commit。
+4. 要改的套件先讀它的維護手冊（`<Category>/<Tool>/Documentation~/Maintenance.md`）。
+5. 要動 `DevEvi/` 的 `Packages/manifest.json` 前，確認 Unity 是否開著（`DevEvi/HaruKitEvi/Temp/` 存在通常代表開著）；manifest 變更會觸發重新匯入，先告知 owner。
+
+---
+
 ## 1. Repo 定位
 
 - **Monorepo，依類別分組**：一個 GitHub repo 收多個獨立 UPM 工具，工具依類別放 `<Category>/<Tool>/`。
@@ -101,10 +113,20 @@ https://github.com/HaruFamily/HaruKit.git?path=/<Category>/<Tool>
 寫進使用端 `Packages/manifest.json` 的 `dependencies`，key = package `name`。
 
 ### 3.2 版本 tag 慣例
-- tag 綁「整 repo 的 commit」→ 用 **per-tool 命名空間**：`<tool-lowercase>/vX.Y.Z`（例 `bookmarks/v1.0.0`）。
-- 釘版安裝：`...?path=/UX/Bookmarks#bookmarks/v1.0.0`
+- tag 綁「整 repo 的 commit」→ 用 **per-tool 命名空間**：`<tool-lowercase>/vX.Y.Z`（例 `bookmarks/v1.0.3`）。
+- 釘版安裝：`...?path=/UX/Bookmarks#bookmarks/v1.0.3`
 - 不加 tag = 吃 default branch 最新（浮動）。個人用初期可不釘；給外部 / 求穩就釘。
-- 發版：更新該工具 `package.json` 的 `version` → commit → `git tag <tool>/vX.Y.Z` → `git push --tags`。
+- tag 只標在 `main` 已經包含的 commit 上，不標在功能分支上。
+
+### 3.3 發佈清單（AI 照做）
+1. 依變更幅度決定版本號（語意化版本）：只修 bug → patch；新增功能、向下相容 → minor；破壞既有使用端（API 移除或改名、序列化格式、明顯行為變更）→ major。不確定是 minor 還是 major 時問 owner，並在回報中說明理由。
+2. 同一個 commit 更新：該套件 `package.json` 的 `version`、repo `README.md` 套件表、套件 README 開頭的「目前套件版本」，有 ReleaseNotes 的套件加上新版本段落。**行為變更必須寫進 ReleaseNotes 與 commit 訊息**。
+3. 執行 `python .github/scripts/check_packages.py`，必須通過（CI 也會跑同一支）。
+4. commit（格式見 §4）。
+5. 確認目前在 `main` 且已包含這個 commit，再建立 annotated tag：`git tag -a <tool>/vX.Y.Z -m "<tool> vX.Y.Z"`。只為這次版本號有變的套件建 tag。
+6. 推送需要 owner 同意（見 §5）。由 owner 執行或授權後執行：`git push <remote> main` 與 `git push <remote> --tags`。
+7. 用 `git ls-remote --tags <remote>` 確認 tag 真的在遠端。`Could not resolve host` 是網路／DNS 問題，不是權限問題：等網路恢復重試，tag 留在本地不會遺失。
+
 
 ---
 
@@ -126,7 +148,14 @@ https://github.com/HaruFamily/HaruKit.git?path=/<Category>/<Tool>
    git status --short
    ```
 5. commit 訊息繁中、結論先行、說明「動了什麼 + 為何」。
-6. push：`git push origin main`（owner push 需 GCM 認證；使用端只讀免認證）。
+6. push：`git push <remote> main`（`<remote>` 見 §0；owner push 需 GCM 認證；使用端只讀免認證）。推送前須取得 owner 同意。
+
+### 4.1 開發環境 DevEvi
+- `DevEvi/HaruKitEvi/` 是 Unity 6000.3 的開發宿主專案，用 Unity Hub 直接開啟。`Library/` 每台電腦各自產生，第一次開啟較久。
+- `Packages/manifest.json` 以 `file:` 參照 repo 內的套件並列入 `testables`：在 Unity 改的是 repo 本身，測試在 Test Runner 的 EditMode 執行。
+- MCP 使用 CoplayDev 的 MCP for Unity（與 GraphKit 設定視窗釘在同一個 commit）。不要在同一個專案再裝 Unity 官方 AI Assistant／MCP；兩套並存會讓 agent 選錯工具。
+- 同一時間只讓一個 AI 客戶端透過 MCP 操作這個 Unity Editor。
+- 套件改動完成的最低驗證：Unity Console 無編譯錯誤、相關套件的 EditMode 測試通過、`check_packages.py` 通過。無法執行 Unity 的環境要在回報中明說「未經 Unity 編譯驗證」。
 
 ---
 
@@ -135,6 +164,9 @@ https://github.com/HaruFamily/HaruKit.git?path=/<Category>/<Tool>
 - ❌ 不 commit `Library/`、`Temp/`、`obj/`、`.vs/`、`*.csproj`、`*.sln`、`*.slnx`（IDE / build 產物）。
 - ⚠️ `DevEvi/` 是開發用的宿主 Unity 專案，**不是套件**：不放 `package.json`，不列入套件清單。它以 `file:` 參照 repo 內的套件，修改套件一律改套件資料夾本身；DevEvi 只放 Fixtures、專案設定與 agent 指引。產物由 `DevEvi/HaruKitEvi/.gitignore` 排除。
 - ❌ 不把 PAT / token 寫進 URL 或任何檔案。
+- ❌ 未經 owner 同意不得：push、force push、刪除或移動已推送的 tag、刪除遠端分支、改寫已推送的歷史（rebase / amend）。
+- ❌ 不手寫或複製 `.meta` 的 GUID；需要新 .meta 時讓 Unity 產生。不直接修改 `Library/`。
+- ⚠️ 已推送的 tag 視為已發佈：發現錯誤時發新版本修正，不要把 tag 移到別的 commit。
 - ⚠️ 改 repo 結構（移夾 / 改 namespace）後，同步更新 `README.md` 套件表、`CONVENTIONS.md` §6、及各使用端 manifest.json。
 - ⚠️ runtime 套件才需 `Runtime/` 夾 + runtime asmdef；純 Editor 工具全放 `<Category>/<Tool>/` 同層即可。
 - ⚠️ 「類別」非安裝單位，不要試圖做 `?path=/UX` 拉整組（見 §1.1）。
