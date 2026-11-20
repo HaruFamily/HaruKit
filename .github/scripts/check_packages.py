@@ -27,6 +27,15 @@ for package in packages:
         if path.suffix in (".cs", ".asmdef") and not path.with_name(path.name + ".meta").exists():
             errors.append(f"缺少 .meta：{rel(path)}")
 
+# 1b. asmdef 檔名必須等於 assembly name（§2.3）
+for package in packages:
+    for path in package.rglob("*.asmdef"):
+        if any(part.endswith("~") for part in path.relative_to(package).parts):
+            continue
+        name = json.loads(path.read_text(encoding="utf-8-sig")).get("name")
+        if name != path.stem:
+            errors.append(f"asmdef 檔名與 name 不一致：{rel(path)} → {name}")
+
 # 2. 版本一致：package.json、repo README 套件表、套件 README 開頭
 readme = (ROOT / "README.md").read_text(encoding="utf-8")
 for package in packages:

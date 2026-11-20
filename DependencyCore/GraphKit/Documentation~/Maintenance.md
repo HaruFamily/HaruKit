@@ -39,7 +39,7 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 | `Editor/VisualEditor/Project/` | `HGTypeIndex`（可建立型別與選單）、資產索引與落點、Owner 索引、引用索引 |
 | `Editor/VisualEditor/Public/` | `HGDocumentSession`（非視窗交易）與視窗命令 `HGWindowSession` |
 | `Editor/VisualEditor/UI/` | 樣式與主題（`HGStyles`、`HGTheme`、`HGSkin`）、值欄位、就地改名、拖曳、庫內重排、確認框、節點狀態色 |
-| `Editor/Tests/` | `HGPortTests`、`HGPublicConsumerTests`、`GraphExecutionTests` |
+| `Editor/Tests/` | `HGPortTests`、`HGPublicConsumerTests`、`GraphExecutionTests`、`HGNestedSlotTests`、`HGOptionsTests`、`HGDocumentInspectionTests`、`HGAgentSetupTests`（見 §8） |
 
 ## 3. 核心模型
 
@@ -149,7 +149,8 @@ GraphKit 是**沒有領域語意**的序列化節點圖：提供節點載體、�
 | `.Source.cs` | 換來源、Token／資產／Property 節點建立與拖放、轉存、右鍵選單 |
 | `.Execution.cs` | 執行觀察、session 選擇、Hold |
 | `.NodeGroups.cs` | 畫布節點群組：建立、繪製、整組移位、分頁、註解、改色、選取、右鍵選單、拖放進出的成員判定 |
-| `.FlowPreview.cs` | 唯讀流程預覽的隔離副本、切換、手動重讀與引用檢視路由；面板與局部畫布狀態在 HGFlowPreviewPanel |
+| `.FlowStructure.cs` | 流程步驟的結構命令：跨清單搬移（`TransferFlowSteps`）與包進外層容器（`WrapFlowSteps`），守衛共用 `HGFlowStructure`，沿用視窗交易與歷程 |
+| `.Nested.cs` | 內放 Node：槽位與清單插入位置的命中、拖入／拖出與組合／連線模式切換、Slot 框與拖曳預覽繪製、Node Header 收合 |
 | `.FlowEditing.cs` | 流程基本編輯、generation／歸屬／唯讀檢查、來源選單與暫存值編輯；沿用視窗交易與歷程 |
 
 資料流：Owner → 明確 binding 或 legacy 欄位探索 → DeepCopy 成 `HGModel.Data` → `HGFocus` 決定中間畫布在編輯哪些 root → `HGGraph.Build` 每次資料變動整份重建節點與列 → 視窗用 IMGUI 繪製 → 存檔時清理遺失型別、DeepCopy、撤銷過期驗證、通過版本守衛後寫回。
@@ -184,7 +185,7 @@ Console 只有一個驗證結果，另以中性文字顯示「有未儲存變更
 - **節點重疊時輸入跟著畫面走**：`graph.Nodes` 的順序就是繪製順序（越後越上層）。IMGUI 依繪製順序分發事件，所以 `DrawCanvas` 在 `hotControl == 0` 的 MouseDown／DragUpdated／DragPerform 先用 `NodeAt` 找出最上層節點，其餘節點畫的時候把事件設成 `Ignore`，畫完還原成遮罩前的型別（不可還原成原始型別，會把已 `Use()` 的按鍵復活）。接點命中（`InputPortAt`／`OutputPortAt`）同樣只認最上層節點。
 - 連線：一般線在節點之前畫（壓在節點下），選取中節點的線在 `EndZoomedCanvas` 之後畫（浮在最上層）。形狀固定為「水平短線 → 圓角 → 斜直線 → 圓角 → 水平短線」（`BuildLinkPath`），方向依接點位在節點左半或右半決定，不依輸入／輸出。點線剪斷（`LinkAt`）用同一份路徑，點在節點上時只剪得到浮在上層的線。清單／Foldout 折疊時，元素的線仍從標題列的代表接點畫出（接點本身不可起手或放線）；不同目標依高度扇形等角散開（`RebuildFoldFan`），這是頭端不水平的唯一例外。
 - 收合線以「可見的折疊祖先列＋另一端的實際 `HGPortKey`」合併，同一關係只畫一條，實線優先於殘影；不同容器、不同 Port 不合併。`RebuildFoldFan` 先掃完整圖挑代表線，再依去重後的目標數分配角度；一般層、選取層與 `LinkAt` 都跳過 `foldedDuplicateLinks`。Group 隱藏端的重複殘影也合併，維持原有朝向、不加入扇形。只有一個目標時角度為 0。合併不改 `HGLink`／Slot 資料；點擊 `foldedMergedLinks` 的多引用代表線只提示先展開，單引用線與展開後的各欄位照常剪斷。
-- 清單標題只註冊純顯示的 Aggregate（`HitRect = Rect.zero`），不註冊新增元素的 Input／Output。新增用「＋ 新增」，再從元素的普通 Port 接線；標題箭頭只折疊清單內容。清單沒有整批子樹切換、solo 或對應右鍵選單；`ApplyVisibility` 只套用實際 Slot 的隱藏記錄，清單層級的隱藏 key 保留在資料但不影響顯示。
+- 清單標題只註冊純顯示的 Aggregate（`HitRect = Rect.zero`），不註冊新增元素的 Input／Output。新增用清單底部的新增按鈕，再從元素的普通 Port 接線；標題箭頭只折疊清單內容。清單沒有整批子樹切換、solo 或對應右鍵選單；`ApplyVisibility` 只套用實際 Slot 的隱藏記錄，清單層級的隱藏 key 保留在資料但不影響顯示。
 - List／Foldout 收合且有線時，右邊界顯示高 10px、寬 `LinkThickness` 的短豎線（`DrawAggregatePort`）；向外短線由實線／殘影本身構成，不重疊補畫。彙整出口沒有圓圈、中心點、＋／－、hover／相容高亮或吸附；展開、空清單或隱藏的容器不畫。`AggregatePortPosition` 把欄位圓心移至右邊界；實線與殘影的 `fromAggregate` 從豎線中央起畫，不再裁掉接點半徑。`LinkAt` 排除彙整出口本身，離開出口後的連線仍沿既有規則剪線。一般 Port 保留原外觀與個別 Slot 子樹操作。
 - 收合欄位的線畫成殘影（實線短線＋圓角，進斜線後轉漸淡虛線；淡出長度固定，兩端太近才依斜線長度比例縮短）。欄位端一定畫，目標節點仍顯示時目標端也畫；殘影不參與命中。欄位在折疊清單裡時，欄位端從清單的代表接點起畫，和看得到的元素線同一把扇（`RebuildFoldFan` 也收殘影）。
 - 接點：外環永遠畫，中心實心點表示有接線（○／◎）；顏色只表達用途與錯誤，不表達接不接。
@@ -476,7 +477,7 @@ Unity 物件引用只回 GUID／local ID／path（非持久物件回 instance ID
 
 ## 8. 驗證
 
-- `Editor/Tests/`：`HGPortTests`（Port 模型與相容）、`HGPublicConsumerTests`（只用公開 API 的非視窗與視窗命令、別名、descriptor 編輯、Undo／Redo、未完成內容保存與診斷、commit／rebind／cancel）、`GraphExecutionTests`（執行觀察與 Hold）。
+- `Editor/Tests/`：`HGPortTests`（Port 模型與相容）、`HGPublicConsumerTests`（只用公開 API 的非視窗與視窗命令、別名、descriptor 編輯、Undo／Redo、未完成內容保存與診斷、commit／rebind／cancel）、`GraphExecutionTests`（執行觀察與 Hold）、`HGNestedSlotTests`（內放 Node 的巢狀建圖、收合與深度上限）、`HGOptionsTests`（候選目錄快照、版本與 Spinner 數量編輯）、`HGDocumentInspectionTests`（唯讀文件快照）、`HGAgentSetupTests`（核心組件不引用 MCP／JSON、Agent skill 匯出）。
 - AssetPipeline 的 `GraphKitCrossToolSessionTests` 也只透過公開 API 使用 GraphKit，可用來確認沒有破壞使用端。
 - 在 Unity Test Runner 以 EditMode 執行。從 UPM 安裝時，要把套件名稱加進使用端 `Packages/manifest.json` 的 `testables` 才看得到測試。
 - 手勢、IMGUI 版面、資產序列化來回，自動測試涵蓋不到，要在 Unity 實際操作確認。**沒有實際執行的測試不可回報為通過。**
@@ -547,7 +548,7 @@ HGGraph.Nested.cs 按文件的實際 Slot 引用建立 view 父子森林。組�
 
 單選拖 Node Header 到單值槽以 HGPortConnection.Check 判斷族、唯讀與循環；同槽、無效目標、父框內放空、畫布外及 Esc 取消。抽出到畫布會斷開原引用並保留原空槽，來源留在候選池，槽位設定不被丟棄。已共用的外部來源拖入只新增引用。清單項目要移到插入線，避免將整個 Slot 設定誤當成單一連線覆寫。
 
-清單標題旁「＋」直接新增 Default／空 Slot 項目，不顯示來源選單。拖到清單標題、元素上緣或尾端會顯示插入線；清單間移動搬原 Slot，保留 Id／Label／Disabled，沿用 HGFlowStructure.ResolveTransfer 的型別、範圍及自我子流程守衛。從外部來源加入則建立新 Slot；來自單值動作槽時保留其 Label／Disabled 並留下原空槽。多選維持原畫布搬移，不做多項拼裝。
+清單底部的新增按鈕直接新增 Default／空 Slot 項目，不顯示來源選單。拖到清單標題、元素上緣或尾端會顯示插入線；清單間移動搬原 Slot，保留 Id／Label／Disabled，沿用 HGFlowStructure.ResolveTransfer 的型別、範圍及自我子流程守衛。從外部來源加入則建立新 Slot；來自單值動作槽時保留其 Label／Disabled 並留下原空槽。多選維持原畫布搬移，不做多項拼裝。
 
 TryMutateContent／ApplyGraphMutation／AttachSource 共用草稿、失敗回復與 Undo；中間 TrackChanges 暫停，最後一次 Invalidate。WindowSession 的流程結構／值／來源命令維持可用，MCP 經 HGDocumentSession 使用同一份圖資料及共用結構守衛。公開背景 API 不依賴 MCP／JSON。
 
@@ -561,7 +562,7 @@ HGDocumentSession.Geometry 使用相同巢狀量測；nodes 的 parent_node_id �
 
 動作清單收合保留 NestedParent／NestedSlot 歸屬。被收合列持有的唯一內放 Node 及其內放後代一併隱藏，展開後回原內容欄；Window 的可達性走訪不穿過隱藏的內放列。共用外部來源仍依既有引用可達性判定，不因收合一處而被全域隱藏。
 
-左右內放配置：父 Node 本體與 Header 維持自身宣告寬度，高度依子樹量測。單值槽與 NodeList 各自繪製 Slot 框，向右延伸只包住直屬子 Node 本體，不追隨更深層的 Slot 延伸；子 Node 留在左標籤右側的內容欄，維持自身寬度與完整圓角外框，不移到父層右緣。父層右框在 Slot 延伸區留出開口。可見範圍、命中、拖放與自動排版計入 Slot 延伸範圍。清單 ＋ 與把手維持固定欄位和垂直置中，收合狀態保存。投影不回填儲存座標。
+左右內放配置：父 Node 本體與 Header 維持自身宣告寬度，高度依子樹量測。單值槽與 NodeList 各自繪製 Slot 框，向右延伸只包住直屬子 Node 本體，不追隨更深層的 Slot 延伸；子 Node 留在左標籤右側的內容欄，維持自身寬度與完整圓角外框，不移到父層右緣。父層右框在 Slot 延伸區留出開口。可見範圍、命中、拖放與自動排版計入 Slot 延伸範圍。清單把手維持固定欄位和垂直置中，收合狀態保存。投影不回填儲存座標。
 
 > Trace: verified 2026-11-01 · doc `Doc/2026-10-2/REPORT_GraphKit固定寬度與開口接合.md`（使用者視覺回報後恢復內放；來源靜態核對，Unity 待驗證）
 
@@ -580,7 +581,7 @@ HGDocumentSession.Geometry 使用相同巢狀量測；nodes 的 parent_node_id �
 
 ### 清單拖放與常數
 
-Canvas 的清單新增入口位於標題旁 ＋，不配置尾端整列新增按鈕。可寫 List<ActionSlot> 與 List<FormulaSlot> 標記 NodeList，共用左右兩欄量測與拖放插入；各類清單的 ＋ 一律直接新增預設元素：公式 Slot 為 Default，動作 Slot 為空槽，不跳選單；要使用 Node 可拖入該槽或清單插入位置。List<int>／List<string> 等純值清單仍只有常數新增，不將 Node 寫進純值元素。固定長度或唯讀清單不得改結構。
+Canvas 的清單新增入口是展開清單底部的整列按鈕，標題旁不放 ＋。可寫 List<ActionSlot> 與 List<FormulaSlot> 標記 NodeList，共用左右兩欄量測與拖放插入；各類清單的新增按鈕一律直接新增預設元素：公式 Slot 為 Default，動作 Slot 為空槽，不跳選單；要使用 Node 可拖入該槽或清單插入位置。List<int>／List<string> 等純值清單仍只有常數新增，不將 Node 寫進純值元素。固定長度或唯讀清單不得改結構。
 
 拖入插入位置新增 Slot；跨清單搬移原 Slot，保留常數與設定，相同清單重排修正移除後索引。動作沿用 HGFlowStructure.ResolveTransfer，所有 Node 清單保留族、循環與唯讀守衛。內放清單 Node 拖到畫布空白處時移除原項目，來源留在畫布／候選池；畫布外、其他 Node 的非接收區及 Esc 取消。外部共用 Node 的搬動不移除引用項目。
 
@@ -601,11 +602,11 @@ Header 左側 ▾／▸ 收合整顆 Node，保留展開寬度，只占 Header �
 
 清單不顯示 1.／2. 序號，順序由上下排列表示；ListGutter 為 16px，只保留排序把手與其命中區。
 
-HGHideLabel 的內放 Slot 不預留名稱欄，但在 Slot 框左側保留 12px 層級縮排；單值另保留必要設定箭頭。NodeList 隱藏名稱與數量，僅預留收合箭頭、＋（32px 操作欄）及固定 ListGutter 把手欄；項目沿用清單內容起點，不移動把手相對位置。
+HGHideLabel 的內放 Slot 不預留名稱欄，但在 Slot 框左側保留 12px 層級縮排；單值另保留必要設定箭頭。NodeList 隱藏名稱與數量，僅預留 12px 收合箭頭欄及固定 ListGutter 把手欄；項目沿用清單內容起點，不移動把手相對位置。
 
-Timing HEAD 的根動作清單依文件 ItemsOf 回傳的清單身分辨識，隱藏 Actions 名稱、數量及清單收合箭頭；只留新增 ＋、固定排序把手欄與 12px 層級縮排。整組沿用 Header 收合，舊清單收合狀態不再遮住內容；其他分支清單維持原規則。TimingActions 僅為 view 旗標，不修改文件或保存格式。
+Timing HEAD 的根動作清單依文件 ItemsOf 回傳的清單身分辨識，隱藏 Actions 名稱、數量及清單收合箭頭；只留固定排序把手欄與底部新增按鈕，不加 12px 層級縮排（`HGGraph.NestedLabelWidth`）。整組沿用 Header 收合，舊清單收合狀態不再遮住內容；其他分支清單維持原規則。TimingActions 僅為 view 旗標，不修改文件或保存格式。
 
-清單新增入口統一放在展開清單底部的整列按鈕（動作清單為「＋ 新增動作」，其他為「＋ 新增項目」），標題旁不再放 ＋。可編輯清單量測預留一列，Slot 框涵蓋此列；空清單也可直接新增 Default／空 Slot。收合時隱藏底部按鈕，唯讀與固定長度清單不提供新增。Timing 仍無清單收合箭頭，保留 Header 收合與排序把手。此規則取代前述標題 ＋ 的舊描述。
+清單新增入口統一放在展開清單底部的整列按鈕（動作清單為「＋ 新增動作」，其他為「＋ 新增項目」），標題旁不放 ＋。可編輯清單量測預留一列，Slot 框涵蓋此列；空清單也可直接新增 Default／空 Slot。收合時隱藏底部按鈕，唯讀與固定長度清單不提供新增。Timing 仍無清單收合箭頭，保留 Header 收合與排序把手。
 
 底部新增按鈕使用獨立實心底色、ListRule 淡邊框與 3px 圓角，hover 時提亮；沿用主題 NodeBody 作實心灰底色來源，不變更排序把手共用的 ListAdd 樣式。
 
