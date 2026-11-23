@@ -14,25 +14,499 @@ MonoBehaviour:
   m_EditorClassIdentifier: HaruFamily.Tools.AssetPipeline.Editor::HaruFamily.Tools.AssetPipeline.AssetPipeline
   graph:
     _roots:
-    - rid: 4031951382408594021
+    - rid: 4031951447005331525
     _orphans: []
     _endpoints: []
-    _properties: []
+    _properties:
+    - rid: 4031951447005331526
+    - rid: 4031951447005331527
+    - rid: 4031951447005331528
     _validated: 0
     _viewState:
       _hidden: []
       _folded:
       - f1e36586b243449e9cb3f0fa10c5fd75#@node
-      _unfolded: []
-      _notesCollapsed: []
+      _unfolded:
+      - 6356fcf0c1304f809718fb612e09f2dd#@node
+      - 995f6ccdbb4f432eaa25280356e60bd5#@node
+      - 8aef94b7cefc4b898c08576b2babf778#@node
+      - 47ac657f425d45828b10f09c1d161b98#@node
+      - 39246a01d69e4ea19b5446529cfc9ac6#@node
+      - f29b8bf9a47744fbb189caef5f62fb8e#@node
+      _notesCollapsed:
+      - 39246a01d69e4ea19b5446529cfc9ac6
       _fieldTabs: []
       _groups: []
   references:
     version: 2
     RefIds:
-    - rid: 4031951382408594021
+    - rid: -2
+      type: {class: , ns: , asm: }
+    - rid: 4031951447005331525
       type: {class: ActionGroup, ns: HaruFamily.Tools.AssetPipeline, asm: HaruFamily.Tools.AssetPipeline.Editor}
       data:
-        Actions: []
+        Actions:
+        - rid: 4031951447005331529
+        - rid: 4031951447005331530
         _pos: {x: 40, y: 40}
         _hasPos: 1
+    - rid: 4031951447005331526
+      type: {class: GraphProperty, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _name: "\u97F3\u6548\u6E05\u55AE"
+        _id: 421138c7a862405291d539e4bc948b25
+        _slot:
+          rid: 4031951447005331531
+        _nullInitialValue: 0
+        _executionLocal: 1
+    - rid: 4031951447005331527
+      type: {class: GraphProperty, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _name: "\u76EE\u524D\u97F3\u6548"
+        _id: 74886ed2904047279a3e08933fa4768c
+        _slot:
+          rid: 4031951447005331532
+        _nullInitialValue: 0
+        _executionLocal: 1
+    - rid: 4031951447005331528
+      type: {class: GraphProperty, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _name: "\u7522\u51FA Prefab"
+        _id: f2e72746114347eb8ba502bf66b314ac
+        _slot:
+          rid: 4031951447005331533
+        _nullInitialValue: 0
+        _executionLocal: 1
+    - rid: 4031951447005331529
+      type: {class: ActionSlot, ns: HaruFamily.Tools.AssetPipeline, asm: HaruFamily.Tools.AssetPipeline.Editor}
+      data:
+        _disabled: 0
+        _label: "\u6536\u96C6\u8CC7\u6599\u593E\u97F3\u6548"
+        _id: 
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _node:
+          rid: 4031951447005331534
+        _orphans: []
+    - rid: 4031951447005331530
+      type: {class: ActionSlot, ns: HaruFamily.Tools.AssetPipeline, asm: HaruFamily.Tools.AssetPipeline.Editor}
+      data:
+        _disabled: 0
+        _label: "\u9010\u4E00\u7522\u751F\u97F3\u6548 Prefab"
+        _id: 
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _node:
+          rid: 4031951447005331535
+        _orphans: []
+    - rid: 4031951447005331531
+      type: {class: AudioClipListSlot, ns: HaruFamily.Tools.AssetPipeline, asm: HaruFamily.Tools.AssetPipeline.Editor}
+      data:
+        _default: []
+        _node:
+          rid: -2
+    - rid: 4031951447005331532
+      type: {class: AudioClipSlot, ns: HaruFamily.Tools.AssetPipeline, asm: HaruFamily.Tools.AssetPipeline.Editor}
+      data:
+        _default: {fileID: 0}
+        _node:
+          rid: -2
+    - rid: 4031951447005331533
+      type: {class: GameObjectSlot, ns: HaruFamily.Tools.AssetPipeline, asm: HaruFamily.Tools.AssetPipeline.Editor}
+      data:
+        _default: {fileID: 0}
+        _node:
+          rid: -2
+    - rid: 4031951447005331534
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: 995f6ccdbb4f432eaa25280356e60bd5
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 1
+        _body:
+          rid: 4031951447005331536
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: -2
+        _bindings: []
+    - rid: 4031951447005331535
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: 6356fcf0c1304f809718fb612e09f2dd
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 1
+        _body:
+          rid: 4031951447005331537
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: -2
+        _bindings: []
+    - rid: 4031951447005331536
+      type: {class: PipeCollectAudioClips, ns: HaruKitEvi.PipelineSteps, asm: HaruKitEvi.Fixtures.Editor}
+      data:
+        folder:
+          _default: {fileID: 0}
+          _node:
+            rid: -2
+          defaultPath: Assets
+        output:
+          node:
+            rid: 4031951447005331538
+    - rid: 4031951447005331537
+      type: {class: PipeForEachAudioClip, ns: HaruKitEvi.PipelineSteps, asm: HaruKitEvi.Fixtures.Editor}
+      data:
+        clips:
+          _default: []
+          _node:
+            rid: 4031951447005331539
+        current:
+          node:
+            rid: 4031951447005331540
+        steps:
+        - _disabled: 0
+          _label: "\u8907\u88FD Prefab \u4E26\u4EE5\u97F3\u6548\u547D\u540D"
+          _id: 
+          _pos: {x: 0, y: 0}
+          _hasPos: 0
+          _node:
+            rid: 4031951447005331541
+          _orphans: []
+        - _disabled: 0
+          _label: "\u66FF\u63DB AudioSource \u97F3\u6548"
+          _id: 
+          _pos: {x: 0, y: 0}
+          _hasPos: 0
+          _node:
+            rid: 4031951447005331542
+          _orphans: []
+        - _disabled: 0
+          _label: "\u767B\u8A18 Addressable"
+          _id: 
+          _pos: {x: 0, y: 0}
+          _hasPos: 0
+          _node:
+            rid: 4031951447005331543
+          _orphans: []
+    - rid: 4031951447005331538
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: 563cd47673e94964a8c7ca658f5d5013
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 6
+        _body:
+          rid: -2
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: 4031951447005331526
+        _bindings: []
+    - rid: 4031951447005331539
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: f29b8bf9a47744fbb189caef5f62fb8e
+        _pos: {x: 460, y: 180}
+        _hasPos: 1
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 6
+        _body:
+          rid: -2
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: 4031951447005331526
+        _bindings: []
+    - rid: 4031951447005331540
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: e905dd3ab77847f5b46648ff8b18eece
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 6
+        _body:
+          rid: -2
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: 4031951447005331527
+        _bindings: []
+    - rid: 4031951447005331541
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: 39246a01d69e4ea19b5446529cfc9ac6
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 1
+        _body:
+          rid: 4031951447005331544
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: -2
+        _bindings: []
+    - rid: 4031951447005331542
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: 47ac657f425d45828b10f09c1d161b98
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 1
+        _body:
+          rid: 4031951447005331545
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: -2
+        _bindings: []
+    - rid: 4031951447005331543
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: 8aef94b7cefc4b898c08576b2babf778
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 1
+        _body:
+          rid: 4031951447005331546
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: -2
+        _bindings: []
+    - rid: 4031951447005331544
+      type: {class: PipeCopyPrefabAs, ns: HaruKitEvi.PipelineSteps, asm: HaruKitEvi.Fixtures.Editor}
+      data:
+        source:
+          _default: {fileID: 0}
+          _node:
+            rid: -2
+        outputFolder:
+          _default: {fileID: 0}
+          _node:
+            rid: -2
+          defaultPath: Assets
+        fileName:
+          _default: 
+          _node:
+            rid: 4031951447005331547
+        output:
+          node:
+            rid: 4031951447005331548
+    - rid: 4031951447005331545
+      type: {class: PipeSetAudioSourceClip, ns: HaruKitEvi.PipelineSteps, asm: HaruKitEvi.Fixtures.Editor}
+      data:
+        prefab:
+          _default: {fileID: 0}
+          _node:
+            rid: 4031951447005331549
+        clip:
+          _default: {fileID: 0}
+          _node:
+            rid: 4031951447005331550
+    - rid: 4031951447005331546
+      type: {class: PipeRegisterAddressable, ns: HaruKitEvi.PipelineSteps, asm: HaruKitEvi.Fixtures.Editor}
+      data:
+        asset:
+          _default: {fileID: 0}
+          _node:
+            rid: 4031951447005331551
+        group:
+          _default: {fileID: 0}
+          _node:
+            rid: -2
+        address:
+          _default: 
+          _node:
+            rid: 4031951447005331552
+    - rid: 4031951447005331547
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: a8e3b93964314358a6670622a67ce6b5
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 1
+        _body:
+          rid: 4031951447005331553
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: -2
+        _bindings: []
+    - rid: 4031951447005331548
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: eb0a2a1b98b94db48931d90abaab337c
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 6
+        _body:
+          rid: -2
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: 4031951447005331528
+        _bindings: []
+    - rid: 4031951447005331549
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: dc4097d49e0243d29ab6279eea738d0a
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 6
+        _body:
+          rid: -2
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: 4031951447005331528
+        _bindings: []
+    - rid: 4031951447005331550
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: 1965e1a62cac465ea4dcaa8abc58f30f
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 6
+        _body:
+          rid: -2
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: 4031951447005331527
+        _bindings: []
+    - rid: 4031951447005331551
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: 58c7666ceb23432382983fdff48f1934
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 6
+        _body:
+          rid: -2
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: 4031951447005331528
+        _bindings: []
+    - rid: 4031951447005331552
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: baf469607d6543cfb17b5097d56ba999
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 1
+        _body:
+          rid: 4031951447005331554
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: -2
+        _bindings: []
+    - rid: 4031951447005331553
+      type: {class: PipeObjectName, ns: HaruKitEvi.PipelineSteps, asm: HaruKitEvi.Fixtures.Editor}
+      data:
+        target:
+          _default: {fileID: 0}
+          _node:
+            rid: 4031951447005331555
+    - rid: 4031951447005331554
+      type: {class: PipeObjectName, ns: HaruKitEvi.PipelineSteps, asm: HaruKitEvi.Fixtures.Editor}
+      data:
+        target:
+          _default: {fileID: 0}
+          _node:
+            rid: 4031951447005331556
+    - rid: 4031951447005331555
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: 010fec84c71346a9ae8927d93c31afc9
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 6
+        _body:
+          rid: -2
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: 4031951447005331527
+        _bindings: []
+    - rid: 4031951447005331556
+      type: {class: GraphNode, ns: HaruFamily.DependencyCore.GraphKit, asm: HaruFamily.DependencyCore.GraphKit}
+      data:
+        _id: cfa973ecd2244c2bb48510e9b1ae7524
+        _pos: {x: 0, y: 0}
+        _hasPos: 0
+        _note: 
+        _disabled: 0
+        _mode: 0
+        _kind: 6
+        _body:
+          rid: -2
+        _asset: {fileID: 0}
+        _endpoint:
+          rid: -2
+        _property:
+          rid: 4031951447005331527
+        _bindings: []

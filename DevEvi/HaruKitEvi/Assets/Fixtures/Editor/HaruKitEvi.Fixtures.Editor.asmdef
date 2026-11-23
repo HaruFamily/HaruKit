@@ -8,7 +8,9 @@
     "HaruFamily.Framework.LogicGraph",
     "HaruFamily.Framework.LogicGraph.Editor",
     "HaruFamily.Tools.AssetPipeline.Editor",
-    "UniTask"
+    "UniTask",
+    "Unity.Addressables",
+    "Unity.Addressables.Editor"
   ],
   "includePlatforms": [
     "Editor"

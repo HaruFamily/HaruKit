@@ -20,7 +20,7 @@ HaruKitEvi 用來手動測試 GraphKit、LogicGraph、AssetPipeline 的使用端
 |---|---|---|
 | `Runtime/Logic/` | `HaruKitEvi.Fixtures` | LogicGraph 示範領域：`EviTiming`、`EviPack`、Int／Bool／Text 三個公式族、公式與動作節點、`EviGraphDefinition`（Owner）、`EviGraphRunner`（Play Mode 觸發）、`EviShowcase`（欄位屬性展示節點） |
 | `Runtime/Plain/` | `HaruKitEvi.Fixtures` | 不經 LogicGraph 的最小 `IGraphDocument`：`PlainGraphOwner`、`PlainDocument`、自訂 Slot 與只有結構的節點 |
-| `Editor/Pipeline/` | `HaruKitEvi.Fixtures.Editor` | AssetPipeline 的同步公式與動作（`Pipe*`）、`PipelineCounter` 測試資產 |
+| `Editor/Pipeline/` | `HaruKitEvi.Fixtures.Editor` | AssetPipeline 的同步公式與動作（`Pipe*`）、`PipelineCounter` 測試資產；`PipelineAudioPrefabSteps.cs` 是「依音效批次產生 Prefab」用的節點（收集音效、逐一處理、複製 Prefab、替換音效、登記 Addressable、物件名稱），因此這個組件引用 Addressables |
 | `Editor/` | `HaruKitEvi.Fixtures.Editor` | 選單與三個範例圖的建立程式 |
 | `Data/` | — | 選單產生的範例資產 |
 
