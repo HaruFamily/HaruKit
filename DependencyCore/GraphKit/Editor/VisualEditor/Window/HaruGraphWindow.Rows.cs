@@ -865,6 +865,8 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                     object value = null;
                     bool succeeded = false;
                     try { value = DrawDescriptorValue(fieldRect, row); succeeded = true; }
+                    // 物件選取器、顏色、曲線與漸層開啟時 Unity 會丟 ExitGUIException 中止這一輪 GUI，不是 drawer 失敗。
+                    catch (ExitGUIException) { throw; }
                     catch (Exception exception) { ReportDrawerFailure(row, exception.Message); }
                     bool changed = EditorGUI.EndChangeCheck();
                     if (succeeded && changed && !row.Locked && !row.Descriptor.ReadOnly)
@@ -885,7 +887,11 @@ namespace HaruFamily.DependencyCore.GraphKit.Editor
                 }
                 EditorGUI.BeginChangeCheck();
                 var value = HGValueField.Draw(fieldRect, row.Field.FieldType, row.Field.GetValue(row.Target), row.ForceEnumButtons, row.BoolButtons);
-                if (EditorGUI.EndChangeCheck()) { row.Field.SetValue(row.Target, value); AfterValueEdit(); }
+                if (EditorGUI.EndChangeCheck())
+                {
+                    row.Field.SetValue(row.Target, HGValueField.ClampToFieldRange(row.Field, value));
+                    AfterValueEdit();
+                }
                 return;
             }
 

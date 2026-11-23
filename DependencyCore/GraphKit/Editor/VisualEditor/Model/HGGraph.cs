@@ -1444,6 +1444,9 @@
         private static void AddDefaultListRow(List<HGRow> into, HGRow slotRow, List<GraphDiagnostic> diagnostics)
         {
             if (slotRow?.InputSlot is not FormulaSlotBase slot) return;
+            // 已放進組合模式的來源：這一格和單值槽位一樣只顯示內放的 Node，不再掛常數清單。
+            // 掛著的話這一列不算單純槽位（IsSimpleNodeSocket），來源只能留在外面拉線。連線模式維持原樣，保底清單仍可編輯。
+            if (slot.Node != null && slot.Node.Mode == GraphNodeMode.Composition) return;
             Type editType = HGReflect.DefaultEditType(slot, slotRow.ResultType);
             if (!HGReflect.IsList(editType, out Type elementType) || !HGValueField.CanDraw(elementType)) return;
 

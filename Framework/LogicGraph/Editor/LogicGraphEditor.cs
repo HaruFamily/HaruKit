@@ -8,8 +8,12 @@ using UnityEditor;
 using UnityEngine;
 
 /// <summary>LogicGraph 的正式 Editor 入口；Inspector、選單與其他工具共用同一份 context。</summary>
+[InitializeOnLoad]
 public static class LogicGraphEditor
 {
+    // GraphKit 視窗在 Domain Reload 後靠這個解析器接回原文件；靜態登記每次重載都要重做。
+    static LogicGraphEditor() => HaruGraphWindow.RegisterReloadResolver(ResolveAfterReload);
+
     public static HGEditorExtensionContext Context { get; } = new HGEditorExtensionContext(
         new DocumentProvider(), profile: new HGEditorProfile(
             HGCapabilities.SharedAssets | HGCapabilities.Tokens | HGCapabilities.Properties, HGModel.HGDocumentRootAdapter.Instance));
@@ -39,6 +43,40 @@ public static class LogicGraphEditor
             owner => field.GetValue(owner) as IGraphDocument,
             (owner, document) => field.SetValue(owner, document),
             () => Activator.CreateInstance(field.FieldType) as IGraphDocument);
+    }
+
+    /// <summary>
+    /// Domain Reload 後依文件 Id 找回原欄位並重建 binding。只認得 <see cref="CreateBinding"/> 產生的 Id；
+    /// 呼叫端自訂的 binding 無法重建，回 false 由使用者從原入口重新開啟。
+    /// </summary>
+    private static bool ResolveAfterReload(UnityEngine.Object owner, string documentId,
+        out HGDocumentBinding binding, out HGEditorExtensionContext context)
+    {
+        binding = null;
+        context = null;
+        if (owner == null) return false;
+
+        FieldInfo match = null;
+        if (documentId == null)
+        {
+            match = HGModel.FindSystemField(owner);
+            if (match != null && !typeof(ILogicGraphEditorDiagnostics).IsAssignableFrom(match.FieldType)) match = null;
+        }
+        else
+        {
+            foreach (var field in HGOwnerValidation.DocumentFields(owner.GetType()))
+            {
+                if (!typeof(ILogicGraphEditorDiagnostics).IsAssignableFrom(field.FieldType)) continue;
+                if ($"LogicGraph.{field.DeclaringType?.FullName}.{field.Name}" != documentId) continue;
+                match = field;
+                break;
+            }
+        }
+        if (match == null) return false;
+
+        binding = CreateBinding(match);
+        context = Context;
+        return true;
     }
 
     /// <summary>呼叫端可提供文件專屬 binding；原地修改版本須由該 binding 的 readRevision 完整維護。</summary>

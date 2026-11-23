@@ -173,6 +173,10 @@ public class CollectAssets : ActionBase
 
 > Trace: verified 2026-10-29 · doc `Doc/2026-10-2/DECISION_Property單一模型與資料保留.md`（原始碼靜態核對；使用者確認本輪 TestRunner 修正，驗證範圍見決策文件）
 
+## GraphKit 視窗的 Domain Reload 接回
+
+`GraphDrawer` 以 `[InitializeOnLoad]` 向 GraphKit 登記解析器：Owner 是 `AssetPipeline` 且文件 Id 為 `AssetPipeline.Graph`（或未指定）時，回傳與 `Open` 相同的 binding 與 `GraphContext`。GraphKit 視窗在編譯或進出 Play Mode 後靠它自動接回管線圖與未存草稿；`Open` 與解析器共用 `CreateBinding`，不可各寫一份。
+
 ## GraphKit 混合式流程接入
 
 ActionGroup 實作 ISequentialActionContainer，直接回傳序列化的 Actions 清單；GraphKit 讀取這項宣告，不依欄位順序猜執行。新增宣告不改 RunPipeline、Slot 族、Property 及資產交易。同步子動作僅在明確宣告流程時展開；未知內容保持完整 Node 可檢視，不因 List<ActionSlot> 欄位存在就視為會執行。AP 的動作 Slot 不收 Token／動作資產，不借用 LogicGraph 的非同步族。

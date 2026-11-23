@@ -34,18 +34,42 @@ public static class HGOwnerIndex
     /// <summary>下次取用時才重掃。專案內容變動時由 <see cref="HGReferenceIndex"/> 呼叫。</summary>
     public static void Invalidate() { cache = null; allCache = null; }
 
+    private static List<Type> ownerTypes;
+
+    /// <summary>帶圖文件欄位的 ScriptableObject 型別。型別集合在一次 Domain 內不變，只算一次。</summary>
+    private static List<Type> OwnerTypes()
+    {
+        if (ownerTypes != null) return ownerTypes;
+        var types = new List<Type>();
+        foreach (var type in TypeCache.GetTypesDerivedFrom<ScriptableObject>())
+        {
+            if (type.IsAbstract || type.ContainsGenericParameters) continue;
+            try { if (HGOwnerValidation.HasDocuments(type)) types.Add(type); }
+            catch (Exception) { /* 讀不到欄位的型別不可能是可編輯對象。 */ }
+        }
+        ownerTypes = types;
+        return ownerTypes;
+    }
+
     private static List<HGOwnerEntry> Scan()
     {
         var result = new List<HGOwnerEntry>();
-        var guids = AssetDatabase.FindAssets("t:ScriptableObject");
+        // 只問「帶圖文件的型別」各有哪些資產，不逐一檢查專案裡每個 ScriptableObject：
+        // 專案變動後索引會重算，資產焦點的引用清單每次重繪都會用到它。
+        var seen = new HashSet<string>();
+        var guids = new List<string>();
+        foreach (var ownerType in OwnerTypes())
+            foreach (var guid in AssetDatabase.FindAssets("t:" + ownerType.Name))
+                if (seen.Add(guid)) guids.Add(guid);
         try
         {
-            for (int i = 0; i < guids.Length; i++)
+            for (int i = 0; i < guids.Count; i++)
             {
                 // 小專案掃很快，進度條反而閃一下礙眼；資產多才顯示。
-                if (guids.Length > 400 && i % 64 == 0 && EditorUtility.DisplayCancelableProgressBar(
-                        "掃描可編輯對象", $"{i + 1}/{guids.Length}", (float)i / Mathf.Max(1, guids.Length)))
-                    break;
+                // 不提供取消：掃到一半的結果會被當成完整索引，引用者清單就會漏人。
+                if (guids.Count > 400 && i % 64 == 0)
+                    EditorUtility.DisplayProgressBar(
+                        "掃描可編輯對象", $"{i + 1}/{guids.Count}", (float)i / Mathf.Max(1, guids.Count));
 
                 var path = AssetDatabase.GUIDToAssetPath(guids[i]);
                 // 先看型別再決定要不要載入：整個專案的 SO 全載一次太慢。

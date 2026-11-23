@@ -66,7 +66,12 @@ public static class HGValueField
         if (type == typeof(ushort)) return (ushort)Mathf.Clamp(EditorGUI.LongField(rect, value is ushort us ? us : (ushort)0), ushort.MinValue, ushort.MaxValue);
         if (type == typeof(byte)) return (byte)Mathf.Clamp(EditorGUI.LongField(rect, value is byte b ? b : (byte)0), byte.MinValue, byte.MaxValue);
         if (type == typeof(sbyte)) return (sbyte)Mathf.Clamp(EditorGUI.LongField(rect, value is sbyte sb ? sb : (sbyte)0), sbyte.MinValue, sbyte.MaxValue);
-        if (type == typeof(uint)) return (uint)Mathf.Clamp(EditorGUI.LongField(rect, value is uint ui ? ui : 0u), uint.MinValue, uint.MaxValue);
+        // uint 不能走 Mathf.Clamp：long 會落到 float 多載，超過 2^24 就失去精度，上限還會溢位。
+        if (type == typeof(uint))
+        {
+            long rawUInt = EditorGUI.LongField(rect, value is uint ui ? ui : 0u);
+            return (uint)(rawUInt < 0L ? 0L : rawUInt > (long)uint.MaxValue ? (long)uint.MaxValue : rawUInt);
+        }
 
         if (type == typeof(char))
         {
@@ -195,6 +200,30 @@ public static class HGValueField
         // CanDraw 說可以畫卻走到這裡＝兩邊的型別清單對不上，回原值不吃掉資料。
         DrawUnsupported(rect, type);
         return value;
+    }
+
+    /// <summary>
+    /// 手動輸入的 int／float 依欄位的 [Range]／[Min] 夾回範圍，與視窗命令（SetFlowValue）的拒絕條件一致。
+    /// 只在值真的改變時呼叫；沒有這兩個屬性或型別不符時回原值。
+    /// </summary>
+    public static object ClampToFieldRange(System.Reflection.FieldInfo field, object value)
+    {
+        if (field == null || !(value is int || value is float)) return value;
+        var range = Attribute.GetCustomAttribute(field, typeof(RangeAttribute)) as RangeAttribute;
+        var min = Attribute.GetCustomAttribute(field, typeof(MinAttribute)) as MinAttribute;
+        if (range == null && min == null) return value;
+
+        if (value is int whole)
+        {
+            if (range != null) whole = Mathf.Clamp(whole, Mathf.CeilToInt(range.min), Mathf.FloorToInt(range.max));
+            if (min != null && whole < min.min) whole = Mathf.CeilToInt(min.min);
+            return whole;
+        }
+
+        float number = (float)value;
+        if (range != null) number = Mathf.Clamp(number, range.min, range.max);
+        if (min != null && number < min.min) number = min.min;
+        return number;
     }
 
     /// <summary>畫不了就講清楚，不要假裝可以編。</summary>

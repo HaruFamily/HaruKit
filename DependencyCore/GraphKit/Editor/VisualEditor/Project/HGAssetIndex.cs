@@ -87,9 +87,10 @@ public static class HGAssetIndex
         {
             for (int i = 0; i < guids.Length; i++)
             {
-                if (guids.Length > 400 && i % 64 == 0 && EditorUtility.DisplayCancelableProgressBar(
-                        "掃描共用資產", $"{i + 1}/{guids.Length}", (float)i / Mathf.Max(1, guids.Length)))
-                    break;
+                // 不提供取消：掃到一半的結果會被快取成完整的資產庫。
+                if (guids.Length > 400 && i % 64 == 0)
+                    EditorUtility.DisplayProgressBar(
+                        "掃描共用資產", $"{i + 1}/{guids.Length}", (float)i / Mathf.Max(1, guids.Length));
 
                 string path = AssetDatabase.GUIDToAssetPath(guids[i]);
                 Type type = AssetDatabase.GetMainAssetTypeAtPath(path);

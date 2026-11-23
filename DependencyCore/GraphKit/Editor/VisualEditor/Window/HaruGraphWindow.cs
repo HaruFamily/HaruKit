@@ -157,11 +157,34 @@ public partial class HaruGraphWindow : EditorWindow
     /// <summary>
     /// 鎖定中：`OnSelectionChange` 整個不動作，在 Project／Hierarchy 點別的東西不會把視窗切走。
     /// </summary>
-    // **只活在這一次 Domain 裡**：欄位沒有 [SerializeField]，編譯或進 Play Mode 之後就是未鎖。
-    // 刻意不存 EditorPrefs——編譯會把工作副本一起丟掉，視窗變成閒置版型，這時鎖還在就只剩「點什麼都
-    // 回不去」這一種效果，而使用者多半已經忘了自己鎖過。
+    // 欄位本身不序列化，也不存 EditorPrefs：Domain Reload 時跟著工作副本一起收進 reloadLocked，
+    // 只有成功接回原文件才恢復。接不回來時視窗是閒置版型，這時鎖還在就只剩「點什麼都回不去」。
     // 狀態寫在工具列的鈕上，所以「為什麼不跟著選取了」看得見，不會變成找不到原因的怪現象。
     private bool locked;
+    /// <summary>截圖專用視窗：不存偏好、不暫存重載草稿、不跟選取、關閉不問存檔。</summary>
+    private bool captureOnly;
+
+    // ===== Domain Reload 暫存 =====
+    // 工作副本不序列化；編譯或進 Play Mode 前把綁定對象與未存草稿收進這些欄位，重載後接回（見 .Session.cs）。
+    // 只在 beforeAssemblyReload 填入，接回或放棄後清空；平常是空的，不會跟著版面檔長期保存。
+    private const string ReloadAliveKey = "HaruGraph.Reload.Alive";
+    private static readonly List<HGReloadBindingResolver> reloadResolvers = new();
+    [SerializeField] private bool reloadPending;
+    [SerializeField] private UnityEngine.Object reloadOwner;
+    [SerializeField] private string reloadDocumentId;
+    [SerializeField] private bool reloadNeedsTool;
+    [SerializeField] private string reloadDraftJson;
+    [SerializeField] private bool reloadDraftContentDirty;
+    [SerializeField] private string reloadTokenId;
+    [SerializeField] private ScriptableObject reloadAsset;
+    [SerializeField] private ScriptableObject reloadAssetStash;
+    [SerializeField] private Vector2 reloadPan;
+    [SerializeField] private float reloadZoom;
+    [SerializeField] private bool reloadLocked;
+    // 重載後輪詢接回的期限（EditorApplication.timeSinceStartup）；過了還找不到解析器才放棄並提示。
+    private double reloadRestoreDeadline;
+    // 接回資產焦點時不要把 Project 選取拉走：使用者重載前選的可能是別的東西。
+    private bool suppressProjectSelect;
 
     /// <summary>就地改名。焦點列、左欄兩庫與參數列共用同一份編輯狀態，所以它住在框架不住在面板。</summary>
     private HGInlineRename inlineName;
@@ -354,6 +377,8 @@ public partial class HaruGraphWindow : EditorWindow
     private void OnGUI()
     {
         // 原生控制項與整個視窗底色都走主題，不跟 Unity 的 Light／Dark 主題變化。
+        // 截圖視窗不接受互動：把游標移到畫面外，真實滑鼠位置造成的懸停效果才不會入鏡。
+        if (captureOnly) Event.current.mousePosition = new Vector2(-100000f, -100000f);
         using (HGSkin.Scope())
         {
             if (Event.current.type == EventType.Repaint)
@@ -1245,6 +1270,7 @@ public partial class HaruGraphWindow : EditorWindow
     private void ApplyAssetState(HGAssetSnapshot snapshot)
     {
         if (snapshot == null || focus.AssetHostSlot == null) return;
+        EndTextEditing();
 
         focus.AssetHostSlot = snapshot.Input;
         focus.AssetOrphans = snapshot.Orphans;
@@ -1267,6 +1293,17 @@ public partial class HaruGraphWindow : EditorWindow
         assetReportStale = true;
         UpdateUnsavedState();
         Repaint();
+    }
+
+    /// <summary>
+    /// 歷程換掉資料後結束文字輸入。輸入中的框握著自己的字串緩衝，不放掉的話畫面看起來沒復原，
+    /// 下一次按鍵還會把舊字串寫回資料。
+    /// </summary>
+    private void EndTextEditing()
+    {
+        inlineName?.Cancel();
+        GUIUtility.keyboardControl = 0;
+        EditorGUIUtility.editingTextField = false;
     }
 
     /// <summary>復原一步。資產焦點走自己的歷程，其餘走 Owner 工作副本那份。</summary>
@@ -1483,6 +1520,13 @@ public partial class HaruGraphWindow : EditorWindow
         }
         if (!e.control) return;
 
+        // 改名框的文字還沒進資料，Ctrl+Z／Y 在歷程裡沒有對應的步驟；吞掉按鍵，不要復原到別的操作。
+        if (inlineName != null && inlineName.IsEditing && (e.keyCode == KeyCode.Z || e.keyCode == KeyCode.Y))
+        {
+            e.Use();
+            return;
+        }
+
         if (e.keyCode == KeyCode.Z && !e.shift)
         {
             if (!DoUndo()) ShowNotification(new GUIContent("沒有可復原的步驟"));
@@ -1515,9 +1559,14 @@ public partial class HaruGraphWindow : EditorWindow
     /// </summary>
     private void AfterHistorySwap(HGStepKind step)
     {
+        EndTextEditing();
         focusReturns.Clear();
         ClearPortInteractionState();
-        focus = focus.Kind == HGFocusKind.Root ? AllRootsFocus() : new HGFocus();
+        // 整份資料已換掉：Token 畫布靠 Id 重指到新副本；那顆 Token 在這一步消失才退回 root 畫布。
+        string tokenId = focus.Kind == HGFocusKind.Token ? focus.Token?.Id : null;
+        var token = string.IsNullOrEmpty(tokenId) ? null : FindToken(tokenId);
+        focus = token != null ? new HGFocus { Kind = HGFocusKind.Token, Token = token }
+            : focus.Kind == HGFocusKind.None ? new HGFocus() : AllRootsFocus();
         selectedIds.Clear();
 
         graphDirty = true;

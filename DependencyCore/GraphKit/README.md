@@ -105,6 +105,8 @@ HaruGraphWindow.OpenForDocument(owner, binding, extensions);
 - 內容修改後保留上次診斷並標示「待重新驗證」，按「驗證」更新結果；純版面修改與一般存檔不清空診斷。剛驗證且內容未再變更時，存檔保留該次結果；其餘內容保存撤銷驗證，後續純版面保存不能恢復舊旗標。無未存修改時，手動驗證立即同步 Inspector 的驗證旗標。
 - Ctrl+S 立即存檔；成功保存後 0.8 秒內放開 S 再按 Ctrl+S，執行驗證並存檔。驗證失敗仍保存內容並顯示錯誤。Console 的驗證結果與「有未儲存變更」分別呈現。
 - 畫布按 A 聚焦全部可見節點，Space 聚焦目前選取的可見節點（多選一起框住）；平移後可按 Space 回到選取。未選節點時不移動，輸入文字時不攔截；Ctrl+A 全選、Ctrl+F 搜尋。
+- 編譯或進出 Play Mode（Domain Reload）時，視窗會暫存綁定對象與未存修改，重載後自動接回；Undo 歷程不保留。以 `OpenForDocument` 接入的 Tool 要在 `[InitializeOnLoad]` 呼叫 `HaruGraphWindow.RegisterReloadResolver` 提供重建 binding 的解析器，否則重載後需從 Tool 重新開啟（未存修改會在重新開啟時還原）。
+- 編輯中有未存修改時，在 Project／Hierarchy 點到無關的物件不會打斷編輯；沒有未存修改才回到閒置版型。存檔只寫編輯對象所在的資產檔。
 - `HaruGraphWindow.OpenFor(owner)` 是舊的便利入口，只接受恰好有一個 `IGraphDocument` 欄位的 Owner。
 - Setter 只能指派傳入的文件引用。需要偵測「同一個文件實例被外部原地修改」時，在 binding 提供無副作用的 `readRevision`。
 

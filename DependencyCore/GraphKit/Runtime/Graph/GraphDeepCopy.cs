@@ -90,12 +90,24 @@ public static class GraphDeepCopy
         }
     }
 
-    private static IEnumerable<FieldInfo> Fields(Type type)
+    // 編輯器每次修改都會整份複製工作副本；欄位清單按型別快取，不必每個物件都重新反射。
+    private static readonly Dictionary<Type, FieldInfo[]> FieldCache = new Dictionary<Type, FieldInfo[]>();
+
+    private static FieldInfo[] Fields(Type type)
     {
-        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
-        for (var current = type; current != null && current != typeof(object); current = current.BaseType)
-            foreach (var field in current.GetFields(flags))
-                if (!field.IsStatic && !field.IsNotSerialized && !field.IsInitOnly) yield return field;
+        lock (FieldCache)
+        {
+            if (FieldCache.TryGetValue(type, out var cached)) return cached;
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+            var fields = new List<FieldInfo>();
+            for (var current = type; current != null && current != typeof(object); current = current.BaseType)
+                foreach (var field in current.GetFields(flags))
+                    if (!field.IsStatic && !field.IsNotSerialized && !field.IsInitOnly) fields.Add(field);
+            var result = fields.ToArray();
+            FieldCache[type] = result;
+            return result;
+        }
     }
 }
 }

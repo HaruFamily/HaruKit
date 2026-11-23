@@ -380,6 +380,79 @@ public class HGPortTests
     }
 
     [Test]
+    public void AdoptDraftReplacesTheWorkingCopyMarksDirtyAndRestartsHistory()
+    {
+        var owner = ScriptableObject.CreateInstance<TestDocumentOwner>();
+        try
+        {
+            owner.Document = new TestDocument();
+            var model = new HGModel();
+            Assert.That(model.Bind(owner), Is.True);
+            model.MarkContentChanged();
+            model.BreakUndoMerge();
+            model.MarkContentChanged();
+
+            var draft = (IGraphDocument)model.Data.DeepCopy();
+            draft.Orphans.Add(new GraphNode());
+            Assert.That(model.AdoptDraft(null, true), Is.False);
+            Assert.That(model.AdoptDraft(draft, false), Is.True);
+            Assert.That(model.Data, Is.SameAs(draft));
+            Assert.That(model.Dirty, Is.True);
+            Assert.That(model.ContentDirty, Is.False, "純版面草稿接回後不該變成內容修改。");
+            Assert.That(model.CanUndo, Is.False, "重載前的歷程不保留。");
+            Assert.That(owner.Document.Orphans, Is.Empty, "接回草稿不可寫到 Owner。");
+        }
+        finally { UnityEngine.Object.DestroyImmediate(owner); }
+    }
+
+    [Test]
+    public void ValueFieldClampFollowsRangeAndMinAndLeavesOtherValuesAlone()
+    {
+        var ranged = typeof(ClampOwner).GetField(nameof(ClampOwner.Ranged));
+        var floor = typeof(ClampOwner).GetField(nameof(ClampOwner.Floor));
+        var plain = typeof(ClampOwner).GetField(nameof(ClampOwner.Plain));
+        Assert.That(HGValueField.ClampToFieldRange(ranged, 99), Is.EqualTo(10));
+        Assert.That(HGValueField.ClampToFieldRange(ranged, -5), Is.EqualTo(0));
+        Assert.That(HGValueField.ClampToFieldRange(ranged, 7), Is.EqualTo(7));
+        Assert.That(HGValueField.ClampToFieldRange(floor, 0.25f), Is.EqualTo(1f));
+        Assert.That(HGValueField.ClampToFieldRange(floor, 3.5f), Is.EqualTo(3.5f));
+        Assert.That(HGValueField.ClampToFieldRange(plain, 12345), Is.EqualTo(12345));
+        Assert.That(HGValueField.ClampToFieldRange(ranged, "text"), Is.EqualTo("text"));
+        Assert.That(HGValueField.ClampToFieldRange(null, 5), Is.EqualTo(5));
+    }
+
+    private sealed class ClampOwner
+    {
+        [UnityEngine.Range(0, 10)] public int Ranged;
+        [UnityEngine.Min(1f)] public float Floor;
+        public int Plain;
+    }
+
+    [Test]
+    public void DeepCopyKeepsSharingAndCyclesOnRepeatedCopiesOfTheSameType()
+    {
+        var a = new GraphNode();
+        var holder = new CopyHolder { First = a, Second = a };
+        holder.Self = holder;
+        // 第二次複製走欄位快取；兩次結果都要保留共享與循環，而且彼此獨立。
+        for (int round = 0; round < 2; round++)
+        {
+            var copy = GraphDeepCopy.Copy(holder);
+            Assert.That(copy, Is.Not.SameAs(holder));
+            Assert.That(copy.First, Is.Not.SameAs(a));
+            Assert.That(copy.Second, Is.SameAs(copy.First));
+            Assert.That(copy.Self, Is.SameAs(copy));
+        }
+    }
+
+    private sealed class CopyHolder
+    {
+        public GraphNode First;
+        public GraphNode Second;
+        public CopyHolder Self;
+    }
+
+    [Test]
     public void FailedWindowBindPreservesThePreviousDocumentAndCommands()
     {
         var owner = ScriptableObject.CreateInstance<PropertyDocumentOwner>();

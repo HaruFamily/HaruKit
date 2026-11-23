@@ -350,6 +350,29 @@ public class HGModel
     /// <summary>強制切一個 Undo 記錄點，讓下一次修改不會跟前一次合併。</summary>
     public void BreakUndoMerge() => lastPushTime = 0d;
 
+    /// <summary>
+    /// 接回 Domain Reload 前的未存工作副本。<paramref name="draft"/> 必須是與 Owner 脫離、型別與目前副本相同的文件；
+    /// 成功後標成未存檔並重開歷程（重載前的 Undo 步驟不保留），版本守衛沿用這次綁定讀到的 Owner 狀態。
+    /// </summary>
+    internal bool AdoptDraft(IGraphDocument draft, bool contentDirty)
+    {
+        if (draft == null || Data == null || draft.GetType() != Data.GetType()) return false;
+        var nextBaseline = DeepCopy(draft);
+        if (nextBaseline == null) return false;
+
+        Data = draft;
+        transientRootIds.Clear();
+        undoStack.Clear();
+        redoStack.Clear();
+        baseline = nextBaseline;
+        lastPushTime = 0d;
+        Dirty = true;
+        ContentDirty = contentDirty;
+        PackType = Doc.PackType;
+        AvailableRootKeys = rootAdapter.RootKeys(Doc, Owner);
+        return true;
+    }
+
     public HGStepKind Undo()
     {
         if (undoStack.Count == 0) return HGStepKind.None;
@@ -460,9 +483,13 @@ public class HGModel
             return false;
         }
         EditorUtility.SetDirty(Owner);
+        // Prefab 實例上的元件要另外登記 override，否則場景存檔時這次修改不會被寫進去。
+        if (UnityEditor.PrefabUtility.IsPartOfPrefabInstance(Owner))
+            UnityEditor.PrefabUtility.RecordPrefabInstancePropertyModifications(Owner);
         if (Owner is Component component && component.gameObject.scene.IsValid())
             EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
-        AssetDatabase.SaveAssets();
+        // 只寫 Owner 所在的資產檔，不順手寫出專案裡其他 dirty 資產；場景物件由場景存檔負責。
+        if (EditorUtility.IsPersistent(Owner)) AssetDatabase.SaveAssetIfDirty(Owner);
         // 工作副本仍供下一次編輯使用，不可讓後續純版面保存復活舊驗證旗標。
         if (!toStore.IsValidated) Doc.InvalidateValidation();
         Dirty = false;

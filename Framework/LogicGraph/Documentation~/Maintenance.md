@@ -135,6 +135,8 @@ Editor 編譯時，ActionAssetBase 與 FormulaAssetBase 提供 GraphKit 的 IEdi
 4. 執行時用 `definition.graph.DeepCopy()` 建立 runtime 副本，再 `await copy.TriggerAction(timing, pack, cancellationToken, name)`。
 5. 執行對象釋放時呼叫該副本的 `CancelObservedExecutions()`；取消會傳到 await 的呼叫端，呼叫端要自己收尾。
 
+`LogicGraphEditor` 以 `[InitializeOnLoad]` 向 GraphKit 登記 Domain Reload 解析器（`ResolveAfterReload`）：依 `CreateBinding` 產生的文件 Id 找回原欄位，視窗在編譯或進出 Play Mode 後才能自動接回原文件與未存草稿。改動文件 Id 的格式時兩處要一起改；呼叫端自訂的 binding 無法重建，重載後仍要從原入口重新開啟。
+
 一個 Owner 有多個 LogicGraph 欄位時，要從 Inspector 按鈕或明確 binding 開啟，選單入口只接受唯一文件欄位。`LogicGraphAutoVerifySweep` 僅由 Verify All Owners 選單執行，不在進入 Play 時掃描資產。
 
 ## 6. 常見修改

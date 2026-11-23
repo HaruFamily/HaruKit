@@ -14,10 +14,31 @@ public partial class HaruGraphWindow
             var owner = graph.Nodes[i];
             if (owner.Hidden || HGGraph.NestedWithin(owner, moving) || !NodeContainsPoint(owner, point)) continue;
             foreach (var row in HGGraph.AllRows(owner.Rows))
-                if (row.NodeSocket && !row.Hidden && !row.IsTabHidden && row.ScreenRect.Contains(point)) return row;
+                if (HGGraph.IsNodeDropTarget(row) && !row.Hidden && !row.IsTabHidden
+                    && (row.ScreenRect.Contains(point)
+                        // 清單 Slot 的常數清單整段都算落點，不必瞄準標題那一列。
+                        || row.DefaultListRow != null && !row.DefaultListRow.Hidden && ListDropArea(owner, row).Contains(point)))
+                    return row;
             return null;
         }
         return null;
+    }
+
+    /// <summary>清單 Slot 的標題列加上它下面那段常數清單，在 graph space 的範圍。</summary>
+    private static Rect ListDropArea(HGNodeView owner, HGRow row)
+    {
+        var area = row.ScreenRect;
+        foreach (var child in HGGraph.AllRows(owner.Rows))
+        {
+            if (child.Hidden) continue;
+            bool inSection = ReferenceEquals(child, row.DefaultListRow);
+            for (var parent = child.ItemOwnerRow; !inSection && parent != null; parent = parent.ItemOwnerRow)
+                inSection = ReferenceEquals(parent, row.DefaultListRow);
+            if (!inSection || child.ScreenRect.height <= 0f) continue;
+            area.yMin = Mathf.Min(area.yMin, child.ScreenRect.yMin);
+            area.yMax = Mathf.Max(area.yMax, child.ScreenRect.yMax);
+        }
+        return area;
     }
 
     private bool CanComposeDrop(HGNodeView node, HGRow row, GraphSlotBase existingListSlot = null)
@@ -122,7 +143,8 @@ public partial class HaruGraphWindow
         bool allowed = CanDropNodeInSocket(dragNode, row);
         var accent = allowed ? new Color(0.3f, 0.8f, 0.85f, 0.9f) : HGStyles.Error;
         // 高亮與實際落點使用同一範圍，不依拖入 Node 的大小延伸。
-        var slot = row.ScreenRect; slot.position += pan;
+        var slot = row.DefaultListRow != null && !row.DefaultListRow.Hidden ? ListDropArea(owner, row) : row.ScreenRect;
+        slot.position += pan;
         HGStyles.RoundedFill(slot, new Color(accent.r, accent.g, accent.b, 0.13f), 3f);
         HGStyles.RoundedFrame(slot, accent, 3f);
     }

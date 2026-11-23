@@ -69,6 +69,57 @@ public sealed partial class HGDocumentSession<TDocument> where TDocument : class
         return HGSessionCommandResult.Rejected;
     });
 
+    /// <summary>
+    /// Clears every manual position in one scope (HEADs, connected sources and candidate nodes) so canvas auto layout
+    /// places them: the window's whole-canvas arrange for background sessions. Layout-only.
+    /// Whole scope only: auto layout ignores manually placed nodes, so a partial clear can stack nodes on top of them.
+    /// </summary>
+    public HGSessionCommandResult ArrangeScope(string scope, out int cleared)
+    {
+        int count = 0;
+        var result = Guard(() =>
+        {
+            if (scope == null || !GroupScopes().ContainsKey(scope)) return HGSessionCommandResult.Rejected;
+            var roots = new List<object>();
+            var heads = new List<IGraphHead>();
+            if (scope == RootGroupScope)
+            {
+                foreach (var root in Document.Roots)
+                {
+                    if (root == null) continue;
+                    roots.Add(root);
+                    if (root is IGraphHead head) heads.Add(head);
+                }
+                roots.AddRange(Document.Orphans);
+            }
+            else
+            {
+                var token = DocumentTokens().SingleOrDefault(item => item != null && TokenGroupScope(item) == scope);
+                if (token == null) return HGSessionCommandResult.Rejected;
+                roots.Add(token.Slot);
+                roots.AddRange(token.Orphans);
+                if ((object)token is IGraphHead tokenHead) heads.Add(tokenHead);
+            }
+
+            var visited = new HashSet<object>(HGRefComparer.Instance);
+            var seen = new HashSet<GraphNode>();
+            var placed = new List<GraphNode>();
+            foreach (var root in roots)
+                foreach (var carrier in HGModel.WalkCarriers(root, visited))
+                    if (carrier != null && seen.Add(carrier) && carrier.HasPos) placed.Add(carrier);
+            var placedHeads = heads.Where(head => head.HasPos).ToArray();
+            count = placed.Count + placedHeads.Length;
+            if (count == 0) return HGSessionCommandResult.NoChange;
+            return Apply(() =>
+            {
+                foreach (var node in placed) node.ClearPos();
+                foreach (var head in placedHeads) head.ClearPos();
+            }, content: false);
+        });
+        cleared = result == HGSessionCommandResult.Changed ? count : 0;
+        return result;
+    }
+
     public HGSessionCommandResult LayoutNodes(IReadOnlyList<GraphNode> nodes, string mode, Vector2 origin,
         Vector2 spacing, int columns) => Guard(() =>
     {

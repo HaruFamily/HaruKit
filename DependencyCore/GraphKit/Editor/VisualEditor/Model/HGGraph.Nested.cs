@@ -124,6 +124,16 @@ public static partial class HGGraph
             && !row.Locked && row.Descriptor?.ReadOnly != true && row.Field?.IsInitOnly != true
             && (row.Children.Count == 0 || row.SlotSettingsRow != null) && row.DefaultListRow == null;
 
+    /// <summary>
+    /// 可以把 Node 拖進來的列。除了已是槽位版面的列（NodeSocket），也包含「目前顯示常數清單」的清單 Slot：
+    /// 它在放進組合來源之前不走槽位版面，但放進去之後常數清單會收掉、來源改成內放。
+    /// </summary>
+    internal static bool IsNodeDropTarget(HGRow row)
+        => row.NodeSocket
+            || row.DefaultListRow != null && row.Kind == HGRowKind.InputPort && row.InputSlot != null
+                && row.InputSlot is not PropertySlotBase && !row.IsItem
+                && !row.Locked && row.Descriptor?.ReadOnly != true && row.Field?.IsInitOnly != true;
+
     public static bool NestedWithin(HGNodeView node, HGNodeView ancestor)
     {
         for (var parent = node; parent != null; parent = parent.NestedParent)

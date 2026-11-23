@@ -6,6 +6,14 @@ using UnityEditor;
 using UnityEngine;
 
 /// <summary>
+/// Domain Reload 後替 Tool 入口重建文件 binding 與 context。兩者持有委派，無法跨重載保存；
+/// Tool 在 [InitializeOnLoad] 以 <see cref="HaruGraphWindow.RegisterReloadResolver"/> 登記解析器，視窗才能自動接回原文件。
+/// documentId 為 null 表示重載前是以 Owner 的唯一文件欄位開啟。不認得的 Owner 或文件回 false。
+/// </summary>
+public delegate bool HGReloadBindingResolver(UnityEngine.Object owner, string documentId,
+    out HGDocumentBinding binding, out HGEditorExtensionContext context);
+
+/// <summary>
 /// 開窗入口、Owner 綁定、選取切換、存檔／取消／驗證交易，以及共用資產焦點的進出與引用者重驗。
 /// </summary>
 public partial class HaruGraphWindow : IHasCustomMenu
@@ -90,6 +98,99 @@ public partial class HaruGraphWindow : IHasCustomMenu
         if (binding == null) throw new ArgumentNullException(nameof(binding));
         var window = OpenWindow();
         window.BindDocument(owner, binding, context ?? HGEditorExtensionContext.Default);
+    }
+
+    // ===== 截圖專用視窗 =====
+
+    /// <summary>
+    /// 開一個獨立、用完即丟的視窗來畫指定文件，給工具截圖用；不動使用者已開的視窗。
+    /// 它不跟選取、不存偏好與版面、不參與重載暫存，關閉時也不詢問存檔。呼叫端負責 <see cref="CloseCaptureView"/>。
+    /// <paramref name="screenRect"/> 的位置是那一小塊原生視窗出現的地方，大小是畫布的繪製尺寸。
+    /// </summary>
+    public static HaruGraphWindow OpenCaptureView(UnityEngine.Object owner, HGDocumentBinding binding,
+        HGEditorExtensionContext context, Rect screenRect)
+    {
+        if (owner == null || binding == null) return null;
+        var window = CreateInstance<HaruGraphWindow>();
+        window.captureOnly = true;
+        window.locked = true;
+        window.suppressProjectSelect = true;
+        window.hideFlags = HideFlags.DontSave;
+        // 以 Tooltip 模式、不給焦點開啟：一般 ShowPopup 會啟用視窗，連帶把 Unity 拉到前景打斷使用者。
+        // 內部 API 不存在時直接放棄，不退回會搶焦點的開法。
+        const System.Reflection.BindingFlags any = System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+        var showMode = typeof(EditorWindow).Assembly.GetType("UnityEditor.ShowMode");
+        var show = showMode == null ? null
+            : typeof(EditorWindow).GetMethod("ShowPopupWithMode", any, null, new[] { showMode, typeof(bool) }, null);
+        if (show == null || !Enum.IsDefined(showMode, "Tooltip"))
+        {
+            DestroyImmediate(window);
+            return null;
+        }
+        // 原生視窗維持最小尺寸（實測會被撐到約 100×56），只把內部的 View 放大到截圖尺寸：
+        // 版面與 GrabPixels 跟著 View 走，螢幕上只會短暫出現那一小塊。
+        // 實測過但行不通的做法：放到螢幕外（Unity 會夾回螢幕內）、ContainerWindow.SetAlpha(0)（視窗照樣可見）。
+        window.minSize = Vector2.one;
+        window.position = new Rect(screenRect.position, Vector2.one);
+        show.Invoke(window, new object[] { Enum.Parse(showMode, "Tooltip"), false });
+        object host = typeof(EditorWindow).GetField("m_Parent", any)?.GetValue(window);
+        var viewPosition = host?.GetType().GetProperty("position", any);
+        if (viewPosition == null || !viewPosition.CanWrite)
+        {
+            window.Close();
+            return null;
+        }
+        viewPosition.SetValue(host, new Rect(Vector2.zero, screenRect.size));
+        if (window.BindDocument(owner, binding, context ?? HGEditorExtensionContext.Default)) return window;
+        window.Close();
+        return null;
+    }
+
+    /// <summary>
+    /// 截圖視窗對準目標：<paramref name="nodeId"/> 為空時框住整張圖，否則框住該節點與內放在它裡面的節點。
+    /// 要在視窗至少畫過一次（畫布大小已知）之後呼叫。
+    /// </summary>
+    public bool FrameCaptureView(string nodeId)
+    {
+        if (!captureOnly || model == null) return false;
+        EnsureGraph();
+        if (graph == null) return false;
+        pendingCenterTarget = null;
+        if (string.IsNullOrEmpty(nodeId)) { FrameAll(); return true; }
+        HGNodeView target = null;
+        foreach (var node in graph.Nodes)
+            if (node.Id == nodeId) { target = node; break; }
+        if (target == null) return false;
+        if (target.Hidden)
+        {
+            RevealNode(target);
+            graphDirty = true;
+            EnsureGraph();
+            target = null;
+            foreach (var node in graph.Nodes)
+                if (node.Id == nodeId) { target = node; break; }
+            if (target == null) return false;
+        }
+        Rect bounds = target.Rect;
+        foreach (var node in graph.Nodes)
+        {
+            if (node.Hidden || !HGGraph.NestedWithin(node, target)) continue;
+            bounds.xMin = Mathf.Min(bounds.xMin, node.Rect.xMin);
+            bounds.yMin = Mathf.Min(bounds.yMin, node.Rect.yMin);
+            bounds.xMax = Mathf.Max(bounds.xMax, node.Rect.xMax);
+            bounds.yMax = Mathf.Max(bounds.yMax, node.Rect.yMax);
+        }
+        FrameRect(bounds);
+        return true;
+    }
+
+    /// <summary>關閉截圖視窗並丟掉它的工作副本。</summary>
+    public void CloseCaptureView()
+    {
+        if (!captureOnly) return;
+        hasUnsavedChanges = false;
+        Close();
     }
 
     /// <summary>Returns bounded commands for this binding. Handles expire when the window binds another document.</summary>
@@ -404,7 +505,8 @@ public partial class HaruGraphWindow : IHasCustomMenu
             ShowNotification(new GUIContent("Tool 接入已因重載失效，請從原 Tool 重新開啟節點圖。"));
             return false;
         }
-        if (HasUnsavedWork && !EditorUtility.DisplayDialog(
+        // Owner 已不存在時，它的工作副本沒有地方可存，不必再問。
+        if (HasUnsavedWork && (model?.Owner != null || assetDirty) && !EditorUtility.DisplayDialog(
                 "尚未儲存", $"'{(model?.Owner != null ? model.Owner.name : "?")}' 有未儲存的修改，切換後會遺失。要繼續嗎？", "捨棄並切換", "取消"))
             return false;
 
@@ -436,6 +538,8 @@ public partial class HaruGraphWindow : IHasCustomMenu
 
         // 所有時機共用一張畫布，綁定後直接進去；不再有「記住上次看的是哪個時機」這件事。
         SetFocus(AllRootsFocus());
+        // Domain Reload 前暫存的草稿在這裡接回：自動還原與使用者從原 Tool 重新開啟都會經過。
+        AdoptReloadStash();
 
         ApplyWindowTitle();
         UpdateUnsavedState();
@@ -489,12 +593,17 @@ public partial class HaruGraphWindow : IHasCustomMenu
         var picked = ResolveOwner(Selection.activeObject);
         if (picked == null)
         {
-            if (model != null && TryReturnToIdle()) ReturnToIdle();
+            if (model == null) return;
+            // 有未存修改時，點到無關的東西不打斷編輯，也不跳對話框；沒有修改才回閒置。
+            // Owner 已不存在時沒有東西可存，照常回閒置。
+            if (model.Owner != null && HasUnsavedWork) return;
+            if (TryReturnToIdle()) ReturnToIdle();
             return;
         }
         if (model != null && ReferenceEquals(picked, model.Owner)) return;
 
-        bool busy = model != null && (model.Dirty || focus.Kind == HGFocusKind.Asset);
+        // Owner 已被刪除時工具列不會畫出待切換提示，直接綁到新對象。
+        bool busy = model != null && model.Owner != null && (model.Dirty || focus.Kind == HGFocusKind.Asset);
         if (busy) pendingTarget = picked;
         else { pendingTarget = null; BindInSession(picked); }
         Repaint();
@@ -603,7 +712,23 @@ public partial class HaruGraphWindow : IHasCustomMenu
         EditorApplication.update += UpdateExecutionView;
         EditorApplication.playModeStateChanged += ExecutionPlayModeChanged;
         AssemblyReloadEvents.beforeAssemblyReload += CancelObservedExecutions;
+        // 退訂放在 OnDestroy：重載時 OnDisable 與 beforeAssemblyReload 的先後不該影響暫存。
+        AssemblyReloadEvents.beforeAssemblyReload -= StashForReload;
+        AssemblyReloadEvents.beforeAssemblyReload += StashForReload;
         if (usesExplicitToolEntry && sessionBinding == null) requiresToolReopenAfterReload = true;
+        if (reloadPending)
+        {
+            // 版面檔帶回來的是上一次 Editor 行程的殘留：草稿裡的物件引用已失效，直接丟掉。
+            if (!SessionState.GetBool(ReloadAliveKey, false)) ClearReloadStash();
+            else if (model == null)
+            {
+                // 用 update 輪詢而不是 delayCall：實測重載期間登記的 delayCall 沒有把視窗接回來，
+                // 而且 Tool 的解析器要等它的 [InitializeOnLoad] 跑完才存在。
+                reloadRestoreDeadline = EditorApplication.timeSinceStartup + 10d;
+                EditorApplication.update -= PollReloadRestore;
+                EditorApplication.update += PollReloadRestore;
+            }
+        }
         sessionContext ??= HGEditorExtensionContext.Default;
         activeContext ??= HGEditorExtensionContext.Default;
         saveChangesMessage = $"{HGGraph.DefaultWindowTitle} 有未儲存的修改。是否在關閉前存檔？";
@@ -613,6 +738,311 @@ public partial class HaruGraphWindow : IHasCustomMenu
         refSectionHeight = EditorPrefs.GetFloat(PrefRefSection, DefaultRefSection);
         LoadLibraryLayout();
         UpdateUnsavedState();
+    }
+
+    private void OnDestroy()
+    {
+        AssemblyReloadEvents.beforeAssemblyReload -= StashForReload;
+        EditorApplication.update -= PollReloadRestore;
+        ClearReloadStash();
+    }
+
+    // ===== Domain Reload：暫存與還原 =====
+
+    /// <summary>登記重載後的 binding 解析器。靜態狀態每次重載都會清空，Tool 要在 [InitializeOnLoad] 裡登記。</summary>
+    public static void RegisterReloadResolver(HGReloadBindingResolver resolver)
+    {
+        if (resolver != null && !reloadResolvers.Contains(resolver)) reloadResolvers.Add(resolver);
+    }
+
+    /// <summary>
+    /// Domain Reload（編譯、進出 Play Mode）前收起綁定對象與未存草稿；工作副本不序列化，不收就會無聲消失。
+    /// 文件草稿以 Unity 的序列化規則轉成 JSON，保留的內容等同「存檔再讀回」；Undo 歷程不保留。
+    /// </summary>
+    private void StashForReload()
+    {
+        if (this == null || captureOnly) return;
+        // 沒有綁定時不動既有暫存：可能正等著使用者從原 Tool 重新開啟。
+        if (model?.Owner == null || model.Data == null) return;
+        ClearReloadStash();
+
+        reloadOwner = model.Owner;
+        reloadDocumentId = sessionBinding != null ? model.DocumentId : null;
+        reloadNeedsTool = usesExplicitToolEntry || sessionBinding != null;
+        reloadPan = pan;
+        reloadZoom = zoom;
+        reloadLocked = locked;
+        reloadTokenId = focus.Kind == HGFocusKind.Token ? focus.Token?.Id : null;
+        if (model.Dirty)
+        {
+            try
+            {
+                reloadDraftJson = JsonUtility.ToJson(model.Data);
+                reloadDraftContentDirty = model.ContentDirty;
+            }
+            catch (Exception exception)
+            {
+                reloadDraftJson = null;
+                Debug.LogWarning($"[GraphKit] '{model.Owner.name}' 的未儲存修改無法暫存，重載後會回到已存檔的內容：{exception.Message}");
+            }
+        }
+        if (focus.Kind == HGFocusKind.Asset && focus.AssetObject is ScriptableObject asset)
+        {
+            reloadAsset = asset;
+            if (assetDirty) reloadAssetStash = CreateAssetStash(asset);
+        }
+        SessionState.SetBool(ReloadAliveKey, true);
+        reloadPending = true;
+    }
+
+    /// <summary>
+    /// 把資產焦點的未存草稿寫進一份隱藏複本，交給 Unity 帶過 Domain Reload；原資產不動。
+    /// 寫入步驟與 <see cref="SaveAsset"/> 相同，四部分同一次深複製以保留共享引用。
+    /// </summary>
+    private ScriptableObject CreateAssetStash(ScriptableObject asset)
+    {
+        ScriptableObject stash = null;
+        try
+        {
+            var host = focus.AssetHostSlot;
+            if (host == null) return null;
+            var packCopy = GraphDeepCopy.Copy(new List<object>
+            {
+                host,
+                focus.AssetOrphans ?? new List<GraphNode>(),
+                focus.AssetTokens ?? new List<GraphToken>(),
+                focus.AssetProperties ?? new List<GraphProperty>(),
+            });
+            if (packCopy == null) return null;
+
+            stash = Instantiate(asset);
+            stash.hideFlags = HideFlags.HideAndDontSave;
+            var storedInput = packCopy[0] as GraphSlotBase;
+            if (stash is IFormulaGraphAsset formulaStash) formulaStash.SetInput((FormulaSlotBase)storedInput);
+            else
+            {
+                var setRoot = stash.GetType().GetMethod("SetRoot");
+                if (setRoot == null) throw new InvalidOperationException(stash.GetType().Name + " 沒有 SetRoot。");
+                setRoot.Invoke(stash, new object[] { storedInput?.Node });
+            }
+
+            var storedOrphans = HGReflect.Orphans(stash);
+            if (storedOrphans != null)
+            {
+                storedOrphans.Clear();
+                if (packCopy[1] is List<GraphNode> orphanCopy) storedOrphans.AddRange(orphanCopy);
+            }
+            if (HGReflect.Tokens(stash) is List<GraphToken> storedTokens)
+            {
+                storedTokens.Clear();
+                if (packCopy[2] is List<GraphToken> endpointCopy) storedTokens.AddRange(endpointCopy);
+            }
+            if (HGReflect.Properties(stash) is List<GraphProperty> storedProperties)
+            {
+                storedProperties.Clear();
+                if (packCopy[3] is List<GraphProperty> propertyCopy) storedProperties.AddRange(propertyCopy);
+            }
+            return stash;
+        }
+        catch (Exception exception)
+        {
+            if (stash != null) DestroyImmediate(stash);
+            Debug.LogWarning($"[GraphKit] 資產 '{asset.name}' 的未儲存修改無法暫存，重載後會回到已存檔的內容：{exception.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>把暫存複本的內容換成目前資產焦點的工作副本，並標成未存檔。</summary>
+    private bool ApplyAssetStash(ScriptableObject stash)
+    {
+        if (stash == null || focus.Kind != HGFocusKind.Asset || focus.AssetHostSlot == null) return false;
+        var formulaStash = stash as IFormulaGraphAsset;
+        var packCopy = GraphDeepCopy.Copy(new List<object>
+        {
+            formulaStash != null ? (object)formulaStash.Input : HGReflect.AssetRoot(stash),
+            HGReflect.Orphans(stash) ?? new List<GraphNode>(),
+            HGReflect.Tokens(stash) ?? new List<GraphToken>(),
+            HGReflect.Properties(stash) ?? new List<GraphProperty>(),
+        });
+        if (packCopy == null) return false;
+
+        GraphSlotBase host;
+        if (formulaStash != null) host = packCopy[0] as GraphSlotBase;
+        else
+        {
+            host = focus.AssetHostSlot;
+            HGReflect.SetNode(host, packCopy[0] as GraphNode);
+        }
+        if (host == null) return false;
+
+        ApplyAssetState(new HGAssetSnapshot
+        {
+            Input = host,
+            Orphans = packCopy[1] as List<GraphNode> ?? new List<GraphNode>(),
+            Tokens = packCopy[2] as List<GraphToken> ?? new List<GraphToken>(),
+            Properties = packCopy[3] as List<GraphProperty> ?? new List<GraphProperty>(),
+        });
+        return true;
+    }
+
+    private void ClearReloadStash()
+    {
+        reloadPending = false;
+        reloadOwner = null;
+        reloadDocumentId = null;
+        reloadNeedsTool = false;
+        reloadDraftJson = null;
+        reloadDraftContentDirty = false;
+        reloadTokenId = null;
+        reloadAsset = null;
+        if (reloadAssetStash != null)
+        {
+            // 複本是短命資產：銷毀前移除求值快取，避免 static dictionary 留著已銷毀的物件。
+            AssetGraphSchema.InvalidateCache(reloadAssetStash);
+            DestroyImmediate(reloadAssetStash);
+        }
+        reloadAssetStash = null;
+    }
+
+    private static bool TryResolveReloadBinding(UnityEngine.Object owner, string documentId,
+        out HGDocumentBinding binding, out HGEditorExtensionContext context)
+    {
+        foreach (var resolver in reloadResolvers)
+        {
+            try
+            {
+                if (resolver(owner, documentId, out var resolvedBinding, out var resolvedContext) && resolvedBinding != null)
+                {
+                    binding = resolvedBinding;
+                    context = resolvedContext;
+                    return true;
+                }
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"[GraphKit] 重載後的 binding 解析器失敗：{exception.Message}");
+            }
+        }
+        binding = null;
+        context = null;
+        return false;
+    }
+
+    /// <summary>重載後每個 Editor tick 嘗試接回，直到成功、已被其他入口綁定，或超過期限。</summary>
+    private void PollReloadRestore()
+    {
+        if (this == null)
+        {
+            EditorApplication.update -= PollReloadRestore;
+            return;
+        }
+        if (EditorApplication.isCompiling || EditorApplication.isUpdating) return;
+        bool final = EditorApplication.timeSinceStartup >= reloadRestoreDeadline;
+        if (RestoreAfterReload(final)) EditorApplication.update -= PollReloadRestore;
+    }
+
+    /// <summary>
+    /// 重載後重新綁定原對象；草稿由 <see cref="AdoptReloadStash"/> 在綁定成功時接回。
+    /// 回傳 true 表示這次接回已有結論（成功、放棄或不需要）；false 表示 Tool 的解析器還沒登記，稍後再試。
+    /// </summary>
+    private bool RestoreAfterReload(bool final)
+    {
+        if (this == null || !reloadPending || model != null) return true;
+        if (reloadOwner == null)
+        {
+            ClearReloadStash();
+            return true;
+        }
+
+        if (!reloadNeedsTool)
+        {
+            if (!Bind(reloadOwner)) ClearReloadStash();
+            return true;
+        }
+
+        if (TryResolveReloadBinding(reloadOwner, reloadDocumentId, out var binding, out var context))
+        {
+            // 綁定失敗時草稿留著，使用者從原 Tool 重新開啟還能接回。
+            BindDocument(reloadOwner, binding, context);
+            Repaint();
+            return true;
+        }
+        if (!final) return false;
+
+        // 沒有解析器認得這份文件：草稿留著，等使用者從原 Tool 重新開啟時接回。
+        if (!string.IsNullOrEmpty(reloadDraftJson) || reloadAssetStash != null)
+            ShowNotification(new GUIContent("Tool 接入已因重載失效；從原 Tool 重新開啟後會還原未儲存的修改。"));
+        Repaint();
+        return true;
+    }
+
+    /// <summary>
+    /// 綁定成功後接回重載前的暫存：文件草稿、Token／資產焦點、視角與鎖定。
+    /// 綁到的不是同一份文件就放棄暫存，不把別的文件的草稿套上來。
+    /// </summary>
+    private void AdoptReloadStash()
+    {
+        if (!reloadPending) return;
+        bool hasDraft = !string.IsNullOrEmpty(reloadDraftJson) || reloadAssetStash != null;
+        bool sameDocument = reloadOwner != null && model.Owner == reloadOwner
+            && (reloadDocumentId == null || reloadDocumentId == model.DocumentId);
+        if (!sameDocument)
+        {
+            if (hasDraft)
+                Debug.LogWarning($"[GraphKit] 已開啟另一份文件，放棄重載前 '{(reloadOwner != null ? reloadOwner.name : "?")}' 的未儲存修改。");
+            ClearReloadStash();
+            return;
+        }
+
+        bool restored = false, failed = false;
+        if (!string.IsNullOrEmpty(reloadDraftJson))
+        {
+            IGraphDocument draft = null;
+            try { draft = JsonUtility.FromJson(reloadDraftJson, model.Data.GetType()) as IGraphDocument; }
+            catch (Exception exception) { Debug.LogWarning($"[GraphKit] 重載前的草稿讀取失敗：{exception.Message}"); }
+            if (draft != null && model.AdoptDraft(draft, reloadDraftContentDirty))
+            {
+                restored = true;
+                reportStale = true;
+                // 工作副本整份換掉，焦點要重新指向新副本。
+                SetFocus(AllRootsFocus());
+            }
+            else failed = true;
+        }
+
+        if (!string.IsNullOrEmpty(reloadTokenId))
+        {
+            var token = FindToken(reloadTokenId);
+            if (token != null) SetFocus(new HGFocus { Kind = HGFocusKind.Token, Token = token });
+        }
+
+        var asset = reloadAsset;
+        var stash = reloadAssetStash;
+        if (asset != null)
+        {
+            bool entered;
+            suppressProjectSelect = true;
+            try { entered = TryEnterSharedAsset(asset); }
+            finally { suppressProjectSelect = false; }
+            if (stash != null)
+            {
+                if (entered && ApplyAssetStash(stash)) restored = true;
+                else failed = true;
+            }
+        }
+
+        pendingFocusStart = false;
+        pan = reloadPan;
+        zoom = Mathf.Clamp(reloadZoom > 0f ? reloadZoom : 1f, MinZoom, MaxZoom);
+        locked = reloadLocked;
+        ClearReloadStash();
+        graphDirty = true;
+        if (failed)
+        {
+            Debug.LogWarning("[GraphKit] 重載前的未儲存修改無法完整還原，還原不了的部分顯示已存檔的內容。");
+            ShowNotification(new GUIContent("重載前的未儲存修改無法完整還原，詳見 Console"));
+        }
+        else if (restored) ShowNotification(new GUIContent("已還原重載前未儲存的修改"));
     }
 
     private void OnDisable()
@@ -625,6 +1055,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
         executionObservation = null;
         executionSource = null;
         selectedExecution = null;
+        if (captureOnly) return;
         console.SavePrefs();
         SaveLibraryLayout();
         EditorPrefs.SetFloat(PrefLeftWidth, leftWidth);
@@ -654,6 +1085,14 @@ public partial class HaruGraphWindow : IHasCustomMenu
             if (focus.Kind == HGFocusKind.Asset) ExitAsset();
         }
 
+        // Owner 已被刪除：沒有地方可存，放掉工作副本讓視窗可以關閉。
+        if (model != null && model.Owner == null)
+        {
+            ReturnToIdle();
+            base.SaveChanges();
+            return;
+        }
+
         if (model?.Dirty == true && !DoSave(false))
             throw new InvalidOperationException($"編輯對象驗證失敗，{HGGraph.WindowTitle(model?.Doc)} 保留未儲存內容並取消關閉。");
 
@@ -665,6 +1104,13 @@ public partial class HaruGraphWindow : IHasCustomMenu
     {
         ClearPortInteractionState();
         if (focus.Kind == HGFocusKind.Asset) ExitAsset();
+        // Owner 已被刪除：重載一定失敗，直接放掉工作副本。
+        if (model != null && model.Owner == null)
+        {
+            ReturnToIdle();
+            base.DiscardChanges();
+            return;
+        }
         if (model?.Dirty == true)
         {
             if (!model.TryReload())
@@ -679,7 +1125,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
 
     private void UpdateUnsavedState()
     {
-        hasUnsavedChanges = HasUnsavedWork;
+        hasUnsavedChanges = !captureOnly && HasUnsavedWork;
         if (!hasUnsavedChanges) return;
 
         string ownerName = model?.Owner != null ? model.Owner.name : HGGraph.WindowTitle(model?.Doc);
@@ -786,7 +1232,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
         // Owner 的引用內容變了，反向索引跟著失效。下次要用時才重算，這裡不掃。
         pendingValidationSave = false;
         HGReferenceIndex.Invalidate();
-        AssetDatabase.SaveAssets();
+        // 寫檔已在 HGModel.Save 完成，而且只寫 Owner 所在的資產檔；這裡不再呼叫全域 SaveAssets。
         UpdateUnsavedState();
         ShowNotification(new GUIContent("已存檔"));
         return true;
@@ -966,7 +1412,7 @@ public partial class HaruGraphWindow : IHasCustomMenu
     /// <summary>把 Project／Inspector 的選取帶到焦點資產上，並在 Project 視窗閃一下定位資料夾。</summary>
     private void SelectAssetInProject(UnityEngine.Object asset)
     {
-        if (asset == null || Selection.activeObject == asset) return;
+        if (asset == null || suppressProjectSelect || Selection.activeObject == asset) return;
         // 必須在焦點設定完之後呼叫：OnSelectionChange 會因為「選到的就是目前焦點資產」直接跳過，不會重開交易。
         Selection.activeObject = asset;
         EditorGUIUtility.PingObject(asset);
@@ -1029,7 +1475,8 @@ public partial class HaruGraphWindow : IHasCustomMenu
             if (packCopy?[3] is List<GraphProperty> propertyCopy) storedProperties.AddRange(propertyCopy);
         }
         EditorUtility.SetDirty(asset);
-        AssetDatabase.SaveAssets();
+        // 只寫這個資產檔；引用者的驗證旗標由下面的 InvalidateAssetUsers 自己存。
+        AssetDatabase.SaveAssetIfDirty(asset);
         // 內容沒變就不要驚動別人：座標是編輯器視覺，改它不會讓任何引用者的驗證結果不一樣。
         if (assetContentDirty)
         {

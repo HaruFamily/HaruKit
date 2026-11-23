@@ -9,9 +9,15 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
     /// Inspector 上的管線節點圖欄位：畫成一張「節點圖入口」卡片，不展開圖的任何內容。
     /// </summary>
     // 節點圖是唯一的編輯點：Inspector 展開巢狀動作清單只會提供第二條會打架的編輯路徑。
+    [InitializeOnLoad]
     [CustomPropertyDrawer(typeof(Graph), true)]
     public class GraphDrawer : PropertyDrawer
     {
+        private const string GraphDocumentId = "AssetPipeline.Graph";
+
+        // GraphKit 視窗在 Domain Reload 後靠這個解析器接回原文件；靜態登記每次重載都要重做。
+        static GraphDrawer() => HaruGraphWindow.RegisterReloadResolver(ResolveAfterReload);
+
         private const float Pad = 6f;
         private const float AccentWidth = 3f;
         private const float TitleHeight = 18f;
@@ -31,11 +37,25 @@ namespace HaruFamily.Tools.AssetPipeline.Editor
         private static readonly Color FailColor = new Color(1f, 0.42f, 0.42f);
         private static readonly Color IdleColor = new Color(0.55f, 0.55f, 0.55f);
 
-        public static void Open(AssetPipeline pipeline)
-            => HaruGraphWindow.OpenForDocument(pipeline, new HGDocumentBinding<Graph>("AssetPipeline.Graph",
+        private static HGDocumentBinding CreateBinding()
+            => new HGDocumentBinding<Graph>(GraphDocumentId,
                 owner => (owner as AssetPipeline)?.graph,
                 (owner, document) => (owner as AssetPipeline).graph = document,
-                () => new Graph()), GraphContext);
+                () => new Graph());
+
+        public static void Open(AssetPipeline pipeline)
+            => HaruGraphWindow.OpenForDocument(pipeline, CreateBinding(), GraphContext);
+
+        private static bool ResolveAfterReload(UnityEngine.Object owner, string documentId,
+            out HGDocumentBinding binding, out HGEditorExtensionContext context)
+        {
+            binding = null;
+            context = null;
+            if (!(owner is AssetPipeline) || (documentId != null && documentId != GraphDocumentId)) return false;
+            binding = CreateBinding();
+            context = GraphContext;
+            return true;
+        }
 
         public static void Navigate(AssetPipeline pipeline, string nodeId)
         {

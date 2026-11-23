@@ -92,6 +92,15 @@ public sealed partial class HGDocumentSession<TDocument> where TDocument : class
         }, content: contentChanged);
     });
 
+    /// <summary>Sets the author-facing Label of one document-owned action item; null or empty clears it.</summary>
+    public HGSessionCommandResult SetActionLabel(ActionSlotBase slot, string label) => Guard(() =>
+    {
+        if (slot == null || !Owns(slot) || label?.Length > 256) return HGSessionCommandResult.Rejected;
+        string next = string.IsNullOrEmpty(label) ? null : label;
+        if ((slot.Label ?? string.Empty) == (next ?? string.Empty)) return HGSessionCommandResult.NoChange;
+        return Apply(() => slot.Label = next);
+    });
+
     /// <summary>Counts distinct read slots, excluding Property write targets and duplicate union branches.</summary>
     public int ReadNodeUserCount(GraphNode node) => HGModel.NodeUsers(node,
         HGModel.WalkSlots(Document, new HashSet<object>(HGRefComparer.Instance))).Count;
@@ -216,6 +225,46 @@ public sealed partial class HGDocumentSession<TDocument> where TDocument : class
                 source.Apply(node, shared);
                 created = node.EnsureId();
                 Document.Orphans.Add(node);
+            });
+        });
+        nodeId = result == HGSessionCommandResult.Changed ? created : null;
+        return result;
+    }
+
+    /// <summary>
+    /// Creates a carrier directly inside one read input as a Composition source, in one Undo step.
+    /// This is the background equivalent of dropping a new Node into a Slot: no orphan-pool detour and no wire.
+    /// <paramref name="portSource"/> wraps the new carrier for the same acceptance and cycle checks as a connection.
+    /// List-append ports and Property write targets are rejected; the replaced source returns to the candidate pool.
+    /// </summary>
+    public HGSessionCommandResult CreateNodeInSlot(HGCarrierSource source, HGPortRegistry registry, HGPortKey inputKey,
+        Func<GraphNode, IHGPortSource> portSource, out string nodeId)
+    {
+        string created = null;
+        var result = Guard(() =>
+        {
+            if (source == null || !source.IsValid || portSource == null
+                || source.Token != null && !DocumentTokens().Contains(source.Token)
+                || source.Property != null && (Document is not IPropertyOwner properties || !properties.Properties.Contains(source.Property)))
+                return HGSessionCommandResult.Rejected;
+            if (!IsCurrentRegistry(registry)) return HGSessionCommandResult.StaleGeneration;
+            if (!registry.TryGet(inputKey, out HGPort input) || !input.IsInput || input.InputSlot == null
+                || input.InputSlot is PropertySlotBase || input.Binding is IHGListAppendBinding || !Owns(input.InputSlot))
+                return HGSessionCommandResult.Rejected;
+            var shared = InspectObjects();
+            return Apply(() =>
+            {
+                var node = new GraphNode();
+                source.Apply(node, shared);
+                created = node.EnsureId();
+                node.Mode = GraphNodeMode.Composition;
+                var acceptance = HGPortConnection.CheckInputSource(input, portSource(node), Generation);
+                if (acceptance != HGPortConnectionResult.Allowed)
+                    throw new InvalidOperationException("The slot does not accept this source: " + acceptance);
+                GraphNode previous = input.InputSlot.Node;
+                List<GraphNode> orphanPool = FindOrphanPool(input.InputSlot);
+                input.InputSlot.SetNode(node);
+                ReturnUnreferenced(previous, orphanPool);
             });
         });
         nodeId = result == HGSessionCommandResult.Changed ? created : null;

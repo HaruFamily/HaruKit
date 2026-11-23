@@ -161,6 +161,10 @@ Owner 手動驗證先收結構／Tool／畫布診斷，無錯誤才經 `HGOwnerV
 
 Console 只有一個驗證結果，另以中性文字顯示「有未儲存變更」。沒有本次報告且圖無未存修改時，可顯示目前 binding 的已儲存驗證結果；不彙總 Owner 的其他文件。
 
+**存檔範圍**：`HGModel.Save` 只寫 Owner 所在的資產檔（`AssetDatabase.SaveAssetIfDirty`），資產焦點的存檔只寫該資產；都不呼叫全域 `SaveAssets`，不會順手寫出專案裡其他 dirty 資產。Owner 是場景物件時只標場景 dirty；是 Prefab 實例上的元件時另外呼叫 `PrefabUtility.RecordPrefabInstancePropertyModifications`。Owner 已被刪除時，關閉視窗的存檔與捨棄都直接放掉工作副本。
+
+**選取切換**：選到另一個可編輯對象時，有未存修改只記 `pendingTarget` 在工具列提示。選到無關的東西（或取消選取）時，有未存修改就不動作、不跳對話框；沒有未存修改才回閒置版型。
+
 **存檔快捷鍵**：Ctrl+S 立即保存目前 Owner／獨立資產；第一次成功保存後 0.8 秒內，再放開並按下 S（Ctrl 可持續按住），先驗證再保存。長按 S 的重複 KeyDown 不執行；其他按鍵（Ctrl 除外）、滑鼠按下、失焦或清除報告中斷連按。驗證失敗仍可存檔，保留錯誤報告與未驗證旗標。工具列存檔提示提供這兩種操作。
 
 **節點搜尋（Ctrl+F）**：畫布上按 Ctrl+F，或按工具列的「搜尋」鈕，開畫布內搜尋列 `HGNodeSearchBar`（`Panels/`，畫布右上角），搜目前焦點 `graph.Nodes` 的全部節點，包括被收起的，不跨焦點。比對節點名稱（Token／資產／Property 補引用對象，`NodeSearchName`）、chip、註解，以及所屬群組的註解與所在分頁名稱；空白分詞，每詞都要命中同一顆節點，不分大小寫，所以群組名可以和節點名組合著篩。群組的修改不重建圖，`MarkViewStateChanged` 會作廢命中快取。輸入時只高亮：命中的節點加淡選取色外框，沒命中的壓暗；沒有命中時不壓暗。Enter／↓／F3 跳下一筆，Shift+Enter／↑／Shift+F3 跳上一筆，頭尾循環；跳轉走 `FocusDocumentNode`：被收起的先 `RevealNode`（展開欄位、清單、群組與分頁，寫回 `GraphViewState`，記成版面修改），再選取並置中。因為會寫版面，輸入時不自動跳。Esc／✕ 關閉，視角停在目前這一筆。搜尋列在 TextField 之前自己判 Enter／Esc／方向鍵；點回畫布時放掉輸入框焦點，畫布快捷鍵才收得到。游標壓在搜尋列上時，底下的節點、Header 工具列與群組標題都要遮掉指標事件（IMGUI 讓先畫的先拿事件）。
@@ -210,6 +214,8 @@ Console 只有一個驗證結果，另以中性文字顯示「有未儲存變更
 
 ### 5.3 Undo
 
+- Ctrl+Z／Ctrl+Y 由 `HandleGlobalKeys` 在所有控制項之前處理，文字輸入中也一樣。`AfterHistorySwap` 與 `ApplyAssetState` 一律先 `EndTextEditing()`（取消改名框、放掉鍵盤焦點）：輸入中的框握著自己的字串緩衝，不放掉就會把復原前的字寫回資料。改名框編輯中的 Ctrl+Z／Y 只吞掉按鍵，不動歷程。
+- Owner 歷程換副本後，Token 畫布以 Token Id 重指到新副本；那顆 Token 在這一步消失才退回 root 畫布。不可留下 `HGFocusKind.None`，那是一張空白畫布。
 - 快照式，掛在 `HGModel.MarkContentChanged()`／`MarkLayoutChanged()`：0.4 秒內連續修改合併成一步，上限 40 步。Undo／Redo 會整份換掉 `Data`，之後要依穩定識別重新解析焦點。
 - 資產焦點不在 Owner 工作副本裡，有自己的 `HGAssetHistory`（同樣 0.4 秒、40 步）。視窗層一律走 `DoUndo`／`DoRedo`／`BreakUndoMerge` 路由。
 - 資產的根內容、候選池、Token 清單、Property 定義必須在**同一次** `GraphDeepCopy.Copy` 裡複製，否則 Token／Property 節點會指到不在清單裡的孤兒定義。
@@ -337,6 +343,27 @@ private List<string> tags;
 private List<int> levelCounts;
 ```
 
+### 5.8 Domain Reload 暫存與還原
+
+- 工作副本 `HGModel` 不序列化。`StashForReload`（`beforeAssemblyReload`）把綁定對象、documentId、是否需要 Tool、視角、鎖定、Token 焦點 Id 收進視窗的 `reload*` 序列化欄位；Owner 有未存修改時另存 `JsonUtility.ToJson(model.Data)`。這些欄位只在重載前填入，接回或放棄後由 `ClearReloadStash` 清空。
+- 草稿走 Unity 的序列化規則，保留的內容等同「存檔再讀回」：`[NonSerialized]` 與 Unity 不序列化的欄位不保留，Undo／Redo 歷程不保留。型別在這次編譯中消失的 SerializeReference 內容無法還原。
+- 資產焦點的未存草稿寫進一份 `HideAndDontSave` 的資產複本（`CreateAssetStash`，寫入步驟同 `SaveAsset`），重載後 `ApplyAssetStash` 以 `ApplyAssetState` 換回工作副本並標未存檔；複本銷毀前要 `AssetGraphSchema.InvalidateCache`。原資產不動。資產內的 Token 子畫布不還原，回到資產本體。
+- `OnEnable` 發現 `reloadPending` 時以 `EditorApplication.update` 輪詢 `RestoreAfterReload`（`PollReloadRestore`，最多 10 秒）：實測重載期間登記的 `delayCall` 接不回來，而且 Tool 的解析器要等它的 `[InitializeOnLoad]` 跑完才存在，所以找不到解析器時先重試、到期才提示。流程：非 Tool 入口直接 `Bind`，Tool 入口向已登記的解析器要 binding 與 context 再 `BindDocument`。實際接回在 `BindOwner` 成功後的 `AdoptReloadStash`，所以使用者自己從原 Tool 重新開啟也會還原。綁到不同 Owner／documentId 時放棄暫存並寫 Console，不把草稿套到別的文件。
+- `HGModel.AdoptDraft` 只接受與目前副本同型別的脫離文件：換掉 `Data`、重開歷程、標 Dirty，版本守衛沿用這次綁定讀到的 Owner 狀態。
+- 暫存只在同一個 Editor 行程內有效（`SessionState` 的 `HaruGraph.Reload.Alive`）：版面檔帶到下一次啟動的殘留直接丟棄，因為草稿裡的 Unity 物件引用是 InstanceID。
+- `StashForReload` 的退訂在 `OnDestroy`，不在 `OnDisable`，暫存不依賴重載時兩者的先後。新增需要跨重載保留的視窗狀態時，加進這組 `reload*` 欄位與 `AdoptReloadStash`，不要讓 `HGModel` 或焦點物件本身變成序列化欄位。
+
+### 5.9 索引與值欄位
+
+- `HGOwnerIndex` 只查「帶圖文件欄位的 ScriptableObject 型別」各有哪些資產（型別清單每個 Domain 算一次），不逐一檢查專案裡所有 ScriptableObject；`projectChanged` 之後它會被引用清單重算。Owner 與資產索引的進度條都不可取消：掃到一半的結果會被當成完整索引。
+- `GraphDeepCopy` 按型別快取欄位清單；複製範圍不變（所有非 `[NonSerialized]`、非 readonly 的實例欄位）。
+- 視窗手動輸入的 int／float 依欄位的 `[Range]`／`[Min]` 夾回範圍（`HGValueField.ClampToFieldRange`），視窗命令 `SetFlowValue` 則是拒絕越界值。`uint` 用整數夾值，不可改回 `Mathf.Clamp`（long 會落到 float 多載而失去精度）。
+- descriptor 欄位的繪製例外會記成 drawer 失敗，但 `ExitGUIException` 必須原樣往外丟：物件選取器、顏色、曲線與漸層開啟時 Unity 用它中止這一輪 GUI。
+
+### 5.10 截圖專用視窗
+
+`OpenCaptureView` 另開一個 `captureOnly` 的 `HaruGraphWindow` 給工具截圖，不動使用者已開的視窗。它以不取得焦點的 Tooltip 模式開啟，避免把 Unity 拉到前景；原生視窗維持最小尺寸，只放大內部 View 來繪製；內部 API 不存在時回傳 null，不退回會搶焦點的開法。它鎖定選取、不存偏好與面板版面、不參與 Domain Reload 暫存、`hasUnsavedChanges` 恆為 false，由呼叫端以 `CloseCaptureView` 關閉。新增任何「視窗關閉／停用時寫入」或「回應外部事件」的行為時，要一併考慮 `captureOnly`。
+
 ## 6. 串接 GraphKit（給 Tool 作者）
 
 ### 6.1 開啟文件
@@ -344,7 +371,7 @@ private List<int> levelCounts;
 - 已知欄位時用 `HaruGraphWindow.OpenForDocument(owner, new HGDocumentBinding<TDocument>(documentId, get, set, create), context)`。每個文件欄位一個 binding、一個穩定的 `documentId`。
 - `HaruGraphWindow.OpenFor(owner)` 是 legacy 入口，只接受恰好一個 `IGraphDocument` 欄位的 Owner。
 - binding 的 setter 只能指派傳入的文件引用，不可原地修改舊文件或其他 Owner 資料，並要能接受 null。需要偵測原地外部修改時，提供無副作用的 `readRevision`，並在每個外部修改入口維護它。
-- context 與 binding 不會跨 Domain Reload 保存；重新載入後要從 Tool 入口重開。
+- context 與 binding 持有委派，不會跨 Domain Reload 保存。Tool 在 `[InitializeOnLoad]` 以 `HaruGraphWindow.RegisterReloadResolver` 登記 `HGReloadBindingResolver`，視窗重載後才能自動接回原文件（§5.8）；解析器只處理自己認得的 Owner／documentId，其餘回 false。沒有解析器認得時，仍要從 Tool 入口重開。
 - 明確 binding 只用於該次入口指定的 Owner；session 內切換到其他 Owner 時重新探索其唯一文件欄位，不沿用前一個 Owner 的 getter／setter。同一 Owner 的 session 導航保留目前 binding；多文件 Owner 須由 Tool 明確指定文件。
 - 視窗先在候選 Model 完成綁定及 root adapter 設定，成功才替換目前 Model／binding／active context 並清除焦點與互動狀態。綁定失敗保留原工作副本、歷程、資產焦點與命令有效性。
 
@@ -442,6 +469,7 @@ Unity 物件引用只回 GUID／local ID／path（非持久物件回 instance ID
 - Slot 的替代 Default enum 同樣預設使用一般下拉選單，只有欄位／Slot 類別明確標記 `[HGEnum]` 或 descriptor 指定 ForceEnumButtons 才畫按鈕列；替代型別不自動啟用。下拉與按鈕皆支援成員 `[HGLabel]`。
 - `[HGBool(trueLabel = "是", falseLabel = "否")]` 把 bool 畫成兩段按鈕，左 true、右 false；沒標的 bool 是 14px 勾選框。和 `[HGEnum]` 一樣可標在欄位或 Slot 類別上，走同一批入口（`HGRow.BoolButtons`，類別用 `HGReflect.BoolButtonsOf`、欄位用 `BoolButtons`，descriptor 用 `HGFieldDescriptor.Create(..., boolButtons:)`）；欄位與類別都標時文字以欄位為準，欄位沒標不能關掉類別宣告。
 - `[HGEnum]` 也可標在 Slot 類別上（子類沿用）：該族的 enum 常數框在一般欄位、descriptor 欄位、清單元素、Token／資產 HEAD、資產參數綁定與變數庫都畫按鈕列。入口是 `HGGraph.SlotRow` 與變數庫面板，兩者都問 `HGReflect.HasEnumButtons(slotType)`。欄位與類別是 OR：欄位只能再開啟，不能關掉類別的宣告；後續設定 `ForceEnumButtons` 一律用 `|=`，不可覆蓋。清單欄位標 `[HGEnum]` 時，`BuildListChildren` 把旗標帶給純值元素列，元素繪製讀 `row.ForceEnumButtons`。
+- 常數是清單的 FormulaSlot 已放進組合模式的來源時，不掛下面那段常數清單（`AddDefaultListRow` 直接略過），這一列才符合 `IsSimpleNodeSocket`、來源才能內放；連線模式的來源維持外部節點，保底清單照常顯示與編輯。空的（或以連線接著的）清單 Slot 仍顯示常數清單、不走槽位版面，但它是可拖入的落點（`HGGraph.IsNodeDropTarget`，落點範圍含整段常數清單）：把 Node 拖進去就改成組合模式並內放，常數清單隨之收掉；把內放的 Node 拖回畫布則變回連線模式，常數清單重新出現。
 - 常數是清單的 FormulaSlot（`DefaultEditType` 本身是 `List<T>`／`T[]`，且元素 `HGValueField.CanDraw`）會在 Slot 列下方多一段常數清單，資料來源就是 `DefaultObject`，沿用清單欄位的增刪、重排與元素繪製；null 時就地補空清單。這段清單不畫自己的標題列（`HGRow.HeaderRow` 指向代畫標題的 Slot 列，底帶與外框從那一列算起），由 Slot 列的標籤畫成「`▾` 名稱 (N)」兼任折疊開關（`HGRow.DefaultListRow`）；Slot 列標籤隱藏時才保留清單自己的標題列。一般欄位、descriptor 欄位與 HEAD 來源列都會掛，資產參數綁定列與「元素本身是 Slot 的清單」不掛。變數庫裡元素畫得出輸入框的清單（純值與資產皆是）逐項用 `HGValueField` 編輯，走 `AddInitialValue`／`SetInitialItem` 命令，一律就地改容器；資產清單另外保留從 Project 拖到標題列的加入方式。
 - 新增清單元素一律走 `HGListItemSource.TryCreateElement`：資產元素是空引用，**不可用 `Activator` 建立 `UnityEngine.Object`**（`GameObject` 會直接生進目前場景）。
 - Slot 族：`[HGKind(name, group, priority)]`。建立公式、新增 Property、新增 Token 三個選單共用 `HGTypeIndex.FormulaKindOptions`；group 用 `/` 分多層，priority 越小越前面。同路徑同名的族附完整型別與組件名稱消歧義。Group／Priority 不影響族身分或相容性。
@@ -491,6 +519,8 @@ Unity 物件引用只回 GUID／local ID／path（非持久物件回 instance ID
 ### 非視窗 Session 的組圖命令
 
 `HGDocumentSession.Authoring` 提供 CreateNode、定義庫 CRUD／Property 設定、Slot fallback 與可變 Slot 清單、root adapter CRUD、基本版面 Group 操作。命令共用 Apply 的單步快照回復／Undo，庫命名、複製及刪除引用語意沿用 HGModel。模型的 CreateDetachedView 只接管傳入的隔離副本，不 Bind／Reload、不清理 Owner、不自己記歷程；不得把 Owner 正本傳進後再執行命令。
+
+`CreateNodeInSlot` 在同一個 Apply 內建立載體並以組合模式放進指定的讀取 Slot，等同把新 Node 直接拖進槽位：不經候選池、不拉線；被取代的來源回候選池。相容與循環檢查由呼叫端提供的 `portSource` 包裝交給 `HGPortConnection.CheckInputSource`，不接受 PropertySlot 與清單新增接點。`ArrangeScope` 清掉一個 scope 內所有手動座標（HEAD、已接來源與候選節點），讓畫布自動排版接手，等同視窗的全畫布「整理版面」，屬純版面修改；只提供整個 scope，因為自動排版不避開仍有手動座標的節點。
 
 `SetPropertyTarget` 為文件所持有的 PropertySlot 選擇本文件庫內相容定義，或傳入 null 清除；使用獨立引用載體，保留既有讀取者與模式。它不建立畫布 Port，走 Guard／Apply、Undo／Redo 與內容驗證失效；外部定義或外部 Slot 拒絕。
 
