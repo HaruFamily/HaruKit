@@ -20,13 +20,13 @@ public static class HaruGraphInspect
 {
     public sealed class Parameters
     {
-        [ToolParameter("search_documents, list_documents, capture, list_windows, capture_window, records, fields, references, sequence, catalog, candidates, or release")]
+        [ToolParameter("screenshot_window, search_documents, list_documents, capture, list_windows, capture_window, records, fields, references, sequence, catalog, candidates, or release")]
         public string action { get; set; }
         [ToolParameter("Exact project-relative asset path returned by Unity asset search; required for list_documents/capture.", Required = false)]
         public string asset_path { get; set; }
         [ToolParameter("Exact document_id returned by list_documents; required for capture.", Required = false)]
         public string document_id { get; set; }
-        [ToolParameter("Exact window_id from list_windows; required for capture_window. IDs expire when a window closes.", Required = false)]
+        [ToolParameter("Exact window_id from list_windows; required for capture_window and screenshot_window. IDs expire when a window closes.", Required = false)]
         public int window_id { get; set; }
         [ToolParameter("Snapshot ID returned by capture.", Required = false)]
         public string snapshot_id { get; set; }
@@ -80,6 +80,7 @@ public static class HaruGraphInspect
                 case "capture": return Capture(request);
                 case "list_windows": return ListWindows(request);
                 case "capture_window": return CaptureWindow(request);
+                case "screenshot_window": return ScreenshotWindow(request);
                 case "records": return Read(request, false);
                 case "fields": return Read(request, true);
                 case "references": return References(request);
@@ -210,6 +211,107 @@ public static class HaruGraphInspect
                     asset_path = AssetDatabase.GetAssetPath(owner), working_copy_dirty = dirty });
         return new SuccessResponse("Existing bound document windows only. Does not open, focus or rebuild windows. document_id is the window binding ID, not the ID used by asset capture.",
             new { total = entries.Count, next_offset = Next(request, entries.Count), entries = entries.Skip(request.offset).Take(request.page_size).ToArray() });
+    }
+
+    /// <summary>
+    /// Saves one existing graph window's own rendering as a PNG under Library/GraphKitCaptures.
+    /// Shows whatever that window currently shows; nothing is opened, focused or moved.
+    /// </summary>
+    private static object ScreenshotWindow(Parameters request)
+    {
+        if (EditorApplication.isCompiling || EditorApplication.isUpdating)
+            return Error("editor_busy", "Take screenshots while the Editor is idle.");
+        var window = Resources.FindObjectsOfTypeAll<HaruGraphWindow>().FirstOrDefault(value => value.GetInstanceID() == request.window_id);
+        if (window == null) return Error("window_unavailable", "Select a window_id from list_windows. No window was opened.");
+        if (!TryGrabWindow(window, "window-" + request.window_id + ".png", out var image, out string code, out string message))
+            return Error(code, message);
+        return new SuccessResponse("The window's own rendering (dock tab strip included), not the screen: other applications covering it are not captured. No window was opened, focused, moved or resized; the file is overwritten by the next screenshot of the same window.", new
+        {
+            window_id = request.window_id, title = window.titleContent.text, image.path, image.project_relative_path,
+            image.width, image.height, image.pixels_per_point,
+        });
+    }
+
+    internal readonly struct GrabbedImage
+    {
+        public readonly string path, project_relative_path;
+        public readonly int width, height;
+        public readonly float pixels_per_point;
+        public GrabbedImage(string path, string relative, int width, int height, float scale)
+        { this.path = path; project_relative_path = relative; this.width = width; this.height = height; pixels_per_point = scale; }
+    }
+
+    private const System.Reflection.BindingFlags AnyInstance = System.Reflection.BindingFlags.Instance
+        | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+
+    private static object HostOf(EditorWindow window) => typeof(EditorWindow).GetField("m_Parent", AnyInstance)?.GetValue(window);
+
+    /// <summary>同步重畫一次視窗（內部 API）；截圖專用視窗靠它在同一個命令內完成版面與對準。</summary>
+    internal static bool RepaintNow(EditorWindow window)
+    {
+        object host = HostOf(window);
+        var repaint = host?.GetType().GetMethod("RepaintImmediately", AnyInstance, null, Type.EmptyTypes, null);
+        if (repaint == null) return false;
+        repaint.Invoke(host, null);
+        return true;
+    }
+
+    /// <summary>
+    /// 抓視窗自己的繪製結果（GUIView.GrabPixels），不讀螢幕：蓋在上面的其他程式不會入鏡。
+    /// 內部 API 失效時回報錯誤，不退回讀螢幕。只寫入 Library/GraphKitCaptures。
+    /// </summary>
+    internal static bool TryGrabWindow(EditorWindow window, string fileName, out GrabbedImage image, out string code, out string message)
+    {
+        image = default; code = null; message = null;
+        object host = HostOf(window);
+        if (host == null) { code = "window_unavailable"; message = "The window is not attached to a view (closed or not yet shown)."; return false; }
+        var actualView = host.GetType().GetProperty("actualView", AnyInstance);
+        var grab = host.GetType().GetMethod("GrabPixels", AnyInstance, null, new[] { typeof(RenderTexture), typeof(Rect) }, null);
+        var hostPosition = host.GetType().GetProperty("position", AnyInstance);
+        if (actualView == null || grab == null || hostPosition == null)
+        { code = "capture_unsupported"; message = "This Unity version does not expose the window capture API used for screenshots."; return false; }
+        if (!ReferenceEquals(actualView.GetValue(host), window))
+        { code = "window_hidden"; message = "The window is behind another tab in its dock, so it is not being drawn. Ask the user to bring its tab forward."; return false; }
+        Rect area = (Rect)hostPosition.GetValue(host);
+        float scale = EditorGUIUtility.pixelsPerPoint;
+        int width = Mathf.RoundToInt(area.width * scale), height = Mathf.RoundToInt(area.height * scale);
+        if (width < 16 || height < 16 || width > 8192 || height > 8192)
+        { code = "window_unavailable"; message = "The window has no capturable area."; return false; }
+        Texture2D texture = null;
+        RenderTexture target = null;
+        RenderTexture previous = RenderTexture.active;
+        try
+        {
+            target = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB) { hideFlags = HideFlags.HideAndDontSave };
+            target.Create();
+            grab.Invoke(host, new object[] { target, new Rect(0f, 0f, width, height) });
+            RenderTexture.active = target;
+            texture = new Texture2D(width, height, TextureFormat.RGB24, false) { hideFlags = HideFlags.HideAndDontSave };
+            texture.ReadPixels(new Rect(0f, 0f, width, height), 0, 0);
+            Color32[] pixels = texture.GetPixels32();
+            if (SystemInfo.graphicsUVStartsAtTop)
+                for (int y = 0; y < height / 2; y++)
+                    for (int x = 0; x < width; x++)
+                    {
+                        int top = y * width + x, bottom = (height - 1 - y) * width + x;
+                        (pixels[top], pixels[bottom]) = (pixels[bottom], pixels[top]);
+                    }
+            texture.SetPixels32(pixels);
+            texture.Apply(false);
+            string directory = System.IO.Path.GetFullPath(System.IO.Path.Combine(Application.dataPath, "../Library/GraphKitCaptures"));
+            System.IO.Directory.CreateDirectory(directory);
+            string file = System.IO.Path.Combine(directory, fileName);
+            System.IO.File.WriteAllBytes(file, texture.EncodeToPNG());
+            image = new GrabbedImage(file.Replace('\\', '/'), "Library/GraphKitCaptures/" + fileName, width, height, scale);
+            return true;
+        }
+        catch (Exception exception) { code = "capture_failed"; message = (exception.InnerException ?? exception).Message; return false; }
+        finally
+        {
+            RenderTexture.active = previous;
+            if (texture != null) UnityEngine.Object.DestroyImmediate(texture);
+            if (target != null) { target.Release(); UnityEngine.Object.DestroyImmediate(target); }
+        }
     }
 
     private static object CaptureWindow(Parameters request)

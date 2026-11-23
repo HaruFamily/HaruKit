@@ -70,12 +70,12 @@ public static partial class HaruGraphDraft
             }
             var entries = map.Slots.Select(pair => (object)new
             {
-                key = pair.Key, kind = "slot", type = pair.Value.GetType().AssemblyQualifiedName,
+                key = pair.Key, stable_key = map.StableSlotKey(pair.Key), kind = "slot", type = pair.Value.GetType().AssemblyQualifiedName,
                 source_key = map.SourceKey(pair.Value), relation = pair.Value is PropertySlotBase ? "property_write_target" : "input",
                 locations = locations.TryGetValue(pair.Value, out var hints) ? hints.ToArray() : Array.Empty<object>(),
             }).Concat(map.Nodes.Select(pair => (object)new
             {
-                key = pair.Key, kind = "source", node_kind = pair.Value.Kind.ToString(), node_id = pair.Value.Id,
+                key = pair.Key, stable_key = map.StableSourceKey(pair.Key), kind = "source", node_kind = pair.Value.Kind.ToString(), node_id = pair.Value.Id,
                 node_mode = pair.Value.Mode.ToString(), read_user_count = draft.Session.ReadNodeUserCount(pair.Value),
                 body_type = pair.Value.BodyObject?.GetType().AssemblyQualifiedName,
                 token_name = pair.Value.Token?.Name, property_name = pair.Value.Property?.Name,
@@ -98,6 +98,18 @@ public static partial class HaruGraphDraft
             return CommandResult(draft, disconnected,
                 "disconnect", new { slot_key = slotKey, slot_type = map.Slots[slotKey].GetType().FullName,
                     previous_source_key = previousSource, previous_node_id = previousNodeId });
+        }
+        // Property write target chosen by definition: no temporary Property node is needed.
+        if (action == "connect" && sourceKey == null && input.Get("definition_id") is string definitionId)
+        {
+            if (map.Slots[slotKey] is not PropertySlotBase target)
+                return Error("slot_unsupported", "definition_id selects a Property write target; read slots take a source_key, or create_node with slot_key.");
+            if (FindDefinition(draft, "property", definitionId) is not GraphProperty definition)
+                return Error("definition_unavailable", "Select a Property definition_id from library.");
+            if (!target.AcceptsProperty(definition)) return Error("connection_rejected", "IncompatibleFamily");
+            string previousTarget = target.Node?.Id;
+            return CommandResult(draft, draft.Session.SetPropertyTarget(target, definition), "connect",
+                new { slot_key = slotKey, slot_type = target.GetType().FullName, definition_id = definitionId, previous_node_id = previousTarget });
         }
         var check = map.Check(slotKey, sourceKey);
         if (action == "check_connection") return new SuccessResponse("Connection compatibility check; no change applied.",

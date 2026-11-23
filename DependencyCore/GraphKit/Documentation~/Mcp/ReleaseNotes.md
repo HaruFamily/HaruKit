@@ -1,3 +1,10 @@
+# Unreleased
+
+- MCP block-style authoring: `create_node` with `slot_key` (create nested), `compose`, `arrange` (whole-scope auto layout) and the read-only `readability` report. The skill gains authoring rules for readable graphs, including Token (recomputed per read) versus Property (fixed once written).
+- MCP: `label_step`, stable endpoint keys (`@node_id`, `@node_id.field`, `@use:node_id`) valid across mutations and inside batches, `connect` with a Property `definition_id`, draft `screenshot` (temporary capture view, whole graph or one node) and `screenshot_window`. `readability` no longer reports missing step Labels.
+- Editor: list-constant slots nest a Composition source and accept dropped nodes.
+- Editor: unsaved window drafts survive domain reload; Tools register `HaruGraphWindow.RegisterReloadResolver`. Saving writes only the edited asset file.
+
 # GraphKit 1.3.0
 
 - Nested graph composition and MCP node authoring.

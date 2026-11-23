@@ -87,6 +87,9 @@ public static partial class HaruGraphDraft
                 {
                     string key = property.Name.Replace("_", "").ToLowerInvariant();
                     if (!new[] { "slotkey", "sourcekey", "listkey", "rootkey", "rootindex", "tabindex", "sectionpath", "targetsectionpath", "flowpath" }.Contains(key)) continue;
+                    // Stable endpoint aliases are resolved against the current generation by each step, so they never go stale.
+                    if ((key == "slotkey" || key == "sourcekey") && property.Value.Type == JTokenType.String
+                        && ((string)property.Value).StartsWith("@", StringComparison.Ordinal)) continue;
                     bool current = property.Value is JObject reference && reference["$ref"]?.Type == JTokenType.String
                         ? resultGenerations.TryGetValue(((string)reference["$ref"]).Split('.')[0], out int sourceGeneration)
                             && sourceGeneration == draft.Session.Generation

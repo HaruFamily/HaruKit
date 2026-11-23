@@ -13,7 +13,7 @@ using UnityEngine;
 
 public static partial class HaruGraphDraft
 {
-    private static readonly string[] authoringActions = { "flow", "flow_candidates", "flow_insert", "flow_remove", "flow_transfer", "flow_wrap", "geometry", "layout_preview", "layout_diff", "protect", "metadata_fields", "set_metadata_value", "structured_types", "replace_structured_value", "structured_fields", "set_structured_value", "initialize_structured_value", "insert_value_item", "remove_value_item", "move_value_item", "catalog_fields", "field_options", "set_field_options", "set_field_count", "layout_nodes", "configure_group", "group_tabs", "add_group_tab", "rename_group_tab", "remove_group_tab", "activate_group_tab", "group_member_tab", "duplicate_group", "nodes", "configure_node", "duplicate_nodes", "set_group_rect", "node_candidates", "create_node", "replace_node", "delete_node", "asset_parameters", "configure_asset_parameter",
+    private static readonly string[] authoringActions = { "flow", "flow_candidates", "flow_insert", "flow_remove", "flow_transfer", "flow_wrap", "geometry", "layout_preview", "layout_diff", "protect", "metadata_fields", "set_metadata_value", "structured_types", "replace_structured_value", "structured_fields", "set_structured_value", "initialize_structured_value", "insert_value_item", "remove_value_item", "move_value_item", "catalog_fields", "field_options", "set_field_options", "set_field_count", "layout_nodes", "configure_group", "group_tabs", "add_group_tab", "rename_group_tab", "remove_group_tab", "activate_group_tab", "group_member_tab", "duplicate_group", "nodes", "configure_node", "duplicate_nodes", "set_group_rect", "node_candidates", "create_node", "compose", "arrange", "readability", "screenshot", "label_step", "replace_node", "delete_node", "asset_parameters", "configure_asset_parameter",
         "library", "create_definition", "rename_definition", "duplicate_definition", "delete_definition", "configure_property",
         "slot_lists", "slot_items", "insert_slot", "remove_slot", "move_slot", "roots", "root_options", "add_root", "remove_root", "asset_choices", "slot_value", "slot_asset_choices", "slot_asset_reference",
         "group_scopes", "groups", "group_members", "create_group", "edit_group", "delete_group", "group_member" };
@@ -64,6 +64,11 @@ public static partial class HaruGraphDraft
         if (action == "layout_nodes") return LayoutSelection(draft, input);
         if (action == "duplicate_nodes") return DuplicateNodes(draft, input);
         if (action == "nodes" || action == "configure_node") return NodeLayoutCommand(draft, input, action, offset, pageSize);
+        if (action == "compose") return Compose(draft, input);
+        if (action == "label_step") return LabelStep(draft, input);
+        if (action == "arrange") return Arrange(draft, input);
+        if (action == "screenshot") return Screenshot(input.Get("draft_id"), draft, input);
+        if (action == "readability") return BoundedFlowResponse(Readability(draft, input, offset, pageSize));
         var session = draft.Session;
         string library = input.Get("library");
         string name = input.Get("name");
@@ -288,6 +293,21 @@ public static partial class HaruGraphDraft
             default: return Error("source_required", "source_kind must be inline, token, property or asset.");
         }
         string nodeId = target?.Id;
+        string intoSlot = action == "create_node" ? input.Get("slot_key") : null;
+        if (intoSlot != null)
+        {
+            // Block-style authoring: the new node is born inside the slot, never passing through the candidate pool or a wire.
+            var endpoints = new HaruGraphDraftConnections(session);
+            if (!endpoints.Slots.TryGetValue(intoSlot, out var destination))
+                return Error("slot_unavailable", "Select slot_key from endpoints at this generation, or omit it to create a standalone candidate node.");
+            if (destination is PropertySlotBase)
+                return Error("slot_unsupported", "Property write targets take an existing Property through connect; create_node with slot_key fills read slots only.");
+            string replacedNodeId = destination.Node?.Id;
+            var placed = session.CreateNodeInSlot(source, endpoints.Registry, HaruGraphDraftConnections.InputKey(intoSlot),
+                HaruGraphDraftConnections.SourceFor, out nodeId);
+            return CommandResult(draft, placed, action, new { node_id = nodeId, slot_key = intoSlot, node_mode = "Composition",
+                previous_node_id = replacedNodeId, hint = "Nested in the slot. A replaced source returned to the candidate pool: reuse or delete it." });
+        }
         var command = action == "create_node" ? session.CreateNode(source, out nodeId) : session.ReplaceSource(target, source);
         return CommandResult(draft, command, action, new { node_id = nodeId });
     }

@@ -19,7 +19,7 @@ public static partial class HaruGraphDraft
     {
         [ToolParameter("Structured field path from structured_fields: an array of exact field_id strings and zero-based list indices, max depth 16. Omit or [] to query the inline node body. Requery paths after list edits; nested slot keys expire after every mutation.", Required = false)]
         public JArray value_path { get; set; }
-        [ToolParameter("flow, flow_candidates, flow_insert, flow_remove, flow_transfer, flow_wrap, geometry, layout_preview, layout_diff, protect, metadata_fields, set_metadata_value, structured_types, replace_structured_value, structured_fields, set_structured_value, initialize_structured_value, insert_value_item, remove_value_item, move_value_item, asset_types, new_asset, owner_types, new_owner, apply_batch, check, asset_parameters, configure_asset_parameter, open, status, capture, value_fields, set_value, endpoints, check_connection, connect, disconnect, undo, redo, preview, validate, history, commit, preview_save_as, save_as, discard, catalog_fields, field_options, set_field_options, set_field_count, layout_nodes, configure_group, group_tabs, add_group_tab, rename_group_tab, remove_group_tab, activate_group_tab, group_member_tab, duplicate_group, nodes, configure_node, duplicate_nodes, set_group_rect, node_candidates, create_node, replace_node, delete_node, library, create_definition, rename_definition, duplicate_definition, delete_definition, configure_property, slot_lists, slot_items, insert_slot, remove_slot, move_slot, roots, root_options, add_root, remove_root, asset_choices, slot_value, slot_asset_choices, slot_asset_reference, group_scopes, groups, group_members, create_group, edit_group, delete_group, group_member")]
+        [ToolParameter("compose, arrange, readability, screenshot, label_step, flow, flow_candidates, flow_insert, flow_remove, flow_transfer, flow_wrap, geometry, layout_preview, layout_diff, protect, metadata_fields, set_metadata_value, structured_types, replace_structured_value, structured_fields, set_structured_value, initialize_structured_value, insert_value_item, remove_value_item, move_value_item, asset_types, new_asset, owner_types, new_owner, apply_batch, check, asset_parameters, configure_asset_parameter, open, status, capture, value_fields, set_value, endpoints, check_connection, connect, disconnect, undo, redo, preview, validate, history, commit, preview_save_as, save_as, discard, catalog_fields, field_options, set_field_options, set_field_count, layout_nodes, configure_group, group_tabs, add_group_tab, rename_group_tab, remove_group_tab, activate_group_tab, group_member_tab, duplicate_group, nodes, configure_node, duplicate_nodes, set_group_rect, node_candidates, create_node, replace_node, delete_node, library, create_definition, rename_definition, duplicate_definition, delete_definition, configure_property, slot_lists, slot_items, insert_slot, remove_slot, move_slot, roots, root_options, add_root, remove_root, asset_choices, slot_value, slot_asset_choices, slot_asset_reference, group_scopes, groups, group_members, create_group, edit_group, delete_group, group_member")]
         public string action { get; set; }
         [ToolParameter("Generation-local section path from flow, e.g. root/0/body. Requery after every mutation.", Required = false)]
         public string section_path { get; set; }
@@ -79,9 +79,17 @@ public static partial class HaruGraphDraft
         public string field_id { get; set; }
         [ToolParameter("JSON scalar or exact component object from value_format. Supports Vector2/3/4, Vector2Int/3Int, Color/Color32, Rect/RectInt. Enum values use an exact declared name. Required for set_value. slot_asset_reference uses null or exactly {asset_path,asset_reference_id}; omit to read.", Required = false)]
         public JToken value { get; set; }
-        [ToolParameter("Generation-local slot key from endpoints.", Required = false)]
+        [ToolParameter("Generation-local slot key from endpoints. Optional on create_node: creates the node inside this read slot as a nested Composition source in one step (preferred over create_node + connect). Target slot for compose. label_step: the action item's ActionSlot key; name is the Label (empty clears).", Required = false)]
         public string slot_key { get; set; }
-        [ToolParameter("Generation-local source key from endpoints.", Required = false)]
+        [ToolParameter("readability: maximum items per action list before long_list is reported, 1..4096, default 7.", Required = false)]
+        public int? max_list_items { get; set; }
+        [ToolParameter("readability: maximum nested formula levels inside one action before deep_nesting is reported, 1..64, default 3.", Required = false)]
+        public int? max_nesting_depth { get; set; }
+        [ToolParameter("screenshot: capture view width in points, 980..4096, default 1600.", Required = false)]
+        public int? image_width { get; set; }
+        [ToolParameter("screenshot: capture view height in points, 560..4096, default 1000.", Required = false)]
+        public int? image_height { get; set; }
+        [ToolParameter("Generation-local source key from endpoints, or its stable_key (@<node_id>), which stays valid across mutations and inside apply_batch. slot_key likewise accepts a stable_key from endpoints.", Required = false)]
         public string source_key { get; set; }
         [ToolParameter("Exact token returned by preview for commit, or preview_save_as for save_as. Tokens cannot be mixed.", Required = false)]
         public string preview_token { get; set; }
@@ -101,7 +109,7 @@ public static partial class HaruGraphDraft
         public string source_kind { get; set; }
         [ToolParameter("token, property or types for library; token/property for definition edits.", Required = false)]
         public string library { get; set; }
-        [ToolParameter("Exact definition_id from library.", Required = false)]
+        [ToolParameter("Exact definition_id from library. connect: with a Property write-target slot_key and no source_key, selects that Property definition directly.", Required = false)]
         public string definition_id { get; set; }
         [ToolParameter("Non-empty definition name, maximum 256 characters.", Required = false)]
         public string name { get; set; }
@@ -242,6 +250,9 @@ public static partial class HaruGraphDraft
                 if (draft.RequiresReopen) return Error("reopen_required", "A previous commit could not confirm persistence. Inspect Owner and open a fresh draft; automatic retry is disabled.");
                 if (draft.Policy != null && (action == "undo" || action == "redo"))
                     return Error("protected_history", "History controls are disabled for protected drafts; discard/reopen to choose a different policy.");
+                // Stable "@..." endpoint aliases are translated to this generation's keys before any handler runs.
+                if (!ResolveStableKeys(draft, parameters, out object stableKeyError)) return stableKeyError;
+                input = new ToolParams(parameters);
                 if (NeedsPolicyGuard(draft, parameters, action)) return GuardedCommand(draft, parameters);
                 if (action == "apply_batch") return ApplyBatch(id, draft, input);
                 if (action == "check") return CheckDraft(id, draft, input);
@@ -398,6 +409,28 @@ public static partial class HaruGraphDraft
         return result == HGSessionCommandResult.Changed || result == HGSessionCommandResult.NoChange
             ? new SuccessResponse("Draft command completed; Owner and window drafts were not written.", data)
             : new ErrorResponse("harugraph.draft.command_rejected", data);
+    }
+
+    private static bool ResolveStableKeys(Draft draft, JObject args, out object error)
+    {
+        error = null;
+        HaruGraphDraftConnections map = null;
+        foreach (var property in args.Properties().ToArray())
+        {
+            string name = property.Name.Replace("_", "").ToLowerInvariant();
+            if (name != "slotkey" && name != "sourcekey" || property.Value.Type != JTokenType.String) continue;
+            string value = (string)property.Value;
+            if (!value.StartsWith("@", StringComparison.Ordinal)) continue;
+            map ??= new HaruGraphDraftConnections(draft.Session);
+            string resolved = name == "slotkey" ? map.ResolveStableSlot(value) : map.ResolveStableSource(value);
+            if (resolved == null)
+            {
+                error = Error("stable_key_unavailable", "No current endpoint matches '" + value + "'. Use stable_key values from endpoints: @<node_id> for a source; @<node_id>.<field>, @<node_id>.<field>[index] or @use:<node_id> for a slot.");
+                return false;
+            }
+            property.Value = resolved;
+        }
+        return true;
     }
 
     private static object Error(string code, string message) => new ErrorResponse("harugraph.draft." + code, new { message });
