@@ -1,6 +1,6 @@
 {
   "name": "com.harufamily.ux.bookmarks",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "displayName": "Bookmarks",
   "description": "Editor bookmarks / pinned object inspector tool for Unity.",
   "unity": "2021.3",
@@ -13,34 +13,5 @@
     "ux",
     "harukit",
     "tool"
-  ],
-  "files": [
-    "package.json.meta",
-    "BookmarksGUI.cs",
-    "BookmarksGUI.cs.meta",
-    "BookmarksWindow.cs",
-    "BookmarksWindow.cs.meta",
-    "HaruFamily.UX.Bookmarks.Editor.asmdef",
-    "HaruFamily.UX.Bookmarks.Editor.asmdef.meta",
-    "Inspector.Base.cs",
-    "Inspector.Base.cs.meta",
-    "Inspector.cs",
-    "Inspector.cs.meta",
-    "InspectorConstants.cs",
-    "InspectorConstants.cs.meta",
-    "InspectorPopup.cs",
-    "InspectorPopup.cs.meta",
-    "InspectorSettingsProvider.cs",
-    "InspectorSettingsProvider.cs.meta",
-    "InspectorShortcuts.cs",
-    "InspectorShortcuts.cs.meta",
-    "JSONStorage.cs",
-    "JSONStorage.cs.meta",
-    "Tests",
-    "UI.meta",
-    "UI/DragSortHandler.cs",
-    "UI/DragSortHandler.cs.meta",
-    "UI/SearchBar.cs",
-    "UI/SearchBar.cs.meta"
   ]
 }

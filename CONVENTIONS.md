@@ -56,7 +56,7 @@ HaruKit/                       ← repo root
 {
   "name": "com.harufamily.<category-lowercase>.<tool-lowercase>",
   "version": "1.0.0",
-  "displayName": "HaruKit <Category> <Tool>",
+  "displayName": "<Tool>",
   "description": "<一句話說明>",
   "unity": "2021.3",
   "author": { "name": "HaruFamily" },
@@ -82,7 +82,7 @@ HaruKit/                       ← repo root
 - 重命名檔案時 `.meta` 一起 `git mv`（保留 GUID）。
 
 ### 2.5 README 與維護手冊
-- 有非顯性規則的套件（目前是 GraphKit、LogicGraph、AssetPipeline）附一份繁中維護手冊 `<Category>/<Tool>/Documentation~/Maintenance.md`，給 AI Agent 與維護者看。檔名用 ASCII，避免路徑在非 UTF-8 的 shell 或工具中損毀。
+- 有非顯性規則的套件（目前是 Bookmarks、GraphKit、LogicGraph、AssetPipeline）附一份繁中維護手冊 `<Category>/<Tool>/Documentation~/Maintenance.md`，給 AI Agent 與維護者看。檔名用 ASCII，避免路徑在非 UTF-8 的 shell 或工具中損毀。
 - `Documentation~` 結尾的 `~` 讓 Unity 不匯入該資料夾：**不需要也不要建立 `.meta`**。UPM 用 git 安裝時仍會一起下載。
 - 套件 README 開頭必須有提醒區塊：請使用者要求 Agent 先讀手冊，並附 UPM 安裝後的手冊路徑。
 - 手冊是該套件維護知識的正本，README 只放安裝、快速使用與限制。同一條規則不要兩邊各寫一份。

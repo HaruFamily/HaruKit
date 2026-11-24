@@ -8,10 +8,11 @@ Unity Editor / runtime 工具集，以 UPM (Unity Package Manager) 分發。每�
 
 ## 維護手冊（給 AI Agent）
 
-GraphKit、LogicGraph、AssetPipeline 各自附有繁中維護手冊 `Documentation~/Maintenance.md`，會跟著 UPM 一起下載。**請 AI Agent 修改、擴充或串接這些套件前，先要求它閱讀並遵守對應的手冊**：
+Bookmarks、GraphKit、LogicGraph、AssetPipeline 各自附有繁中維護手冊 `Documentation~/Maintenance.md`，會跟著 UPM 一起下載。**請 AI Agent 修改、擴充或串接這些套件前，先要求它閱讀並遵守對應的手冊**：
 
 | 套件 | 維護手冊 |
 |---|---|
+| Bookmarks | [`UX/Bookmarks/Documentation~/Maintenance.md`](./UX/Bookmarks/Documentation~/Maintenance.md) |
 | GraphKit | [`DependencyCore/GraphKit/Documentation~/Maintenance.md`](./DependencyCore/GraphKit/Documentation~/Maintenance.md) |
 | LogicGraph | [`Framework/LogicGraph/Documentation~/Maintenance.md`](./Framework/LogicGraph/Documentation~/Maintenance.md) |
 | AssetPipeline | [`Tools/AssetPipeline/Documentation~/Maintenance.md`](./Tools/AssetPipeline/Documentation~/Maintenance.md) |
@@ -42,7 +43,7 @@ Unity → `Window > Package Manager` → `+` → `Add package from git URL...`�
 
 | 類別 | 套件 | 版本 | 用途 | package name | 安裝 path | 需手動加入的 git 依賴 |
 |---|---|---:|---|---|---|---|
-| UX | Bookmarks | 1.0.3 | Editor 書籤與釘選物件 Inspector | `com.harufamily.ux.bookmarks` | `?path=/UX/Bookmarks` | — |
+| UX | [Bookmarks](./UX/Bookmarks/README.md) | 1.1.0 | Editor 書籤、選取紀錄與上一頁／下一頁 | `com.harufamily.ux.bookmarks` | `?path=/UX/Bookmarks` | — |
 | Framework | [Nexus](./Framework/Nexus/README.md) | 1.0.1 | 有 scope、生命週期、pool 與 Addressables 支援的非同步 service locator | `com.harufamily.framework.nexus` | `?path=/Framework/Nexus` | UniTask |
 | DependencyCore | [GraphKit](./DependencyCore/GraphKit/README.md) | 1.3.0 | 無領域執行語意的序列化節點圖模型與 IMGUI 編輯器 | `com.harufamily.dependencycore.graphkit` | `?path=/DependencyCore/GraphKit` | — |
 | Framework | [LogicGraph](./Framework/LogicGraph/README.md) | 2.1.0 | Action、Formula、Token、驗證與描述編譯框架 | `com.harufamily.framework.logicgraph` | `?path=/Framework/LogicGraph` | GraphKit、UniTask |

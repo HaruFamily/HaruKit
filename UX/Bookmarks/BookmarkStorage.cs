@@ -8,13 +8,22 @@ using System.IO;
 
 namespace HaruFamily.UX.Bookmarks
 {
-    // ====================== InspectorItem ======================================
+    // ====================== ObjectRef ======================================
     [System.Serializable]
+    // 識別規則見 BookmarkService.cs 開頭說明。
     internal class ObjectRef
     {
+        // 所屬資產檔的 guid（場景物件為 null）。
         public string guid;
+        // GlobalObjectId 字串；重開 Editor 後仍可解析。舊版資料沒有此欄位，啟動時自動補上。
+        public string globalId;
+        // 本次 Editor 執行期間的 instanceId；Editor 重開時歸零。
         public int instanceId;
-        // "" 代表「未分類」（顯示時轉為 InspectorConstants.LabelUncategorized）。
+        // 最後一次看到的顯示名稱，物件找不到時用來顯示失效列。
+        public string label;
+        // 加入的時間（Unix 毫秒，UTC）；紀錄列表顯示「幾分鐘前」。舊資料為 0，不顯示。
+        public long time;
+        // "" 代表「未分類」（顯示時轉為 BookmarkConstants.LabelUncategorized）。
         // 舊資料無此欄位時 JsonUtility 預設填 "" 而自動歸到「未分類」分組。
         public string folder = "";
     }
@@ -24,13 +33,15 @@ namespace HaruFamily.UX.Bookmarks
     internal class FolderInfo
     {
         public string name;
-        public bool fold = true;
+        // true = 收合（注意：與 BookmarksData.foldBookmarks / foldHistory 的意思相反，欄位名稱保留以相容舊資料）。
+        public bool fold;
     }
 
     // ====================== JSON Data ======================================
     [System.Serializable]
-    internal class InspectorJData
+    internal class BookmarksData
     {
+        // true = 展開（欄位名稱保留以相容舊資料）。
         public bool foldBookmarks = true;
         public bool foldHistory = true;
 
@@ -38,24 +49,31 @@ namespace HaruFamily.UX.Bookmarks
         public List<ObjectRef> bookmarks = new();
         public int index = -1;
 
-        // 未分類分組（folder == ""）的折疊狀態，獨立於 folders list 之外
-        public bool foldUncategorized = true;
+        // 未分類分組（folder == ""）的折疊狀態，獨立於 folders list 之外。true = 收合，同 FolderInfo.fold。
+        public bool foldUncategorized;
         public List<FolderInfo> folders = new();
 
         public int maxCount = 20;
+        // 紀錄列表中同一物件只顯示最近一次；不影響上一頁 / 下一頁的導覽順序。
+        public bool mergeDuplicateHistory = true;
+        // 在 Project / Hierarchy 已加入書籤的項目旁顯示 ★。
+        public bool showItemBadges = true;
+        // 用快捷鍵、Inspector ★ 或右鍵選單加入／移除書籤時，在視窗上短暫顯示通知。
+        public bool showNotifications = true;
 
-        // 整個 Pin Inspector 系統開關（false 時 selection 不記錄、shortcut 失效、Inspector toolbar 不顯示）
+        // 整個書籤功能的開關（false 時 selection 不記錄、shortcut 失效、Inspector toolbar 不顯示）
         public bool enableSystem = true;
         // Inspector header 上的 toolbar（Previous / Next / 最近使用 ▼ / 書籤切換）顯示與否。enableSystem=false 時此值無效
         public bool enableInspectorHeader = true;
-        // true 時 Play Mode 不記錄、顯示或操作 Pin Inspector；預設維持既有行為。
+        // true 時 Play Mode 不記錄、顯示或操作書籤功能；預設維持既有行為。
         public bool disableInPlayMode;
     }
 
     // ====================== JSON Storage ======================================
-    internal static class JSONStorage
+    internal static class BookmarkStorage
     {
         // 純個人偏好檔，放 UserSettings/（Unity 預設 gitignore）—— 不污染 ProjectSettings/ 也不必動 .gitignore。
+        // 檔名沿用舊名 PinInspectorData.json，避免既有資料與降版使用者分岔成兩份。
         public const string PathData = "../UserSettings/PinInspectorData.json";
         // 一次性 migration 來源：舊版資料原本放在 git tracked 的 ProjectSettings/
         private const string LegacyPathData = "../ProjectSettings/PinInspectorData.json";
@@ -75,7 +93,7 @@ namespace HaruFamily.UX.Bookmarks
 
         private static bool _flushScheduled;
 
-        public static InspectorJData Data
+        public static BookmarksData Data
         {
             get
             {
@@ -94,7 +112,7 @@ namespace HaruFamily.UX.Bookmarks
 
         // Save 為 debounced：呼叫即 bump Version + 排程一次 delayCall 落盤。
         // 連續 N 次 mutate（例：方向鍵狂選 Project）只實際寫盤 1 次。
-        // domain reload / Editor quitting 透過 Flush() 強制即時落盤（Inspector.Init 內註冊）。
+        // domain reload / Editor quitting 透過 Flush() 強制即時落盤（BookmarkService.Init 內註冊）。
         public static void Save()
         {
             if (!IsAvailable) return;
@@ -121,7 +139,7 @@ namespace HaruFamily.UX.Bookmarks
         private readonly string path;
         private readonly string legacyPath;
 
-        public InspectorJData Data { get; private set; } = new();
+        public BookmarksData Data { get; private set; } = new();
         public bool IsDirty { get; private set; }
         public bool IsWriteBlocked { get; private set; }
         public string LastError { get; private set; }
@@ -141,8 +159,8 @@ namespace HaruFamily.UX.Bookmarks
                     source = legacyPath;
 
                 var loaded = File.Exists(source)
-                    ? JsonUtility.FromJson<InspectorJData>(File.ReadAllText(source))
-                    : new InspectorJData();
+                    ? JsonUtility.FromJson<BookmarksData>(File.ReadAllText(source))
+                    : new BookmarksData();
                 if (loaded == null || loaded.bookmarks == null || loaded.history == null)
                     throw new InvalidDataException("書籤或歷史資料結構不完整。");
                 if (loaded.bookmarks.Exists(x => x == null) || loaded.history.Exists(x => x == null))
@@ -170,7 +188,7 @@ namespace HaruFamily.UX.Bookmarks
             catch (System.Exception e)
             {
                 IsWriteBlocked = true;
-                LastError = $"[PinTools.Bookmarks] 載入失敗：{source} → {path}\n{e.Message}\n已停止書籤操作與寫入，請修復檔案後重新載入腳本或重開 Editor。";
+                LastError = $"[HaruFamily.Bookmarks] 載入失敗：{source} → {path}\n{e.Message}\n已停止書籤操作與寫入，請修復檔案後重新載入腳本或重開 Editor。";
                 return false;
             }
         }
@@ -200,7 +218,7 @@ namespace HaruFamily.UX.Bookmarks
             }
             catch (System.Exception e)
             {
-                LastError = $"[PinTools.Bookmarks] 儲存失敗：{path}\n{e.Message}\n保留原檔與待存狀態；下次操作或結束 Editor 時會重試，暫存位置：{temporaryPath}";
+                LastError = $"[HaruFamily.Bookmarks] 儲存失敗：{path}\n{e.Message}\n保留原檔與待存狀態；下次操作或結束 Editor 時會重試，暫存位置：{temporaryPath}";
                 return false;
             }
         }

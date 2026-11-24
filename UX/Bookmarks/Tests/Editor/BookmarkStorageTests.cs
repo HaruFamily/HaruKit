@@ -30,7 +30,7 @@ namespace HaruFamily.UX.Bookmarks.Tests
         {
             var storage = new BookmarkFileStorage(path);
             Assert.That(storage.Load(), Is.True);
-            storage.Data.bookmarks.Add(new ObjectRef { guid = "asset-a", instanceId = 10, folder = "Art" });
+            storage.Data.bookmarks.Add(new ObjectRef { guid = "asset-a", globalId = "GlobalObjectId_V1-1-asset-a-7-0", instanceId = 10, folder = "Art", label = "[Asset] A (Material)" });
             storage.Data.folders.Add(new FolderInfo { name = "Art", fold = false });
             storage.MarkDirty();
             Assert.That(storage.Flush(), Is.True, storage.LastError);
@@ -46,6 +46,8 @@ namespace HaruFamily.UX.Bookmarks.Tests
             Assert.That(loaded.Load(), Is.True, loaded.LastError);
             Assert.That(loaded.Data.bookmarks[0].guid, Is.EqualTo("asset-a"));
             Assert.That(loaded.Data.bookmarks[0].folder, Is.EqualTo("Art"));
+            Assert.That(loaded.Data.bookmarks[0].globalId, Is.EqualTo("GlobalObjectId_V1-1-asset-a-7-0"));
+            Assert.That(loaded.Data.bookmarks[0].label, Is.EqualTo("[Asset] A (Material)"));
             Assert.That(loaded.Data.folders[0].fold, Is.False);
             Assert.That(loaded.Data.history[0].guid, Is.EqualTo("asset-b"));
             Assert.That(loaded.Data.index, Is.Zero);
@@ -70,7 +72,7 @@ namespace HaruFamily.UX.Bookmarks.Tests
         [Test]
         public void Flush_WriteFailure_PreservesOriginalAndDirtyState_ThenRetries()
         {
-            string original = JsonUtility.ToJson(new InspectorJData());
+            string original = JsonUtility.ToJson(new BookmarksData());
             File.WriteAllText(path, original);
             var storage = new BookmarkFileStorage(path);
             Assert.That(storage.Load(), Is.True);
@@ -95,7 +97,7 @@ namespace HaruFamily.UX.Bookmarks.Tests
         public void Load_LegacyFile_CopiesValidatedDataWithoutRemovingSource()
         {
             string legacy = Path.Combine(directory, "legacy.json");
-            var data = new InspectorJData();
+            var data = new BookmarksData();
             data.bookmarks.Add(new ObjectRef { guid = "legacy-bookmark" });
             string original = JsonUtility.ToJson(data);
             File.WriteAllText(legacy, original);
@@ -124,7 +126,7 @@ namespace HaruFamily.UX.Bookmarks.Tests
         public void Load_MigrationFailure_BlocksWritesAndPreservesLegacy()
         {
             string legacy = Path.Combine(directory, "legacy.json");
-            string original = JsonUtility.ToJson(new InspectorJData());
+            string original = JsonUtility.ToJson(new BookmarksData());
             File.WriteAllText(legacy, original);
             Directory.CreateDirectory(path);
             var storage = new BookmarkFileStorage(path, legacy);

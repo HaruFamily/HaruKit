@@ -1,26 +1,28 @@
 #if UNITY_EDITOR
-using UnityEditor;
-using UnityEngine;
+using UnityEditor.IMGUI.Controls;
 
 namespace HaruFamily.UX.Bookmarks
 {
-    internal class SearchBar
+    // 書籤與紀錄共用的搜尋框（Unity 內建 SearchField：附清除鈕，Ctrl+F 自動聚焦）。
+    internal sealed class SearchBar
     {
-        public const string LabelSearch = "搜尋";
-        public const string LabelClearSearch = "清除";
+        private SearchField field;
+        private bool requestFocus;
         public string Keyword { get; private set; } = string.Empty;
+        public bool HasFocus => field != null && field.HasFocus();
 
-        // 內嵌在外層 helpBox 內使用：不再自帶 helpBox（避免雙層框），TextField 採 EditorGUILayout 預設樣式（黑底）
-        public void Draw()
+        public void RequestFocus() => requestFocus = true;
+        public void Clear() => Keyword = string.Empty;
+
+        public void DrawToolbar()
         {
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.Label(LabelSearch, GUILayout.Width(36));
-            Keyword = EditorGUILayout.TextField(Keyword);
-
-            if (GUILayout.Button(LabelClearSearch, EditorStyles.miniButton, GUILayout.Width(40)))
-                Keyword = string.Empty;
-
-            EditorGUILayout.EndHorizontal();
+            field ??= new SearchField();
+            if (requestFocus)
+            {
+                requestFocus = false;
+                field.SetFocus();
+            }
+            Keyword = field.OnToolbarGUI(Keyword) ?? string.Empty;
         }
     }
 }
