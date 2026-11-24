@@ -33,12 +33,13 @@ namespace HaruFamily.UX.Bookmarks
         {
             if (BadgesEnabled && BookmarkService.IsBookmarkedInstance(instanceId)) DrawBadge(rect, grid: rect.height > 20f);
         }
-#else
+#endif
+
+        // 2022.1 以前使用；新版也照樣編譯（只是不註冊），確保這段在目前的 Editor 也能被編譯檢查到。
         private static void OnProjectItemByGuid(string guid, Rect rect)
         {
             if (BadgesEnabled && BookmarkService.IsBookmarkedFile(guid)) DrawBadge(rect, grid: rect.height > 20f);
         }
-#endif
 
         private static void OnHierarchyItem(int instanceId, Rect rect)
         {

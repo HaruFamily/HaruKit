@@ -8,6 +8,7 @@ namespace HaruFamily.UX.Bookmarks
     internal class BookmarksWindow : EditorWindow
     {
         private BookmarksGUI gui;
+        internal BookmarksGUI Gui => gui; // 測試用
         private int storageVersion = -1;
         private int referenceVersion = -1;
         private bool wasEnabled, couldUndo;

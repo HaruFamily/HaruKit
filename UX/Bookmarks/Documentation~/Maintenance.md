@@ -74,8 +74,13 @@ Editor-only 的書籤與選取紀錄工具，只有一個組件 `HaruFamily.UX.B
 
 彈出視窗（`BookmarksPopup`）與書籤視窗（`BookmarksWindow`）共用；host 傳入 `onItemPicked`（彈出視窗傳 Close，視窗傳 null）。操作對照表見 README「列表操作」。
 
-- **快照**：資料夾分組、每列的名稱／型別／圖示／tooltip、鍵盤可走訪的列（`navRows`）、失效書籤清單，只在 Layout 事件且 `BookmarkStorage.Version`、`ReferenceVersion`、`BookmarkVersion` 或搜尋字有變時重建；其他事件沿用同一份快照，維持 IMGUI control 順序一致。新增會影響列表內容的狀態時，必須讓它反映在上述版本號之一，否則畫面不會更新。`navRows` 的順序必須與實際畫出的順序一致（含「只有未分類時不畫資料夾標題、一律展開」的規則）。
-- **hover 才出現的按鈕**：列尾的 ★、↗ 與資料夾的 ✎、刪除只在 hover（或鍵盤游標所在）時畫；**沒畫時必須用 `GUIUtility.GetControlID` 補上相同數量的 control id**，否則後面各列的 id 位移，點擊與拖曳會失效。
+- **快照**：只在 Layout 事件重建，其他事件沿用同一份，維持 IMGUI control 順序一致。分成兩區：
+  - 書籤區（資料夾分組、失效書籤清單）在 `BookmarkStorage.NonHistoryVersion`、`BookmarkVersion`、`ReferenceVersion` 或搜尋字變動時重建。
+  - 紀錄區在 `BookmarkStorage.Version`（任何存檔）、`ReferenceVersion` 或搜尋字變動時重建。
+  - 只動到 `history`／`index` 的存檔必須用 `SaveHistory()`（`Save(historyOnly: true)`），選取物件時書籤區才不會整份重建；其他變動用 `Save()` 或 `SaveBookmarkMembership()`。
+  - 每列的名稱、型別、圖示、tooltip 依引用快取（`rowCache`），`ReferenceVersion` 改變時整批清掉。
+  - 新增會影響列表內容的狀態時，必須讓它反映在上述版本號之一，否則畫面不會更新。`navRows`（書籤區 + 紀錄區）的順序必須與實際畫出的順序一致（含「只有未分類時不畫資料夾標題、一律展開」的規則）。
+- **hover 才出現的按鈕**：列尾的 ★、↗ 與資料夾的 ✎、刪除一律用 `IconButton`：不論是否顯示都以同一個 hint 配置 control id，後面各列的 id 才不會因 hover 改變而位移；放開滑鼠時不論是否還顯示都釋放 `hotControl`。不要改回 `GUI.Button` 搭配條件繪製。圖示由呼叫端在 Repaint 時另外畫。
 - **選取**：列表內的多選（`picked`）與 Unity `Selection` 同步；`Selection.activeObject` 被外部改掉時清空多選。鍵盤游標（`cursor`）移動時不改變 Unity 選取，避免紀錄被灌滿。
 - **鍵盤**：只在搜尋框有焦點或沒有任何控制項有焦點時處理，正在輸入資料夾名稱時不搶按鍵。按鍵必須在畫搜尋框之前處理，否則會被 `SearchField` 吃掉。
 - **失效列**：照樣出列（灰色斜體），標題數量與列一致；書籤失效列可用 ★、右鍵或「清除 N 筆失效書籤」移除；場景未開啟時 ↗ 會切換到該場景並選取物件（Play Mode 中停用）。
@@ -93,8 +98,15 @@ Editor-only 的書籤與選取紀錄工具，只有一個組件 `HaruFamily.UX.B
 - 工具列畫在 `Editor.finishedDefaultHeaderGUI`。內嵌的 Material 編輯器（例如 MeshRenderer 底下）也會觸發：只有 Material 本身是選取物件時才畫，避免重複出現。
 - Inspector 對資產顯示的是 Importer 編輯器；★ 透過 `ResolveInspectedTarget` 換成主資產再加入書籤。
 - ◀ ▶ 的 tooltip 顯示目標的 `label`（不解析物件）；右鍵列出最近 30 筆紀錄。
-- Project／Hierarchy 的 ★：Unity 2022.1 以上用 `projectWindowItemInstanceOnGUI` 依物件判斷，以前用 `projectWindowItemOnGUI` 依檔案判斷。快取（`EnsureBadgeCache`）只在 `BookmarkVersion` 或已開啟場景組合（開關場景、新場景、Play Mode 切換）變動時重建，重建時會解析每筆書籤。書籤變動時主動重畫 Project 與 Hierarchy。
+- Project／Hierarchy 的 ★：Unity 2022.1 以上用 `projectWindowItemInstanceOnGUI` 依物件判斷，以前用 `projectWindowItemOnGUI` 依檔案判斷（舊版的方法在新版也照樣編譯、只是不註冊，讓目前的 Editor 就能編譯檢查到）。快取（`EnsureBadgeCache`）在 `BookmarkVersion`、已開啟場景組合（開關場景、新場景、Play Mode 切換）或專案（`projectChanged`）變動時重建：已解析過的只檢查 instanceId 是否仍存在；找不到物件的記下當時的場景組合與專案版本，兩者都沒變就不再呼叫 `GlobalObjectIdentifierToObjectSlow`。書籤變動時主動重畫 Project 與 Hierarchy。
 - 通知（`Notify`）只用於快捷鍵、Inspector ★ 與右鍵選單；列表內的操作畫面本身就有變化，不另外通知。
+
+## 6.3 Unity 版本相容
+
+- 宣稱支援 2021.3（`package.json` 的 `unity`）。實際編譯與測試只在 6000.3 做過；以下 API 已依 2021.3 官方文件確認存在：`GlobalObjectId`（含 `TryParse`）、`SearchField`、`EditorStyles.linkLabel`／`toolbarDropDown`、`projectWindowItemOnGUI`、`hierarchyWindowItemOnGUI`、`RepaintProjectWindow`／`RepaintHierarchyWindow`。
+- 版本分支：`projectWindowItemInstanceOnGUI` 從 2022.1 才有（`UNITY_2022_1_OR_NEWER`）；`EditorUtility.EntityIdToObject` 不在 6000.0 的 API 中，只在 `UNITY_6000_3_OR_NEWER` 使用，其他版本用 `InstanceIDToObject`。
+- 通知只用 `ShowNotification(GUIContent)` 單參數版本：帶顯示秒數的多載不在 2021.3 文件的宣告中。
+- 新增 Unity API 前先查最低支援版本的文件；只在新版存在的 API 要加版本分支，並讓舊版分支也能在目前的 Editor 編譯到。
 
 ## 7. Editor 入口（契約）
 
@@ -114,5 +126,6 @@ EditMode，`Tests/Editor/`：
 
 - `BookmarkLogicTests`：排序、搜尋（含多字）、識別比對、`RemoveAllKeepCursor`、`TrimToLimit`、`CollectLatestDistinct`、`MoveBookmarks`、`ReorderFolders`、`FormatRelativeTime`。
 - `BookmarkStorageTests`：寫檔與讀回、壞檔封鎖寫入、寫入失敗重試、舊位置搬移。測試使用暫存目錄，不碰使用者資料。
+- `BookmarkWindowSmokeTests`：開書籤視窗並送繪製、滑鼠移動、方向鍵事件，以及移除後復原，確認不噴例外（Test Runner 遇到 Console 錯誤即判定失敗）且列數、游標正確。以 `BookmarkStorage.UseStorageForTests` 暫時改用暫存資料檔，物件用記憶體中的 Texture2D／Mesh，不碰使用者資料也不弄髒場景。新的介面測試照同樣方式隔離資料。
 
 涉及 `AssetDatabase`、場景、`GlobalObjectId` 與 IMGUI 互動的行為沒有自動測試，修改後要在 DevEvi 實際驗證：資產、子資產、已存檔場景物件加入書籤後重新編譯仍在；關閉場景後顯示失效列，↗ 可切回；hover 按鈕、多選、拖放、鍵盤、復原列；Project／Hierarchy 的 ★。

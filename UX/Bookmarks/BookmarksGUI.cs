@@ -83,17 +83,25 @@ namespace HaruFamily.UX.Bookmarks
         private readonly List<RowData> navRows = new();
         private readonly List<ObjectRef> missingBookmarks = new();
         private readonly Dictionary<ObjectRef, Object> resolveCache = new();
-        private readonly Dictionary<ObjectRef, RowData> missingRowCache = new();
-        private readonly HashSet<ObjectRef> activeReferences = new();
+        private readonly Dictionary<ObjectRef, RowData> rowCache = new();
+        private readonly HashSet<ObjectRef> bookmarkRefs = new();
+        private readonly HashSet<ObjectRef> historyRefs = new();
+        private readonly List<RowData> bookmarkNavRows = new();
         private readonly List<ObjectRef> removedReferences = new();
         private int resolveVersion = -1;
         private bool hasSnapshot;
-        private int snapshotStorageVersion = -1, snapshotReferenceVersion = -1, snapshotBookmarkVersion = -1;
-        private string snapshotKeyword;
+        private int snapshotNonHistoryVersion = -1, snapshotBookmarkVersion = -1, snapshotBookmarkReference = -1;
+        private int snapshotStorageVersion = -1, snapshotHistoryReference = -1;
+        private string snapshotBookmarkKeyword, snapshotHistoryKeyword;
         private string keyword;
         private int bookmarkTotal, bookmarkMatched, historyTotal;
 
         public void FocusSearch() => search.RequestFocus();
+
+        // 測試用：目前可用鍵盤走訪的列數與游標。
+        internal int VisibleRowCount => navRows.Count;
+        internal ObjectRef Cursor => cursor;
+        internal IReadOnlyList<ObjectRef> VisibleItems => navRows.ConvertAll(r => r.item);
 
         // ====================== Styles ======================
         private void InitStyles()
@@ -135,7 +143,6 @@ namespace HaruFamily.UX.Bookmarks
         private Object Resolve(ObjectRef item)
         {
             if (item == null) return null;
-            activeReferences.Add(item);
             if (resolveCache.TryGetValue(item, out var cached))
             {
                 // 真正的 null 是已查證的 missing；Unity destroyed wrapper 則重新解析一次。
@@ -146,13 +153,16 @@ namespace HaruFamily.UX.Bookmarks
             return obj;
         }
 
-        private bool IsSnapshotStale()
-        {
-            return snapshotStorageVersion != BookmarkStorage.Version
-                || snapshotReferenceVersion != BookmarkService.ReferenceVersion
-                || snapshotBookmarkVersion != BookmarkService.BookmarkVersion
-                || snapshotKeyword != search.Keyword;
-        }
+        private bool BookmarksStale() =>
+            snapshotNonHistoryVersion != BookmarkStorage.NonHistoryVersion
+            || snapshotBookmarkVersion != BookmarkService.BookmarkVersion
+            || snapshotBookmarkReference != BookmarkService.ReferenceVersion
+            || snapshotBookmarkKeyword != search.Keyword;
+
+        private bool HistoryStale() =>
+            snapshotStorageVersion != BookmarkStorage.Version
+            || snapshotHistoryReference != BookmarkService.ReferenceVersion
+            || snapshotHistoryKeyword != search.Keyword;
 
         private void AddFolderSnapshot(string name, bool folded)
         {
@@ -170,28 +180,44 @@ namespace HaruFamily.UX.Bookmarks
 
         private bool Searching => !string.IsNullOrWhiteSpace(keyword);
 
-        private void BuildSnapshot()
+        // 書籤區與紀錄區分開重建：選取物件只會讓紀錄區重建。只在 Layout 事件呼叫。
+        private void RefreshSnapshot(bool force)
         {
-            snapshotStorageVersion = BookmarkStorage.Version;
-            snapshotReferenceVersion = BookmarkService.ReferenceVersion;
-            snapshotBookmarkVersion = BookmarkService.BookmarkVersion;
-            snapshotKeyword = search.Keyword;
+            bool rebuildBookmarks = force || BookmarksStale();
+            bool rebuildHistory = force || HistoryStale();
+            if (!rebuildBookmarks && !rebuildHistory) return;
+
             if (resolveVersion != BookmarkService.ReferenceVersion)
             {
                 resolveCache.Clear();
-                missingRowCache.Clear();
+                rowCache.Clear();
                 resolveVersion = BookmarkService.ReferenceVersion;
             }
+            keyword = search.Keyword?.Trim() ?? string.Empty;
+            if (rebuildBookmarks) BuildBookmarkSnapshot();
+            if (rebuildHistory) BuildHistorySnapshot();
+
+            navRows.Clear();
+            navRows.AddRange(bookmarkNavRows);
+            if (BookmarkStorage.Data.foldHistory) navRows.AddRange(historyRows);
+            PruneCaches();
+            hasSnapshot = true;
+        }
+
+        private void BuildBookmarkSnapshot()
+        {
+            snapshotNonHistoryVersion = BookmarkStorage.NonHistoryVersion;
+            snapshotBookmarkVersion = BookmarkService.BookmarkVersion;
+            snapshotBookmarkReference = BookmarkService.ReferenceVersion;
+            snapshotBookmarkKeyword = search.Keyword;
 
             var data = BookmarkStorage.Data;
-            keyword = search.Keyword?.Trim() ?? string.Empty;
             bookmarkTotal = data.bookmarks.Count;
             bookmarkMatched = 0;
             folderOrder.Clear();
             activeFolders.Clear();
-            activeReferences.Clear();
-            historyRows.Clear();
-            navRows.Clear();
+            bookmarkRefs.Clear();
+            bookmarkNavRows.Clear();
             missingBookmarks.Clear();
 
             foreach (var folder in data.folders)
@@ -209,19 +235,30 @@ namespace HaruFamily.UX.Bookmarks
                 if (item == null) continue;
                 if (!folders.TryGetValue(item.folder ?? string.Empty, out var group)) group = folders[string.Empty];
                 group.total++;
-                activeReferences.Add(item);
+                bookmarkRefs.Add(item);
                 var row = MakeRow(item, -1);
                 if (row.obj == null) missingBookmarks.Add(item);
                 if (!MatchesSearch(row.label, group.name, keyword)) continue;
                 group.rows.Add(row);
                 bookmarkMatched++;
             }
+
             // 只有「未分類」時不畫資料夾標題，列一律顯示（與 DrawBookmarksSection 一致）。
             bool onlyUncategorized = folderOrder.Count == 1;
             if (data.foldBookmarks)
                 foreach (var group in folderOrder)
-                    if (!group.folded || Searching || onlyUncategorized) navRows.AddRange(group.rows);
+                    if (!group.folded || Searching || onlyUncategorized) bookmarkNavRows.AddRange(group.rows);
+        }
 
+        private void BuildHistorySnapshot()
+        {
+            snapshotStorageVersion = BookmarkStorage.Version;
+            snapshotHistoryReference = BookmarkService.ReferenceVersion;
+            snapshotHistoryKeyword = search.Keyword;
+
+            var data = BookmarkStorage.Data;
+            historyRows.Clear();
+            historyRefs.Clear();
             historyIndices.Clear();
             if (data.mergeDuplicateHistory) BookmarkService.CollectLatestDistinct(data.history, historyIndices);
             else for (int i = 0; i < data.history.Count; i++) historyIndices.Add(i);
@@ -232,28 +269,44 @@ namespace HaruFamily.UX.Bookmarks
                 int i = historyIndices[k];
                 var item = data.history[i];
                 if (item == null) continue;
-                activeReferences.Add(item);
+                historyRefs.Add(item);
                 var row = MakeRow(item, i);
                 if (MatchesSearch(row.label, null, keyword)) historyRows.Add(row);
             }
-            if (data.foldHistory) navRows.AddRange(historyRows);
-
-            // 移除已不存在的引用，長駐視窗不累積快取與選取。
-            removedReferences.Clear();
-            foreach (var item in resolveCache.Keys)
-                if (!activeReferences.Contains(item)) removedReferences.Add(item);
-            foreach (var item in removedReferences) resolveCache.Remove(item);
-            removedReferences.Clear();
-            foreach (var item in missingRowCache.Keys)
-                if (!activeReferences.Contains(item)) removedReferences.Add(item);
-            foreach (var item in removedReferences) missingRowCache.Remove(item);
-            picked.RemoveWhere(item => !activeReferences.Contains(item));
-            if (cursor != null && !activeReferences.Contains(cursor)) cursor = null;
-            if (anchor != null && !activeReferences.Contains(anchor)) anchor = null;
-            hasSnapshot = true;
         }
 
+        private bool IsActive(ObjectRef item) => bookmarkRefs.Contains(item) || historyRefs.Contains(item);
+
+        // 移除已不存在的引用，長駐視窗不累積快取與選取。
+        private void PruneCaches()
+        {
+            removedReferences.Clear();
+            foreach (var item in resolveCache.Keys)
+                if (!IsActive(item)) removedReferences.Add(item);
+            foreach (var item in removedReferences) resolveCache.Remove(item);
+            removedReferences.Clear();
+            foreach (var item in rowCache.Keys)
+                if (!IsActive(item)) removedReferences.Add(item);
+            foreach (var item in removedReferences) rowCache.Remove(item);
+            picked.RemoveWhere(item => !IsActive(item));
+            if (cursor != null && !IsActive(cursor)) cursor = null;
+            if (anchor != null && !IsActive(anchor)) anchor = null;
+        }
+
+        // 每列的名稱、圖示、tooltip 依引用快取；ReferenceVersion 改變（改名、刪除、開關場景）時整批清掉。
         private RowData MakeRow(ObjectRef item, int historyIndex)
+        {
+            if (!rowCache.TryGetValue(item, out var row) || (!ReferenceEquals(row.obj, null) && row.obj == null))
+            {
+                row = CreateRow(item);
+                rowCache[item] = row;
+            }
+            row.bookmarkRow = historyIndex < 0;
+            row.historyIndex = historyIndex;
+            return row;
+        }
+
+        private RowData CreateRow(ObjectRef item)
         {
             var obj = Resolve(item);
             if (obj != null)
@@ -269,25 +322,16 @@ namespace HaruFamily.UX.Bookmarks
                     detail = obj.GetType().Name,
                     icon = EditorGUIUtility.ObjectContent(obj, obj.GetType()).image,
                     canOpen = BookmarkService.CanOpen(obj),
-                    bookmarkRow = historyIndex < 0,
-                    historyIndex = historyIndex,
                 };
             }
-            if (!missingRowCache.TryGetValue(item, out var missing))
+            string missingLabel = BookmarkService.GetMissingLabel(item);
+            return new RowData
             {
-                string label = BookmarkService.GetMissingLabel(item);
-                missing = new RowData
-                {
-                    item = item,
-                    label = label,
-                    name = new GUIContent(label),
-                    sceneUnloaded = BookmarkService.TryGetUnloadedScene(item, out _),
-                };
-                missingRowCache[item] = missing;
-            }
-            missing.bookmarkRow = historyIndex < 0;
-            missing.historyIndex = historyIndex;
-            return missing;
+                item = item,
+                label = missingLabel,
+                name = new GUIContent(missingLabel),
+                sceneUnloaded = BookmarkService.TryGetUnloadedScene(item, out _),
+            };
         }
 
         // ====================== Body ======================
@@ -314,7 +358,7 @@ namespace HaruFamily.UX.Bookmarks
                 if (BookmarkStorage.IsAvailable) EditorGUILayout.HelpBox(BookmarkConstants.LabelSystemDisabled, MessageType.Info);
                 return;
             }
-            if (!hasSnapshot || (e.type == EventType.Layout && IsSnapshotStale())) BuildSnapshot();
+            if (!hasSnapshot || e.type == EventType.Layout) RefreshSnapshot(force: !hasSnapshot);
             SyncPickedWithSelection();
 
             HandleKeyboard(onItemPicked, repaint);
@@ -788,23 +832,15 @@ namespace HaruFamily.UX.Bookmarks
             Rect deleteRect = new(rect.xMax - ActionWidth - 2, rect.y, ActionWidth, RowHeight);
             Rect renameRect = new(deleteRect.x - ActionWidth, rect.y, ActionWidth, RowHeight);
             bool showActions = hover && !uncategorized;
-            if (showActions)
+            if (IconButton(renameRect, showActions, BookmarkConstants.LabelRenameFolder))
             {
-                if (GUI.Button(renameRect, new GUIContent("✎", BookmarkConstants.LabelRenameFolder), iconButtonStyle))
-                {
-                    StartRename(name);
-                    EndChangedGUI(repaint);
-                }
-                if (GUI.Button(deleteRect, BookmarkIcons.Content(BookmarkIcons.Trash, "✕", BookmarkConstants.LabelDeleteFolder), iconButtonStyle))
-                {
-                    BookmarkService.DeleteFolder(name);
-                    EndChangedGUI(repaint);
-                }
+                StartRename(name);
+                EndChangedGUI(repaint);
             }
-            else
+            if (IconButton(deleteRect, showActions, BookmarkConstants.LabelDeleteFolder))
             {
-                GUIUtility.GetControlID(FocusType.Passive);
-                GUIUtility.GetControlID(FocusType.Passive);
+                BookmarkService.DeleteFolder(name);
+                EndChangedGUI(repaint);
             }
 
             if (e.type == EventType.Repaint)
@@ -821,6 +857,11 @@ namespace HaruFamily.UX.Bookmarks
                 float width = headerStyle.CalcSize(new GUIContent(display)).x;
                 detailStyle.Draw(new Rect(labelRect.x + width + 6, rect.y + 3, 60, 14),
                     CountLabel(folder.rows.Count, folder.total, Searching), false, false, false, false);
+                if (showActions)
+                {
+                    iconButtonStyle.Draw(renameRect, new GUIContent("✎"), false, false, false, false);
+                    iconButtonStyle.Draw(deleteRect, BookmarkIcons.Content(BookmarkIcons.Trash, "✕"), false, false, false, false);
+                }
             }
 
             if (e.type == EventType.MouseDown && e.button == 1 && rect.Contains(e.mousePosition))
@@ -898,29 +939,20 @@ namespace HaruFamily.UX.Bookmarks
             Rect openRect = new(starRect.x - ActionWidth, row.y, ActionWidth, RowHeight);
             // 失效的紀錄列不能加入書籤；失效的書籤列可以移除。
             bool starEnabled = alive || data.bookmarkRow;
-            if (showActions && starEnabled)
+            var starTip = bookmarked ? BookmarkConstants.LabelStarRemoveTooltip : BookmarkConstants.LabelStarAddTooltip;
+            if (IconButton(starRect, showActions && starEnabled, starTip))
             {
-                var starTip = bookmarked ? BookmarkConstants.LabelStarRemoveTooltip : BookmarkConstants.LabelStarAddTooltip;
-                if (GUI.Button(starRect, new GUIContent(string.Empty, starTip), iconButtonStyle))
-                {
-                    if (!alive) BookmarkService.RemoveBookmark(data.item);
-                    else if (isPicked && picked.Count > 1 && data.bookmarkRow) RemovePickedBookmarks();
-                    else BookmarkService.ToggleBookmark(data.obj);
-                    EndChangedGUI(repaint);
-                }
+                if (!alive) BookmarkService.RemoveBookmark(data.item);
+                else if (isPicked && picked.Count > 1 && data.bookmarkRow) RemovePickedBookmarks();
+                else BookmarkService.ToggleBookmark(data.obj);
+                EndChangedGUI(repaint);
             }
-            else GUIUtility.GetControlID(FocusType.Passive);
-            if (showActions && canOpen)
+            if (IconButton(openRect, showActions && canOpen, alive ? BookmarkConstants.LabelOpen : BookmarkConstants.LabelOpenSceneTooltip))
             {
-                var tip = alive ? BookmarkConstants.LabelOpen : BookmarkConstants.LabelOpenSceneTooltip;
-                if (GUI.Button(openRect, new GUIContent(string.Empty, tip), iconButtonStyle))
-                {
-                    if (alive) AssetDatabase.OpenAsset(data.obj);
-                    else BookmarkService.OpenSceneOf(data.item);
-                    EndChangedGUI(repaint);
-                }
+                if (alive) AssetDatabase.OpenAsset(data.obj);
+                else BookmarkService.OpenSceneOf(data.item);
+                EndChangedGUI(repaint);
             }
-            else GUIUtility.GetControlID(FocusType.Passive);
 
             if (e.type == EventType.Repaint)
             {
@@ -996,6 +1028,34 @@ namespace HaruFamily.UX.Bookmarks
             var click = drag.HandleItem(clickRect, data.item, () => MakeRowPayload(data));
             if (click != RowClick.None) OnRowClicked(data, click, modifiers, onItemPicked, repaint);
             if (data.bookmarkRow) HandleDrop(row, data.item.folder ?? string.Empty, data.item, repaint);
+        }
+
+        // hover 才出現的小按鈕。不論是否顯示都配置同一種 control id，後續各列的 id 才不會因 hover 改變而位移；
+        // 放開滑鼠時不論是否還顯示都釋放 hotControl，避免滑出列後卡住。圖示由呼叫端在 Repaint 時自行繪製。
+        private static readonly int IconButtonHint = "HaruFamily.Bookmarks.IconButton".GetHashCode();
+
+        private static bool IconButton(Rect rect, bool visible, string tooltip)
+        {
+            int id = GUIUtility.GetControlID(IconButtonHint, FocusType.Passive, rect);
+            var e = Event.current;
+            switch (e.GetTypeForControl(id))
+            {
+                case EventType.MouseDown:
+                    if (!visible || e.button != 0 || !rect.Contains(e.mousePosition)) break;
+                    GUIUtility.hotControl = id;
+                    e.Use();
+                    break;
+                case EventType.MouseDrag:
+                    if (GUIUtility.hotControl == id) e.Use();
+                    break;
+                case EventType.MouseUp:
+                    if (GUIUtility.hotControl != id) break;
+                    GUIUtility.hotControl = 0;
+                    e.Use();
+                    return visible && rect.Contains(e.mousePosition);
+            }
+            if (visible && !string.IsNullOrEmpty(tooltip)) GUI.Label(rect, new GUIContent(string.Empty, tooltip));
+            return false;
         }
 
         private static void DrawOutline(Rect rect, Color color)

@@ -46,6 +46,8 @@ namespace HaruFamily.UX.Bookmarks
         private static ObjectRef _expectedNavTarget;
 
         public static void Save() => BookmarkStorage.Save();
+        // 只改到 history / index 時用：書籤區畫面不重建。
+        private static void SaveHistory() => BookmarkStorage.Save(historyOnly: true);
 
         private static void SaveBookmarkMembership()
         {
@@ -194,8 +196,8 @@ namespace HaruFamily.UX.Bookmarks
             Editor.finishedDefaultHeaderGUI -= DrawInspectorHeader;
             Editor.finishedDefaultHeaderGUI += DrawInspectorHeader;
 
-            EditorApplication.projectChanged -= InvalidateReferences;
-            EditorApplication.projectChanged += InvalidateReferences;
+            EditorApplication.projectChanged -= OnProjectChanged;
+            EditorApplication.projectChanged += OnProjectChanged;
             EditorApplication.hierarchyChanged -= InvalidateReferences;
             EditorApplication.hierarchyChanged += InvalidateReferences;
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
@@ -254,7 +256,7 @@ namespace HaruFamily.UX.Bookmarks
             Data.index = Data.history.Count - 1;
 
             TrimHistoryToLimit();
-            Save();
+            SaveHistory();
         }
 
         // 改小上限時也會呼叫（設定頁），因此游標不能直接設成最後一筆。
@@ -327,9 +329,10 @@ namespace HaruFamily.UX.Bookmarks
             return r != null && !string.IsNullOrEmpty(r.globalId) && GlobalObjectId.TryParse(r.globalId, out id);
         }
 
+        // EntityIdToObject 不在 6000.0 的 API 中（6000.0 文件只有 InstanceIDToObject），只在已驗證的 6000.3 以上使用。
         private static Object InstanceIdToObject(int instanceId)
         {
-#if UNITY_6000_0_OR_NEWER
+#if UNITY_6000_3_OR_NEWER
             return EditorUtility.EntityIdToObject(instanceId);
 #else
             return EditorUtility.InstanceIDToObject(instanceId);
@@ -497,7 +500,7 @@ namespace HaruFamily.UX.Bookmarks
                 Selection.activeObject = obj;
             }
 
-            Save();
+            SaveHistory();
             return true;
         }
 
@@ -749,7 +752,7 @@ namespace HaruFamily.UX.Bookmarks
                 Data.index = -1;
             }
 
-            Save();
+            SaveHistory();
         }
 
         // ====================== Variables ======================

@@ -83,11 +83,13 @@ namespace HaruFamily.UX.Bookmarks
         private static readonly string LegacySavePath =
             Path.Combine(Application.dataPath, LegacyPathData);
 
-        private static readonly BookmarkFileStorage storage = new(SavePath, LegacySavePath);
+        private static BookmarkFileStorage storage = new(SavePath, LegacySavePath);
         private static bool isLoaded;
 
         // 儲存版本僅用於畫面刷新，不作為物件解析或書籤成員快取的版本。
         public static int Version { get; private set; }
+        // 不含「只動到選取紀錄」的存檔；書籤區的畫面只看這個，選取物件時不必重建。
+        public static int NonHistoryVersion { get; private set; }
         public static bool IsAvailable => isLoaded && !storage.IsWriteBlocked;
         public static string LastError => storage.LastError;
 
@@ -113,14 +115,45 @@ namespace HaruFamily.UX.Bookmarks
         // Save 為 debounced：呼叫即 bump Version + 排程一次 delayCall 落盤。
         // 連續 N 次 mutate（例：方向鍵狂選 Project）只實際寫盤 1 次。
         // domain reload / Editor quitting 透過 Flush() 強制即時落盤（BookmarkService.Init 內註冊）。
-        public static void Save()
+        public static void Save(bool historyOnly = false)
         {
             if (!IsAvailable) return;
             Version++;
+            if (!historyOnly) NonHistoryVersion++;
             storage.MarkDirty();
             if (_flushScheduled) return;
             _flushScheduled = true;
             EditorApplication.delayCall += Flush;
+        }
+
+        // 測試用：暫時改用獨立的資料檔，Dispose 時換回；不會讀寫使用者的書籤資料。
+        internal static System.IDisposable UseStorageForTests(BookmarkFileStorage replacement)
+        {
+            Flush(); // 先把使用者尚未寫入的變更落盤
+            var previous = storage;
+            bool previousLoaded = isLoaded;
+            SwapStorage(replacement, loaded: true);
+            return new RestoreScope(() => SwapStorage(previous, previousLoaded));
+        }
+
+        private static void SwapStorage(BookmarkFileStorage next, bool loaded)
+        {
+            storage = next;
+            isLoaded = loaded;
+            Version++;
+            NonHistoryVersion++;
+            BookmarkService.OnStorageSwapped();
+        }
+
+        private sealed class RestoreScope : System.IDisposable
+        {
+            private System.Action restore;
+            public RestoreScope(System.Action restore) => this.restore = restore;
+            public void Dispose()
+            {
+                restore?.Invoke();
+                restore = null;
+            }
         }
 
         public static void Flush()

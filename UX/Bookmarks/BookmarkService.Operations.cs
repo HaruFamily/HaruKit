@@ -69,6 +69,16 @@ namespace HaruFamily.UX.Bookmarks
 
         internal static void DismissUndo() => undoSnapshot = null;
 
+        // 測試換資料檔時清掉所有依附在舊資料上的快取與狀態。
+        internal static void OnStorageSwapped()
+        {
+            BookmarkVersion++;
+            undoSnapshot = null;
+            failedResolves.Clear();
+            _expectedNavTarget = null;
+            InvalidateReferences();
+        }
+
         // ====================== 多物件操作 ======================
         // 全部都已是書籤 → 全部移除（可復原）；否則把還不是書籤的加入「未分類」。
         internal static void ToggleBookmarks(IList<Object> objects, bool notify)
@@ -191,7 +201,8 @@ namespace HaruFamily.UX.Bookmarks
         {
             if (string.IsNullOrEmpty(message) || !Data.showNotifications) return;
             var window = EditorWindow.focusedWindow ?? EditorWindow.mouseOverWindow;
-            if (window != null) window.ShowNotification(new GUIContent(message), 1.2);
+            // 只用單參數版本：帶顯示秒數的多載在 2021.3 文件中沒有列出。
+            if (window != null) window.ShowNotification(new GUIContent(message));
         }
 
         // Inspector 對 Asset 顯示的是 Importer 編輯器；書籤要記主資產，不是 Importer。
@@ -206,27 +217,62 @@ namespace HaruFamily.UX.Bookmarks
         }
 
         // ====================== Project / Hierarchy 標記 ======================
-        private static int sceneSetVersion;
-        private static int resolvedSceneSetVersion = -1, resolvedBookmarkVersion = -1;
+        private static int sceneSetVersion, projectVersion;
+        private static int resolvedSceneSetVersion = -1, resolvedBookmarkVersion = -1, resolvedProjectVersion = -1;
         private static readonly HashSet<string> bookmarkFileGuids = new(StringComparer.Ordinal);
         private static readonly HashSet<int> bookmarkLiveInstanceIds = new();
 
+        // 找不到物件的書籤：記下當時的場景組合與專案版本，兩者都沒變就不再嘗試（GlobalObjectId 解析很慢）。
+        private struct FailedResolve
+        {
+            public int sceneSet, project;
+        }
+        private static readonly Dictionary<ObjectRef, FailedResolve> failedResolves = new();
+
         private static void OnSceneSetChanged() => sceneSetVersion++;
 
-        // 補齊每筆書籤目前的 instanceId（場景沒開的略過），只在書籤或已開啟場景變動時做一次。
+        private static void OnProjectChanged()
+        {
+            projectVersion++;
+            InvalidateReferences();
+        }
+
+        // 書籤、已開啟場景或專案變動時重建。已解析過的只檢查 instanceId 是否仍存在；
+        // 找不到的只在場景組合或專案變動後重試，按 ★ 不會讓整份書籤重新解析。
         private static void EnsureBadgeCache()
         {
-            if (resolvedSceneSetVersion == sceneSetVersion && resolvedBookmarkVersion == BookmarkVersion) return;
+            if (resolvedSceneSetVersion == sceneSetVersion && resolvedBookmarkVersion == BookmarkVersion
+                && resolvedProjectVersion == projectVersion) return;
             resolvedSceneSetVersion = sceneSetVersion;
             resolvedBookmarkVersion = BookmarkVersion;
+            resolvedProjectVersion = projectVersion;
             bookmarkFileGuids.Clear();
             bookmarkLiveInstanceIds.Clear();
             foreach (var b in Data.bookmarks)
             {
                 if (b == null) continue;
                 if (!string.IsNullOrEmpty(b.guid)) bookmarkFileGuids.Add(b.guid);
-                var obj = RefToObject(b);
-                if (obj != null) bookmarkLiveInstanceIds.Add(obj.GetInstanceID());
+                Object obj = b.instanceId != 0 ? InstanceIdToObject(b.instanceId) : null;
+                if (obj == null)
+                {
+                    if (failedResolves.TryGetValue(b, out var failed)
+                        && failed.sceneSet == sceneSetVersion && failed.project == projectVersion) continue;
+                    obj = RefToObject(b);
+                    if (obj == null)
+                    {
+                        failedResolves[b] = new FailedResolve { sceneSet = sceneSetVersion, project = projectVersion };
+                        continue;
+                    }
+                    failedResolves.Remove(b);
+                }
+                bookmarkLiveInstanceIds.Add(obj.GetInstanceID());
+            }
+            if (failedResolves.Count > 0)
+            {
+                var stale = new List<ObjectRef>();
+                foreach (var key in failedResolves.Keys)
+                    if (!Data.bookmarks.Contains(key)) stale.Add(key);
+                foreach (var key in stale) failedResolves.Remove(key);
             }
         }
 
